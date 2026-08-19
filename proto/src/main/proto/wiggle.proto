@@ -1,0 +1,201 @@
+syntax = "proto3";
+
+package dev.wiggle.proto;
+
+option java_package = "dev.wiggle.proto";
+option java_multiple_files = true;
+
+import "google/protobuf/struct.proto";
+
+// The control-plane API. Workers pull work from here; nothing is ever pushed to them,
+// so workers need no inbound connectivity and can scale independently of the servers.
+service WiggleControlPlane {
+    rpc HealthCheck(Empty) returns (HealthStatus);
+    rpc GetCluster(Empty) returns (ClusterView);
+
+    rpc ListWorkflows(Empty) returns (WorkflowNames);
+    rpc RegisterWorkflow(WorkflowDefinition) returns (RegisterWorkflowResult);
+    rpc GetWorkflow(GetWorkflowRequest) returns (WorkflowDefinition);
+
+    rpc StartInstance(StartInstanceRequest) returns (StartInstanceResult);
+    rpc ListInstances(ListInstancesRequest) returns (InstanceList);
+    rpc GetInstance(InstanceIdRequest) returns (InstanceDetail);
+    rpc CancelInstance(CancelInstanceRequest) returns (CancelInstanceResult);
+
+    rpc PollTasks(PollRequest) returns (TaskList);
+    rpc CompleteTask(TaskResultRequest) returns (Ack);
+    rpc FailTask(TaskFailureRequest) returns (Ack);
+    rpc HeartbeatTask(HeartbeatRequest) returns (HeartbeatResult);
+}
+
+message Empty {}
+
+message Ack { bool ok = 1; }
+
+// ------------------------------------------------------------- health / cluster
+
+message HealthStatus {
+    string status = 1;
+    string node = 2;
+    bool leader = 3;
+}
+
+message ClusterMember {
+    string id = 1;
+    string name = 2;
+    int64 first_heartbeat = 3;
+    int64 last_heartbeat = 4;
+    int32 workers = 5;
+    bool leader = 6;
+    bool alive = 7;
+}
+
+message ClusterView {
+    string self = 1;
+    bool leader = 2;
+    repeated ClusterMember members = 3;
+}
+
+// ------------------------------------------------------------------ workflows
+//
+// A workflow definition's shape (nodes as a sorted array, sparse per-kind fields) is
+// already JSON-native (see core.WorkflowDefinition/Node#toJson); rather than re-modeling
+// it in proto, the whole definition travels as one opaque Struct, exactly as its JSON
+// body does over HTTP today, converted at the edges via
+// ProtoJson + WorkflowDefinition.toJson()/fromJson().
+
+message WorkflowDefinition {
+    google.protobuf.Struct definition = 1;
+}
+
+message WorkflowNames {
+    repeated string workflows = 1;
+}
+
+message RegisterWorkflowResult {
+    string name = 1;
+    string version = 2;
+    int64 nodes = 3;
+}
+
+message GetWorkflowRequest {
+    string name = 1;
+}
+
+// -------------------------------------------------------------- instances
+
+message StartInstanceRequest {
+    string workflow = 1;
+    google.protobuf.Value context = 2;
+    optional int32 version = 3;
+    optional string correlation_id = 4;
+}
+
+message StartInstanceResult {
+    string instance_id = 1;
+    string workflow = 2;
+}
+
+message InstanceView {
+    string id = 1;
+    string workflow = 2;
+    int32 version = 3;
+    string status = 4;
+    optional string termination_reason = 5;
+    optional string error = 6;
+    google.protobuf.Value context = 7;
+    int64 created_at = 8;
+    int64 updated_at = 9;
+}
+
+message Token {
+    string id = 1;
+    string node_id = 2;
+    string kind = 3;
+    string status = 4;
+    string activity = 5;
+    int32 attempt = 6;
+    int64 available_at = 7;
+    optional string lease_owner = 8;
+    optional string last_error = 9;
+}
+
+message InstanceDetail {
+    InstanceView instance = 1;
+    repeated Token tokens = 2;
+}
+
+message ListInstancesRequest {
+    optional string workflow = 1;
+    optional string status = 2;
+    int32 limit = 3;
+}
+
+message InstanceList {
+    repeated InstanceView instances = 1;
+}
+
+message InstanceIdRequest {
+    string instance_id = 1;
+}
+
+message CancelInstanceRequest {
+    string instance_id = 1;
+    string reason = 2;
+}
+
+message CancelInstanceResult {
+    string cancelled = 1;
+}
+
+// ------------------------------------------------------------------ tasks
+
+message PollRequest {
+    string worker_id = 1;
+    repeated string queues = 2;
+    int32 max = 3;
+    int64 lease_millis = 4;
+    int64 wait_millis = 5;
+}
+
+message TaskActivation {
+    string task_id = 1;
+    string instance_id = 2;
+    string workflow = 3;
+    int32 version = 4;
+    string node_id = 5;
+    string step_name = 6;
+    string activity = 7;
+    string kind = 8;
+    int32 attempt = 9;
+    int64 lease_expires_at = 10;
+    string lease_owner = 11;
+    google.protobuf.Value context = 12;
+}
+
+message TaskList {
+    repeated TaskActivation tasks = 1;
+}
+
+message TaskResultRequest {
+    string task_id = 1;
+    string lease_owner = 2;
+    google.protobuf.Value result = 3;
+}
+
+message TaskFailureRequest {
+    string task_id = 1;
+    string lease_owner = 2;
+    string message = 3;
+    bool retryable = 4;
+}
+
+message HeartbeatRequest {
+    string task_id = 1;
+    string lease_owner = 2;
+    int64 extend_millis = 3;
+}
+
+message HeartbeatResult {
+    int64 lease_expires_at = 1;
+}
