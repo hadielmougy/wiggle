@@ -1,4 +1,4 @@
-package dev.wiggle.example;
+package dev.wiggle.order;
 
 import dev.wiggle.client.worker.WiggleClient;
 import dev.wiggle.core.Json;

@@ -1,29 +1,28 @@
-package dev.wiggle.example;
+package dev.wiggle.account;
 
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.worker.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.client.worker.WorkerOptions;
+import dev.wiggle.order.Order;
+import dev.wiggle.order.OrderFulfilment;
 
 import java.time.Duration;
 
-/**
- * A standalone worker process. Run as many as you like against the same server; each
- * one pulls only as much work as it has free capacity.
- */
-public final class WorkerMain {
+public class TransactionWorker {
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) throws InterruptedException {
         String url = env("WIGGLE_URL", "localhost:8080");
         String id = env("WIGGLE_WORKER_ID", "worker-" + ProcessHandle.current().pid());
         int concurrency = Integer.parseInt(env("WIGGLE_WORKER_CONCURRENCY", "8"));
 
         WiggleClient client = new WiggleClient(url);
-        Blueprint<Order> blueprint = OrderFulfilment.blueprint();
+
+        Blueprint<Transaction> blueprint = TransactionWorkflow.blueprint();
 
         Worker worker = new Worker(client, id, WorkerOptions.defaults()
-                        .withConcurrency(concurrency)
-                        .withLongPollWait(Duration.ofSeconds(10)))
+                .withConcurrency(concurrency)
+                .withLongPollWait(Duration.ofSeconds(10)))
                 .register(blueprint);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

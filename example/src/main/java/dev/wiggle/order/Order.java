@@ -1,4 +1,4 @@
-package dev.wiggle.example;
+package dev.wiggle.order;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;

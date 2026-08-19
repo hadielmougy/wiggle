@@ -226,7 +226,7 @@ JSON (workflow node graphs, instance/task context and results) travels as
 
 ```bash
 # grpcurl, or just use the reference clients:
-java -cp out/classes dev.wiggle.example.ClusterStatus localhost:8080
+java -cp out/classes dev.wiggle.order.ClusterStatus localhost:8080
 ```
 
 ---

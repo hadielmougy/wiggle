@@ -1,0 +1,20 @@
+package dev.wiggle.account;
+
+import dev.wiggle.client.dsl.Blueprint;
+import dev.wiggle.client.dsl.Workflow;
+import dev.wiggle.core.ContextCodec;
+import dev.wiggle.core.RetryPolicy;
+
+import java.time.Duration;
+
+public class TransactionWorkflow {
+
+    public static Blueprint<Transaction> blueprint() {
+        return Workflow.define("accounts-workflow", ContextCodec.records(Transaction.class))
+                .map("make-withdraw", Transaction::withdraw)
+                .retry(RetryPolicy.fixed(100, Duration.ofMinutes(1)))
+                .map("make-deposit", Transaction::deposit)
+                .retry(RetryPolicy.fixed(100, Duration.ofMinutes(1)))
+                .build();
+    }
+}

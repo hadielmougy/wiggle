@@ -1,4 +1,4 @@
-package dev.wiggle.example;
+package dev.wiggle.order;
 
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.worker.WiggleClient;
