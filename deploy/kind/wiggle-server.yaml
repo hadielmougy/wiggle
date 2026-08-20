@@ -30,6 +30,11 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - { name: WIGGLE_PORT, value: "8080" }
+            # Promote server-side timers (sleeps) quickly and in bulk. The defaults
+            # (1000ms tick, batch 100) cap timer throughput at ~100/s and add up to a
+            # second of latency to every sleep, which dominates throughput under load.
+            - { name: WIGGLE_POLL_INTERVAL_MILLIS, value: "200" }
+            - { name: WIGGLE_HOUSEKEEPING_BATCH, value: "500" }
             - { name: WIGGLE_JDBC_URL, value: "jdbc:postgresql://postgres:5432/wiggle" }
             - { name: WIGGLE_JDBC_USER, value: "wiggle" }
             - { name: WIGGLE_JDBC_PASSWORD, value: "wiggle" }

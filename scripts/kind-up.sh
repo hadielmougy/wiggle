@@ -39,11 +39,19 @@ kubectl apply -f deploy/kind/postgres.yaml
 kubectl rollout status deploy/postgres --timeout=120s
 
 echo "==> deploying $REPLICAS wiggle server node(s)"
+# Only an existing deployment needs a pod refresh to pick up a rebuilt image; on a first
+# deploy the pods start fresh, so we skip the restart to avoid churning kube-proxy's
+# conntrack (which would briefly reset new client connections through the NodePort).
+REDEPLOY=false
+kubectl get deploy/wiggle-server >/dev/null 2>&1 && REDEPLOY=true
 kubectl apply -f deploy/kind/wiggle-server.yaml
 kubectl scale deploy/wiggle-server --replicas="$REPLICAS"
-# Same image tag across runs, so nudge the pods to pick up the freshly loaded image.
-kubectl rollout restart deploy/wiggle-server >/dev/null
+if [ "$REDEPLOY" = true ]; then
+  echo "    redeploy: restarting pods to pick up the rebuilt image"
+  kubectl rollout restart deploy/wiggle-server >/dev/null
+fi
 kubectl rollout status deploy/wiggle-server --timeout=180s
+kubectl wait --for=condition=ready pod -l app=wiggle-server --timeout=120s >/dev/null
 
 echo
 echo "cluster is up: $REPLICAS server node(s) reachable at localhost:$NODEPORT"

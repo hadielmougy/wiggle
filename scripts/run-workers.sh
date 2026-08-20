@@ -47,7 +47,18 @@ done
 if [ "$SUBMIT" -gt 0 ]; then
   sleep 3
   echo "==> submitting $SUBMIT orders"
-  WIGGLE_URL="$URL" java -cp "$CP" dev.wiggle.order.SubmitOrders "$SUBMIT"
+  # A submit failure must not tear down the running workers, and the first connection
+  # through a NodePort can be reset transiently, so retry a few times before giving up.
+  submitted=false
+  for attempt in 1 2 3; do
+    if WIGGLE_URL="$URL" java -cp "$CP" dev.wiggle.order.SubmitOrders "$SUBMIT"; then
+      submitted=true
+      break
+    fi
+    echo "   submit attempt $attempt failed; retrying in 2s..."
+    sleep 2
+  done
+  [ "$submitted" = true ] || echo "   warning: could not submit orders; workers are still running"
 fi
 
 echo

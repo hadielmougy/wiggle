@@ -25,6 +25,8 @@ public final class JdbcStorage implements Storage {
     private final String url, user, password;
     private final ArrayBlockingQueue<Connection> pool;
     private final int poolSize;
+    /** Whether the target is PostgreSQL -- gates the SKIP LOCKED claim. Set during migrate(). */
+    private volatile boolean postgres;
 
     public JdbcStorage(String url, String user, String password, int poolSize) {
         this.url = url;
@@ -117,6 +119,7 @@ public final class JdbcStorage implements Storage {
             // pg_type unique violation. A transaction-scoped advisory lock, keyed by a
             // constant shared across nodes, serialises the whole one-time bootstrap so late
             // arrivals simply find everything already present. H2 has no such catalog race.
+            this.postgres = isPostgres(c);
             acquireMigrationLock(c);
             try (Statement st = c.createStatement()) {
                 for (String stmt : ddl.split(";")) {
@@ -148,7 +151,7 @@ public final class JdbcStorage implements Storage {
     @Override public <R> R inTx(Function<Tx, R> work) {
         Connection c = borrow();
         try {
-            R r = work.apply(new JdbcTx(c));
+            R r = work.apply(new JdbcTx(c, postgres));
             c.commit();
             return r;
         } catch (SQLException e) {
@@ -184,8 +187,9 @@ public final class JdbcStorage implements Storage {
 
     private static final class JdbcTx implements Tx {
         private final Connection c;
+        private final boolean postgres;
 
-        JdbcTx(Connection c) { this.c = c; }
+        JdbcTx(Connection c, boolean postgres) { this.c = c; this.postgres = postgres; }
 
         private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
 
@@ -356,12 +360,51 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+            return postgres
+                    ? claimSkipLocked(workerId, queues, max, now, leaseUntil)
+                    : claimCompareAndSet(workerId, queues, max, now, leaseUntil);
+        }
+
+        /**
+         * Atomic claim for PostgreSQL: lock up to {@code max} dispatchable rows with
+         * SKIP LOCKED -- which steps over rows another worker already holds instead of
+         * blocking on them -- and update them in the same statement. Because no
+         * transaction ever waits on a row locked by another, concurrent claims across
+         * many workers and nodes cannot deadlock, and none of them collide on a row.
+         */
+        private List<Token> claimSkipLocked(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+            StringBuilder pick = new StringBuilder(
+                    "SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
+            if (queues != null && !queues.isEmpty()) {
+                pick.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
+            }
+            pick.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
+            String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=? " +
+                    "WHERE id IN (" + pick + ") RETURNING *";
+            try (PreparedStatement p = ps(sql)) {
+                int idx = 1;
+                p.setString(idx++, workerId);   // SET lease_owner
+                p.setLong(idx++, leaseUntil);   // SET lease_expires
+                p.setLong(idx++, now);          // SET updated_at
+                p.setLong(idx++, now);          // WHERE available_at<=?
+                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                p.setInt(idx, max);             // LIMIT
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Token> out = new ArrayList<>();
+                    while (rs.next()) out.add(readToken(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
+        private List<Token> claimCompareAndSet(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
             StringBuilder sql = new StringBuilder(
                     "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
                 sql.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
             }
-            sql.append(" ORDER BY available_at LIMIT ?");
+            sql.append(" ORDER BY available_at, id LIMIT ?");
             List<Token> candidates = new ArrayList<>();
             try (PreparedStatement p = ps(sql.toString())) {
                 int idx = 1;
