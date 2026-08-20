@@ -361,6 +361,38 @@ public final class Scenarios {
         });
     }
 
+    /**
+     * A task that runs far longer than its lease still completes exactly once: the worker
+     * heartbeats to extend the lease while the handler runs, so the leader never reclaims
+     * it and redelivers it to another worker. Without the heartbeat this same task -- three
+     * lease-lengths long -- would be reclaimed mid-flight and executed twice.
+     */
+    public static void heartbeatKeepsLongTaskAlive() throws Exception {
+        AtomicInteger invocations = new AtomicInteger();
+        Blueprint<Map<String, Object>> bp = json("heartbeat")
+                .map("long-running", ctx -> {
+                    invocations.incrementAndGet();
+                    Check.sleep(900);               // three times the 300ms lease
+                    return put(ctx, "done", true);
+                })
+                .build();
+
+        withServer((server, client) -> {
+            Worker w = new Worker(client, "hb-" + Ids.next("x"),
+                    WorkerOptions.defaults()
+                            .withLease(Duration.ofMillis(300))          // heartbeat fires at ~100ms
+                            .withLongPollWait(Duration.ofMillis(250)))
+                    .register(bp);
+            try (w) {
+                w.start();
+                InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
+                Check.equal(v.status(), "COMPLETED", "status");
+                Check.equal(Json.asObject(v.context()).get("done"), true, "work completed");
+                Check.equal(invocations.get(), 1, "task executed exactly once (lease never expired)");
+            }
+        });
+    }
+
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
     public static void definitionVersionIsContentAddressed() {
         Blueprint<Map<String, Object>> a = json("versioned").map("one", ctx -> ctx).build();
@@ -497,6 +529,7 @@ public final class Scenarios {
                 new Case("expiredLeaseIsReclaimed", Scenarios::expiredLeaseIsReclaimed),
                 new Case("staleLeaseIsRejected", Scenarios::staleLeaseIsRejected),
                 new Case("cancelStopsAnInstance", Scenarios::cancelStopsAnInstance),
+                new Case("heartbeatKeepsLongTaskAlive", Scenarios::heartbeatKeepsLongTaskAlive),
                 new Case("leaderElectionAndFailover", Scenarios::leaderElectionAndFailover),
                 new Case("workDistributesAcrossWorkers", Scenarios::workDistributesAcrossWorkers));
     }

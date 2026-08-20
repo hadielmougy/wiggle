@@ -91,6 +91,11 @@ class EngineConformanceTest {
         Scenarios.cancelStopsAnInstance();
     }
 
+    @Test @DisplayName("a heartbeat keeps a long task's lease alive so it runs once")
+    void heartbeatKeepsLongTaskAlive() throws Exception {
+        Scenarios.heartbeatKeepsLongTaskAlive();
+    }
+
     @Test @DisplayName("exactly one leader is elected, and failover works")
     void leaderElectionAndFailover() {
         Scenarios.leaderElectionAndFailover();

@@ -33,7 +33,18 @@ public final class Worker implements AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
     private ExecutorService executor;
+    private ScheduledExecutorService heartbeats;
     private Thread pollThread;
+
+    private ThreadFactory heartbeatThreadFactory = new ThreadFactory() {
+        private final AtomicInteger n = new AtomicInteger();
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "wiggle-heartbeat-" + workerId + "-" + n.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        }
+    };
 
     public Worker(WiggleClient client, String workerId) {
         this(client, workerId, WorkerOptions.defaults());
@@ -68,6 +79,7 @@ public final class Worker implements AutoCloseable {
             for (Blueprint<?> bp : blueprints) client.register(bp);
         }
         executor = Executors.newVirtualThreadPerTaskExecutor();
+        heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
         pollThread.setDaemon(true);
         pollThread.start();
@@ -114,6 +126,7 @@ public final class Worker implements AutoCloseable {
             reportFailure(task, "no handler registered for activity '" + task.activity() + "'", false);
             return;
         }
+        ScheduledFuture<?> lease = scheduleHeartbeat(task);
         try {
             Object result = handler.invoke(task.context());
             if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
@@ -132,7 +145,33 @@ public final class Worker implements AutoCloseable {
         } catch (Throwable t) {
             reportFailure(task, describe(t), false);
             throw t;
+        } finally {
+            // Task is settled (completed or failed); stop extending its lease.
+            lease.cancel(false);
         }
+    }
+
+    /** A small pool: heartbeats are brief RPCs, so a handful of threads covers any concurrency. */
+    private int heartbeatThreads() {
+        return Math.max(1, Math.min(4, options.concurrency()));
+    }
+
+    /**
+     * Keeps the task's lease alive for as long as the handler runs. Fires at a third of
+     * the lease so a single missed beat is not fatal, and each beat extends by a full
+     * lease. The returned future is cancelled once the task is settled.
+     */
+    private ScheduledFuture<?> scheduleHeartbeat(TaskActivation task) {
+        long leaseMillis = options.lease().toMillis();
+        long period = Math.max(1, leaseMillis / 3);
+        return heartbeats.scheduleWithFixedDelay(() -> {
+            try {
+                client.heartbeat(task.taskId(), task.leaseOwner(), leaseMillis);
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.DEBUG,
+                        () -> "heartbeat for task " + task.taskId() + " failed: " + e.getMessage());
+            }
+        }, period, period, TimeUnit.MILLISECONDS);
     }
 
     private void reportFailure(TaskActivation task, String message, boolean retryable) {
@@ -171,5 +210,6 @@ public final class Worker implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
         }
+        if (heartbeats != null) heartbeats.shutdownNow();
     }
 }
