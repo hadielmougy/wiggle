@@ -62,7 +62,7 @@ configure(subprojects.filter { it.name in publishedModules }) {
     apply(plugin = "com.vanniktech.maven.publish")
 
     extensions.configure<MavenPublishBaseExtension> {
-        publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = false)
+        publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
         signAllPublications()
 
         coordinates(group.toString(), "wiggle-${project.name}", version.toString())
