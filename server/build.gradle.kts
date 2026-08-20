@@ -14,4 +14,5 @@ dependencies {
 
 application {
     mainClass.set("dev.wiggle.server.WiggleServer")
+    applicationName = "wiggle"
 }
