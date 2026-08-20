@@ -61,6 +61,15 @@ val moduleDescriptions = mapOf(
 configure(subprojects.filter { it.name in publishedModules }) {
     apply(plugin = "com.vanniktech.maven.publish")
 
+    // Sign with the local GnuPG agent (pinentry prompts for the passphrase) instead of
+    // requiring an in-memory key. Vanniktech applies the signing plugin lazily, so we
+    // hook it once registered. Override by setting the signingInMemoryKey properties.
+    plugins.withId("signing") {
+        extensions.configure<SigningExtension> {
+            useGpgCmd()
+        }
+    }
+
     extensions.configure<MavenPublishBaseExtension> {
         publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
         signAllPublications()
