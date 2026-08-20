@@ -1,0 +1,11 @@
+# kind cluster for the wiggle server nodes. The single k8s node maps host port 30080
+# to the NodePort the wiggle Service publishes, so locally-run workers can reach the
+# server pods at localhost:30080 (kube-proxy spreads their connections across pods).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP

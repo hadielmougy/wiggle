@@ -1,0 +1,3 @@
+# Keep the build context tiny: only the server distribution is needed by the image.
+*
+!server/build/install/wiggle
