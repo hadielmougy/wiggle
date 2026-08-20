@@ -18,6 +18,7 @@ import java.io.IOException;
  */
 public final class WiggleServer implements AutoCloseable {
 
+    private final ServerConfig config;
     private final Storage storage;
     private final WorkflowEngine engine;
     private final ClusterManager cluster;
@@ -25,6 +26,7 @@ public final class WiggleServer implements AutoCloseable {
     private final GrpcApi api;
 
     public WiggleServer(ServerConfig config) throws IOException {
+        this.config = config;
         this.storage = config.isInMemory()
                 ? new InMemoryStorage()
                 : new JdbcStorage(config.jdbcUrl(), config.jdbcUser(), config.jdbcPassword(), config.jdbcPoolSize());
@@ -38,15 +40,23 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer start() {
+        // Bind the API first so the real port is known (it may be ephemeral, port 0),
+        // then advertise a dialable address before the cluster's first heartbeat writes it.
+        api.start();
+        cluster.setAdvertisedAddress(advertisedAddress());
         cluster.start();
         housekeeper.start();
-        api.start();
         return this;
     }
 
     public int port() { return api.port(); }
 
     public String baseUrl() { return "127.0.0.1:" + port(); }
+
+    private String advertisedAddress() {
+        String configured = config.advertisedAddress();
+        return configured != null && !configured.isBlank() ? configured : baseUrl();
+    }
 
     public WorkflowEngine engine() { return engine; }
 

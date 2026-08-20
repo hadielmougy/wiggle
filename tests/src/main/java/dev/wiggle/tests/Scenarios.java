@@ -15,6 +15,7 @@ import dev.wiggle.server.store.Storage;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -34,12 +35,37 @@ public final class Scenarios {
     }
 
     private static void withServer(Body body) throws Exception {
-        ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(0, "test-node", null, null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100);
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             body.run(server, client);
+        }
+    }
+
+    private interface ClusterBody {
+        void run(List<WiggleServer> servers, WiggleClient client) throws Exception;
+    }
+
+    /** Starts {@code n} server nodes sharing one H2 in-memory database -- a real cluster. */
+    private static void withCluster(int n, ClusterBody body) throws Exception {
+        String url = "jdbc:h2:mem:wiggle-" + Ids.next("db") + ";DB_CLOSE_DELAY=-1;MODE=PostgreSQL";
+        List<WiggleServer> servers = new ArrayList<>();
+        try {
+            for (int i = 0; i < n; i++) {
+                ServerConfig config = new ServerConfig(0, "node-" + i, null, url, null, null, 4,
+                        Duration.ofMillis(100), Duration.ofMillis(300), 3, Duration.ofSeconds(20),
+                        Duration.ofMillis(500), Duration.ofHours(1), 100);
+                servers.add(new WiggleServer(config).start());
+            }
+            try (WiggleClient client = new WiggleClient(servers.get(0).baseUrl())) {
+                body.run(servers, client);
+            }
+        } finally {
+            for (WiggleServer s : servers) {
+                try { s.close(); } catch (RuntimeException ignored) { }
+            }
         }
     }
 
@@ -393,6 +419,125 @@ public final class Scenarios {
         });
     }
 
+    /** Discovery returns every live node's dialable address, served from any node. */
+    public static void discoveryReturnsLiveServers() throws Exception {
+        withCluster(2, (servers, client) -> {
+            Set<String> expected = new HashSet<>();
+            for (WiggleServer s : servers) expected.add(s.baseUrl());
+
+            List<String> seen = new ArrayList<>();
+            Check.eventually("both nodes discoverable", 5000, () -> {
+                seen.clear();
+                seen.addAll(client.discover("probe", List.of()));
+                return seen.size() == 2;
+            });
+            Check.equal(new HashSet<>(seen), expected, "discovered addresses match the live nodes");
+        });
+    }
+
+    /**
+     * The backpressure invariant under a cluster: a worker polling several servers
+     * round-robin still never holds more in-flight tasks than its concurrency. This is
+     * exactly what fanning a full poll out to every server would have broken.
+     */
+    public static void backpressureHoldsAcrossServers() throws Exception {
+        withCluster(2, (servers, client) -> {
+            int concurrency = 3;
+            Blueprint<Map<String, Object>> bp = json("disco-backpressure")
+                    .map("slow", ctx -> { Check.sleep(120); return put(ctx, "done", true); })
+                    .build();
+            client.register(bp);
+
+            List<String> seeds = new ArrayList<>();
+            for (WiggleServer s : servers) seeds.add(s.baseUrl());
+
+            Worker w = new Worker(seeds, "w-" + Ids.next("x"), WorkerOptions.defaults()
+                    .withConcurrency(concurrency)
+                    .withLongPollWait(Duration.ofMillis(200))
+                    .withDiscoveryInterval(Duration.ofMillis(200)))
+                    .register(bp);
+            AtomicInteger maxSeen = new AtomicInteger();
+            AtomicBoolean sampling = new AtomicBoolean(true);
+            Thread sampler = new Thread(() -> {
+                while (sampling.get()) {
+                    maxSeen.accumulateAndGet(w.inFlight(), Math::max);
+                    try { Thread.sleep(3); } catch (InterruptedException e) { return; }
+                }
+            });
+            try {
+                w.start();
+                sampler.setDaemon(true);
+                sampler.start();
+                List<String> ids = new ArrayList<>();
+                for (int i = 0; i < 30; i++) ids.add(client.start(bp, Map.of("i", (long) i)));
+                for (String id : ids) {
+                    Check.equal(client.awaitCompletion(id, Duration.ofSeconds(30)).status(), "COMPLETED", "status");
+                }
+            } finally {
+                sampling.set(false);
+                w.close();
+            }
+            Check.isTrue(maxSeen.get() > 0, "the worker actually ran tasks");
+            Check.isTrue(maxSeen.get() <= concurrency,
+                    "in-flight never exceeded concurrency " + concurrency + ", peak was " + maxSeen.get());
+        });
+    }
+
+    /**
+     * A worker seeded with only one node still drains the whole cluster: it discovers the
+     * siblings and round-robins across them, so work handed out by any node completes.
+     */
+    public static void workerSeededWithOneNodeDrainsCluster() throws Exception {
+        withCluster(2, (servers, client) -> {
+            Blueprint<Map<String, Object>> bp = json("disco-drain")
+                    .map("work", ctx -> put(ctx, "done", true))
+                    .build();
+            client.register(bp);
+
+            Worker w = new Worker(List.of(servers.get(0).baseUrl()), "w-" + Ids.next("x"),
+                    WorkerOptions.defaults()
+                            .withConcurrency(4)
+                            .withLongPollWait(Duration.ofMillis(200))
+                            .withDiscoveryInterval(Duration.ofMillis(200)))
+                    .register(bp);
+            try {
+                w.start();
+                List<String> ids = new ArrayList<>();
+                for (int i = 0; i < 20; i++) ids.add(client.start(bp, Map.of("i", (long) i)));
+                for (String id : ids) {
+                    Check.equal(client.awaitCompletion(id, Duration.ofSeconds(30)).status(), "COMPLETED", "status");
+                }
+            } finally {
+                w.close();
+            }
+        });
+    }
+
+    /** An unreachable seed must not stop a worker: it bootstraps from the reachable one. */
+    public static void seedFailoverBootstrapsFromReachableNode() throws Exception {
+        withCluster(1, (servers, client) -> {
+            Blueprint<Map<String, Object>> bp = json("disco-seed-failover")
+                    .map("work", ctx -> put(ctx, "done", true))
+                    .build();
+            client.register(bp);
+
+            // First seed points at nothing; the worker must fall through to the live node.
+            List<String> seeds = List.of("127.0.0.1:1", servers.get(0).baseUrl());
+            Worker w = new Worker(seeds, "w-" + Ids.next("x"), WorkerOptions.defaults()
+                    .withConcurrency(2)
+                    .withLongPollWait(Duration.ofMillis(200))
+                    .withDiscoveryInterval(Duration.ofMillis(200)))
+                    .register(bp);
+            try {
+                w.start();
+                String id = client.start(bp, Map.of());
+                Check.equal(client.awaitCompletion(id, Duration.ofSeconds(30)).status(), "COMPLETED", "status");
+            } finally {
+                w.close();
+            }
+        });
+    }
+
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
     public static void definitionVersionIsContentAddressed() {
         Blueprint<Map<String, Object>> a = json("versioned").map("one", ctx -> ctx).build();
@@ -530,6 +675,10 @@ public final class Scenarios {
                 new Case("staleLeaseIsRejected", Scenarios::staleLeaseIsRejected),
                 new Case("cancelStopsAnInstance", Scenarios::cancelStopsAnInstance),
                 new Case("heartbeatKeepsLongTaskAlive", Scenarios::heartbeatKeepsLongTaskAlive),
+                new Case("discoveryReturnsLiveServers", Scenarios::discoveryReturnsLiveServers),
+                new Case("backpressureHoldsAcrossServers", Scenarios::backpressureHoldsAcrossServers),
+                new Case("workerSeededWithOneNodeDrainsCluster", Scenarios::workerSeededWithOneNodeDrainsCluster),
+                new Case("seedFailoverBootstrapsFromReachableNode", Scenarios::seedFailoverBootstrapsFromReachableNode),
                 new Case("leaderElectionAndFailover", Scenarios::leaderElectionAndFailover),
                 new Case("workDistributesAcrossWorkers", Scenarios::workDistributesAcrossWorkers));
     }

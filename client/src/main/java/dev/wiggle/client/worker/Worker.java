@@ -2,6 +2,7 @@ package dev.wiggle.client.worker;
 
 import dev.wiggle.client.dsl.ActivityHandler;
 import dev.wiggle.client.dsl.Blueprint;
+import dev.wiggle.client.worker.WiggleClient.WiggleApiException;
 import dev.wiggle.core.NodeKind;
 import dev.wiggle.core.TaskActivation;
 
@@ -15,6 +16,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * asks for as many tasks as it has free slots, so the server never overwhelms it and
  * backpressure is a property of the protocol rather than a thing to configure.
  *
+ * A worker discovers the live servers (see {@link ServerDirectory}) and polls them
+ * round-robin -- one server per cycle, for exactly its free slots -- which reaches the
+ * whole shared work pool while keeping the single-poll backpressure invariant intact.
+ *
  * Workers hold no workflow state. Losing one loses only the in-flight leases, which
  * the server's leader reclaims once they expire.
  */
@@ -22,7 +27,10 @@ public final class Worker implements AutoCloseable {
 
     private static final System.Logger LOG = System.getLogger(Worker.class.getName());
 
-    private final WiggleClient client;
+    /** How many other servers to try when a poll to the chosen server fails transiently. */
+    private static final int MAX_POLL_FAILOVER = 3;
+
+    private final ServerDirectory directory;
     private final String workerId;
     private final WorkerOptions options;
     private final Map<String, ActivityHandler> handlers = new ConcurrentHashMap<>();
@@ -36,7 +44,7 @@ public final class Worker implements AutoCloseable {
     private ScheduledExecutorService heartbeats;
     private Thread pollThread;
 
-    private ThreadFactory heartbeatThreadFactory = new ThreadFactory() {
+    private final ThreadFactory heartbeatThreadFactory = new ThreadFactory() {
         private final AtomicInteger n = new AtomicInteger();
         @Override
         public Thread newThread(Runnable r) {
@@ -50,10 +58,19 @@ public final class Worker implements AutoCloseable {
         this(client, workerId, WorkerOptions.defaults());
     }
 
+    /**
+     * Single-seed worker. The client's target is used as the discovery seed; the worker
+     * still learns and rotates across whatever siblings that server reports.
+     */
     public Worker(WiggleClient client, String workerId, WorkerOptions options) {
-        this.client = client;
+        this(List.of(client.target()), workerId, options);
+    }
+
+    /** Multi-seed worker: any of the seeds bootstraps discovery of the full cluster. */
+    public Worker(List<String> seeds, String workerId, WorkerOptions options) {
         this.workerId = workerId;
         this.options = options;
+        this.directory = new ServerDirectory(seeds, workerId, () -> queues, options.discoveryInterval());
     }
 
     public String workerId() { return workerId; }
@@ -75,9 +92,8 @@ public final class Worker implements AutoCloseable {
 
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
-        if (options.registerOnStart()) {
-            for (Blueprint<?> bp : blueprints) client.register(bp);
-        }
+        directory.start();
+        if (options.registerOnStart()) registerBlueprints();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
@@ -88,25 +104,53 @@ public final class Worker implements AutoCloseable {
         return this;
     }
 
+    /** Registers each blueprint on a live server, failing over across the cluster on transport errors. */
+    private void registerBlueprints() {
+        for (Blueprint<?> bp : blueprints) {
+            boolean registered = false;
+            int attempts = Math.max(1, Math.min(directory.size(), MAX_POLL_FAILOVER));
+            for (int i = 0; i < attempts && !registered; i++) {
+                ServerDirectory.Server s = directory.next();
+                if (s == null) break;
+                try {
+                    s.client().register(bp);
+                    registered = true;
+                } catch (WiggleApiException e) {
+                    if (e.status() != 0) throw e;   // real rejection, not a transport blip
+                    directory.onFailure(s.address());
+                }
+            }
+            if (!registered) {
+                LOG.log(System.Logger.Level.WARNING, "could not register blueprint " + bp.name() + " on start");
+            }
+        }
+    }
+
     private void pollLoop() {
         while (running.get()) {
             try {
+                // Backpressure: compute free slots once, then poll exactly that many from
+                // ONE server. Never split or fan out this budget, or leases could exceed slots.
                 int free = options.concurrency() - inFlight.get();
                 if (free <= 0) {
                     sleep(options.idleBackoff().toMillis());
                     continue;
                 }
-                List<TaskActivation> tasks = client.poll(workerId, queues, free,
-                        options.lease().toMillis(), options.longPollWait().toMillis());
-                if (tasks.isEmpty()) {
+                ServerDirectory.Server server = directory.next();
+                if (server == null) {
+                    sleep(options.errorBackoff().toMillis());
+                    continue;
+                }
+                PollResult polled = pollWithFailover(server, free);
+                if (polled.tasks().isEmpty()) {
                     sleep(options.idleBackoff().toMillis());
                     continue;
                 }
-                for (TaskActivation task : tasks) {
+                for (TaskActivation task : polled.tasks()) {
                     inFlight.incrementAndGet();
                     executor.submit(() -> {
                         try {
-                            execute(task);
+                            execute(task, polled.address());
                         } finally {
                             inFlight.decrementAndGet();
                         }
@@ -120,35 +164,83 @@ public final class Worker implements AutoCloseable {
         }
     }
 
-    private void execute(TaskActivation task) {
-        ActivityHandler handler = handlers.get(task.activity());
-        if (handler == null) {
-            reportFailure(task, "no handler registered for activity '" + task.activity() + "'", false);
+    /**
+     * Polls one server for {@code free} tasks, failing over to other servers on transport
+     * errors. The budget {@code free} is identical on every attempt and only one poll is
+     * ever outstanding, so failover cannot over-lease. Long-poll waits are applied only to
+     * the first attempt; retries use a zero wait so the loop returns promptly.
+     */
+    private PollResult pollWithFailover(ServerDirectory.Server first, int free) {
+        int attempts = Math.max(1, Math.min(directory.size(), MAX_POLL_FAILOVER));
+        ServerDirectory.Server current = first;
+        for (int i = 0; i < attempts; i++) {
+            long wait = i == 0 ? options.longPollWait().toMillis() : 0;
+            try {
+                List<TaskActivation> tasks = current.client().poll(
+                        workerId, queues, free, options.lease().toMillis(), wait);
+                return new PollResult(current.address(), tasks);
+            } catch (WiggleApiException e) {
+                if (e.status() != 0) {
+                    // A client error (bad request, etc.) -- retrying elsewhere won't help.
+                    LOG.log(System.Logger.Level.WARNING,
+                            "poll rejected by " + current.address() + ": " + e.getMessage());
+                    return PollResult.empty(current.address());
+                }
+                directory.onFailure(current.address());
+                ServerDirectory.Server nextServer = directory.next();
+                if (nextServer == null) return PollResult.empty(current.address());
+                current = nextServer;
+            }
+        }
+        return PollResult.empty(current.address());
+    }
+
+    private record PollResult(String address, List<TaskActivation> tasks) {
+        static PollResult empty(String address) { return new PollResult(address, List.of()); }
+    }
+
+    private void execute(TaskActivation task, String sourceAddress) {
+        // Route this task's results (and its lease heartbeat) back to the server it came from.
+        WiggleClient rc = resolveResultClient(sourceAddress);
+        if (rc == null) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "no server to run task " + task.taskId() + "; its lease will expire and be reclaimed");
             return;
         }
-        ScheduledFuture<?> lease = scheduleHeartbeat(task);
+        ActivityHandler handler = handlers.get(task.activity());
+        if (handler == null) {
+            reportFailure(rc, task, "no handler registered for activity '" + task.activity() + "'", false);
+            return;
+        }
+        ScheduledFuture<?> lease = scheduleHeartbeat(task, rc);
         try {
             Object result = handler.invoke(task.context());
             if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
-                reportFailure(task, "predicate '" + task.stepName() + "' returned "
+                reportFailure(rc, task, "predicate '" + task.stepName() + "' returned "
                         + (result == null ? "null" : result.getClass().getSimpleName()), false);
                 return;
             }
-            client.complete(task.taskId(), task.leaseOwner(),
-                    task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
+            complete(rc, task, task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
         } catch (PermanentActivityException e) {
-            reportFailure(task, describe(e), false);
+            reportFailure(rc, task, describe(e), false);
         } catch (Exception e) {
             LOG.log(System.Logger.Level.DEBUG,
                     () -> "step " + task.stepName() + " of " + task.instanceId() + " failed: " + e);
-            reportFailure(task, describe(e), true);
+            reportFailure(rc, task, describe(e), true);
         } catch (Throwable t) {
-            reportFailure(task, describe(t), false);
+            reportFailure(rc, task, describe(t), false);
             throw t;
         } finally {
             // Task is settled (completed or failed); stop extending its lease.
             lease.cancel(false);
         }
+    }
+
+    private WiggleClient resolveResultClient(String sourceAddress) {
+        ServerDirectory.Server origin = directory.clientFor(sourceAddress);
+        if (origin != null) return origin.client();
+        ServerDirectory.Server fallback = directory.next();
+        return fallback != null ? fallback.client() : null;
     }
 
     /** A small pool: heartbeats are brief RPCs, so a handful of threads covers any concurrency. */
@@ -157,16 +249,16 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Keeps the task's lease alive for as long as the handler runs. Fires at a third of
-     * the lease so a single missed beat is not fatal, and each beat extends by a full
-     * lease. The returned future is cancelled once the task is settled.
+     * Keeps the task's lease alive for as long as the handler runs, heartbeating the server
+     * the task came from. Fires at a third of the lease so a single missed beat is not fatal,
+     * and each beat extends by a full lease. Cancelled once the task is settled.
      */
-    private ScheduledFuture<?> scheduleHeartbeat(TaskActivation task) {
+    private ScheduledFuture<?> scheduleHeartbeat(TaskActivation task, WiggleClient rc) {
         long leaseMillis = options.lease().toMillis();
         long period = Math.max(1, leaseMillis / 3);
         return heartbeats.scheduleWithFixedDelay(() -> {
             try {
-                client.heartbeat(task.taskId(), task.leaseOwner(), leaseMillis);
+                rc.heartbeat(task.taskId(), task.leaseOwner(), leaseMillis);
             } catch (RuntimeException e) {
                 LOG.log(System.Logger.Level.DEBUG,
                         () -> "heartbeat for task " + task.taskId() + " failed: " + e.getMessage());
@@ -174,14 +266,35 @@ public final class Worker implements AutoCloseable {
         }, period, period, TimeUnit.MILLISECONDS);
     }
 
-    private void reportFailure(TaskActivation task, String message, boolean retryable) {
+    private void complete(WiggleClient rc, TaskActivation task, Object result) {
         try {
-            client.fail(task.taskId(), task.leaseOwner(), message, retryable);
-        } catch (RuntimeException e) {
+            rc.complete(task.taskId(), task.leaseOwner(), result);
+        } catch (WiggleApiException e) {
+            if (e.status() != 0) throw e;      // e.g. 409 stale lease -- nothing to retry
+            WiggleClient alt = failoverClient(rc);
+            if (alt == null) throw e;
+            alt.complete(task.taskId(), task.leaseOwner(), result);
+        }
+    }
+
+    private void reportFailure(WiggleClient rc, TaskActivation task, String message, boolean retryable) {
+        try {
+            rc.fail(task.taskId(), task.leaseOwner(), message, retryable);
+        } catch (WiggleApiException e) {
+            WiggleClient alt = e.status() == 0 ? failoverClient(rc) : null;
+            if (alt != null) {
+                try { alt.fail(task.taskId(), task.leaseOwner(), message, retryable); return; }
+                catch (RuntimeException ignored) { /* fall through to log */ }
+            }
             // The lease will expire and the leader will reclaim the task; nothing else to do.
             LOG.log(System.Logger.Level.WARNING,
                     "could not report failure of task " + task.taskId() + ": " + e.getMessage());
         }
+    }
+
+    private WiggleClient failoverClient(WiggleClient failed) {
+        ServerDirectory.Server alt = directory.next();
+        return alt != null && alt.client() != failed ? alt.client() : null;
     }
 
     private static String describe(Throwable t) {
@@ -211,5 +324,6 @@ public final class Worker implements AutoCloseable {
             }
         }
         if (heartbeats != null) heartbeats.shutdownNow();
+        directory.close();
     }
 }

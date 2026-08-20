@@ -15,11 +15,16 @@ public final class WiggleClient implements AutoCloseable {
 
     private final ManagedChannel channel;
     private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
+    private final String target;
 
     public WiggleClient(String target) {
-        this.channel = ManagedChannelBuilder.forTarget(stripScheme(target)).usePlaintext().build();
+        this.target = stripScheme(target);
+        this.channel = ManagedChannelBuilder.forTarget(this.target).usePlaintext().build();
         this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
     }
+
+    /** The host:port this client dials -- used to seed and key server discovery. */
+    public String target() { return target; }
 
     private static String stripScheme(String target) {
         int i = target.indexOf("://");
@@ -126,6 +131,19 @@ public final class WiggleClient implements AutoCloseable {
                 .setMessage(message)
                 .setRetryable(retryable)
                 .build()));
+    }
+
+    /** Announces this worker to a server and returns the advertised addresses of the live nodes. */
+    public List<String> discover(String workerId, Collection<String> queues) {
+        ServerList res = call(() -> stub.discover(DiscoveryRequest.newBuilder()
+                .setWorkerId(workerId)
+                .addAllQueues(queues)
+                .build()));
+        List<String> out = new ArrayList<>(res.getServersCount());
+        for (ServerEndpoint s : res.getServersList()) {
+            if (!s.getAddress().isBlank()) out.add(s.getAddress());
+        }
+        return out;
     }
 
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {

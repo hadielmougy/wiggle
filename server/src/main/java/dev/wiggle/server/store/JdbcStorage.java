@@ -104,11 +104,13 @@ public final class JdbcStorage implements Storage {
             CREATE TABLE IF NOT EXISTS wf_node (
               id             VARCHAR(64)  PRIMARY KEY,
               name           VARCHAR(200) NOT NULL,
+              advertised_address VARCHAR(200),
               first_heartbeat BIGINT      NOT NULL,
               last_heartbeat BIGINT       NOT NULL,
               workers        INT          NOT NULL,
               leader         INT          NOT NULL
             );
+            ALTER TABLE wf_node ADD COLUMN IF NOT EXISTS advertised_address VARCHAR(200);
             """;
         Connection c = borrow();
         try {
@@ -417,14 +419,17 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void upsertNode(ServerNode n) {
-            try (PreparedStatement upd = ps("UPDATE wf_node SET name=?,last_heartbeat=?,workers=? WHERE id=?")) {
-                upd.setString(1, n.name); upd.setLong(2, n.lastHeartbeat); upd.setInt(3, n.workers);
-                upd.setString(4, n.id);
+            try (PreparedStatement upd = ps(
+                    "UPDATE wf_node SET name=?,advertised_address=?,last_heartbeat=?,workers=? WHERE id=?")) {
+                upd.setString(1, n.name); upd.setString(2, n.advertisedAddress);
+                upd.setLong(3, n.lastHeartbeat); upd.setInt(4, n.workers);
+                upd.setString(5, n.id);
                 if (upd.executeUpdate() == 0) {
                     try (PreparedStatement ins = ps("INSERT INTO wf_node " +
-                            "(id,name,first_heartbeat,last_heartbeat,workers,leader) VALUES (?,?,?,?,?,0)")) {
-                        ins.setString(1, n.id); ins.setString(2, n.name); ins.setLong(3, n.firstHeartbeat);
-                        ins.setLong(4, n.lastHeartbeat); ins.setInt(5, n.workers);
+                            "(id,name,advertised_address,first_heartbeat,last_heartbeat,workers,leader) " +
+                            "VALUES (?,?,?,?,?,?,0)")) {
+                        ins.setString(1, n.id); ins.setString(2, n.name); ins.setString(3, n.advertisedAddress);
+                        ins.setLong(4, n.firstHeartbeat); ins.setLong(5, n.lastHeartbeat); ins.setInt(6, n.workers);
                         ins.executeUpdate();
                     }
                 }
@@ -439,6 +444,7 @@ public final class JdbcStorage implements Storage {
                     ServerNode n = new ServerNode();
                     n.id = rs.getString("id");
                     n.name = rs.getString("name");
+                    n.advertisedAddress = rs.getString("advertised_address");
                     n.firstHeartbeat = rs.getLong("first_heartbeat");
                     n.lastHeartbeat = rs.getLong("last_heartbeat");
                     n.workers = rs.getInt("workers");

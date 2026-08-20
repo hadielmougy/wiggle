@@ -12,6 +12,8 @@ import "google/protobuf/struct.proto";
 service WiggleControlPlane {
     rpc HealthCheck(Empty) returns (HealthStatus);
     rpc GetCluster(Empty) returns (ClusterView);
+    // Worker-facing discovery: a heartbeat to any known node returns the live server set.
+    rpc Discover(DiscoveryRequest) returns (ServerList);
 
     rpc ListWorkflows(Empty) returns (WorkflowNames);
     rpc RegisterWorkflow(WorkflowDefinition) returns (RegisterWorkflowResult);
@@ -48,12 +50,30 @@ message ClusterMember {
     int32 workers = 5;
     bool leader = 6;
     bool alive = 7;
+    string advertised_address = 8;
 }
 
 message ClusterView {
     string self = 1;
     bool leader = 2;
     repeated ClusterMember members = 3;
+}
+
+// A worker announces itself (id + the queues it serves) and gets back the live servers.
+message DiscoveryRequest {
+    string worker_id = 1;
+    repeated string queues = 2;
+}
+
+message ServerEndpoint {
+    string id = 1;
+    string name = 2;
+    string address = 3;   // host:port to dial
+    bool leader = 4;
+}
+
+message ServerList {
+    repeated ServerEndpoint servers = 1;
 }
 
 // ------------------------------------------------------------------ workflows

@@ -9,8 +9,12 @@ public class SubmitTransactions {
         try (WiggleClient client = new WiggleClient(url)) {
             client.register(TransactionWorkflow.blueprint());
 
-            Transaction trx = new Transaction("from", "to");
-            client.start(TransactionWorkflow.blueprint(), trx);
+            for (int i = 1; i <= 1000; i++) {
+                Transaction trx = new Transaction("from", "to");
+                client.start(TransactionWorkflow.blueprint(), trx);
+                Thread.sleep(50);
+            }
+
 
         } catch (Exception e) {
             e.printStackTrace();

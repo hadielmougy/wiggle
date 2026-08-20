@@ -87,6 +87,8 @@ public final class Rows {
     public static final class ServerNode implements Cloneable {
         public String id;
         public String name;
+        /** host:port a worker should dial to reach this node; null until advertised. */
+        public String advertisedAddress;
         public long firstHeartbeat;
         public long lastHeartbeat;
         public int workers;

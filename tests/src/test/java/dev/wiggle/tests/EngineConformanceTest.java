@@ -96,6 +96,26 @@ class EngineConformanceTest {
         Scenarios.heartbeatKeepsLongTaskAlive();
     }
 
+    @Test @DisplayName("discovery returns every live node's dialable address")
+    void discoveryReturnsLiveServers() throws Exception {
+        Scenarios.discoveryReturnsLiveServers();
+    }
+
+    @Test @DisplayName("backpressure holds when polling several servers round-robin")
+    void backpressureHoldsAcrossServers() throws Exception {
+        Scenarios.backpressureHoldsAcrossServers();
+    }
+
+    @Test @DisplayName("a worker seeded with one node drains the whole cluster")
+    void workerSeededWithOneNodeDrainsCluster() throws Exception {
+        Scenarios.workerSeededWithOneNodeDrainsCluster();
+    }
+
+    @Test @DisplayName("an unreachable seed falls through to a reachable node")
+    void seedFailoverBootstrapsFromReachableNode() throws Exception {
+        Scenarios.seedFailoverBootstrapsFromReachableNode();
+    }
+
     @Test @DisplayName("exactly one leader is elected, and failover works")
     void leaderElectionAndFailover() {
         Scenarios.leaderElectionAndFailover();

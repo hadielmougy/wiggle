@@ -41,6 +41,8 @@ public final class ClusterManager implements AutoCloseable {
             });
     private final AtomicBoolean leader = new AtomicBoolean(false);
     private volatile long lastSuccessfulHeartbeat;
+    /** Alive members as of the last heartbeat, so worker discovery never hits the DB. */
+    private volatile List<ServerNode> aliveSnapshot = List.of();
 
     public ClusterManager(Storage storage, String name, int workers,
                           long heartbeatIntervalMillis, int missedHeartbeatsBeforeDead) {
@@ -56,6 +58,12 @@ public final class ClusterManager implements AutoCloseable {
     }
 
     public String nodeId() { return self.id; }
+
+    /**
+     * The host:port workers should dial to reach this node. Set once before {@link #start()}
+     * (the API must be bound first so the real port is known); every heartbeat persists it.
+     */
+    public void setAdvertisedAddress(String address) { self.advertisedAddress = address; }
 
     public boolean isLeader() {
         // Fencing: a node whose own heartbeat has gone stale must not act as leader,
@@ -90,6 +98,7 @@ public final class ClusterManager implements AutoCloseable {
             List<ServerNode> alive = tx.nodes().stream()
                     .filter(n -> now - n.lastHeartbeat < deadAfterMillis())
                     .toList();
+            this.aliveSnapshot = alive;
             Optional<ServerNode> elected = alive.stream()
                     .min((a, b) -> a.firstHeartbeat != b.firstHeartbeat
                             ? Long.compare(a.firstHeartbeat, b.firstHeartbeat)
@@ -109,6 +118,14 @@ public final class ClusterManager implements AutoCloseable {
 
     public List<ServerNode> members() {
         return storage.inTx(tx -> tx.nodes());
+    }
+
+    /**
+     * Alive members from the last heartbeat cache -- served to workers on discovery so
+     * per-worker discovery load never touches the database.
+     */
+    public List<ServerNode> aliveMembers() {
+        return aliveSnapshot;
     }
 
     @Override public void close() {

@@ -84,6 +84,24 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
+    public void discover(DiscoveryRequest req, StreamObserver<ServerList> resp) {
+        run(resp, () -> {
+            // Served from the cluster's cached alive set, so worker discovery never hits the DB.
+            ServerList.Builder out = ServerList.newBuilder();
+            for (ServerNode n : cluster.aliveMembers()) {
+                if (n.advertisedAddress == null || n.advertisedAddress.isBlank()) continue;
+                out.addServers(ServerEndpoint.newBuilder()
+                        .setId(n.id)
+                        .setName(n.name)
+                        .setAddress(n.advertisedAddress)
+                        .setLeader(n.leader)
+                        .build());
+            }
+            return out.build();
+        });
+    }
+
+    @Override
     public void listWorkflows(Empty req, StreamObserver<WorkflowNames> resp) {
         run(resp, () -> WorkflowNames.newBuilder().addAllWorkflows(engine.definitions().names()).build());
     }
@@ -220,6 +238,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                     .setWorkers(n.workers)
                     .setLeader(n.leader)
                     .setAlive(now - n.lastHeartbeat < cluster.deadAfterMillis())
+                    .setAdvertisedAddress(n.advertisedAddress == null ? "" : n.advertisedAddress)
                     .build());
         }
         return out.build();

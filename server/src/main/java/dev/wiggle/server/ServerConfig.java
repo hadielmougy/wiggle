@@ -3,7 +3,8 @@ package dev.wiggle.server;
 import java.time.Duration;
 
 /** Configuration with sane defaults; every field is overridable from env or system properties. */
-public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
+public record ServerConfig(int port, String nodeName, String advertisedAddress,
+                           String jdbcUrl, String jdbcUser, String jdbcPassword,
                            int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                            int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                            Duration retention, int housekeepingBatch) {
@@ -12,6 +13,10 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(
                 intProp("wiggle.port", "WIGGLE_PORT", 8080),
                 strProp("wiggle.node.name", "WIGGLE_NODE_NAME", defaultNodeName()),
+                // The host:port workers should dial. Leave unset for single-host/local runs
+                // (defaults to 127.0.0.1:<port>); set explicitly for multi-host deployments,
+                // since the bind address is often not the reachable one (containers, NAT).
+                strProp("wiggle.advertised.address", "WIGGLE_ADVERTISED_ADDRESS", null),
                 strProp("wiggle.jdbc.url", "WIGGLE_JDBC_URL", null),
                 strProp("wiggle.jdbc.user", "WIGGLE_JDBC_USER", null),
                 strProp("wiggle.jdbc.password", "WIGGLE_JDBC_PASSWORD", null),
