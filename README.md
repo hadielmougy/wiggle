@@ -5,12 +5,12 @@ small `java.util.stream`-style DSL, run it on a server (embedded in your JVM or 
 standalone cluster), and process the steps with *workers* that pull work when they have
 capacity.
 
-- **Fluent DSL** — build a workflow as a chain of steps: `map`, `filter`, `fork`, `sleep`, `retry`.
+- **Fluent DSL** — build a workflow as a chain of steps: `step`, `gate`, `choose`, `fork`, `sleep`.
 - **Durable** — instances survive restarts; run in-memory for dev, or on Postgres for real.
 - **Pull-based workers** — workers ask for work; the server never pushes. Backpressure is built in, and workers need no inbound connectivity.
 - **Automatic retries, timers, and parallel fork/join**, with at-least-once execution and lease-based recovery when a worker dies.
 
-**Current version: `1.1.0`** · Java 21+ · Apache-2.0
+**Current version: `2.0.0`** · Java 21+ · Apache-2.0
 
 ---
 
@@ -23,10 +23,10 @@ Artifacts are published to Maven Central under `io.github.hadielmougy`.
 ```kotlin
 dependencies {
     // The DSL + worker + client — this is what your application needs.
-    implementation("io.github.hadielmougy:wiggle-client:1.1.0")
+    implementation("io.github.hadielmougy:wiggle-client:2.0.0")
 
     // Only if you embed the server in your own JVM (otherwise run it standalone).
-    implementation("io.github.hadielmougy:wiggle-server:1.1.0")
+    implementation("io.github.hadielmougy:wiggle-server:2.0.0")
 
     // Only for a real, multi-node deployment: a JDBC driver at runtime.
     runtimeOnly("org.postgresql:postgresql:42.7.4")
@@ -39,7 +39,7 @@ dependencies {
 <dependency>
   <groupId>io.github.hadielmougy</groupId>
   <artifactId>wiggle-client</artifactId>
-  <version>1.1.0</version>
+  <version>2.0.0</version>
 </dependency>
 ```
 
@@ -61,7 +61,7 @@ import java.util.Map;
 
 // 1. Define a workflow. Here the context is a plain Map; see below for typed records.
 Blueprint<Map<String, Object>> greet = Workflow.defineJson("greet")
-        .map("say-hello", ctx -> Map.of("greeting", "hello, " + ctx.get("name")))
+        .step("say-hello", ctx -> Map.of("greeting", "hello, " + ctx.get("name")))
         .build();
 
 // 2. Start an embedded, in-memory server (great for dev and tests).
@@ -98,23 +98,23 @@ A workflow is a chain of steps. Nothing runs while you build it; `build()` produ
 ```java
 Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.records(Order.class))
 
-        .map("validate", order -> order.withStatus("VALIDATED"))
+        .step("validate", order -> order.withStatus("VALIDATED"))
 
-        // A false predicate ends the instance successfully — an empty stream, not an error.
-        .filter("in-stock", order -> order.quantity() > 0)
+        // A false guard ends the instance successfully — an empty stream, not an error.
+        .gate("in-stock", order -> order.quantity() > 0)
 
         .fork(
                 Branch.of("payment", s -> s
-                        .map("authorise", Payments::authorise)
-                        .retry(RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                        .map("capture", Payments::capture)),
+                        // Retry policy is an optional parameter on the step itself.
+                        .step("authorise", Payments::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+                        .step("capture", Payments::capture)),
 
                 Branch.of("shipping", s -> s
-                        .map("reserve-stock", Stock::reserve)
+                        .step("reserve-stock", Stock::reserve)
                         .sleep("await-warehouse", Duration.ofMillis(300))
-                        .map("print-label", Labels::print)))
+                        .step("print-label", Labels::print)))
 
-        .map("notify", Notifier::send)
+        .step("notify", Notifier::send)
         .build();
 ```
 
@@ -122,20 +122,23 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 
 | Operation | What it does |
 |---|---|
-| `map(name, fn)` / `then(name, fn)` | run `fn` on a worker; its return value becomes the new context |
-| `peek(name, fn)` | run `fn` for a side effect; context unchanged |
-| `filter(name, pred)` | continue only while `pred` is true; a false result ends the instance as `filtered:<name>` |
+| `step(name, fn)` / `then(name, fn)` | run `fn` on a worker; its return value becomes the new context |
+| `step(name, fn, retry)` | same, with an explicit `RetryPolicy` for that step |
+| `effect(name, fn)` | run `fn` for a side effect; context unchanged |
+| `gate(name, pred)` | continue only while `pred` is true; a false result ends the instance as `gated:<name>` |
 | `choose(cases…)` | switch/case: run the branch of the **first** matching guard, then continue |
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
 | `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
-| `retry(policy)` | set the retry policy for the step you just added |
 | `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |
 | `build()` | finish; produces the `Blueprint` |
+
+`step`, `effect`, and `gate` all accept an optional trailing `RetryPolicy` argument; omit it
+to use the workflow's default policy.
 
 ### The context
 
 The context is your workflow's data. It's the same type from the first step to the last:
-`map` returns a new context of the same type (think `UnaryOperator<T>`, not
+`step` returns a new context of the same type (think `UnaryOperator<T>`, not
 `Function<T,R>`). Two flavors:
 
 - **Typed records** — `Workflow.define("name", ContextCodec.records(Order.class))`. Your
@@ -159,17 +162,17 @@ import static dev.wiggle.client.dsl.Case.*;   // when, otherwise
 
 .choose(
         when("is-digital",  o -> o.type() == Type.DIGITAL,
-                b -> b.map("grant-access", Fulfil::grantAccess)),
+                b -> b.step("grant-access", Fulfil::grantAccess)),
 
         when("is-physical", o -> o.type() == Type.PHYSICAL,
-                b -> b.map("reserve", Stock::reserve)
+                b -> b.step("reserve", Stock::reserve)
                       .sleep("await-warehouse", Duration.ofMillis(300))
-                      .map("ship", Shipping::send)),
+                      .step("ship", Shipping::send)),
 
         otherwise("backorder",
-                b -> b.map("queue-backorder", Backorders::queue)))
+                b -> b.step("queue-backorder", Backorders::queue)))
 
-.map("notify", Notifier::send)   // runs once, after the chosen branch
+.step("notify", Notifier::send)   // runs once, after the chosen branch
 ```
 
 ---
@@ -233,13 +236,12 @@ failures)? Read it from `Step` — no change to your step's signature:
 ```java
 import dev.wiggle.client.worker.Step;
 
-.map("authorise", order -> {
+.step("authorise", order -> {
     if (Step.attempt() <= 2) {                 // 1 on the first try, +1 each retry
         throw new IllegalStateException("payment gateway timeout");
     }
     return order.withPaymentRef("auth-" + order.orderId());
-})
-.retry(RetryPolicy.exponential(5, Duration.ofMillis(100)))
+}, RetryPolicy.exponential(5, Duration.ofMillis(100)))
 ```
 
 `Step` also exposes `Step.name()` and `Step.instanceId()`. It's valid only inside a

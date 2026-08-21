@@ -10,13 +10,13 @@ import java.util.Map;
  *
  * <pre>{@code
  * Blueprint<Order> bp = Workflow.define("order-fulfilment", ContextCodec.records(Order.class))
- *         .map("validate",  o -> o.withStatus("VALIDATED"))
- *         .filter("in-stock", o -> o.quantity() > 0)
- *         .fork(Branch.of("payment",  s -> s.map("charge", Payments::charge)),
- *               Branch.of("shipping", s -> s.map("reserve", Stock::reserve)
+ *         .step("validate",  o -> o.withStatus("VALIDATED"))
+ *         .gate("in-stock", o -> o.quantity() > 0)
+ *         .fork(Branch.of("payment",  s -> s.step("charge", Payments::charge)),
+ *               Branch.of("shipping", s -> s.step("reserve", Stock::reserve)
  *                                            .sleep(Duration.ofSeconds(2))
- *                                            .map("label", Labels::print)))
- *         .map("notify", Notifier::send)
+ *                                            .step("label", Labels::print)))
+ *         .step("notify", Notifier::send)
  *         .build();
  * }</pre>
  */
