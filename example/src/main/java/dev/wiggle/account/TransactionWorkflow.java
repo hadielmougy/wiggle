@@ -10,11 +10,9 @@ import java.time.Duration;
 public class TransactionWorkflow {
 
     public static Blueprint<Transaction> blueprint() {
-        return Workflow.define("accounts-workflow", ContextCodec.records(Transaction.class))
+        return Workflow.define("accounts-workflow", ContextCodec.records(Transaction.class), RetryPolicy.fixed(100, Duration.ofSeconds(1)))
                 .map("make-withdraw", Transaction::withdraw)
-                .retry(RetryPolicy.fixed(100, Duration.ofMinutes(1)))
                 .map("make-deposit", Transaction::deposit)
-                .retry(RetryPolicy.fixed(100, Duration.ofMinutes(1)))
                 .build();
     }
 }
