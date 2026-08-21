@@ -27,7 +27,7 @@ final class Pipeline<T> {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("workflow name is required");
         this.name = name;
         this.codec = codec;
-        this.defaultRetry = defaultRetry == null ? RetryPolicy.none() : defaultRetry;
+        this.defaultRetry = defaultRetry == null ? RetryPolicy.forever() : defaultRetry;
         this.defaultQueue = name;
     }
 

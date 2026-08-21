@@ -16,6 +16,10 @@ public record RetryPolicy(int maxAttempts, long initialBackoffMillis, double mul
         if (multiplier < 1.0) throw new IllegalArgumentException("multiplier must be >= 1.0");
     }
 
+    public static RetryPolicy forever() {
+        return new RetryPolicy(Integer.MAX_VALUE, Duration.ofSeconds(1).toMillis(), 1.0, Duration.ofMinutes(1).toMillis(), 0);
+    }
+
     public static RetryPolicy none() {
         return new RetryPolicy(1, 0, 1.0, 0, 0);
     }
