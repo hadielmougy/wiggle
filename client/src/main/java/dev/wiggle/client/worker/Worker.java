@@ -126,10 +126,14 @@ public final class Worker implements AutoCloseable {
             reportFailure(task, "no handler registered for activity '" + task.activity() + "'", false);
             return;
         }
-        ScheduledFuture<?> lease = scheduleHeartbeat(task);
+        Heartbeat lease = new Heartbeat(heartbeats,
+                extend -> client.heartbeat(task.taskId(), task.leaseOwner(), extend),
+                options.lease().toMillis(), task.taskId());
+        lease.start();
         Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId()));
         try {
             Object result = handler.invoke(task.context());
+            lease.stop();
             if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
                 reportFailure(task, "predicate '" + task.stepName() + "' returned "
                         + (result == null ? "null" : result.getClass().getSimpleName()), false);
@@ -138,17 +142,19 @@ public final class Worker implements AutoCloseable {
             client.complete(task.taskId(), task.leaseOwner(),
                     task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
         } catch (PermanentActivityException e) {
+            lease.stop();
             reportFailure(task, describe(e), false);
         } catch (Exception e) {
             LOG.log(System.Logger.Level.DEBUG,
                     () -> "step " + task.stepName() + " of " + task.instanceId() + " failed: " + e);
+            lease.stop();
             reportFailure(task, describe(e), true);
         } catch (Throwable t) {
+            lease.stop();
             reportFailure(task, describe(t), false);
             throw t;
         } finally {
-            // Task is settled (completed or failed); stop extending its lease.
-            lease.cancel(false);
+            lease.stop();
             Step.end();
         }
     }
@@ -156,24 +162,6 @@ public final class Worker implements AutoCloseable {
     /** A small pool: heartbeats are brief RPCs, so a handful of threads covers any concurrency. */
     private int heartbeatThreads() {
         return Math.max(1, Math.min(4, options.concurrency()));
-    }
-
-    /**
-     * Keeps the task's lease alive for as long as the handler runs. Fires at a third of
-     * the lease so a single missed beat is not fatal, and each beat extends by a full
-     * lease. The returned future is cancelled once the task is settled.
-     */
-    private ScheduledFuture<?> scheduleHeartbeat(TaskActivation task) {
-        long leaseMillis = options.lease().toMillis();
-        long period = Math.max(1, leaseMillis / 3);
-        return heartbeats.scheduleWithFixedDelay(() -> {
-            try {
-                client.heartbeat(task.taskId(), task.leaseOwner(), leaseMillis);
-            } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.DEBUG,
-                        () -> "heartbeat for task " + task.taskId() + " failed: " + e.getMessage());
-            }
-        }, period, period, TimeUnit.MILLISECONDS);
     }
 
     private void reportFailure(TaskActivation task, String message, boolean retryable) {
