@@ -46,58 +46,83 @@ public final class WorkflowStream<T> {
 
     // ------------------------------------------------- intermediate operations
 
-    /** Runs {@code fn} on a worker and stores the result as the new context. */
-    public WorkflowStream<T> map(String stepName, Activity<T> fn) {
+    /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
+    public WorkflowStream<T> step(String name, Activity<T> fn) {
+        return step(name, fn, null);
+    }
+
+    /**
+     * A unit of work run on a worker, with an explicit retry policy. Pass {@code retry} to
+     * govern how a thrown step is retried (exponential backoff by default); a {@code null}
+     * policy falls back to the workflow default.
+     */
+    public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry) {
         Objects.requireNonNull(fn, "activity");
-        String activity = pipeline.activityFor(stepName);
+        String activity = pipeline.activityFor(name);
         ContextCodec<T> codec = pipeline.codec;
         pipeline.handlers.put(activity,
                 json -> dev.wiggle.core.Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json)))));
         String id = pipeline.nextId("n");
-        pipeline.put(Node.task(id, stepName, activity, pipeline.defaultQueue, pipeline.defaultRetry));
+        pipeline.put(Node.task(id, name, activity, pipeline.defaultQueue, retryOr(retry)));
         pipeline.queues.add(pipeline.defaultQueue);
         attach(id);
         lastStepId = id;
         return this;
     }
 
-    /** Alias for {@link #map} that reads better for steps run for their effect. */
-    public WorkflowStream<T> then(String stepName, Activity<T> fn) {
-        return map(stepName, fn);
+    /** Alias for {@link #step} that reads well when sequencing ("do this, then that"). */
+    public WorkflowStream<T> then(String name, Activity<T> fn) {
+        return step(name, fn, null);
     }
 
-    /** Runs {@code fn} on a worker but keeps the context unchanged. */
-    public WorkflowStream<T> peek(String stepName, SideEffect<T> fn) {
+    /** Alias for {@link #step(String, Activity, RetryPolicy)}. */
+    public WorkflowStream<T> then(String name, Activity<T> fn, RetryPolicy retry) {
+        return step(name, fn, retry);
+    }
+
+    /** Runs {@code fn} on a worker for its side effect only; the context is left unchanged. */
+    public WorkflowStream<T> effect(String name, SideEffect<T> fn) {
+        return effect(name, fn, null);
+    }
+
+    /** {@link #effect} with an explicit retry policy; a {@code null} policy uses the workflow default. */
+    public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry) {
         Objects.requireNonNull(fn, "side effect");
-        String activity = pipeline.activityFor(stepName);
+        String activity = pipeline.activityFor(name);
         ContextCodec<T> codec = pipeline.codec;
         pipeline.handlers.put(activity, json -> {
             fn.accept(codec.decode(json));
             return null;
         });
         String id = pipeline.nextId("n");
-        pipeline.put(Node.task(id, stepName, activity, pipeline.defaultQueue, pipeline.defaultRetry));
+        pipeline.put(Node.task(id, name, activity, pipeline.defaultQueue, retryOr(retry)));
         pipeline.queues.add(pipeline.defaultQueue);
         attach(id);
         lastStepId = id;
         return this;
     }
 
+    /** {@link #gate} whose guard uses the workflow's default retry policy. */
+    public WorkflowStream<T> gate(String name, Predicate<T> test) {
+        return gate(name, test, null);
+    }
+
     /**
-     * Continues only while the predicate holds. A false result ends the instance
-     * successfully with the termination reason {@code "filtered:<stepName>"} -- the
-     * workflow equivalent of an empty stream, not an error.
+     * A guard evaluated on a worker: the flow continues only while {@code test} holds. A false
+     * result ends the instance successfully with the termination reason {@code "gated:<name>"}
+     * -- the workflow equivalent of an empty stream, not an error.
      *
-     * Inside a fork branch the false path short-circuits to the enclosing join instead,
-     * so the branch still arrives at the barrier and its siblings are not stranded.
+     * <p>Inside a fork branch the false path short-circuits to the enclosing join instead, so
+     * the branch still arrives at the barrier and its siblings are not stranded. A {@code null}
+     * retry policy uses the workflow default.
      */
-    public WorkflowStream<T> filter(String stepName, Predicate<T> test) {
+    public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry) {
         Objects.requireNonNull(test, "predicate");
-        String activity = pipeline.activityFor(stepName);
+        String activity = pipeline.activityFor(name);
         ContextCodec<T> codec = pipeline.codec;
         pipeline.handlers.put(activity, json -> test.test(codec.decode(json)));
         String id = pipeline.nextId("n");
-        pipeline.put(Node.predicate(id, stepName, activity, pipeline.defaultQueue, pipeline.defaultRetry));
+        pipeline.put(Node.predicate(id, name, activity, pipeline.defaultQueue, retryOr(retry)));
         pipeline.queues.add(pipeline.defaultQueue);
         attach(id);
 
@@ -105,7 +130,7 @@ public final class WorkflowStream<T> {
             pipeline.wire(id, ALT_NEXT, enclosingJoinId);
         } else {
             String stop = pipeline.nextId("n");
-            pipeline.put(Node.end(stop, true, "filtered:" + stepName));
+            pipeline.put(Node.end(stop, true, "gated:" + name));
             pipeline.wire(id, ALT_NEXT, stop);
         }
 
@@ -113,6 +138,10 @@ public final class WorkflowStream<T> {
         openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
         lastStepId = id;
         return this;
+    }
+
+    private RetryPolicy retryOr(RetryPolicy retry) {
+        return retry != null ? retry : pipeline.defaultRetry;
     }
 
     /** Server-side timer. No worker is occupied while the instance waits. */
@@ -238,21 +267,10 @@ public final class WorkflowStream<T> {
         openSlots.addAll(tail.openSlots);
     }
 
-    /** Overrides the retry policy of the step that was just added. */
-    public WorkflowStream<T> retry(RetryPolicy policy) {
-        if (lastStepId == null) {
-            throw new IllegalStateException("retry() must directly follow map(), peek() or filter()");
-        }
-        Node n = pipeline.get(lastStepId);
-        pipeline.put(new Node(n.id(), n.kind(), n.name(), n.activity(), n.queue(), policy, n.sleepMillis(),
-                n.next(), n.altNext(), n.branches(), n.expected(), n.success(), n.reason()));
-        return this;
-    }
-
     /** Routes the step that was just added to a dedicated queue (for worker specialisation). */
     public WorkflowStream<T> onQueue(String queue) {
         if (lastStepId == null) {
-            throw new IllegalStateException("onQueue() must directly follow map(), peek() or filter()");
+            throw new IllegalStateException("onQueue() must directly follow step(), effect() or gate()");
         }
         Node n = pipeline.get(lastStepId);
         pipeline.put(new Node(n.id(), n.kind(), n.name(), n.activity(), queue, n.retry(), n.sleepMillis(),

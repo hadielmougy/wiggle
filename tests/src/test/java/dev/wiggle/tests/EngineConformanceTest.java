@@ -31,9 +31,9 @@ class EngineConformanceTest {
         Scenarios.sequentialPipeline();
     }
 
-    @Test @DisplayName("a false filter short-circuits the pipeline")
-    void filterShortCircuits() throws Exception {
-        Scenarios.filterShortCircuits();
+    @Test @DisplayName("a false gate short-circuits the pipeline")
+    void gateShortCircuits() throws Exception {
+        Scenarios.gateShortCircuits();
     }
 
     @Test @DisplayName("parallel branches merge disjoint writes")
@@ -51,9 +51,9 @@ class EngineConformanceTest {
         Scenarios.nestedForks();
     }
 
-    @Test @DisplayName("a filter inside a branch does not strand its siblings")
-    void filterInsideBranchDoesNotStrandSiblings() throws Exception {
-        Scenarios.filterInsideBranchDoesNotStrandSiblings();
+    @Test @DisplayName("a gate inside a branch does not strand its siblings")
+    void gateInsideBranchDoesNotStrandSiblings() throws Exception {
+        Scenarios.gateInsideBranchDoesNotStrandSiblings();
     }
 
     @Test @DisplayName("transient failures are retried")

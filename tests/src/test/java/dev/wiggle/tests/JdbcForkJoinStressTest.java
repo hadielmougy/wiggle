@@ -40,22 +40,21 @@ class JdbcForkJoinStressTest {
 
     private static Blueprint<Map<String, Object>> blueprint() {
         return Workflow.defineJson("order-ish")
-                .map("validate", ctx -> put(ctx, "validated", true))
-                .filter("in-stock", ctx -> true)
+                .step("validate", ctx -> put(ctx, "validated", true))
+                .gate("in-stock", ctx -> true)
                 .fork(
                         Branch.of("payment", s -> s
-                                .map("authorise", ctx -> {
+                                .step("authorise", ctx -> {
                                     int attempt = Step.attempt();
                                     if (attempt <= 2) throw new IllegalStateException("gateway timeout " + attempt);
                                     return put(ctx, "paid", true);
-                                })
-                                .retry(RetryPolicy.exponential(5, Duration.ofMillis(50)))
-                                .map("capture", ctx -> put(ctx, "captured", true))),
+                                }, RetryPolicy.exponential(5, Duration.ofMillis(50)))
+                                .step("capture", ctx -> put(ctx, "captured", true))),
                         Branch.of("shipping", s -> s
-                                .map("reserve", ctx -> put(ctx, "reserved", true))
+                                .step("reserve", ctx -> put(ctx, "reserved", true))
                                 .sleep("await", Duration.ofMillis(150))
-                                .map("label", ctx -> put(ctx, "labelled", true))))
-                .map("notify", ctx -> put(ctx, "fulfilled", true))
+                                .step("label", ctx -> put(ctx, "labelled", true))))
+                .step("notify", ctx -> put(ctx, "fulfilled", true))
                 .build();
     }
 

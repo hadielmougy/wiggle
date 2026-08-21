@@ -41,12 +41,12 @@ class ChooseTest {
         return Workflow.defineJson("choose-default")
                 .choose(
                         Case.when("is-gold", c -> "gold".equals(c.get("tier")),
-                                b -> b.map("gold", c -> { counter("gold").incrementAndGet(); return put(c, "path", "gold"); })),
+                                b -> b.step("gold", c -> { counter("gold").incrementAndGet(); return put(c, "path", "gold"); })),
                         Case.when("is-premium", c -> c.get("tier") != null,   // also true for "gold": must not win
-                                b -> b.map("premium", c -> { counter("premium").incrementAndGet(); return put(c, "path", "premium"); })),
+                                b -> b.step("premium", c -> { counter("premium").incrementAndGet(); return put(c, "path", "premium"); })),
                         Case.otherwise("plain",
-                                b -> b.map("plain", c -> { counter("plain").incrementAndGet(); return put(c, "path", "plain"); })))
-                .map("finalize", c -> { counter("finalize").incrementAndGet(); return put(c, "done", true); })
+                                b -> b.step("plain", c -> { counter("plain").incrementAndGet(); return put(c, "path", "plain"); })))
+                .step("finalize", c -> { counter("finalize").incrementAndGet(); return put(c, "done", true); })
                 .build();
     }
 
@@ -55,8 +55,8 @@ class ChooseTest {
         return Workflow.defineJson("choose-skip")
                 .choose(
                         Case.when("is-a", c -> "a".equals(c.get("k")),
-                                b -> b.map("a", c -> put(c, "path", "a"))))
-                .map("finalize", c -> put(c, "done", true))
+                                b -> b.step("a", c -> put(c, "path", "a"))))
+                .step("finalize", c -> put(c, "done", true))
                 .build();
     }
 
