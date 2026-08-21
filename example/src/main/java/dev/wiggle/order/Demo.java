@@ -22,7 +22,7 @@ public final class Demo {
     public static void main(String[] args) throws Exception {
         ServerConfig config = new ServerConfig(0, "demo-node", null, null, null, 4,
                 Duration.ofMillis(200), Duration.ofSeconds(2), 3, Duration.ofSeconds(30),
-                Duration.ofSeconds(2), Duration.ofHours(1), 100);
+                Duration.ofSeconds(2), Duration.ofHours(1), 100, 0);
 
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {

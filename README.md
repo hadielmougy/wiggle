@@ -298,9 +298,26 @@ Everything has a sensible default; override via environment variable or system p
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `20000` | how long a worker's poll may block server-side |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name shown in cluster membership |
+| `WIGGLE_DASHBOARD_PORT` | `0` (off) | set a port to enable the web dashboard |
 
 The schema (`wf_definition`, `wf_graph_node`, `wf_graph_edge`, `wf_instance`, `wf_token`,
 `wf_node`) is created automatically on startup.
+
+### Web dashboard
+
+A small, read-only web UI ships with the server — off by default. Give it a port to turn
+it on:
+
+```bash
+WIGGLE_DASHBOARD_PORT=8090 ./gradlew :server:run
+# → open http://localhost:8090
+```
+
+It lists instances (filter by workflow/status), and clicking one shows its status, error,
+context, and token history; running instances can be cancelled. It reads the engine
+directly over a tiny JSON API (`/api/instances`, `/api/instances/{id}`, `/api/workflows`,
+`/api/cluster`) — no gRPC proxy, no build step, no extra dependencies. In a cluster, every
+node can run its own dashboard, and each shows the whole system (they share the database).
 
 ---
 
