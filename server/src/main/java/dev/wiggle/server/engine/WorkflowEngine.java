@@ -41,7 +41,7 @@ public final class WorkflowEngine {
         return storage.inTx(tx -> {
             int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                     () -> EngineException.notFound("workflow '" + workflow + "'"));
-            WorkflowDefinition def = definitions.get(tx, workflow, v);
+            LazyGraph def = definitions.graph(tx, workflow, v);
             long now = System.currentTimeMillis();
 
             Instance inst = new Instance();
@@ -107,7 +107,7 @@ public final class WorkflowEngine {
             for (Token t : claimed) {
                 Instance inst = tx.findInstance(t.instanceId).orElse(null);
                 if (inst == null || inst.status != InstanceStatus.RUNNING) continue;
-                WorkflowDefinition def = definitions.get(tx, t.workflow, t.version);
+                LazyGraph def = definitions.graph(tx, t.workflow, t.version);
                 Node node = def.node(t.nodeId);
                 out.add(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
                         node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson)));
@@ -146,7 +146,7 @@ public final class WorkflowEngine {
             }
 
             long now = System.currentTimeMillis();
-            WorkflowDefinition def = definitions.get(tx, t.workflow, t.version);
+            LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
 
             String next;
@@ -183,7 +183,7 @@ public final class WorkflowEngine {
             if (inst.status != InstanceStatus.RUNNING) return;
 
             long now = System.currentTimeMillis();
-            WorkflowDefinition def = definitions.get(tx, t.workflow, t.version);
+            LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
             RetryPolicy policy = node.retry() == null ? RetryPolicy.none() : node.retry();
 
@@ -253,7 +253,7 @@ public final class WorkflowEngine {
                     Token t = tx.findToken(timer.id).orElse(null);
                     if (t == null || t.status != TokenStatus.WAITING) return;
                     long ts = System.currentTimeMillis();
-                    WorkflowDefinition def = definitions.get(tx, t.workflow, t.version);
+                    LazyGraph def = definitions.graph(tx, t.workflow, t.version);
                     Node node = def.node(t.nodeId);
                     t.status = TokenStatus.DONE;
                     t.updatedAt = ts;
@@ -282,7 +282,7 @@ public final class WorkflowEngine {
                     if (inst == null) return;
                     Token t = tx.findToken(orphan.id).orElse(null);
                     if (t == null || t.status != TokenStatus.RUNNING || t.leaseExpiresAt >= System.currentTimeMillis()) return;
-                    WorkflowDefinition def = definitions.get(tx, t.workflow, t.version);
+                    LazyGraph def = definitions.graph(tx, t.workflow, t.version);
                     Node node = def.node(t.nodeId);
                     RetryPolicy policy = node.retry() == null ? RetryPolicy.none() : node.retry();
                     long ts = System.currentTimeMillis();
@@ -323,7 +323,7 @@ public final class WorkflowEngine {
      * world: a worker (READY), a clock (WAITING), a sibling (JOINED), or nothing at
      * all (DONE at an END node).
      */
-    private void drive(Tx tx, WorkflowDefinition def, Instance inst, Deque<Token> work, long now) {
+    private void drive(Tx tx, LazyGraph def, Instance inst, Deque<Token> work, long now) {
         int guard = 0;
         while (!work.isEmpty()) {
             if (++guard > 10_000) throw new IllegalStateException("cycle detected in workflow " + def.key());

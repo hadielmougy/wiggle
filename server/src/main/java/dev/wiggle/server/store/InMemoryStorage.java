@@ -1,6 +1,8 @@
 package dev.wiggle.server.store;
 
+import dev.wiggle.core.Node;
 import dev.wiggle.core.NodeKind;
+import dev.wiggle.core.WorkflowDefinition;
 import dev.wiggle.server.store.Rows.Instance;
 import dev.wiggle.server.store.Rows.InstanceStatus;
 import dev.wiggle.server.store.Rows.ServerNode;
@@ -23,6 +25,9 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, Token> tokens = new ConcurrentHashMap<>();
     private final Map<String, String> definitions = new ConcurrentHashMap<>();
     private final Map<String, Integer> latest = new ConcurrentHashMap<>();
+    // Normalised graph rows, keyed by "name:version": one node id -> node, plus the entry node.
+    private final Map<String, Map<String, Node>> graphNodes = new ConcurrentHashMap<>();
+    private final Map<String, String> graphStart = new ConcurrentHashMap<>();
     private final Map<String, ServerNode> nodes = new ConcurrentHashMap<>();
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -48,6 +53,21 @@ public final class InMemoryStorage implements Storage {
 
         @Override public Optional<String> definition(String name, int version) {
             return Optional.ofNullable(definitions.get(name + ":" + version));
+        }
+
+        @Override public void putGraph(WorkflowDefinition def) {
+            String key = def.name() + ":" + def.version();
+            graphNodes.put(key, Map.copyOf(def.nodes()));
+            graphStart.put(key, def.startNode());
+        }
+
+        @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
+            Map<String, Node> ns = graphNodes.get(workflow + ":" + version);
+            return Optional.ofNullable(ns == null ? null : ns.get(nodeId));
+        }
+
+        @Override public Optional<String> graphStartNode(String workflow, int version) {
+            return Optional.ofNullable(graphStart.get(workflow + ":" + version));
         }
 
         @Override public Optional<Integer> latestVersion(String name) {

@@ -1,5 +1,7 @@
 package dev.wiggle.server.store;
 
+import dev.wiggle.core.Node;
+import dev.wiggle.core.WorkflowDefinition;
 import dev.wiggle.server.store.Rows.Instance;
 import dev.wiggle.server.store.Rows.InstanceStatus;
 import dev.wiggle.server.store.Rows.ServerNode;
@@ -16,6 +18,17 @@ public interface Tx {
     /** Most recently registered version for a name. */
     Optional<Integer> latestVersion(String name);
     List<String> definitionNames();
+
+    /**
+     * Normalises a definition's graph into per-node and per-edge rows so the runtime can
+     * fetch a single node's neighbourhood without materialising the whole graph. Idempotent:
+     * the version is a content hash, so re-registering the same graph is a no-op.
+     */
+    void putGraph(WorkflowDefinition def);
+    /** One node plus its outgoing edges, reconstructed from the normalised rows. */
+    Optional<Node> graphNode(String workflow, int version, String nodeId);
+    /** The graph's entry node, without loading any other node. */
+    Optional<String> graphStartNode(String workflow, int version);
 
     void insertInstance(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */

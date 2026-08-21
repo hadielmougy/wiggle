@@ -1,6 +1,10 @@
 package dev.wiggle.server.store;
 
+import dev.wiggle.core.Json;
+import dev.wiggle.core.Node;
 import dev.wiggle.core.NodeKind;
+import dev.wiggle.core.RetryPolicy;
+import dev.wiggle.core.WorkflowDefinition;
 import dev.wiggle.server.store.Rows.Instance;
 import dev.wiggle.server.store.Rows.InstanceStatus;
 import dev.wiggle.server.store.Rows.ServerNode;
@@ -67,6 +71,33 @@ public final class JdbcStorage implements Storage {
               registered_at  BIGINT       NOT NULL,
               PRIMARY KEY (name, version)
             );
+            CREATE TABLE IF NOT EXISTS wf_graph_node (
+              workflow       VARCHAR(200) NOT NULL,
+              version        INT          NOT NULL,
+              node_id        VARCHAR(64)  NOT NULL,
+              kind           VARCHAR(16)  NOT NULL,
+              name           VARCHAR(200),
+              activity       VARCHAR(300),
+              queue          VARCHAR(200),
+              retry_json     TEXT,
+              sleep_millis   BIGINT       NOT NULL,
+              expected       INT          NOT NULL,
+              success        INT          NOT NULL,
+              reason         VARCHAR(200),
+              is_start       INT          NOT NULL,
+              PRIMARY KEY (workflow, version, node_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_graph_start ON wf_graph_node (workflow, version, is_start);
+            CREATE TABLE IF NOT EXISTS wf_graph_edge (
+              workflow       VARCHAR(200) NOT NULL,
+              version        INT          NOT NULL,
+              from_node      VARCHAR(64)  NOT NULL,
+              to_node        VARCHAR(64)  NOT NULL,
+              cond           VARCHAR(16),
+              ordinal        INT          NOT NULL,
+              PRIMARY KEY (workflow, version, from_node, ordinal)
+            );
+            CREATE INDEX IF NOT EXISTS ix_graph_edge_from ON wf_graph_edge (workflow, version, from_node);
             CREATE TABLE IF NOT EXISTS wf_instance (
               id             VARCHAR(64)  PRIMARY KEY,
               workflow       VARCHAR(200) NOT NULL,
@@ -195,6 +226,27 @@ public final class JdbcStorage implements Storage {
 
         private static StorageException wrap(SQLException e) { return new StorageException(e.getMessage(), e); }
 
+        private record Edge(String to, String condition, int ordinal) { }
+
+        /** Flattens a node's typed successors into ordered edge rows; the inverse of {@link #assemble}. */
+        private static List<Edge> edgesOf(Node n) {
+            List<Edge> out = new ArrayList<>();
+            switch (n.kind()) {
+                case PREDICATE -> {
+                    if (n.next() != null) out.add(new Edge(n.next(), "true", 0));
+                    if (n.altNext() != null) out.add(new Edge(n.altNext(), "false", 1));
+                }
+                case FORK -> {
+                    int i = 0;
+                    for (String b : n.branches()) out.add(new Edge(b, "branch", i++));
+                }
+                default -> {
+                    if (n.next() != null) out.add(new Edge(n.next(), null, 0));
+                }
+            }
+            return out;
+        }
+
         @Override public void putDefinition(String name, int version, String json) {
             // The version is a content hash of the topology, so an existing (name,version) row
             // is byte-for-byte identical and re-registration is a genuine no-op. ON CONFLICT DO
@@ -205,6 +257,99 @@ public final class JdbcStorage implements Storage {
                 ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
                 ins.setLong(4, System.currentTimeMillis());
                 ins.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void putGraph(WorkflowDefinition def) {
+            // The (name,version) blob insert already used ON CONFLICT DO NOTHING for idempotency;
+            // guard the graph rows the same way so a re-registration of the same content hash is a
+            // clean no-op even if two nodes race.
+            if (graphExists(def.name(), def.version())) return;
+            try (PreparedStatement node = ps("INSERT INTO wf_graph_node " +
+                    "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING");
+                 PreparedStatement edge = ps("INSERT INTO wf_graph_edge " +
+                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING")) {
+                for (Node n : def.nodes().values()) {
+                    node.setString(1, def.name()); node.setInt(2, def.version()); node.setString(3, n.id());
+                    node.setString(4, n.kind().name()); node.setString(5, n.name()); node.setString(6, n.activity());
+                    node.setString(7, n.queue());
+                    node.setString(8, n.retry() == null ? null : Json.write(n.retry().toJson()));
+                    node.setLong(9, n.sleepMillis()); node.setInt(10, n.expected());
+                    node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
+                    node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
+                    node.addBatch();
+                    for (Edge e : edgesOf(n)) {
+                        edge.setString(1, def.name()); edge.setInt(2, def.version()); edge.setString(3, n.id());
+                        edge.setString(4, e.to); edge.setString(5, e.condition); edge.setInt(6, e.ordinal);
+                        edge.addBatch();
+                    }
+                }
+                node.executeBatch();
+                edge.executeBatch();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        private boolean graphExists(String workflow, int version) {
+            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? " +
+                    (postgres ? "LIMIT 1" : "FETCH FIRST 1 ROWS ONLY"))) {
+                p.setString(1, workflow); p.setInt(2, version);
+                try (ResultSet rs = p.executeQuery()) { return rs.next(); }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
+            try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason " +
+                    "FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
+                p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
+                try (ResultSet rs = p.executeQuery()) {
+                    if (!rs.next()) return Optional.empty();
+                    NodeKind kind = NodeKind.valueOf(rs.getString(1));
+                    String name = rs.getString(2), activity = rs.getString(3), queue = rs.getString(4);
+                    String retryJson = rs.getString(5);
+                    RetryPolicy retry = retryJson == null ? null : RetryPolicy.fromJson(Json.parse(retryJson));
+                    long sleep = rs.getLong(6);
+                    int expected = rs.getInt(7);
+                    boolean success = rs.getInt(8) != 0;
+                    String reason = rs.getString(9);
+                    return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
+                            retry, sleep, expected, success, reason));
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        /** Reads a node's outgoing edges and folds them back into the node's typed next/altNext/branches. */
+        private Node assemble(String workflow, int version, String id, NodeKind kind, String name, String activity,
+                              String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason) {
+            String next = null, altNext = null;
+            List<String> branches = new ArrayList<>();
+            try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
+                    "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
+                p.setString(1, workflow); p.setInt(2, version); p.setString(3, id);
+                try (ResultSet rs = p.executeQuery()) {
+                    while (rs.next()) {
+                        String to = rs.getString(1), cond = rs.getString(2);
+                        if (kind == NodeKind.PREDICATE) {
+                            if ("false".equals(cond)) altNext = to; else next = to;
+                        } else if (kind == NodeKind.FORK) {
+                            branches.add(to);
+                        } else {
+                            next = to;
+                        }
+                    }
+                }
+            } catch (SQLException e) { throw wrap(e); }
+            return new Node(id, kind, name, activity, queue, retry, sleep, next, altNext,
+                    List.copyOf(branches), expected, success, reason);
+        }
+
+        @Override public Optional<String> graphStartNode(String workflow, int version) {
+            try (PreparedStatement p = ps("SELECT node_id FROM wf_graph_node " +
+                    "WHERE workflow=? AND version=? AND is_start=1")) {
+                p.setString(1, workflow); p.setInt(2, version);
+                try (ResultSet rs = p.executeQuery()) {
+                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+                }
             } catch (SQLException e) { throw wrap(e); }
         }
 

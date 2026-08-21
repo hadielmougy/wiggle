@@ -10,6 +10,7 @@ dependencies {
     testImplementation(project(":server"))
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testRuntimeOnly("com.h2database:h2:${property("h2Version")}")
 }
 
 application {
