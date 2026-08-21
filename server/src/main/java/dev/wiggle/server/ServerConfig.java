@@ -6,7 +6,7 @@ import java.time.Duration;
 public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
                            int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                            int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
-                           Duration retention, int housekeepingBatch) {
+                           Duration retention, int housekeepingBatch, int dashboardPort) {
 
     public static ServerConfig fromEnvironment() {
         return new ServerConfig(
@@ -22,7 +22,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 Duration.ofMillis(intProp("wiggle.lease.millis", "WIGGLE_LEASE_MILLIS", 30_000)),
                 Duration.ofMillis(intProp("wiggle.longpoll.maxMillis", "WIGGLE_LONGPOLL_MAX_MILLIS", 20_000)),
                 Duration.ofMillis(intProp("wiggle.retention.millis", "WIGGLE_RETENTION_MILLIS", 86_400_000)),
-                intProp("wiggle.housekeeping.batch", "WIGGLE_HOUSEKEEPING_BATCH", 100));
+                intProp("wiggle.housekeeping.batch", "WIGGLE_HOUSEKEEPING_BATCH", 100),
+                // The read-only web dashboard. 0 = off; set a port to enable it.
+                intProp("wiggle.dashboard.port", "WIGGLE_DASHBOARD_PORT", 0));
     }
 
     public boolean isInMemory() {

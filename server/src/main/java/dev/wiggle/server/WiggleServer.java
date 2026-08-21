@@ -5,6 +5,7 @@ import dev.wiggle.server.cluster.Housekeeper;
 import dev.wiggle.server.engine.DefinitionRegistry;
 import dev.wiggle.server.engine.WorkflowEngine;
 import dev.wiggle.server.grpc.GrpcApi;
+import dev.wiggle.server.http.HttpDashboard;
 import dev.wiggle.server.store.InMemoryStorage;
 import dev.wiggle.server.store.JdbcStorage;
 import dev.wiggle.server.store.Storage;
@@ -23,6 +24,8 @@ public final class WiggleServer implements AutoCloseable {
     private final ClusterManager cluster;
     private final Housekeeper housekeeper;
     private final GrpcApi api;
+    /** Null unless a dashboard port was configured. */
+    private final HttpDashboard dashboard;
 
     public WiggleServer(ServerConfig config) throws IOException {
         this.storage = config.isInMemory()
@@ -35,16 +38,23 @@ public final class WiggleServer implements AutoCloseable {
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch());
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis());
+        this.dashboard = config.dashboardPort() > 0
+                ? new HttpDashboard(engine, cluster, config.dashboardPort())
+                : null;
     }
 
     public WiggleServer start() {
         cluster.start();
         housekeeper.start();
         api.start();
+        if (dashboard != null) dashboard.start();
         return this;
     }
 
     public int port() { return api.port(); }
+
+    /** The dashboard's port, or {@code -1} if it is not enabled. */
+    public int dashboardPort() { return dashboard == null ? -1 : dashboard.port(); }
 
     public String baseUrl() { return "127.0.0.1:" + port(); }
 
@@ -53,6 +63,7 @@ public final class WiggleServer implements AutoCloseable {
     public ClusterManager cluster() { return cluster; }
 
     @Override public void close() {
+        if (dashboard != null) dashboard.close();
         api.close();
         housekeeper.close();
         cluster.close();
@@ -64,6 +75,9 @@ public final class WiggleServer implements AutoCloseable {
         WiggleServer server = new WiggleServer(config).start();
         System.out.println("Wiggle server '" + config.nodeName() + "' on " + server.baseUrl()
                 + " (storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
+        if (server.dashboardPort() > 0) {
+            System.out.println("Dashboard at http://localhost:" + server.dashboardPort());
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         Thread.currentThread().join();
     }

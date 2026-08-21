@@ -36,7 +36,7 @@ public final class Scenarios {
     private static void withServer(Body body) throws Exception {
         ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             body.run(server, client);

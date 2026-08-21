@@ -72,7 +72,7 @@ class JdbcForkJoinStressTest {
             for (int i = 0; i < 3; i++) {
                 ServerConfig config = new ServerConfig(0, "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                        Duration.ofMillis(500), Duration.ofHours(1), 100);
+                        Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
                 WiggleServer server = new WiggleServer(config).start();
                 servers.add(server);
                 WiggleClient client = new WiggleClient(server.baseUrl());
