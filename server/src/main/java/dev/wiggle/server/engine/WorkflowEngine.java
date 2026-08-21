@@ -185,7 +185,7 @@ public final class WorkflowEngine {
             long now = System.currentTimeMillis();
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-            RetryPolicy policy = node.retry() == null ? RetryPolicy.none() : node.retry();
+            RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
 
             t.attempt++;
             t.lastError = message;
@@ -284,7 +284,7 @@ public final class WorkflowEngine {
                     if (t == null || t.status != TokenStatus.RUNNING || t.leaseExpiresAt >= System.currentTimeMillis()) return;
                     LazyGraph def = definitions.graph(tx, t.workflow, t.version);
                     Node node = def.node(t.nodeId);
-                    RetryPolicy policy = node.retry() == null ? RetryPolicy.none() : node.retry();
+                    RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
                     long ts = System.currentTimeMillis();
                     t.attempt++;
                     t.leaseOwner = null;
