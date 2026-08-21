@@ -3,21 +3,17 @@ package dev.wiggle.order;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Branch;
 import dev.wiggle.client.dsl.Workflow;
+import dev.wiggle.client.worker.Step;
 import dev.wiggle.core.ContextCodec;
 import dev.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The workflow definition and its implementation, in one place. The chain compiles to
  * a graph the server can drive, while the lambdas stay behind on the worker.
  */
 public final class OrderFulfilment {
-
-    /** Stands in for a flaky downstream: the first two attempts per order blow up. */
-    private static final Map<String, Integer> GATEWAY_ATTEMPTS = new ConcurrentHashMap<>();
 
     private OrderFulfilment() {}
 
@@ -36,11 +32,13 @@ public final class OrderFulfilment {
 
                 .fork(
                         Branch.of("payment", s -> s
+                                // Stands in for a flaky downstream: the first two attempts blow up.
+                                // Step.attempt() is the engine's global count, so retries converge no
+                                // matter which worker picks up each try.
                                 .map("authorise", order -> {
-                                    int attempt = GATEWAY_ATTEMPTS.merge(order.orderId(), 1, Integer::sum);
-                                    if (attempt <= 2) {
+                                    if (Step.attempt() <= 2) {
                                         throw new IllegalStateException(
-                                                "payment gateway timeout (attempt " + attempt + ")");
+                                                "payment gateway timeout (attempt " + Step.attempt() + ")");
                                     }
                                     return order.withPaymentRef("auth-" + order.orderId());
                                 })

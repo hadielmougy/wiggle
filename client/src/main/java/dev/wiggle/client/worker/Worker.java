@@ -127,6 +127,7 @@ public final class Worker implements AutoCloseable {
             return;
         }
         ScheduledFuture<?> lease = scheduleHeartbeat(task);
+        Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId()));
         try {
             Object result = handler.invoke(task.context());
             if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
@@ -148,6 +149,7 @@ public final class Worker implements AutoCloseable {
         } finally {
             // Task is settled (completed or failed); stop extending its lease.
             lease.cancel(false);
+            Step.end();
         }
     }
 
