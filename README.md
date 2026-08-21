@@ -125,6 +125,7 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `map(name, fn)` / `then(name, fn)` | run `fn` on a worker; its return value becomes the new context |
 | `peek(name, fn)` | run `fn` for a side effect; context unchanged |
 | `filter(name, pred)` | continue only while `pred` is true; a false result ends the instance as `filtered:<name>` |
+| `choose(cases…)` | switch/case: run the branch of the **first** matching guard, then continue |
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
 | `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
 | `retry(policy)` | set the retry policy for the step you just added |
@@ -145,6 +146,31 @@ The context is your workflow's data. It's the same type from the first step to t
 > **Parallel branches merge automatically.** Each step writes back only the fields it
 > *changed*, so branches that touch different fields merge cleanly. If two branches write
 > the same field, the later write wins.
+
+### Branching: `choose` vs `fork`
+
+- **`fork`** runs branches **in parallel** and waits for all of them (fan-out / join).
+- **`choose`** is an exclusive **switch/case**: guards are tested in order and only the
+  **first** match runs. Unmatched input falls through to `Case.otherwise(...)` if present,
+  or straight to the next step. Exactly one branch runs.
+
+```java
+import static dev.wiggle.client.dsl.Case.*;   // when, otherwise
+
+.choose(
+        when("is-digital",  o -> o.type() == Type.DIGITAL,
+                b -> b.map("grant-access", Fulfil::grantAccess)),
+
+        when("is-physical", o -> o.type() == Type.PHYSICAL,
+                b -> b.map("reserve", Stock::reserve)
+                      .sleep("await-warehouse", Duration.ofMillis(300))
+                      .map("ship", Shipping::send)),
+
+        otherwise("backorder",
+                b -> b.map("queue-backorder", Backorders::queue)))
+
+.map("notify", Notifier::send)   // runs once, after the chosen branch
+```
 
 ---
 

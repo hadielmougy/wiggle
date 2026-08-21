@@ -165,6 +165,79 @@ public final class WorkflowStream<T> {
         return this;
     }
 
+    /**
+     * Exclusive choice -- a switch/case over the context. Each case's guard is evaluated in
+     * order and the first one to hold runs its branch; the rest are skipped. If no guard
+     * matches, control passes to an {@link Case#otherwise} branch when one is given, otherwise
+     * straight to the step after {@code choose}. Exactly one branch ever runs.
+     *
+     * <p>Unlike {@link #fork}, nothing runs in parallel and there is no join: it is a cascade
+     * of predicates, so a five-way choose costs at most five guard evaluations, short-circuiting
+     * at the first match.
+     */
+    @SafeVarargs
+    public final WorkflowStream<T> choose(Case<T>... cases) {
+        if (cases.length == 0) throw new IllegalArgumentException("choose needs at least one case");
+        for (int i = 0; i < cases.length - 1; i++) {
+            if (cases[i].guard() == null) throw new IllegalArgumentException("otherwise() must be the last case");
+        }
+        boolean hasDefault = cases[cases.length - 1].guard() == null;
+        int guards = hasDefault ? cases.length - 1 : cases.length;
+        if (guards == 0) throw new IllegalArgumentException("choose needs at least one guarded case");
+
+        ContextCodec<T> codec = pipeline.codec;
+
+        // Lay down the guard predicates first, so each false path can point at the next guard.
+        String[] guardIds = new String[guards];
+        for (int i = 0; i < guards; i++) {
+            Case<T> c = cases[i];
+            Predicate<T> guard = c.guard();
+            String activity = pipeline.activityFor(c.name());
+            pipeline.handlers.put(activity, json -> guard.test(codec.decode(json)));
+            String id = pipeline.nextId("n");
+            pipeline.put(Node.predicate(id, c.name(), activity, pipeline.defaultQueue, pipeline.defaultRetry));
+            pipeline.queues.add(pipeline.defaultQueue);
+            guardIds[i] = id;
+        }
+
+        // Enter at the first guard, then take over the open-end bookkeeping ourselves.
+        attach(guardIds[0]);
+        openNodes = new ArrayList<>();
+        openSlots = new ArrayList<>();
+
+        // Chain each guard's false path to the next guard.
+        for (int i = 0; i < guards - 1; i++) {
+            pipeline.wire(guardIds[i], ALT_NEXT, guardIds[i + 1]);
+        }
+
+        // Each guard's true path runs its branch; the branch's open ends become the choose's.
+        for (int i = 0; i < guards; i++) {
+            collectCaseBranch(cases[i], guardIds[i], NEXT);
+        }
+
+        // The last false path: a default branch, or an open end that skips the choose entirely.
+        if (hasDefault) {
+            collectCaseBranch(cases[cases.length - 1], guardIds[guards - 1], ALT_NEXT);
+        } else {
+            openNodes.add(guardIds[guards - 1]);
+            openSlots.add(new int[]{ALT_NEXT});
+        }
+
+        lastStepId = null;
+        return this;
+    }
+
+    /** Builds one case's branch and wires the guard's {@code slot} to it, accumulating open ends. */
+    private void collectCaseBranch(Case<T> c, String guardId, int slot) {
+        String[] start = new String[1];
+        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, enclosingJoinId);
+        WorkflowStream<T> tail = c.body().apply(sub);
+        if (start[0] == null) throw new IllegalArgumentException("case '" + c.name() + "' defines no steps");
+        pipeline.wire(guardId, slot, start[0]);
+        openNodes.addAll(tail.openNodes);
+        openSlots.addAll(tail.openSlots);
+    }
+
     /** Overrides the retry policy of the step that was just added. */
     public WorkflowStream<T> retry(RetryPolicy policy) {
         if (lastStepId == null) {
