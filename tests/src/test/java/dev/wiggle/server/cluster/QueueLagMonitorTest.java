@@ -68,8 +68,18 @@ class QueueLagMonitorTest {
 
     @Test @DisplayName("a stuck backlog with no throughput is logged as a WARNING")
     void warnsWhenBacklogIsNotDraining() throws Exception {
+        warnsWhenBacklogIsNotDraining(new InMemoryStorage());
+    }
+
+    @Test @DisplayName("the same lag detection works against a JDBC store")
+    void warnsWhenBacklogIsNotDrainingOnJdbc() throws Exception {
+        warnsWhenBacklogIsNotDraining(new dev.wiggle.postgres.JdbcStorage(
+                "jdbc:h2:mem:lag-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2));
+    }
+
+    private void warnsWhenBacklogIsNotDraining(Storage newStorage) throws Exception {
         captureLogsOf(QueueLagMonitor.class);
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = newStorage) {
             storage.migrate();
             WorkflowEngine engine = newEngine(storage);
             WorkflowDefinition def = registerLagWorkflow(engine);

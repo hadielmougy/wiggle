@@ -1,32 +1,37 @@
 package dev.wiggle.client.worker;
 
 import java.time.Duration;
+import java.util.Set;
 
 /** Worker tuning. Defaults are chosen for interactive workloads, not throughput benchmarks. */
 public record WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
                             Duration idleBackoff, Duration errorBackoff, boolean registerOnStart,
-                            int localBatchSize) {
+                            int localBatchSize, Set<String> queues) {
 
     public WorkerOptions {
         if (localBatchSize < 1) throw new IllegalArgumentException("localBatchSize must be >= 1");
+        queues = queues == null ? Set.of() : Set.copyOf(queues);
     }
 
     public static WorkerOptions defaults() {
         return new WorkerOptions(Runtime.getRuntime().availableProcessors(),
                 Duration.ofSeconds(30), Duration.ofSeconds(10),
-                Duration.ofMillis(200), Duration.ofSeconds(2), true, 64);
+                Duration.ofMillis(200), Duration.ofSeconds(2), true, 64, Set.of());
     }
 
     public WorkerOptions withConcurrency(int c) {
-        return new WorkerOptions(c, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart, localBatchSize);
+        return new WorkerOptions(c, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+                localBatchSize, queues);
     }
 
     public WorkerOptions withLease(Duration d) {
-        return new WorkerOptions(concurrency, d, longPollWait, idleBackoff, errorBackoff, registerOnStart, localBatchSize);
+        return new WorkerOptions(concurrency, d, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+                localBatchSize, queues);
     }
 
     public WorkerOptions withLongPollWait(Duration d) {
-        return new WorkerOptions(concurrency, lease, d, idleBackoff, errorBackoff, registerOnStart, localBatchSize);
+        return new WorkerOptions(concurrency, lease, d, idleBackoff, errorBackoff, registerOnStart,
+                localBatchSize, queues);
     }
 
     /**
@@ -35,6 +40,17 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      * Ignored by SERVER and LOCAL_SYNC (which flush every step).
      */
     public WorkerOptions withLocalBatchSize(int size) {
-        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart, size);
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+                size, queues);
+    }
+
+    /**
+     * Restricts this worker to the given queues (worker specialization). Empty -- the default --
+     * means "serve every queue of the registered blueprints". A specialized worker never claims
+     * steps routed elsewhere, and a local-execution chain hands back at a step it does not serve.
+     */
+    public WorkerOptions withQueues(String... only) {
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+                localBatchSize, Set.of(only));
     }
 }

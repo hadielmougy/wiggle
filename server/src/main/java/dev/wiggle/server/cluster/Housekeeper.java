@@ -44,7 +44,8 @@ public final class Housekeeper implements AutoCloseable {
                 Math.max(60_000, retention.toMillis() / 4), TimeUnit.MILLISECONDS);
     }
 
-    private void tick() {
+    /** Package-visible so tests can drive a tick deterministically. */
+    void tick() {
         if (!cluster.isLeader()) {
             LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: skipped, not leader");
             return;
@@ -61,7 +62,8 @@ public final class Housekeeper implements AutoCloseable {
         }
     }
 
-    private void retain() {
+    /** Package-visible so tests can drive a sweep deterministically. */
+    void retain() {
         if (!cluster.isLeader()) {
             LOG.log(System.Logger.Level.DEBUG, "retention sweep: skipped, not leader");
             return;
