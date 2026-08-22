@@ -1,6 +1,12 @@
 # Design: Worker-side local execution (step chaining)
 
-Status: **Phase 0–2 implemented (SERVER / LOCAL_SYNC / LOCAL_ASYNC)** · Target: post-2.0 · Owner: TBD
+Status: **Phase 0–2 implemented + `.checkpoint()`** · Target: post-2.0 · Owner: TBD
+
+> **Benchmark (linear 20-step pipeline, 1000 instances, 4 workers × 16, Postgres):**
+> SERVER 15 inst/s · LOCAL_SYNC 102 inst/s · **LOCAL_ASYNC 213 inst/s**. Async is ~2× sync on a
+> real DB because a 20-step run commits once (≈20× fewer WAL fsyncs) rather than per step; on the
+> in-memory store, where commits are ~free, async ≈ sync. Reproduce with `./gradlew :example:bench`
+> (set `WIGGLE_EXECUTION_MODE`, `WIGGLE_JDBC_URL`, `WIGGLE_BENCH_*`).
 
 > **Implemented:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition (in the
 > content hash) with the `.execution(...)` DSL flag, the `AdvanceRun` wire RPC + `execution_mode`
@@ -280,7 +286,9 @@ marker on the parked token; keep the default `SERVER` for anyone who needs step-
    regression, so this is the safe high-value slice.
 3. **Phase 2 — `LOCAL_ASYNC`.** Add batching, cancellation-on-flush, chain-lease heartbeating, and
    the idempotency documentation. Ship behind the per-definition flag.
-4. **Phase 3 — knobs.** `maxSteps`, async flush cadence, per-step `checkpoint()`.
+4. **Phase 3 — knobs.** ~~per-step `checkpoint()`~~ (done: forces an async flush after a step,
+   committing it before the next; part of the content hash), plus still-to-do `maxSteps` /
+   async flush cadence.
 
 ## 15. Testing plan
 

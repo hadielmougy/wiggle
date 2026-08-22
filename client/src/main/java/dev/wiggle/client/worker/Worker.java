@@ -248,7 +248,11 @@ public final class Worker implements AutoCloseable {
                         : new WiggleClient.StepReport(node.id(), result, null));
                 if (!isPredicate) ctx = applyMerge(ctx, result);
 
-                if (handback || buffer.size() >= maxBatch) {
+                // A checkpoint forces a flush after this step even mid-chain (non-final), so it is
+                // committed before the next runs -- SYNC already flushes every step, so this only
+                // affects ASYNC.
+                boolean checkpoint = def.checkpoints().contains(node.id());
+                if (handback || checkpoint || buffer.size() >= maxBatch) {
                     AdvanceResult advanced = client.advanceRun(serverTaskId.get(), leaseOwner, buffer, handback);
                     buffer.clear();
                     if (!advanced.running() || handback || advanced.nextTaskId() == null) return;

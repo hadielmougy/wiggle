@@ -6,6 +6,9 @@ dependencies {
     implementation(project(":client"))
     // Only the single-JVM Demo needs the server on its classpath.
     implementation(project(":server"))
+    // So the benchmark can run against a real database (WIGGLE_JDBC_URL) to show LOCAL_ASYNC's
+    // commit-batching win; brings the StorageProvider SPI + Postgres/H2 drivers at runtime.
+    runtimeOnly(project(":postgres"))
 }
 
 application {
@@ -25,4 +28,11 @@ tasks.register<JavaExec>("submitOrders") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("dev.wiggle.order.SubmitOrders")
     args = listOf(project.findProperty("count")?.toString() ?: "5")
+}
+
+tasks.register<JavaExec>("bench") {
+    group = "application"
+    description = "Throughput benchmark of a linear pipeline. Set WIGGLE_EXECUTION_MODE etc."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.wiggle.order.Benchmark")
 }

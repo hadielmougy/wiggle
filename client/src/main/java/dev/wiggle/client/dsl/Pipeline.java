@@ -20,6 +20,7 @@ final class Pipeline<T> {
     final Map<String, ActivityHandler> handlers = new LinkedHashMap<>();
     final Set<String> queues = new LinkedHashSet<>();
     final Set<String> stepNames = new LinkedHashSet<>();
+    final Set<String> checkpoints = new LinkedHashSet<>();
     String startNode;
     String defaultQueue;
     ExecutionMode executionMode = ExecutionMode.DEFAULT;

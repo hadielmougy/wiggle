@@ -345,6 +345,20 @@ public final class WorkflowStream<T> {
         return this;
     }
 
+    /**
+     * Marks the step just added as a checkpoint: under {@link ExecutionMode#LOCAL_ASYNC} the worker
+     * flushes its buffer to the server immediately after this step (committing it before running the
+     * next), narrowing the crash-replay window for a step you don't want re-run. A no-op under
+     * SERVER and LOCAL_SYNC, which already commit every step. Must directly follow a step.
+     */
+    public WorkflowStream<T> checkpoint() {
+        if (lastStepId == null) {
+            throw new IllegalStateException("checkpoint() must directly follow step(), effect() or gate()");
+        }
+        pipeline.checkpoints.add(lastStepId);
+        return this;
+    }
+
     public Blueprint<T> build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         consumed = true;
@@ -355,9 +369,9 @@ public final class WorkflowStream<T> {
         wireOpenEndsTo(endId);
 
         int version = WorkflowDefinition.contentVersion(pipeline.name, pipeline.startNode,
-                pipeline.nodes.values(), pipeline.executionMode);
+                pipeline.nodes.values(), pipeline.executionMode, pipeline.checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(pipeline.name, version, pipeline.startNode,
-                new LinkedHashMap<>(pipeline.nodes), pipeline.queues, pipeline.executionMode);
+                new LinkedHashMap<>(pipeline.nodes), pipeline.queues, pipeline.executionMode, pipeline.checkpoints);
         validate(def);
         return new Blueprint<>(def, pipeline.handlers, pipeline.codec);
     }

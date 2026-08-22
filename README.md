@@ -198,12 +198,17 @@ Workflow.defineJson("etl").execution(ExecutionMode.LOCAL_SYNC)
 - `SERVER` (default) — server-driven, one step per claim.
 - `LOCAL_SYNC` — the worker runs consecutive steps back-to-back, committing each to the server
   before the next. **As durable as `SERVER`** (a crash re-runs at most one step), just faster.
+- `LOCAL_ASYNC` — the worker buffers up to `WorkerOptions.localBatchSize` steps and reports the
+  run in **one** call at the handback boundary. Highest throughput (far fewer commits), at the
+  cost of a wider crash-replay window — the whole batch re-runs on recovery, so steps must be
+  idempotent. Use `.checkpoint()` after a step to force it to commit before the next runs.
 - The worker hands control back at any boundary — a `sleep`, `fork`, `join`, `userTask`, a step
   on a different queue, a failure/retry, or the end — so those still coordinate through the server.
 
 The mode is part of the definition's content hash, so an in-flight instance keeps the mode it
-started on. (`LOCAL_ASYNC`, which batches the status writes for more throughput at the cost of a
-wider crash-replay window, is planned — see `docs/local-execution.md`.)
+started on. `LOCAL_ASYNC` only pays off when there's a run of consecutive same-queue steps to
+batch; the win shows against a real database (fewer WAL fsyncs). Compare the modes with
+`./gradlew :example:bench` (see `docs/local-execution.md`).
 
 ---
 

@@ -29,7 +29,7 @@ public final class OrderFulfilment {
     }
 
     public static Blueprint<Order> blueprint() {
-        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.LOCAL_SYNC)
+        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.LOCAL_ASYNC)
 
                 .step("validate", order -> {
                     if (order.customer() == null || order.customer().isBlank()) {

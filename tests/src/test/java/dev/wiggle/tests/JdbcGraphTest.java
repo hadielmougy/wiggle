@@ -37,7 +37,7 @@ class JdbcGraphTest {
         nodes.put("ok", Node.end("ok", true, "done"));
         nodes.put("bad", Node.end("bad", false, "nope"));
         int version = WorkflowDefinition.contentVersion("sample", "t", nodes.values(),
-                dev.wiggle.core.ExecutionMode.DEFAULT);
+                dev.wiggle.core.ExecutionMode.DEFAULT, java.util.Set.of());
         return new WorkflowDefinition("sample", version, "t", nodes, java.util.Set.of("q"));
     }
 
