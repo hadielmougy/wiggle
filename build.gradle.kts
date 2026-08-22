@@ -42,8 +42,6 @@ subprojects {
     }
 }
 
-// ------------------------------------------------------------------ publishing
-//
 // Only the reusable library modules are published to Maven Central; `example` and
 // `tests` are excluded. The actual upload is a manual, credentialed step -- see
 // RELEASING.md. Signing and Central-Portal credentials are read from properties or

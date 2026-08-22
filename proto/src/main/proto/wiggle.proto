@@ -32,8 +32,6 @@ message Empty {}
 
 message Ack { bool ok = 1; }
 
-// ------------------------------------------------------------- health / cluster
-
 message HealthStatus {
     string status = 1;
     string node = 2;
@@ -56,8 +54,6 @@ message ClusterView {
     repeated ClusterMember members = 3;
 }
 
-// ------------------------------------------------------------------ workflows
-//
 // A workflow definition's shape (nodes as a sorted array, sparse per-kind fields) is
 // already JSON-native (see core.WorkflowDefinition/Node#toJson); rather than re-modeling
 // it in proto, the whole definition travels as one opaque Struct, exactly as its JSON
@@ -81,8 +77,6 @@ message RegisterWorkflowResult {
 message GetWorkflowRequest {
     string name = 1;
 }
-
-// -------------------------------------------------------------- instances
 
 message StartInstanceRequest {
     string workflow = 1;
@@ -147,8 +141,6 @@ message CancelInstanceRequest {
 message CancelInstanceResult {
     string cancelled = 1;
 }
-
-// ------------------------------------------------------------------ tasks
 
 message PollRequest {
     string worker_id = 1;

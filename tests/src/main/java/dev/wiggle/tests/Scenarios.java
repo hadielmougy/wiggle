@@ -27,8 +27,6 @@ public final class Scenarios {
 
     private Scenarios() {}
 
-    // ------------------------------------------------------------- harness
-
     private interface Body {
         void run(WiggleServer server, WiggleClient client) throws Exception;
     }
@@ -36,7 +34,7 @@ public final class Scenarios {
     private static void withServer(Body body) throws Exception {
         ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             body.run(server, client);
@@ -59,8 +57,6 @@ public final class Scenarios {
         next.put(key, value);
         return next;
     }
-
-    // ------------------------------------------------------------ scenarios
 
     /** A linear pipeline runs its steps in order and the context accumulates. */
     public static void sequentialPipeline() throws Exception {
@@ -489,8 +485,6 @@ public final class Scenarios {
         Basket round = codec.decode(Json.parse(Json.write(codec.encode(original))));
         Check.equal(round, original, "record round trip");
     }
-
-    // ------------------------------------------------------------------ main
 
     private record Case(String name, ThrowingRunnable body) {}
 

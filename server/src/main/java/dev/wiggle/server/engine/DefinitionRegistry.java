@@ -36,8 +36,6 @@ public final class DefinitionRegistry {
         return new LazyGraph(tx, name, version);
     }
 
-    // ---- blob-backed accessors: admin/describe only, not the execution hot path ----
-
     public WorkflowDefinition get(String name, int version) {
         return lookup(name, version).orElseThrow(
                 () -> new IllegalArgumentException("no such workflow definition: " + name + ":" + version));

@@ -98,4 +98,11 @@ public final class Rows {
             try { return (ServerNode) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
         }
     }
+
+    /**
+     * A snapshot of the dispatchable backlog: how many worker-dispatched tokens (TASK/PREDICATE)
+     * are READY and due right now, and the {@code availableAt} of the oldest of them (0 if none).
+     * Read-only, so unlike the row classes above this is a plain record.
+     */
+    public record QueueDepth(int readyCount, long oldestAvailableAt) { }
 }

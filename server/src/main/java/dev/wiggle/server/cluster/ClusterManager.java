@@ -84,22 +84,29 @@ public final class ClusterManager implements AutoCloseable {
     private void beat() {
         long now = System.currentTimeMillis();
         self.lastHeartbeat = now;
+        String[] electedId = new String[1];
+        int[] aliveCount = new int[1];
         boolean nowLeader = storage.inTx(tx -> {
             tx.upsertNode(self);
             tx.deleteNodesOlderThan(now - deadAfterMillis() * 4);
             List<ServerNode> alive = tx.nodes().stream()
                     .filter(n -> now - n.lastHeartbeat < deadAfterMillis())
                     .toList();
+            aliveCount[0] = alive.size();
             Optional<ServerNode> elected = alive.stream()
                     .min((a, b) -> a.firstHeartbeat != b.firstHeartbeat
                             ? Long.compare(a.firstHeartbeat, b.firstHeartbeat)
                             : a.id.compareTo(b.id));
+            electedId[0] = elected.map(n -> n.id).orElse(null);
             boolean me = elected.map(n -> n.id.equals(self.id)).orElse(false);
             tx.setLeader(self.id, me);
             return me;
         });
         lastSuccessfulHeartbeat = now;
         boolean was = leader.getAndSet(nowLeader);
+        LOG.log(System.Logger.Level.DEBUG, () -> "heartbeat: node " + self.id + " at " + now
+                + ", " + aliveCount[0] + " alive node(s), elected leader=" + electedId[0]
+                + ", self leader=" + nowLeader);
         if (was != nowLeader) {
             LOG.log(System.Logger.Level.INFO, () -> nowLeader
                     ? "node " + self.id + " became leader"
@@ -114,6 +121,7 @@ public final class ClusterManager implements AutoCloseable {
     @Override public void close() {
         scheduler.shutdownNow();
         leader.set(false);
+        LOG.log(System.Logger.Level.DEBUG, () -> "node " + self.id + " closing, backdating heartbeat for immediate re-election");
         try {
             // Backdate our own heartbeat so the rest of the cluster re-elects immediately
             // instead of waiting out the full timeout window.
@@ -122,8 +130,8 @@ public final class ClusterManager implements AutoCloseable {
                 tx.upsertNode(self);
                 tx.setLeader(self.id, false);
             });
-        } catch (RuntimeException ignored) {
-            // best effort on shutdown
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "node " + self.id + " best-effort shutdown heartbeat failed: " + e);
         }
     }
 }

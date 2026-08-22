@@ -43,7 +43,7 @@ class HttpDashboardTest {
         int dash = freePort();
         ServerConfig config = new ServerConfig(0, "dash-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, dash);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, dash, Duration.ofSeconds(5), Duration.ofSeconds(10));
 
         Blueprint<Map<String, Object>> done = Workflow.defineJson("dash-done")
                 .step("work", ctx -> Map.of("result", "ok")).build();

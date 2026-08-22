@@ -156,6 +156,12 @@ public final class JdbcStorage implements Storage {
               workers        INT          NOT NULL,
               leader         INT          NOT NULL
             );
+            """),
+            // Backs QueueLagMonitor's countProcessedSince query (kind IN (...) AND status='DONE'
+            // AND updated_at>?), which none of the baseline wf_token indexes cover -- without this,
+            // that query is a full table scan that gets slower as DONE tokens accumulate.
+            new Migration(2, "index-token-throughput", """
+            CREATE INDEX IF NOT EXISTS ix_token_throughput ON wf_token (kind, status, updated_at);
             """));
 
     @Override public void migrate() {
@@ -254,8 +260,6 @@ public final class JdbcStorage implements Storage {
 
         public StorageException(String m, Throwable c) { super(m, c); }
     }
-
-    // ------------------------------------------------------------------ tx
 
     private static final class JdbcTx implements Tx {
         private final Connection c;
@@ -654,6 +658,28 @@ public final class JdbcStorage implements Storage {
         @Override public List<Token> dueUserTasks(long now, int max) {
             return query("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
                     "AND available_at>0 AND available_at<=? ORDER BY available_at LIMIT ?", now, max);
+        }
+
+        @Override public Rows.QueueDepth queueDepth(long now) {
+            try (PreparedStatement p = ps("SELECT COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
+                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?")) {
+                p.setLong(1, now);
+                try (ResultSet rs = p.executeQuery()) {
+                    rs.next();
+                    return new Rows.QueueDepth(rs.getInt(1), rs.getLong(2));
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public int countProcessedSince(long since) {
+            try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_token " +
+                    "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>?")) {
+                p.setLong(1, since);
+                try (ResultSet rs = p.executeQuery()) {
+                    rs.next();
+                    return rs.getInt(1);
+                }
+            } catch (SQLException e) { throw wrap(e); }
         }
 
         private List<Token> query(String sql, long arg, int limit) {
