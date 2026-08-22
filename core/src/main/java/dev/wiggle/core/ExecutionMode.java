@@ -14,9 +14,9 @@ public enum ExecutionMode {
      */
     LOCAL_SYNC,
     /**
-     * Like {@link #LOCAL_SYNC} but the worker reports a whole local run in one batch at handback.
-     * Higher throughput, wider crash blast radius (the whole run re-executes) -- requires
-     * idempotent steps. (Not yet implemented on the worker; treated as {@link #LOCAL_SYNC}.)
+     * Like {@link #LOCAL_SYNC} but the worker buffers up to {@code WorkerOptions.localBatchSize}
+     * steps and reports them in one batch at handback. Higher throughput, wider crash blast radius
+     * (the whole batch re-executes on recovery) -- so steps must be idempotent.
      */
     LOCAL_ASYNC,
     /** Defer to the server's configured default ({@code WIGGLE_EXECUTION_MODE}). */

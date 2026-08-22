@@ -14,6 +14,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The data plane. A worker registers its blueprints, then pulls work: it only ever
@@ -180,70 +181,99 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Local execution (LOCAL_SYNC): run consecutive same-queue steps in-worker, reporting each to
-     * the server before the next, until the next node is a boundary (sleep / fork / join / user
-     * task / other queue / end) or the instance is no longer running. Each step gets its own lease
-     * guard, exactly as the server-driven path does.
+     * Local execution: run consecutive same-queue steps in-worker, reporting to the server until
+     * the next node is a boundary (sleep / fork / join / user task / other queue / end) or the
+     * instance is no longer running. LOCAL_SYNC flushes every step (batch size 1, one-step crash
+     * blast radius); LOCAL_ASYNC buffers up to {@code localBatchSize} steps and flushes the run in
+     * one call (fewer round-trips, whole-batch crash blast radius).
+     *
+     * <p>{@code serverTaskId} always names the token the server currently has leased to us -- the
+     * node of the first un-flushed buffered step (or, when the buffer is empty, the next node to
+     * run). A single lease guard heartbeats that token across the whole run.
      */
     private void executeLocal(TaskActivation task, WorkflowDefinition def) {
-        String taskId = task.taskId();
+        int maxBatch = task.executionMode() == ExecutionMode.LOCAL_ASYNC ? options.localBatchSize() : 1;
         String leaseOwner = task.leaseOwner();
         String instanceId = task.instanceId();
         Node node = def.node(task.nodeId());
         Object ctx = task.context();
         int attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
 
-        while (true) {
-            ActivityHandler handler = handlers.get(node.activity());
-            if (handler == null) {
-                client.fail(taskId, leaseOwner, "no handler registered for activity '" + node.activity() + "'", false);
-                return;
-            }
-            final String tid = taskId;
-            Heartbeat lease = new Heartbeat(heartbeats,
-                    extend -> client.heartbeat(tid, leaseOwner, extend), options.lease().toMillis(), tid);
-            lease.start();
-            Step.begin(new Step.Info(attempt, node.name(), instanceId));
-            Object result;
-            try {
-                result = handler.invoke(ctx);
-            } catch (PermanentActivityException e) {
-                client.fail(taskId, leaseOwner, describe(e), false);
-                return;
-            } catch (Exception e) {
-                String stepName = node.name();
-                LOG.log(System.Logger.Level.DEBUG,
-                        () -> "local step " + stepName + " of " + instanceId + " failed: " + e);
-                client.fail(taskId, leaseOwner, describe(e), true);
-                return;
-            } finally {
-                lease.stop();
+        AtomicReference<String> serverTaskId = new AtomicReference<>(task.taskId());
+        List<WiggleClient.StepReport> buffer = new ArrayList<>();
+        Heartbeat lease = new Heartbeat(heartbeats,
+                extend -> client.heartbeat(serverTaskId.get(), leaseOwner, extend),
+                options.lease().toMillis(), task.taskId());
+        lease.start();
+        try {
+            while (true) {
+                ActivityHandler handler = handlers.get(node.activity());
+                if (handler == null) {
+                    flush(buffer, serverTaskId, leaseOwner);   // commit what succeeded
+                    client.fail(serverTaskId.get(), leaseOwner,
+                            "no handler registered for activity '" + node.activity() + "'", false);
+                    return;
+                }
+                Object result;
+                Step.begin(new Step.Info(attempt, node.name(), instanceId));
+                try {
+                    result = handler.invoke(ctx);
+                } catch (PermanentActivityException e) {
+                    Step.end();
+                    if (flush(buffer, serverTaskId, leaseOwner)) client.fail(serverTaskId.get(), leaseOwner, describe(e), false);
+                    return;
+                } catch (Exception e) {
+                    Step.end();
+                    String stepName = node.name();
+                    LOG.log(System.Logger.Level.DEBUG,
+                            () -> "local step " + stepName + " of " + instanceId + " failed: " + e);
+                    if (flush(buffer, serverTaskId, leaseOwner)) client.fail(serverTaskId.get(), leaseOwner, describe(e), true);
+                    return;
+                }
                 Step.end();
+
+                boolean isPredicate = node.kind() == NodeKind.PREDICATE;
+                if (isPredicate && !(result instanceof Boolean)) {
+                    if (flush(buffer, serverTaskId, leaseOwner)) client.fail(serverTaskId.get(), leaseOwner,
+                            "predicate '" + node.name() + "' returned "
+                                    + (result == null ? "null" : result.getClass().getSimpleName()), false);
+                    return;
+                }
+                boolean predicateValue = isPredicate && (Boolean) result;
+                Node next = def.node(GraphTraversal.successor(node, predicateValue));
+                boolean handback = GraphTraversal.classify(next, queues) != null;
+
+                buffer.add(isPredicate
+                        ? new WiggleClient.StepReport(node.id(), null, predicateValue)
+                        : new WiggleClient.StepReport(node.id(), result, null));
+                if (!isPredicate) ctx = applyMerge(ctx, result);
+
+                if (handback || buffer.size() >= maxBatch) {
+                    AdvanceResult advanced = client.advanceRun(serverTaskId.get(), leaseOwner, buffer, handback);
+                    buffer.clear();
+                    if (!advanced.running() || handback || advanced.nextTaskId() == null) return;
+                    serverTaskId.set(advanced.nextTaskId());
+                }
+                node = next;
+                attempt = 1;
             }
-
-            boolean isPredicate = node.kind() == NodeKind.PREDICATE;
-            if (isPredicate && !(result instanceof Boolean)) {
-                client.fail(taskId, leaseOwner, "predicate '" + node.name() + "' returned "
-                        + (result == null ? "null" : result.getClass().getSimpleName()), false);
-                return;
-            }
-            boolean predicateValue = isPredicate && (Boolean) result;
-            Node next = def.node(GraphTraversal.successor(node, predicateValue));
-            boolean handback = GraphTraversal.classify(next, queues) != null;
-
-            WiggleClient.StepReport report = isPredicate
-                    ? new WiggleClient.StepReport(node.id(), null, predicateValue)
-                    : new WiggleClient.StepReport(node.id(), result, null);
-            AdvanceResult advanced = client.advanceRun(taskId, leaseOwner, List.of(report), handback);
-
-            if (!advanced.running() || handback || advanced.nextTaskId() == null) return;
-
-            // Continue the chain locally on the freshly-leased continuation token.
-            taskId = advanced.nextTaskId();
-            if (!isPredicate) ctx = applyMerge(ctx, result);
-            node = next;
-            attempt = 1;
+        } finally {
+            lease.stop();
         }
+    }
+
+    /**
+     * Flushes buffered successful steps to the server (non-final), leaving {@code serverTaskId} at
+     * the next node so a failure can be reported against the correct token.
+     *
+     * @return true if the instance is still running (safe to report a failure), false otherwise
+     */
+    private boolean flush(List<WiggleClient.StepReport> buffer, AtomicReference<String> serverTaskId, String leaseOwner) {
+        if (buffer.isEmpty()) return true;
+        AdvanceResult advanced = client.advanceRun(serverTaskId.get(), leaseOwner, List.copyOf(buffer), false);
+        buffer.clear();
+        if (advanced.nextTaskId() != null) serverTaskId.set(advanced.nextTaskId());
+        return advanced.running();
     }
 
     /** Mirrors the server's context merge: a map result is shallow-merged; anything else replaces. */

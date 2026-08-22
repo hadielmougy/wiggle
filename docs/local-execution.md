@@ -1,13 +1,15 @@
 # Design: Worker-side local execution (step chaining)
 
-Status: **Phase 0 + Phase 1 (LOCAL_SYNC) implemented** · Target: post-2.0 · Owner: TBD
+Status: **Phase 0–2 implemented (SERVER / LOCAL_SYNC / LOCAL_ASYNC)** · Target: post-2.0 · Owner: TBD
 
-> **Implemented so far:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition
-> (in the content hash) with the `.execution(...)` DSL flag, the `AdvanceRun` wire RPC +
-> `execution_mode` on `TaskActivation`, `WorkflowEngine.advanceRun`, and the worker's `LOCAL_SYNC`
-> chaining loop. `LOCAL_ASYNC` is defined but the worker treats it as `LOCAL_SYNC` for now
-> (Phase 2). The `WIGGLE_EXECUTION_MODE` server default is deferred — `DEFAULT` currently resolves
-> to `SERVER`; set the mode explicitly on a workflow via `.execution(...)`.
+> **Implemented:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition (in the
+> content hash) with the `.execution(...)` DSL flag, the `AdvanceRun` wire RPC + `execution_mode`
+> on `TaskActivation`, `WorkflowEngine.advanceRun` (which already applies multi-step batches
+> atomically), and the worker's unified local loop: `LOCAL_SYNC` flushes every step, `LOCAL_ASYNC`
+> buffers up to `WorkerOptions.localBatchSize` (default 64) and flushes the run in one call. A
+> mid-run failure flushes the successful prefix then fails the offending step's token.
+> The `WIGGLE_EXECUTION_MODE` server default is still deferred — `DEFAULT` resolves to `SERVER`;
+> set the mode per-workflow via `.execution(...)`.
 
 ## 1. Summary
 

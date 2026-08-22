@@ -18,8 +18,18 @@ public final class OrderFulfilment {
 
     private OrderFulfilment() {}
 
+    /**
+     * Execution mode for benchmarking, from {@code WIGGLE_EXECUTION_MODE} (default SERVER). Set it
+     * identically on the worker and submitter JVMs so they compile the same version (the mode is
+     * part of the content hash).
+     */
+    private static ExecutionMode mode() {
+        String v = System.getenv("WIGGLE_EXECUTION_MODE");
+        return v == null || v.isBlank() ? ExecutionMode.SERVER : ExecutionMode.valueOf(v.trim());
+    }
+
     public static Blueprint<Order> blueprint() {
-        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.SERVER)
+        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.LOCAL_SYNC)
 
                 .step("validate", order -> {
                     if (order.customer() == null || order.customer().isBlank()) {

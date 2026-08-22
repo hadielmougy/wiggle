@@ -21,6 +21,9 @@ import java.util.ServiceLoader;
  */
 public final class WiggleServer implements AutoCloseable {
 
+    private static final System.Logger LOG = System.getLogger(WiggleServer.class.getName());
+
+    private final ServerConfig config;
     private final Storage storage;
     private final WorkflowEngine engine;
     private final ClusterManager cluster;
@@ -31,6 +34,7 @@ public final class WiggleServer implements AutoCloseable {
     private final HttpDashboard dashboard;
 
     public WiggleServer(ServerConfig config) throws IOException {
+        this.config = config;
         this.storage = config.isInMemory() ? new InMemoryStorage() : databaseStorage(config);
         this.storage.migrate();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis());
@@ -64,6 +68,9 @@ public final class WiggleServer implements AutoCloseable {
         queueLagMonitor.start();
         api.start();
         if (dashboard != null) dashboard.start();
+        LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' started on port " + port()
+                + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc")
+                + (dashboard != null ? ", dashboard: " + dashboard.port() : "") + ")");
         return this;
     }
 
@@ -79,6 +86,7 @@ public final class WiggleServer implements AutoCloseable {
     public ClusterManager cluster() { return cluster; }
 
     @Override public void close() {
+        LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' stopping");
         if (dashboard != null) dashboard.close();
         api.close();
         queueLagMonitor.close();

@@ -58,9 +58,10 @@ class LocalSyncTest {
                 .build();
     }
 
-    @Test @DisplayName("a linear pipeline yields the same context under LOCAL_SYNC as under SERVER")
+    @Test @DisplayName("a linear pipeline yields the same context under every execution mode")
     void sameResultAsServer() throws Exception {
-        for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC}) {
+        for (ExecutionMode mode : new ExecutionMode[]{
+                ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             AtomicInteger runs = new AtomicInteger();
             Blueprint<Map<String, Object>> bp = linear(mode, runs);
             try (WiggleServer server = new WiggleServer(config()).start();
@@ -108,6 +109,38 @@ class LocalSyncTest {
             // A different worker polling the same queue gets nothing -- the chain is owned by w1.
             assertTrue(engine.poll("w2", queues, 10, null).isEmpty(),
                     "the continuation must not be offered to another worker");
+        }
+    }
+
+    @Test @DisplayName("LOCAL_ASYNC: a whole run is applied atomically in one AdvanceRun batch")
+    void batchAppliesAtomically() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            Blueprint<Map<String, Object>> bp = Workflow.defineJson("async-batch")
+                    .execution(ExecutionMode.LOCAL_ASYNC)
+                    .step("x", ctx -> put(ctx, "x", 1L))
+                    .step("y", ctx -> put(ctx, "y", 2L))
+                    .build();
+            registry.register(bp.definition());
+            Set<String> queues = bp.definition().queues();
+
+            String id = engine.start(bp.name(), bp.version(), Map.of(), null);
+            TaskActivation first = engine.poll("w1", queues, 10, null).get(0);
+            String xNode = first.nodeId();
+            String yNode = bp.definition().node(xNode).next();
+
+            // The worker buffered both steps and flushes them in a single final batch.
+            WorkflowEngine.AdvanceOutcome out = engine.advanceRun(first.taskId(), "w1", List.of(
+                    new WorkflowEngine.StepInput(xNode, Map.of("x", 1L), null),
+                    new WorkflowEngine.StepInput(yNode, Map.of("y", 2L), null)), true);
+
+            assertEquals("COMPLETED", out.instanceStatus(), "the batch drove the instance to completion");
+            Map<String, Object> ctx = Json.asObject(engine.instance(id).orElseThrow().context());
+            assertEquals(1L, ctx.get("x"));
+            assertEquals(2L, ctx.get("y"));
+            assertTrue(engine.poll("w2", queues, 10, null).isEmpty(), "nothing left to dispatch");
         }
     }
 }
