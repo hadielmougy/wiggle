@@ -49,9 +49,10 @@ public final class Housekeeper implements AutoCloseable {
         try {
             int fired = engine.fireDueTimers(batchSize);
             int reclaimed = engine.reclaimExpiredLeases(batchSize);
-            if (fired > 0 || reclaimed > 0) {
-                LOG.log(System.Logger.Level.DEBUG,
-                        () -> "housekeeping: " + fired + " timers fired, " + reclaimed + " leases reclaimed");
+            int escalated = engine.fireDueUserTaskDeadlines(batchSize);
+            if (fired > 0 || reclaimed > 0 || escalated > 0) {
+                LOG.log(System.Logger.Level.DEBUG, () -> "housekeeping: " + fired + " timers fired, "
+                        + reclaimed + " leases reclaimed, " + escalated + " user-task deadlines fired");
             }
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "housekeeping tick failed: " + e);

@@ -151,6 +151,25 @@ public final class InMemoryStorage implements Storage {
                     .toList();
         }
 
+        @Override public List<Token> pendingUserTasks(int max) {
+            return tokens.values().stream()
+                    .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.USER_TASK)
+                    .sorted(Comparator.comparingLong((Token t) -> t.createdAt).thenComparing(t -> t.id))
+                    .limit(max)
+                    .map(Token::clone)
+                    .toList();
+        }
+
+        @Override public List<Token> dueUserTasks(long now, int max) {
+            return tokens.values().stream()
+                    .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.USER_TASK
+                            && t.availableAt > 0 && t.availableAt <= now)
+                    .sorted(Comparator.comparingLong((Token t) -> t.availableAt))
+                    .limit(max)
+                    .map(Token::clone)
+                    .toList();
+        }
+
         @Override public List<Token> expiredLeases(long now, int max) {
             return tokens.values().stream()
                     .filter(t -> t.status == TokenStatus.RUNNING && t.leaseExpiresAt > 0 && t.leaseExpiresAt < now)

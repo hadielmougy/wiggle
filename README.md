@@ -128,6 +128,7 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `gate(name, pred)` | continue only while `pred` is true; a false result ends the instance as `gated:<name>` |
 | `choose(cases…)` | switch/case: run the branch of the **first** matching guard, then continue |
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
+| `userTask(name[, timeout[, escalation]])` | wait for a human/external completion; optional deadline escalates or fails |
 | `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
 | `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |
 | `build()` | finish; produces the `Blueprint` |
@@ -249,6 +250,41 @@ running step.
 
 ---
 
+## Human / external tasks
+
+A `userTask` pauses the instance until a human (or another system) completes it — no worker
+is held while it waits, so it can sit for days.
+
+```java
+Workflow.defineJson("expense")
+        .step("submit", Expenses::record)
+
+        // Waits until someone completes it via the control API / dashboard.
+        // Optional deadline (here 48h) runs the escalation branch if nobody acts.
+        .userTask("manager-approval", Duration.ofHours(48),
+                b -> b.step("auto-escalate", Escalations::toDirector))
+
+        .step("pay-out", Expenses::disburse)
+        .build();
+```
+
+- `userTask(name)` — waits indefinitely.
+- `userTask(name, timeout)` — if unmet by the deadline, the **instance fails** with a timeout error.
+- `userTask(name, timeout, escalation)` — if unmet, the **escalation branch runs**, then rejoins the flow.
+
+Complete a task from the [dashboard](#web-dashboard) (a "User tasks" panel lists them with a
+**complete** button) or over its HTTP API:
+
+```bash
+curl -X POST http://localhost:8090/api/tasks/{taskId}/complete \
+     -H 'Content-Type: application/json' -d '{"decision":"approved"}'
+```
+
+The posted JSON is merged into the context, exactly like a `step`'s return value, and the
+flow continues. Cancelling the instance clears any task it was waiting on.
+
+---
+
 ## Running the server
 
 ### Single node (in-memory)
@@ -300,8 +336,23 @@ Everything has a sensible default; override via environment variable or system p
 | `WIGGLE_NODE_NAME` | hostname | name shown in cluster membership |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | set a port to enable the web dashboard |
 
+### Schema migrations
+
 The schema (`wf_definition`, `wf_graph_node`, `wf_graph_edge`, `wf_instance`, `wf_token`,
-`wf_node`) is created automatically on startup.
+`wf_node`) is created and evolved automatically on startup by a small **versioned migration
+runner** in `JdbcStorage`:
+
+- Migrations are an ordered, **forward-only** list (`JdbcStorage.MIGRATIONS`); applied
+  versions are tracked in a `wf_schema_version` table, so each runs exactly once.
+- On boot, pending migrations run inside one transaction under a cross-node advisory lock —
+  safe when several nodes start at once, and atomic on PostgreSQL (a failed migration rolls
+  back and records nothing). Version 1 is the baseline, using `IF NOT EXISTS`, so a database
+  created before versioning existed adopts it without re-creating anything.
+
+To change the schema, **append** a new `Migration(n, "name", sql)` — never edit or reorder a
+released one. Keep changes backward-compatible (add nullable columns, new tables/indexes) so
+a rolling deploy, where old and new nodes briefly share the database, stays safe; do
+destructive changes a release later, once every node is upgraded.
 
 ### Web dashboard
 
