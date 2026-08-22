@@ -54,6 +54,12 @@ public final class Rows {
         public long leaseExpiresAt;
         /** Comma separated stack of enclosing fork groups; last element is innermost. */
         public String joinStack = "";
+        /**
+         * Branch-scoped JSON overlaid on the instance context when this token is dispatched --
+         * how a dynamic-fork child carries its item. Inherited along the branch, restored from
+         * the fork token after a join; null outside dynamic branches.
+         */
+        public String payloadJson;
         public String lastError;
         public long createdAt;
         public long updatedAt;

@@ -147,6 +147,8 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `gate(name, pred)` | continue only while true; false ends the instance as `gated:<name>` |
 | `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
 | `fork(branches…)` | run branches in parallel, then join |
+| `forkEach(name, itemsKey, itemKey, body)` | runtime fan-out: one branch per element of the list at `itemsKey` |
+| `doWhile(name, cond, body)` | run `body`, then repeat while `cond` holds (at least once) |
 | `sleep(name, duration)` | server-side timer; holds no worker |
 | `userTask(name[, timeout[, escalation]])` | wait for a human/external completion; optional deadline escalates or fails |
 | `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |

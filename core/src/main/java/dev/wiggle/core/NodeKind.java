@@ -9,6 +9,12 @@ public enum NodeKind {
     SLEEP,
     /** Fan-out: spawns one token per branch. */
     FORK,
+    /**
+     * Runtime fan-out: spawns one token per element of a list read from the context at
+     * {@code itemsKey}, each running the same branch template with its element injected
+     * under {@code itemKey} (and its position under {@code itemKey + "Index"}).
+     */
+    DYN_FORK,
     /** Fan-in: continues once every sibling token has arrived. */
     JOIN,
     /**

@@ -137,6 +137,8 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
 | `userTask(name[, timeout[, escalation]])` | wait for a human/external completion; optional deadline escalates or fails |
 | `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
+| `forkEach(name, itemsKey, itemKey, body)` | **runtime** fan-out: one parallel branch per element of the list at `itemsKey`, each seeing its element as `itemKey` (and `itemKey + "Index"`); empty list skips through |
+| `doWhile(name, cond, body)` | run `body`, then re-run while `cond` holds (body runs at least once) |
 | `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |
 | `build()` | finish; produces the `Blueprint` |
 
@@ -490,8 +492,9 @@ copy from:
 
 - **Execution is at-least-once.** A worker crash can cause a step to run again on recovery,
   so make steps idempotent where it matters.
-- **`fork` branches are fixed at definition time** — there's no runtime fan-out over a
-  collection of unknown size.
+- **`forkEach` branch writes share one context** — per-element results belong under
+  per-element keys (use `itemKey + "Index"`); two branches writing the same key race,
+  last write wins.
 - **A failed instance stops; it does not roll back.** There's no built-in saga/compensation.
 - **The gRPC API is plaintext** (no auth/TLS). Keep it on a trusted network or front it
   with something that terminates TLS.

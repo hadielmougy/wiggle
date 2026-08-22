@@ -57,7 +57,7 @@ public final class WorkflowEngine {
             LazyGraph def = definitions.graph(tx, workflow, v);
             long now = System.currentTimeMillis();
             Instance inst = insertNewInstance(tx, def, context, correlationId, now);
-            Token t = newToken(inst, def.startNode(), "", now);
+            Token t = newToken(inst, def.startNode(), "", null, now);
             tx.insertToken(t);
             LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                     + " at node " + def.startNode() + " correlationId=" + correlationId);
@@ -161,7 +161,7 @@ public final class WorkflowEngine {
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson), mode));
+                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t), mode));
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -215,7 +215,7 @@ public final class WorkflowEngine {
             String next = routeCompletion(inst, node, result);
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, next, t.joinStack, now);
+            Token cont = newToken(inst, next, t.joinStack, t.payloadJson, now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
@@ -295,7 +295,7 @@ public final class WorkflowEngine {
             String next = routeReportedStep(inst, node, step);
             settleToken(tx, current, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, next, current.joinStack, now);
+            Token cont = newToken(inst, next, current.joinStack, current.payloadJson, now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
             if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
@@ -373,7 +373,7 @@ public final class WorkflowEngine {
             mergeContext(inst, result);
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, node.next(), t.joinStack, now);
+            Token cont = newToken(inst, node.next(), t.joinStack, t.payloadJson, now);
             tx.insertToken(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "completeUserTask: user task " + node.name()
                     + " of instance " + inst.id + " completed externally -> " + node.next());
@@ -432,7 +432,7 @@ public final class WorkflowEngine {
         t.status = TokenStatus.DONE;
         t.updatedAt = ts;
         tx.updateToken(t);
-        Token cont = newToken(inst, node.next(), t.joinStack, ts);
+        Token cont = newToken(inst, node.next(), t.joinStack, t.payloadJson, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
@@ -464,7 +464,7 @@ public final class WorkflowEngine {
             failInstance(tx, inst, "user task '" + node.name() + "' timed out", ts);
             return;
         }
-        Token cont = newToken(inst, node.altNext(), t.joinStack, ts);
+        Token cont = newToken(inst, node.altNext(), t.joinStack, t.payloadJson, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
@@ -593,6 +593,7 @@ public final class WorkflowEngine {
                 case SLEEP -> parkAtSleep(tx, inst, t, node, now);
                 case USER_TASK -> parkAtUserTask(tx, inst, t, node, now);
                 case FORK -> spawnForkBranches(tx, inst, t, node, work, now);
+                case DYN_FORK -> spawnDynamicBranches(tx, inst, t, node, work, now);
                 case JOIN -> arriveAtJoin(tx, inst, t, node, work, now);
                 case END -> finishAtEnd(tx, inst, t, node, work, now);
             };
@@ -651,10 +652,10 @@ public final class WorkflowEngine {
         t.kind = NodeKind.FORK;
         t.updatedAt = now;
         tx.updateToken(t);
-        String group = Ids.next("jg");
+        String group = t.id;   // unique per fork execution; the join finds the fork token by it
         String childStack = t.pushJoinStack(group);
         for (String branchStart : node.branches()) {
-            Token child = newToken(inst, branchStart, childStack, now);
+            Token child = newToken(inst, branchStart, childStack, t.payloadJson, now);
             tx.insertToken(child);
             work.push(child);
         }
@@ -664,28 +665,109 @@ public final class WorkflowEngine {
         return true;
     }
 
+    /**
+     * Runtime fan-out: one child per element of the list at the node's {@code itemsKey}, each
+     * carrying its element (and index) as a branch-scoped payload. The join group encodes the
+     * width, since a dynamic join's expected count varies per execution. An empty or missing
+     * list skips straight past the paired join; a non-list value fails the instance.
+     */
+    private boolean spawnDynamicBranches(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+        Object items = Json.parseObject(inst.contextJson).get(node.itemsKey());
+        if (items != null && !(items instanceof List)) {
+            failInstance(tx, inst, "forkEach '" + node.name() + "': context key '" + node.itemsKey()
+                    + "' holds " + items.getClass().getSimpleName() + ", not a list", now);
+            return false;
+        }
+        List<?> list = items == null ? List.of() : (List<?>) items;
+        TokenStatus before = t.status;
+        t.status = TokenStatus.DONE;
+        t.kind = NodeKind.DYN_FORK;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        if (list.isEmpty()) {
+            // Nothing to fan out over: continue directly past the paired join (node.next()).
+            Token cont = newToken(inst, def(tx, inst).node(node.next()).next(), t.joinStack, t.payloadJson, now);
+            tx.insertToken(cont);
+            work.push(cont);
+            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                    + node.name() + " (DYN_FORK) " + before + " -> DONE, empty '" + node.itemsKey()
+                    + "' skips the join");
+            return true;
+        }
+        String group = t.id + "#" + list.size();   // fork token id + width, parsed back at the join
+        String childStack = t.pushJoinStack(group);
+        String branchStart = node.branches().get(0);
+        for (int i = 0; i < list.size(); i++) {
+            Token child = newToken(inst, branchStart, childStack, itemPayload(t, node, list.get(i), i), now);
+            tx.insertToken(child);
+            work.push(child);
+        }
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (DYN_FORK) " + before + " -> DONE, spawned " + list.size()
+                + " branch(es) over '" + node.itemsKey() + "' in group " + group);
+        return true;
+    }
+
+    /** The child's payload: the fork token's own payload (nesting) plus its item and index. */
+    private static String itemPayload(Token forkToken, Node node, Object item, int index) {
+        Map<String, Object> payload = forkToken.payloadJson == null
+                ? new LinkedHashMap<>() : Json.parseObject(forkToken.payloadJson);
+        payload.put(node.itemKey(), item);
+        payload.put(node.itemKey() + "Index", (long) index);
+        return Json.write(payload);
+    }
+
+    private LazyGraph def(Tx tx, Instance inst) {
+        return definitions.graph(tx, inst.workflow, inst.version);
+    }
+
     private boolean arriveAtJoin(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
         String group = t.currentJoinGroup();
+        int expected = expectedAt(node, group);
         TokenStatus before = t.status;
         t.status = TokenStatus.JOINED;
         t.kind = NodeKind.JOIN;
         t.updatedAt = now;
         tx.updateToken(t);
         List<Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
-        if (atBarrier.size() < node.expected()) {
+        if (atBarrier.size() < expected) {
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (JOIN) " + before + " -> JOINED, waiting on barrier " + group
-                    + " (" + atBarrier.size() + "/" + node.expected() + ")");
+                    + " (" + atBarrier.size() + "/" + expected + ")");
             return true;
         }
         consumeBarrier(tx, atBarrier, now);
-        Token cont = newToken(inst, node.next(), t.popJoinStack(), now);
+        // Restore the payload the branches started from, so nesting scopes correctly.
+        Token cont = newToken(inst, node.next(), t.popJoinStack(), forkPayload(tx, group), now);
         tx.insertToken(cont);
         work.push(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                 + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
-                + " satisfied (" + atBarrier.size() + "/" + node.expected() + ") -> " + node.next());
+                + " satisfied (" + atBarrier.size() + "/" + expected + ") -> " + node.next());
         return true;
+    }
+
+    /** A static join's width comes from the graph; a dynamic one travels in the group as "#n". */
+    private static int expectedAt(Node node, String group) {
+        if (node.expected() > 0) return node.expected();
+        int hash = group == null ? -1 : group.lastIndexOf('#');
+        return hash < 0 ? 1 : Integer.parseInt(group.substring(hash + 1));
+    }
+
+    /** The payload the fork token had when it spawned this group, or null for legacy groups. */
+    private static String forkPayload(Tx tx, String group) {
+        if (group == null) return null;
+        int hash = group.lastIndexOf('#');
+        String forkTokenId = hash < 0 ? group : group.substring(0, hash);
+        return tx.findToken(forkTokenId).map(f -> f.payloadJson).orElse(null);
+    }
+
+    /** The context a worker sees: the shared instance context with the token's payload overlaid. */
+    private static Object dispatchContext(Instance inst, Token t) {
+        if (t.payloadJson == null) return Json.parse(inst.contextJson);
+        Map<String, Object> ctx = Json.parseObject(inst.contextJson);
+        ctx.putAll(Json.parseObject(t.payloadJson));
+        return ctx;
     }
 
     private static List<Token> joinedAtBarrier(Tx tx, Instance inst, Node node, String group) {
@@ -759,8 +841,9 @@ public final class WorkflowEngine {
         }
     }
 
-    private static Token newToken(Instance inst, String nodeId, String joinStack, long now) {
+    private static Token newToken(Instance inst, String nodeId, String joinStack, String payload, long now) {
         Token t = new Token();
+        t.payloadJson = payload;
         t.id = Ids.next("tok");
         t.instanceId = inst.id;
         t.workflow = inst.workflow;

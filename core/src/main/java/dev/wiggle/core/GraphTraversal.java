@@ -32,7 +32,7 @@ public final class GraphTraversal {
         return switch (next.kind()) {
             case TASK, PREDICATE -> workerQueues.contains(next.queue()) ? null : Handback.OTHER_QUEUE;
             case SLEEP -> Handback.SLEEP;
-            case FORK -> Handback.FORK;
+            case FORK, DYN_FORK -> Handback.FORK;
             case JOIN -> Handback.JOIN;
             case USER_TASK -> Handback.USER_TASK;
             case END -> Handback.TERMINAL;
