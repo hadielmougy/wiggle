@@ -12,6 +12,7 @@ public final class Rows {
         /** Dispatchable to a worker. */           READY,
         /** Leased by a worker. */                 RUNNING,
         /** Sleeping until availableAt. */         WAITING,
+        /** Awaiting an external/user completion. */ AWAITING,
         /** Parked at a join barrier. */           JOINED,
         /** Consumed. */                           DONE,
         /** Terminally failed. */                  FAILED,
@@ -75,7 +76,8 @@ public final class Rows {
 
         public boolean isActive() {
             return status == TokenStatus.READY || status == TokenStatus.RUNNING
-                    || status == TokenStatus.WAITING || status == TokenStatus.JOINED;
+                    || status == TokenStatus.WAITING || status == TokenStatus.AWAITING
+                    || status == TokenStatus.JOINED;
         }
 
         @Override public Token clone() {

@@ -30,6 +30,11 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null);
     }
 
+    /** {@code deadlineMillis == 0} means no deadline. Reuses {@code sleepMillis} for the deadline. */
+    public static Node userTask(String id, String name, long deadlineMillis) {
+        return new Node(id, NodeKind.USER_TASK, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null);
+    }
+
     public static Node end(String id, boolean success, String reason) {
         return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason);
     }

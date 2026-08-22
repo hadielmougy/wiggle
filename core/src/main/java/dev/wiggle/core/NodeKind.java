@@ -11,6 +11,12 @@ public enum NodeKind {
     FORK,
     /** Fan-in: continues once every sibling token has arrived. */
     JOIN,
+    /**
+     * Waits for an external actor (a human, or another system) to complete it. No worker is
+     * held. Completed out of band via the control API; an optional deadline routes to
+     * {@code altNext} (escalation) or fails the instance if none is set.
+     */
+    USER_TASK,
     /** Terminal. */
     END
 }

@@ -173,6 +173,81 @@ public final class WorkflowEngine {
         });
     }
 
+    // ------------------------------------------------------------- user tasks
+
+    /** The user tasks currently awaiting an external completion, oldest first. */
+    public List<Token> pendingUserTasks(int max) {
+        return storage.inTx(tx -> tx.pendingUserTasks(max));
+    }
+
+    /**
+     * Completes a user task on behalf of an external actor. Unlike {@link #complete}, there is
+     * no lease to hold -- the token only has to be AWAITING. {@code result} is merged into the
+     * instance context and the flow advances down the task's completion path.
+     */
+    public void completeUserTask(String taskId, Object result) {
+        storage.inTxVoid(tx -> {
+            Token probe = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+            Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+            Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+            if (t.status != TokenStatus.AWAITING || t.kind != NodeKind.USER_TASK) {
+                throw EngineException.conflict("task " + t.id + " is " + t.status + ", not an awaiting user task");
+            }
+            if (inst.status != InstanceStatus.RUNNING) {
+                throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
+            }
+            long now = System.currentTimeMillis();
+            LazyGraph def = definitions.graph(tx, t.workflow, t.version);
+            Node node = def.node(t.nodeId);
+
+            mergeContext(inst, result);
+            t.status = TokenStatus.DONE;
+            t.updatedAt = now;
+            tx.updateToken(t);
+            inst.updatedAt = now;
+            tx.updateInstance(inst);
+
+            Token cont = newToken(inst, node.next(), t.joinStack, now);
+            tx.insertToken(cont);
+            drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        });
+    }
+
+    /** Leader duty: user tasks whose deadline has passed escalate (to {@code altNext}) or fail. */
+    public int fireDueUserTaskDeadlines(int max) {
+        long now = System.currentTimeMillis();
+        List<Token> due = storage.inTx(tx -> tx.dueUserTasks(now, max));
+        int fired = 0;
+        for (Token task : due) {
+            try {
+                storage.inTxVoid(tx -> {
+                    Instance inst = tx.lockInstance(task.instanceId).orElse(null);
+                    if (inst == null || inst.status != InstanceStatus.RUNNING) return;
+                    Token t = tx.findToken(task.id).orElse(null);
+                    if (t == null || t.status != TokenStatus.AWAITING) return;
+                    long ts = System.currentTimeMillis();
+                    if (t.availableAt <= 0 || t.availableAt > ts) return;   // deadline cleared or moved
+                    LazyGraph def = definitions.graph(tx, t.workflow, t.version);
+                    Node node = def.node(t.nodeId);
+                    t.status = TokenStatus.DONE;
+                    t.updatedAt = ts;
+                    tx.updateToken(t);
+                    if (node.altNext() != null) {
+                        Token cont = newToken(inst, node.altNext(), t.joinStack, ts);
+                        tx.insertToken(cont);
+                        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
+                    } else {
+                        failInstance(tx, inst, "user task '" + node.name() + "' timed out", ts);
+                    }
+                });
+                fired++;
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "user-task deadline " + task.id + " failed: " + e);
+            }
+        }
+        return fired;
+    }
+
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
         storage.inTxVoid(tx -> {
@@ -343,6 +418,16 @@ public final class WorkflowEngine {
                     t.status = TokenStatus.WAITING;
                     t.kind = NodeKind.SLEEP;
                     t.availableAt = now + node.sleepMillis();
+                    t.updatedAt = now;
+                    tx.updateToken(t);
+                }
+                case USER_TASK -> {
+                    // Park until an external actor completes it. No worker leases an AWAITING
+                    // token; a positive availableAt is the (optional) deadline the leader sweeps.
+                    t.status = TokenStatus.AWAITING;
+                    t.kind = NodeKind.USER_TASK;
+                    t.activity = node.name();     // surfaced to the task list as the human name
+                    t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
                     t.updatedAt = now;
                     tx.updateToken(t);
                 }

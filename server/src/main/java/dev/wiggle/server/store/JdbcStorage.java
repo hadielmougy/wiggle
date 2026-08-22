@@ -62,8 +62,19 @@ public final class JdbcStorage implements Storage {
         }
     }
 
-    @Override public void migrate() {
-        String ddl = """
+    /** One forward-only schema step. {@code sql} may hold several {@code ;}-separated statements. */
+    record Migration(int version, String name, String sql) { }
+
+    /**
+     * Ordered, forward-only schema history. Append new migrations; never edit or reorder an
+     * already-released one. V1 is the baseline: it uses {@code IF NOT EXISTS} so a database
+     * created before schema versioning existed adopts version tracking without re-creating
+     * anything. Later migrations should be backward-compatible (add nullable columns / new
+     * tables / new indexes) so a rolling multi-node deploy, where old and new nodes briefly
+     * share the database, stays safe.
+     */
+    static final List<Migration> MIGRATIONS = List.of(
+            new Migration(1, "baseline", """
             CREATE TABLE IF NOT EXISTS wf_definition (
               name           VARCHAR(200) NOT NULL,
               version        INT          NOT NULL,
@@ -142,27 +153,54 @@ public final class JdbcStorage implements Storage {
               workers        INT          NOT NULL,
               leader         INT          NOT NULL
             );
-            """;
+            """));
+
+    @Override public void migrate() {
         Connection c = borrow();
         try {
-            // CREATE TABLE IF NOT EXISTS is not race-safe on PostgreSQL: two nodes can both
-            // find a table absent and both try to create it, and the loser fails with a
-            // pg_type unique violation. A transaction-scoped advisory lock, keyed by a
-            // constant shared across nodes, serialises the whole one-time bootstrap so late
-            // arrivals simply find everything already present. H2 has no such catalog race.
             this.postgres = isPostgres(c);
-            acquireMigrationLock(c);
-            try (Statement st = c.createStatement()) {
-                for (String stmt : ddl.split(";")) {
-                    if (!stmt.isBlank()) st.execute(stmt);
-                }
-            }
-            c.commit(); // also releases the advisory lock
+            runMigrations(c, MIGRATIONS);
+            c.commit();   // also releases the advisory lock held for the duration
         } catch (SQLException e) {
             rollback(c);
             throw new StorageException("migration failed", e);
         } finally {
             release(c);
+        }
+    }
+
+    /**
+     * Applies every migration newer than the recorded schema version, in order, on the given
+     * connection. Serialised across nodes by a transaction-scoped advisory lock (PostgreSQL;
+     * a no-op on H2), so concurrent starters do not race on catalog creation. Runs in the
+     * caller's transaction and does <em>not</em> commit -- the caller does, which keeps the
+     * lock held until the whole batch lands atomically.
+     */
+    static void runMigrations(Connection c, List<Migration> migrations) throws SQLException {
+        acquireMigrationLock(c);
+        try (Statement st = c.createStatement()) {
+            st.execute("CREATE TABLE IF NOT EXISTS wf_schema_version (" +
+                    "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL)");
+        }
+        int current = 0;
+        try (Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COALESCE(MAX(version),0) FROM wf_schema_version")) {
+            if (rs.next()) current = rs.getInt(1);
+        }
+        for (Migration m : migrations) {
+            if (m.version() <= current) continue;
+            try (Statement st = c.createStatement()) {
+                for (String stmt : m.sql().split(";")) {
+                    if (!stmt.isBlank()) st.execute(stmt);
+                }
+            }
+            try (PreparedStatement ins = c.prepareStatement(
+                    "INSERT INTO wf_schema_version (version,name,applied_at) VALUES (?,?,?)")) {
+                ins.setInt(1, m.version());
+                ins.setString(2, m.name());
+                ins.setLong(3, System.currentTimeMillis());
+                ins.executeUpdate();
+            }
         }
     }
 
@@ -239,6 +277,10 @@ public final class JdbcStorage implements Storage {
                 case FORK -> {
                     int i = 0;
                     for (String b : n.branches()) out.add(new Edge(b, "branch", i++));
+                }
+                case USER_TASK -> {
+                    if (n.next() != null) out.add(new Edge(n.next(), null, 0));
+                    if (n.altNext() != null) out.add(new Edge(n.altNext(), "escalate", 1));
                 }
                 default -> {
                     if (n.next() != null) out.add(new Edge(n.next(), null, 0));
@@ -331,6 +373,8 @@ public final class JdbcStorage implements Storage {
                         String to = rs.getString(1), cond = rs.getString(2);
                         if (kind == NodeKind.PREDICATE) {
                             if ("false".equals(cond)) altNext = to; else next = to;
+                        } else if (kind == NodeKind.USER_TASK) {
+                            if ("escalate".equals(cond)) altNext = to; else next = to;
                         } else if (kind == NodeKind.FORK) {
                             branches.add(to);
                         } else {
@@ -590,6 +634,23 @@ public final class JdbcStorage implements Storage {
         @Override public List<Token> expiredLeases(long now, int max) {
             return query("SELECT * FROM wf_token WHERE status='RUNNING' AND lease_expires>0 AND lease_expires<? " +
                     "ORDER BY lease_expires LIMIT ?", now, max);
+        }
+
+        @Override public List<Token> pendingUserTasks(int max) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
+                    "ORDER BY created_at LIMIT ?")) {
+                p.setInt(1, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Token> out = new ArrayList<>();
+                    while (rs.next()) out.add(readToken(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Token> dueUserTasks(long now, int max) {
+            return query("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
+                    "AND available_at>0 AND available_at<=? ORDER BY available_at LIMIT ?", now, max);
         }
 
         private List<Token> query(String sql, long arg, int limit) {

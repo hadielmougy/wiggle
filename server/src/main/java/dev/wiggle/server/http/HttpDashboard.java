@@ -44,6 +44,7 @@ public final class HttpDashboard implements AutoCloseable {
         this.http.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         this.http.createContext("/api/workflows", guard(this::workflows));
         this.http.createContext("/api/instances", guard(this::instances));
+        this.http.createContext("/api/tasks", guard(this::tasks));
         this.http.createContext("/api/cluster", guard(this::clusterView));
         this.http.createContext("/healthz", ex -> sendText(ex, 200, "text/plain", "ok"));
         this.http.createContext("/", this::staticFile);
@@ -129,7 +130,41 @@ public final class HttpDashboard implements AutoCloseable {
         sendJson(ex, 200, out);
     }
 
+    private void tasks(HttpExchange ex) throws IOException {
+        String rest = ex.getRequestURI().getPath().substring("/api/tasks".length());   // "", "/{id}/complete"
+
+        if (rest.isEmpty() || rest.equals("/")) {
+            requireGet(ex);
+            int limit = parseInt(query(ex.getRequestURI()).get("limit"), 200);
+            List<Object> list = new ArrayList<>();
+            for (Token t : engine.pendingUserTasks(limit)) list.add(taskMap(t));
+            sendJson(ex, 200, Map.of("tasks", list));
+            return;
+        }
+
+        String[] parts = rest.substring(1).split("/");
+        if (parts.length == 2 && parts[1].equals("complete")) {
+            if (!ex.getRequestMethod().equals("POST")) { sendError(ex, 405, "POST required"); return; }
+            Object result = readJsonBody(ex);
+            engine.completeUserTask(parts[0], result);
+            sendJson(ex, 200, Map.of("ok", true));
+            return;
+        }
+        sendError(ex, 404, "not found");
+    }
+
     // ------------------------------------------------------------- projections
+
+    private static Map<String, Object> taskMap(Token t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", t.id);
+        m.put("instanceId", t.instanceId);
+        m.put("workflow", t.workflow);
+        m.put("name", t.activity);                 // the user task's human name (set when parked)
+        m.put("deadline", t.availableAt);          // 0 = no deadline
+        m.put("createdAt", t.createdAt);
+        return m;
+    }
 
     private static Map<String, Object> instanceMap(InstanceView v) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -207,6 +242,13 @@ public final class HttpDashboard implements AutoCloseable {
 
     private static String emptyToNull(String s) { return s == null || s.isBlank() ? null : s; }
 
+    /** Parses the request body as JSON; an empty body is an empty object. */
+    private static Object readJsonBody(HttpExchange ex) throws IOException {
+        byte[] raw = ex.getRequestBody().readAllBytes();
+        String body = new String(raw, StandardCharsets.UTF_8).trim();
+        return body.isEmpty() ? Map.of() : Json.parse(body);
+    }
+
     private static int parseInt(String s, int def) {
         try { return s == null ? def : Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return def; }
     }
@@ -280,6 +322,10 @@ public final class HttpDashboard implements AutoCloseable {
               <span class="cluster" id="cluster">connecting…</span>
             </header>
             <main>
+              <section class="panel" style="grid-column:1/-1">
+                <h2>User tasks — awaiting completion</h2>
+                <div id="tasks"><div class="empty">loading…</div></div>
+              </section>
               <section class="panel">
                 <h2>Instances</h2>
                 <div class="toolbar">
@@ -367,9 +413,32 @@ public final class HttpDashboard implements AutoCloseable {
               catch(e){ alert('cancel failed: '+e.message); }
             }
 
-            function tick(){ loadInstances(); if(selected) showDetail(selected); }
+            async function loadTasks(){
+              try {
+                const d = await j('/api/tasks');
+                if(!d.tasks.length){ $('#tasks').innerHTML='<div class="empty">no pending user tasks</div>'; return; }
+                $('#tasks').innerHTML = `<table><thead><tr><th>task</th><th>workflow</th><th>instance</th><th>deadline</th><th></th></tr></thead><tbody>`
+                  + d.tasks.map(t=>`<tr><td>${esc(t.name)}</td><td>${esc(t.workflow)}</td>
+                      <td><code>${esc(t.instanceId)}</code></td>
+                      <td class="muted">${t.deadline?('in '+Math.max(0,Math.round((t.deadline-Date.now())/1000))+'s'):'—'}</td>
+                      <td><button onclick="completeTask('${esc(t.id)}')">complete</button></td></tr>`).join('')
+                  + `</tbody></table>`;
+              } catch(e){ $('#tasks').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
+            }
+
+            async function completeTask(id){
+              const body = prompt('result JSON (merged into the context):', '{}');
+              if(body===null) return;
+              try {
+                await j('/api/tasks/'+encodeURIComponent(id)+'/complete',
+                        {method:'POST', headers:{'Content-Type':'application/json'}, body});
+                loadTasks(); loadInstances();
+              } catch(e){ alert('complete failed: '+e.message); }
+            }
+
+            function tick(){ loadInstances(); loadTasks(); if(selected) showDetail(selected); }
             ['#workflow','#status','#limit'].forEach(s=>$(s).onchange=loadInstances);
-            loadWorkflows(); loadCluster(); loadInstances();
+            loadWorkflows(); loadCluster(); loadInstances(); loadTasks();
             setInterval(()=>{ if($('#auto').checked) tick(); }, 2000);
             setInterval(()=>{ loadCluster(); loadWorkflows(); }, 5000);
             </script>

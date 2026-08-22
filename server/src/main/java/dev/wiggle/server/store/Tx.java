@@ -52,6 +52,12 @@ public interface Tx {
     /** WAITING timer tokens whose fire time has passed. */
     List<Token> dueTimers(long now, int max);
 
+    /** AWAITING user-task tokens, oldest first -- what the task list shows. */
+    List<Token> pendingUserTasks(int max);
+
+    /** AWAITING user-task tokens with a deadline (availableAt > 0) that has passed. */
+    List<Token> dueUserTasks(long now, int max);
+
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
 

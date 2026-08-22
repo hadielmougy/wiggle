@@ -160,6 +160,57 @@ public final class WorkflowStream<T> {
     }
 
     /**
+     * Waits for an external actor (a human, or another system) to complete the task out of
+     * band -- the flow then continues down the following step. No worker is held while it
+     * waits. Complete it via the control API / dashboard ({@code POST /api/tasks/{id}/complete});
+     * the submitted result merges into the context like a {@link #step}.
+     */
+    public WorkflowStream<T> userTask(String name) {
+        return userTask(name, null, null);
+    }
+
+    /**
+     * A user task with a deadline. If nobody completes it within {@code timeout}, the instance
+     * fails with a timeout error. Use {@link #userTask(String, Duration, java.util.function.UnaryOperator)}
+     * to escalate to a branch instead.
+     */
+    public WorkflowStream<T> userTask(String name, Duration timeout) {
+        return userTask(name, timeout, null);
+    }
+
+    /**
+     * A user task with a deadline and an escalation branch: if it is not completed within
+     * {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow after
+     * the task (exactly one of completion / escalation happens).
+     */
+    public WorkflowStream<T> userTask(String name, Duration timeout,
+                                      java.util.function.UnaryOperator<WorkflowStream<T>> escalation) {
+        if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
+        if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
+        if (!pipeline.stepNames.add(name)) {
+            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
+        }
+        String id = pipeline.nextId("n");
+        pipeline.put(Node.userTask(id, name, timeout == null ? 0 : timeout.toMillis()));
+        attach(id);
+        // The completion path (slot NEXT) is the open end; the escalation branch hangs off ALT_NEXT.
+        openNodes = new ArrayList<>(List.of(id));
+        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        lastStepId = null;
+
+        if (escalation != null) {
+            String[] start = new String[1];
+            WorkflowStream<T> sub = new WorkflowStream<>(pipeline, s -> start[0] = s, enclosingJoinId);
+            WorkflowStream<T> tail = escalation.apply(sub);
+            if (start[0] == null) throw new IllegalArgumentException("escalation branch of '" + name + "' defines no steps");
+            pipeline.wire(id, ALT_NEXT, start[0]);
+            openNodes.addAll(tail.openNodes);
+            openSlots.addAll(tail.openSlots);
+        }
+        return this;
+    }
+
+    /**
      * Fans out into parallel branches and waits for all of them. Branches execute
      * independently and may be picked up by different workers. Each step writes back
      * only the context fields it actually changed, so branches touching different
@@ -325,6 +376,9 @@ public final class WorkflowStream<T> {
                     if (n.kind() == dev.wiggle.core.NodeKind.FORK && n.branches().size() < 2) {
                         throw new IllegalStateException("fork " + n.id() + " has fewer than two branches");
                     }
+                }
+                case USER_TASK -> {
+                    if (n.next() == null) throw new IllegalStateException("user task " + n.id() + " has no successor");
                 }
                 case END -> { }
             }
