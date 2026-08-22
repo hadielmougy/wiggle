@@ -58,6 +58,11 @@ public final class Worker implements AutoCloseable {
 
     public String workerId() { return workerId; }
 
+    /** The queues this worker actually serves: the explicit restriction, or everything registered. */
+    private Set<String> servedQueues() {
+        return options.queues().isEmpty() ? queues : options.queues();
+    }
+
     public int inFlight() { return inFlight.get(); }
 
     /** Adds a workflow's handlers to this worker's dispatch table. */
@@ -80,7 +85,7 @@ public final class Worker implements AutoCloseable {
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
         pollThread.setDaemon(true);
         pollThread.start();
-        LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + queues
+        LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());
         return this;
     }
@@ -103,7 +108,7 @@ public final class Worker implements AutoCloseable {
             sleep(options.idleBackoff().toMillis());
             return;
         }
-        List<TaskActivation> tasks = client.poll(workerId, queues, free,
+        List<TaskActivation> tasks = client.poll(workerId, servedQueues(), free,
                 options.lease().toMillis(), options.longPollWait().toMillis());
         if (tasks.isEmpty()) {
             sleep(options.idleBackoff().toMillis());
@@ -268,7 +273,7 @@ public final class Worker implements AutoCloseable {
             boolean isPredicate = node.kind() == NodeKind.PREDICATE;
             boolean predicateValue = isPredicate && (Boolean) result;
             Node next = def.node(GraphTraversal.successor(node, predicateValue));
-            boolean handback = GraphTraversal.classify(next, queues) != null;
+            boolean handback = GraphTraversal.classify(next, servedQueues()) != null;
             buffer.add(isPredicate
                     ? new WiggleClient.StepReport(node.id(), null, predicateValue)
                     : new WiggleClient.StepReport(node.id(), result, null));

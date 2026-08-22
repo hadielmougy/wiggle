@@ -238,6 +238,11 @@ try (WiggleClient client = new WiggleClient("localhost:8080")) {
 `WIGGLE_WORKER_CONCURRENCY` are read from the environment by the example worker; anything
 else is a `WorkerOptions` setting.
 
+**Worker specialization**: by default a worker serves every queue of the blueprints it
+registered. Pair `onQueue("gpu")` on a step with `WorkerOptions.defaults().withQueues("gpu")`
+on a dedicated worker pool, and only those workers execute it — a local-execution chain hands
+the step over automatically at the queue boundary.
+
 ---
 
 ## Starting and tracking instances
