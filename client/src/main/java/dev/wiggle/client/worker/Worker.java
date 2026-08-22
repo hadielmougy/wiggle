@@ -14,8 +14,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * asks for as many tasks as it has free slots, so the server never overwhelms it and
  * backpressure is a property of the protocol rather than a thing to configure.
  *
- * Workers hold no workflow state. Losing one loses only the in-flight leases, which
- * the server's leader reclaims once they expire.
+ * Workers hold no durable state -- nothing survives a crash, and nothing needs to,
+ * since every commit lands on the server. A crash loses at most the current step
+ * (SERVER/LOCAL_SYNC) or the current local-execution batch (LOCAL_ASYNC); either way
+ * the leader reclaims the lease and it re-runs. A graceful {@link #close()} does
+ * better: it drains any buffered LOCAL_ASYNC steps to the server before exiting, so an
+ * orderly shutdown (a rolling deploy, a scale-down) does not even pay that replay cost.
  */
 public final class Worker implements AutoCloseable {
 
@@ -226,11 +230,38 @@ public final class Worker implements AutoCloseable {
             lease.start();
             try {
                 boolean chaining = true;
-                while (chaining) {
+                // Re-checked between steps (never mid-handler), so a shutdown drains promptly:
+                // the step already in flight finishes normally, then the loop stops here instead
+                // of picking up another one.
+                while (chaining && running.get()) {
                     chaining = runOneStep();
                 }
+                if (chaining) drainOnShutdown();
             } finally {
                 lease.stop();
+            }
+        }
+
+        /**
+         * Called when the worker is closing while steps remain buffered or a further step could
+         * still run locally. Flushes what's already been computed -- so it survives the
+         * restart instead of being silently discarded -- and forces a handback (even though the
+         * next node may itself be locally runnable) so the continuation is immediately READY for
+         * another worker rather than sitting leased to one that is shutting down.
+         */
+        private void drainOnShutdown() {
+            if (buffer.isEmpty()) return;   // nothing computed yet; the claimed lease simply expires and is reclaimed
+            try {
+                client.advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), true);
+                int drained = buffer.size();
+                buffer.clear();
+                LOG.log(System.Logger.Level.DEBUG, () -> "drained " + drained
+                        + " buffered step(s) of instance " + instanceId + " on shutdown");
+            } catch (RuntimeException e) {
+                // Best effort: the lease will simply expire and the leader will reclaim it,
+                // re-running from the last successful flush -- the same guarantee a crash gives.
+                LOG.log(System.Logger.Level.WARNING,
+                        "could not drain buffered steps of instance " + instanceId + " on shutdown: " + e);
             }
         }
 
@@ -370,6 +401,14 @@ public final class Worker implements AutoCloseable {
         }
     }
 
+    /**
+     * Stops polling and lets in-flight steps finish. Flips {@link #running} first, so any
+     * {@link LocalRun} in progress sees it at its next between-steps check and drains instead of
+     * continuing to chain (see {@link LocalRun#drainOnShutdown()}) -- a graceful shutdown loses
+     * nothing already computed. The {@code executor.shutdown()} below does not interrupt the
+     * current step; it only stops new submissions, so that in-flight step (and, for a local run,
+     * its drain flush) gets to complete.
+     */
     @Override
     public void close() {
         if (!running.compareAndSet(true, false)) return;
@@ -382,6 +421,8 @@ public final class Worker implements AutoCloseable {
         if (executor == null) return;
         executor.shutdown();
         try {
+            // Bounded by one step plus one flush RPC now that a local run drains rather than
+            // chaining to a natural boundary, so the lease duration is ample headroom.
             executor.awaitTermination(options.lease().toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

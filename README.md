@@ -203,8 +203,11 @@ Workflow.defineJson("etl").execution(ExecutionMode.LOCAL_SYNC)
   before the next. **As durable as `SERVER`** (a crash re-runs at most one step), just faster.
 - `LOCAL_ASYNC` — the worker buffers up to `WorkerOptions.localBatchSize` steps and reports the
   run in **one** call at the handback boundary. Highest throughput (far fewer commits), at the
-  cost of a wider crash-replay window — the whole batch re-runs on recovery, so steps must be
-  idempotent. Use `.checkpoint()` after a step to force it to commit before the next runs.
+  cost of a wider *crash* blast radius — a killed worker loses the unflushed batch, which
+  re-runs on recovery, so steps must be idempotent. Use `.checkpoint()` after a step to force it
+  to commit before the next runs. A **graceful** `worker.close()` does not pay this cost: it
+  drains any buffered steps to the server before returning, so a rolling deploy or scale-down
+  loses nothing already computed — only an unclean process death does.
 - The worker hands control back at any boundary — a `sleep`, `fork`, `join`, `userTask`, a step
   on a different queue, a failure/retry, or the end — so those still coordinate through the server.
 

@@ -1,6 +1,6 @@
 # Design: Worker-side local execution (step chaining)
 
-Status: **Phase 0–2 implemented + `.checkpoint()`** · Target: post-2.0 · Owner: TBD
+Status: **Phase 0–2 implemented + `.checkpoint()` + graceful-shutdown drain** · Target: post-2.0 · Owner: TBD
 
 > **Benchmark (linear 20-step pipeline, 1000 instances, 4 workers × 16, Postgres):**
 > SERVER 15 inst/s · LOCAL_SYNC 102 inst/s · **LOCAL_ASYNC 213 inst/s**. Async is ~2× sync on a
@@ -238,13 +238,17 @@ crash, and this MUST be documented loudly for users:
 
 - `SERVER` / `LOCAL_SYNC`: each step is committed before the next runs. A crash re-runs **at most
   one** step (identical to today).
-- `LOCAL_ASYNC`: a crash after executing steps *i..j* but before the batch `AdvanceRun` rewinds
-  the server's view to *i-1*; on lease expiry, steps *i..j* **re-execute**. Blast radius = the
-  whole local run.
+- `LOCAL_ASYNC`: an **unclean** death (kill -9, OOM, node loss) after executing steps *i..j* but
+  before the batch `AdvanceRun` rewinds the server's view to *i-1*; on lease expiry, steps *i..j*
+  **re-execute**. Blast radius = the whole local run. A **graceful** shutdown does not pay this
+  cost: `Worker.close()` flips its running flag, and the in-flight `LocalRun` sees it at its next
+  between-steps check and drains the buffer (`AdvanceRun` with a forced handback) before
+  returning, instead of continuing to chain -- so a rolling deploy or scale-down loses nothing
+  already computed (see `Worker.LocalRun.drainOnShutdown()`, implemented).
 
-Implication: `LOCAL_ASYNC` steps must be idempotent. Non-idempotent side effects (charge a card,
-send an email) belong in `SERVER`/`LOCAL_SYNC`, or behind a step-level idempotency key. We should
-surface this in the DSL javadoc and README, not just here.
+Implication: `LOCAL_ASYNC` steps must still be idempotent for the unclean-death case. Non-idempotent
+side effects (charge a card, send an email) belong in `SERVER`/`LOCAL_SYNC`, or behind a
+step-level idempotency key, or after a `.checkpoint()`. Documented in the DSL javadoc and README.
 
 ## 11. Feature interactions
 
