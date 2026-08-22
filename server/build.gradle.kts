@@ -6,10 +6,11 @@ dependencies {
     api(project(":core"))
     api(project(":proto"))
 
-    // Only needed when running with WIGGLE_JDBC_URL set. The in-memory store,
-    // which is the default, needs nothing at all.
-    runtimeOnly("org.postgresql:postgresql:${property("postgresVersion")}")
-    runtimeOnly("com.h2database:h2:${property("h2Version")}")
+    // The standalone distribution ships with PostgreSQL support so it works out of the box
+    // against a database; the server code itself never references this module (it resolves a
+    // store via the StorageProvider SPI). With no JDBC URL set, the in-memory store is used
+    // and this is inert. Drop it for a strictly in-memory build.
+    runtimeOnly(project(":postgres"))
 }
 
 application {

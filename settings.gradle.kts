@@ -4,6 +4,7 @@ include(
     "core",
     "proto",
     "server",
+    "postgres",
     "client",
     "example",
     "tests"

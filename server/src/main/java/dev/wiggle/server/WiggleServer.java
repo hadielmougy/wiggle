@@ -7,10 +7,11 @@ import dev.wiggle.server.engine.WorkflowEngine;
 import dev.wiggle.server.grpc.GrpcApi;
 import dev.wiggle.server.http.HttpDashboard;
 import dev.wiggle.server.store.InMemoryStorage;
-import dev.wiggle.server.store.JdbcStorage;
 import dev.wiggle.server.store.Storage;
+import dev.wiggle.server.store.StorageProvider;
 
 import java.io.IOException;
+import java.util.ServiceLoader;
 
 /**
  * Wires one server node together. Multiple nodes pointed at the same JDBC URL form a
@@ -28,9 +29,7 @@ public final class WiggleServer implements AutoCloseable {
     private final HttpDashboard dashboard;
 
     public WiggleServer(ServerConfig config) throws IOException {
-        this.storage = config.isInMemory()
-                ? new InMemoryStorage()
-                : new JdbcStorage(config.jdbcUrl(), config.jdbcUser(), config.jdbcPassword(), config.jdbcPoolSize());
+        this.storage = config.isInMemory() ? new InMemoryStorage() : databaseStorage(config);
         this.storage.migrate();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis());
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
@@ -41,6 +40,18 @@ public final class WiggleServer implements AutoCloseable {
         this.dashboard = config.dashboardPort() > 0
                 ? new HttpDashboard(engine, cluster, config.dashboardPort())
                 : null;
+    }
+
+    /**
+     * Finds the {@link StorageProvider} for the configured JDBC URL via {@link ServiceLoader}.
+     * Add a database module (e.g. {@code wiggle-postgres}) to the classpath to supply one.
+     */
+    private static Storage databaseStorage(ServerConfig config) {
+        for (StorageProvider provider : ServiceLoader.load(StorageProvider.class)) {
+            if (provider.supports(config.jdbcUrl())) return provider.create(config);
+        }
+        throw new IllegalStateException("no storage provider for JDBC URL '" + config.jdbcUrl()
+                + "' -- add a database module such as wiggle-postgres to the classpath");
     }
 
     public WiggleServer start() {

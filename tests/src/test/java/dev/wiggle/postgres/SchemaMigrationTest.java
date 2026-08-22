@@ -1,4 +1,4 @@
-package dev.wiggle.server.store;
+package dev.wiggle.postgres;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

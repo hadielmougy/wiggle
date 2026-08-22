@@ -49,13 +49,14 @@ subprojects {
 // RELEASING.md. Signing and Central-Portal credentials are read from properties or
 // environment variables and are never stored in the repository.
 
-val publishedModules = setOf("core", "proto", "client", "server")
+val publishedModules = setOf("core", "proto", "client", "server", "postgres")
 
 val moduleDescriptions = mapOf(
     "core" to "Wiggle shared model: JSON, the compiled workflow graph, retry policy, wire records.",
     "proto" to "Wiggle gRPC/protobuf stubs for the control-plane wire protocol.",
     "client" to "Wiggle client: the workflow authoring DSL, imperative builder, and worker runtime.",
-    "server" to "Wiggle server: the workflow engine, cluster manager, and control-plane API."
+    "server" to "Wiggle server: the workflow engine, cluster manager, and control-plane API.",
+    "postgres" to "Wiggle PostgreSQL storage: a JDBC-backed store for multi-node clustering."
 )
 
 configure(subprojects.filter { it.name in publishedModules }) {
