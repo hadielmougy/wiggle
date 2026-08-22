@@ -230,6 +230,29 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         });
     }
 
+    @Override
+    public void advanceRun(AdvanceRunRequest req, StreamObserver<AdvanceRunResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceRun taskId=" + req.getTaskId()
+                + " leaseOwner=" + req.getLeaseOwner() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
+        run(resp, () -> {
+            List<WorkflowEngine.StepInput> steps = new ArrayList<>(req.getStepsCount());
+            for (StepResult s : req.getStepsList()) {
+                Object merge = s.getOutcomeCase() == StepResult.OutcomeCase.MERGE
+                        ? ProtoJson.fromValue(s.getMerge()) : null;
+                Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
+                        ? s.getPredicateValue() : null;
+                steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate));
+            }
+            WorkflowEngine.AdvanceOutcome out =
+                    engine.advanceRun(req.getTaskId(), req.getLeaseOwner(), steps, req.getFinal());
+            return AdvanceRunResult.newBuilder()
+                    .setInstanceStatus(out.instanceStatus())
+                    .setLeaseExpiresAt(out.leaseExpiresAt())
+                    .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId())
+                    .build();
+        });
+    }
+
     private ClusterView clusterView() {
         ClusterView.Builder out = ClusterView.newBuilder().setSelf(cluster.nodeId()).setLeader(cluster.isLeader());
         long now = System.currentTimeMillis();
@@ -287,7 +310,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 .setKind(t.kind().name())
                 .setAttempt(t.attempt())
                 .setLeaseExpiresAt(t.leaseExpiresAt())
-                .setLeaseOwner(t.leaseOwner());
+                .setLeaseOwner(t.leaseOwner())
+                .setExecutionMode(t.executionMode().name());
         if (t.context() != null) m.setContext(ProtoJson.toValue(t.context()));
         return m.build();
     }

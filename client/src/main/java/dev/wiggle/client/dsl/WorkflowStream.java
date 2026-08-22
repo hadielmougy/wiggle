@@ -1,6 +1,7 @@
 package dev.wiggle.client.dsl;
 
 import dev.wiggle.core.ContextCodec;
+import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.Node;
 import dev.wiggle.core.RetryPolicy;
 import dev.wiggle.core.WorkflowDefinition;
@@ -334,6 +335,16 @@ public final class WorkflowStream<T> {
         return this;
     }
 
+    /**
+     * Sets how this workflow's steps are driven (default {@link ExecutionMode#DEFAULT}, i.e. the
+     * server's configured default). The mode is part of the definition's content hash, so an
+     * in-flight instance keeps the mode it started on.
+     */
+    public WorkflowStream<T> execution(ExecutionMode mode) {
+        pipeline.executionMode = Objects.requireNonNull(mode, "mode");
+        return this;
+    }
+
     public Blueprint<T> build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         consumed = true;
@@ -343,9 +354,10 @@ public final class WorkflowStream<T> {
         pipeline.put(Node.end(endId, true, null));
         wireOpenEndsTo(endId);
 
-        int version = WorkflowDefinition.contentVersion(pipeline.name, pipeline.startNode, pipeline.nodes.values());
+        int version = WorkflowDefinition.contentVersion(pipeline.name, pipeline.startNode,
+                pipeline.nodes.values(), pipeline.executionMode);
         WorkflowDefinition def = new WorkflowDefinition(pipeline.name, version, pipeline.startNode,
-                new LinkedHashMap<>(pipeline.nodes), pipeline.queues);
+                new LinkedHashMap<>(pipeline.nodes), pipeline.queues, pipeline.executionMode);
         validate(def);
         return new Blueprint<>(def, pipeline.handlers, pipeline.codec);
     }

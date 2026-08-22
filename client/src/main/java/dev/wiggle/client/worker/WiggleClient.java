@@ -150,12 +150,37 @@ public final class WiggleClient implements AutoCloseable {
         return dev.wiggle.core.InstanceView.fromJson(m);
     }
 
+    /**
+     * Reports a locally-executed run (LOCAL_SYNC/LOCAL_ASYNC) and returns whether to keep going.
+     * {@code steps} carries, per node, either a task merge (Object) or a predicate value (Boolean).
+     */
+    public dev.wiggle.core.AdvanceResult advanceRun(String taskId, String leaseOwner,
+                                                    List<StepReport> steps, boolean finalHandback) {
+        AdvanceRunRequest.Builder req = AdvanceRunRequest.newBuilder()
+                .setTaskId(taskId).setLeaseOwner(leaseOwner).setFinal(finalHandback);
+        for (StepReport s : steps) {
+            StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId());
+            if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
+            else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(s.merge()));
+            req.addSteps(sr);
+        }
+        AdvanceRunResult res = call(() -> stub.advanceRun(req.build()));
+        return new dev.wiggle.core.AdvanceResult(res.getInstanceStatus(), res.getLeaseExpiresAt(),
+                res.getNextTaskId().isEmpty() ? null : res.getNextTaskId());
+    }
+
+    /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
+    public record StepReport(String nodeId, Object merge, Boolean predicateValue) {}
+
     private static dev.wiggle.core.TaskActivation toTaskActivation(dev.wiggle.proto.TaskActivation t) {
         return new dev.wiggle.core.TaskActivation(
                 t.getTaskId(), t.getInstanceId(), t.getWorkflow(), t.getVersion(),
                 t.getNodeId(), t.getStepName().isEmpty() ? null : t.getStepName(), t.getActivity(),
                 NodeKind.valueOf(t.getKind()), t.getAttempt(), t.getLeaseExpiresAt(), t.getLeaseOwner(),
-                t.hasContext() ? ProtoJson.fromValue(t.getContext()) : null);
+                t.hasContext() ? ProtoJson.fromValue(t.getContext()) : null,
+                t.getExecutionMode().isEmpty()
+                        ? dev.wiggle.core.ExecutionMode.SERVER
+                        : dev.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()));
     }
 
     private interface Call<T> { T run(); }

@@ -126,8 +126,9 @@ public final class WorkflowEngine {
                 if (inst == null || inst.status != InstanceStatus.RUNNING) continue;
                 LazyGraph def = definitions.graph(tx, t.workflow, t.version);
                 Node node = def.node(t.nodeId);
+                ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
                 activations.add(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                        node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson)));
+                        node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson), mode));
             }
             return activations;
         });
@@ -198,6 +199,96 @@ public final class WorkflowEngine {
             Token cont = newToken(inst, next, t.joinStack, now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        });
+    }
+
+    // ------------------------------------------------------ local execution
+
+    /** DEFAULT resolves to the reference {@link ExecutionMode#SERVER} for now (no server-wide override yet). */
+    private static ExecutionMode resolveMode(ExecutionMode mode) {
+        return mode == null || mode == ExecutionMode.DEFAULT ? ExecutionMode.SERVER : mode;
+    }
+
+    /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
+    public record StepInput(String nodeId, Object merge, Boolean predicateValue) {}
+
+    /** The result of applying a reported run: the instance's status, renewed lease, and next token. */
+    public record AdvanceOutcome(String instanceStatus, long leaseExpiresAt, String nextTaskId) {}
+
+    /**
+     * Applies an ordered run of locally-executed steps (LOCAL_SYNC/LOCAL_ASYNC) atomically under
+     * the instance lock. For each step it does exactly what {@link #complete} would: merge the
+     * task result or route the predicate, advance the token. Between steps the continuation is
+     * leased straight back to the same worker (never exposed to {@code poll}); at the final step
+     * (or a boundary) it is driven normally, releasing the worker.
+     */
+    public AdvanceOutcome advanceRun(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
+        return storage.inTx(tx -> {
+            Token probe = tx.findToken(startTaskId).orElseThrow(() -> EngineException.notFound("task"));
+            Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+            long now = System.currentTimeMillis();
+            long lease = now + defaultLeaseMillis;
+            if (inst.status != InstanceStatus.RUNNING) {
+                return new AdvanceOutcome(inst.status.name(), 0, null);
+            }
+            LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
+            Token current = tx.findToken(startTaskId).orElseThrow(() -> EngineException.notFound("task"));
+            requireLease(current, leaseOwner);
+
+            String nextTaskId = null;
+            for (int i = 0; i < steps.size(); i++) {
+                StepInput step = steps.get(i);
+                Node node = def.node(current.nodeId);
+                if (!node.id().equals(step.nodeId())) {
+                    throw EngineException.conflict("reported step " + step.nodeId() + " but token "
+                            + current.id + " is at " + node.id());
+                }
+                boolean value = step.predicateValue() != null && step.predicateValue();
+                String next;
+                if (node.kind() == NodeKind.PREDICATE) {
+                    next = GraphTraversal.successor(node, value);
+                } else {
+                    mergeContext(inst, step.merge());
+                    next = node.next();
+                }
+                current.status = TokenStatus.DONE;
+                current.leaseOwner = null;
+                current.leaseExpiresAt = 0;
+                current.updatedAt = now;
+                tx.updateToken(current);
+                inst.updatedAt = now;
+                tx.updateInstance(inst);
+
+                Token cont = newToken(inst, next, current.joinStack, now);
+                Node nextNode = def.node(next);
+                boolean lastStep = i == steps.size() - 1;
+                boolean nextRunnable = nextNode.kind() == NodeKind.TASK || nextNode.kind() == NodeKind.PREDICATE;
+
+                if ((lastStep && finalHandback) || !nextRunnable) {
+                    // Hand back: drive the continuation normally (READY for a worker, or a boundary).
+                    tx.insertToken(cont);
+                    LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
+                            + " handing back at " + next + " (" + nextNode.kind() + ")");
+                    drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+                    nextTaskId = null;
+                    break;
+                }
+                // Keep the chain on this worker: lease the continuation straight back, no poll.
+                cont.status = TokenStatus.RUNNING;
+                cont.kind = nextNode.kind();
+                cont.activity = nextNode.activity();
+                cont.queue = nextNode.queue();
+                cont.leaseOwner = leaseOwner;
+                cont.leaseExpiresAt = lease;
+                cont.availableAt = now;
+                cont.updatedAt = now;
+                tx.insertToken(cont);
+                current = cont;
+                nextTaskId = cont.id;
+                LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
+                        + " chaining locally " + node.name() + " -> " + next);
+            }
+            return new AdvanceOutcome(inst.status.name(), lease, nextTaskId);
         });
     }
 

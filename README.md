@@ -180,6 +180,31 @@ import static dev.wiggle.client.dsl.Case.*;   // when, otherwise
 .step("notify", Notifier::send)   // runs once, after the chosen branch
 ```
 
+### Execution mode (local step chaining)
+
+By default the server drives one step at a time: each step is a poll → execute → complete
+round-trip. For step-heavy linear workflows you can let a worker **chain consecutive same-queue
+steps locally** instead, cutting the round-trips and keeping the context in the worker between
+steps:
+
+```java
+Workflow.defineJson("etl").execution(ExecutionMode.LOCAL_SYNC)
+        .step("extract",  ...)
+        .step("transform",...)
+        .step("load",     ...)
+        .build();
+```
+
+- `SERVER` (default) — server-driven, one step per claim.
+- `LOCAL_SYNC` — the worker runs consecutive steps back-to-back, committing each to the server
+  before the next. **As durable as `SERVER`** (a crash re-runs at most one step), just faster.
+- The worker hands control back at any boundary — a `sleep`, `fork`, `join`, `userTask`, a step
+  on a different queue, a failure/retry, or the end — so those still coordinate through the server.
+
+The mode is part of the definition's content hash, so an in-flight instance keeps the mode it
+started on. (`LOCAL_ASYNC`, which batches the status writes for more throughput at the cost of a
+wider crash-replay window, is planned — see `docs/local-execution.md`.)
+
 ---
 
 ## Running workers

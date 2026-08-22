@@ -2,8 +2,13 @@ package dev.wiggle.client.worker;
 
 import dev.wiggle.client.dsl.ActivityHandler;
 import dev.wiggle.client.dsl.Blueprint;
+import dev.wiggle.core.AdvanceResult;
+import dev.wiggle.core.ExecutionMode;
+import dev.wiggle.core.GraphTraversal;
+import dev.wiggle.core.Node;
 import dev.wiggle.core.NodeKind;
 import dev.wiggle.core.TaskActivation;
+import dev.wiggle.core.WorkflowDefinition;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -29,6 +34,8 @@ public final class Worker implements AutoCloseable {
     private final Map<String, NodeKind> kinds = new ConcurrentHashMap<>();
     private final Set<String> queues = ConcurrentHashMap.newKeySet();
     private final List<Blueprint<?>> blueprints = new CopyOnWriteArrayList<>();
+    /** Compiled graphs by "name:version", for local-execution traversal. */
+    private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -64,6 +71,7 @@ public final class Worker implements AutoCloseable {
     public Worker register(Blueprint<?> blueprint) {
         blueprints.add(blueprint);
         handlers.putAll(blueprint.handlers());
+        graphs.put(blueprint.definition().key(), blueprint.definition());
         blueprint.definition().nodes().values().stream()
                 .filter(n -> n.isWorkerDispatched())
                 .forEach(n -> {
@@ -121,6 +129,18 @@ public final class Worker implements AutoCloseable {
     }
 
     private void execute(TaskActivation task) {
+        WorkflowDefinition def = graphs.get(task.workflow() + ":" + task.version());
+        // Local execution needs the graph to traverse; without it (unregistered version) fall back
+        // to server-driven, one step at a time.
+        if (task.executionMode() != ExecutionMode.SERVER && def != null) {
+            executeLocal(task, def);
+        } else {
+            executeServer(task);
+        }
+    }
+
+    /** Server-driven: run one step and report via complete/fail; the server advances the token. */
+    private void executeServer(TaskActivation task) {
         ActivityHandler handler = handlers.get(task.activity());
         if (handler == null) {
             reportFailure(task, "no handler registered for activity '" + task.activity() + "'", false);
@@ -157,6 +177,83 @@ public final class Worker implements AutoCloseable {
             lease.stop();
             Step.end();
         }
+    }
+
+    /**
+     * Local execution (LOCAL_SYNC): run consecutive same-queue steps in-worker, reporting each to
+     * the server before the next, until the next node is a boundary (sleep / fork / join / user
+     * task / other queue / end) or the instance is no longer running. Each step gets its own lease
+     * guard, exactly as the server-driven path does.
+     */
+    private void executeLocal(TaskActivation task, WorkflowDefinition def) {
+        String taskId = task.taskId();
+        String leaseOwner = task.leaseOwner();
+        String instanceId = task.instanceId();
+        Node node = def.node(task.nodeId());
+        Object ctx = task.context();
+        int attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
+
+        while (true) {
+            ActivityHandler handler = handlers.get(node.activity());
+            if (handler == null) {
+                client.fail(taskId, leaseOwner, "no handler registered for activity '" + node.activity() + "'", false);
+                return;
+            }
+            final String tid = taskId;
+            Heartbeat lease = new Heartbeat(heartbeats,
+                    extend -> client.heartbeat(tid, leaseOwner, extend), options.lease().toMillis(), tid);
+            lease.start();
+            Step.begin(new Step.Info(attempt, node.name(), instanceId));
+            Object result;
+            try {
+                result = handler.invoke(ctx);
+            } catch (PermanentActivityException e) {
+                client.fail(taskId, leaseOwner, describe(e), false);
+                return;
+            } catch (Exception e) {
+                String stepName = node.name();
+                LOG.log(System.Logger.Level.DEBUG,
+                        () -> "local step " + stepName + " of " + instanceId + " failed: " + e);
+                client.fail(taskId, leaseOwner, describe(e), true);
+                return;
+            } finally {
+                lease.stop();
+                Step.end();
+            }
+
+            boolean isPredicate = node.kind() == NodeKind.PREDICATE;
+            if (isPredicate && !(result instanceof Boolean)) {
+                client.fail(taskId, leaseOwner, "predicate '" + node.name() + "' returned "
+                        + (result == null ? "null" : result.getClass().getSimpleName()), false);
+                return;
+            }
+            boolean predicateValue = isPredicate && (Boolean) result;
+            Node next = def.node(GraphTraversal.successor(node, predicateValue));
+            boolean handback = GraphTraversal.classify(next, queues) != null;
+
+            WiggleClient.StepReport report = isPredicate
+                    ? new WiggleClient.StepReport(node.id(), null, predicateValue)
+                    : new WiggleClient.StepReport(node.id(), result, null);
+            AdvanceResult advanced = client.advanceRun(taskId, leaseOwner, List.of(report), handback);
+
+            if (!advanced.running() || handback || advanced.nextTaskId() == null) return;
+
+            // Continue the chain locally on the freshly-leased continuation token.
+            taskId = advanced.nextTaskId();
+            if (!isPredicate) ctx = applyMerge(ctx, result);
+            node = next;
+            attempt = 1;
+        }
+    }
+
+    /** Mirrors the server's context merge: a map result is shallow-merged; anything else replaces. */
+    @SuppressWarnings("unchecked")
+    private static Object applyMerge(Object ctx, Object result) {
+        if (result == null) return ctx;
+        if (!(result instanceof Map) || !(ctx instanceof Map)) return result;
+        Map<String, Object> merged = new LinkedHashMap<>((Map<String, Object>) ctx);
+        merged.putAll((Map<String, Object>) result);
+        return merged;
     }
 
     /** A small pool: heartbeats are brief RPCs, so a handful of threads covers any concurrency. */
