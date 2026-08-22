@@ -3,7 +3,6 @@ package dev.wiggle.order;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Branch;
 import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.client.worker.Step;
 import dev.wiggle.core.ContextCodec;
 import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.RetryPolicy;
@@ -29,7 +28,7 @@ public final class OrderFulfilment {
     }
 
     public static Blueprint<Order> blueprint() {
-        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.LOCAL_ASYNC)
+        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.SERVER)
 
                 .step("validate", order -> {
                     if (order.customer() == null || order.customer().isBlank()) {

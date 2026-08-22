@@ -36,32 +36,48 @@ public final class WorkflowEngine {
 
     public DefinitionRegistry definitions() { return definitions; }
 
+    // Facade over the registry so callers (API, dashboard) don't reach through the engine
+    // into a collaborator's collaborator.
+
+    /** Registers a definition (blob + normalised graph rows). */
+    public WorkflowDefinition register(WorkflowDefinition def) { return definitions.register(def); }
+
+    /** All registered workflow names. */
+    public List<String> workflowNames() { return definitions.names(); }
+
+    /** The most recently registered version of a workflow, if any. */
+    public Optional<WorkflowDefinition> latestDefinition(String name) { return definitions.latest(name); }
+
+    // ------------------------------------------------------------- lifecycle
+
     public String start(String workflow, Integer version, Object context, String correlationId) {
         return storage.inTx(tx -> {
             int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                     () -> EngineException.notFound("workflow '" + workflow + "'"));
             LazyGraph def = definitions.graph(tx, workflow, v);
             long now = System.currentTimeMillis();
-
-            Instance inst = new Instance();
-            inst.id = Ids.next("wfi");
-            inst.workflow = def.name();
-            inst.version = def.version();
-            inst.correlationId = correlationId;
-            inst.status = InstanceStatus.RUNNING;
-            inst.contextJson = Json.write(context == null ? Map.of() : context);
-            inst.createdAt = now;
-            inst.updatedAt = now;
-            tx.insertInstance(inst);
-
+            Instance inst = insertNewInstance(tx, def, context, correlationId, now);
             Token t = newToken(inst, def.startNode(), "", now);
             tx.insertToken(t);
-
             LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                     + " at node " + def.startNode() + " correlationId=" + correlationId);
             drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
             return inst.id;
         });
+    }
+
+    private static Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId, long now) {
+        Instance inst = new Instance();
+        inst.id = Ids.next("wfi");
+        inst.workflow = def.name();
+        inst.version = def.version();
+        inst.correlationId = correlationId;
+        inst.status = InstanceStatus.RUNNING;
+        inst.contextJson = Json.write(context == null ? Map.of() : context);
+        inst.createdAt = now;
+        inst.updatedAt = now;
+        tx.insertInstance(inst);
+        return inst;
     }
 
     public void cancel(String instanceId, String reason) {
@@ -113,31 +129,39 @@ public final class WorkflowEngine {
                 i.error, Json.parse(i.contextJson), i.createdAt, i.updatedAt);
     }
 
+    // ---------------------------------------------------------------- polling
+
     /** Leases up to {@code max} tasks for a worker. Returns immediately; long-polling lives in the HTTP layer. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis) {
         long now = System.currentTimeMillis();
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         long until = now + lease;
-        List<TaskActivation> out = storage.inTx(tx -> {
-            List<Token> claimed = tx.claimTasks(workerId, queues, max, now, until);
-            List<TaskActivation> activations = new ArrayList<>(claimed.size());
-            for (Token t : claimed) {
-                Instance inst = tx.findInstance(t.instanceId).orElse(null);
-                if (inst == null || inst.status != InstanceStatus.RUNNING) continue;
-                LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-                Node node = def.node(t.nodeId);
-                ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
-                activations.add(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                        node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson), mode));
-            }
-            return activations;
-        });
+        List<TaskActivation> out = storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, until));
         if (!out.isEmpty()) {
             LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
                     + " claimed " + out.size() + " task(s): "
                     + out.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
         }
         return out;
+    }
+
+    private List<TaskActivation> claimActivations(Tx tx, String workerId, Set<String> queues,
+                                                  int max, long now, long until) {
+        List<Token> claimed = tx.claimTasks(workerId, queues, max, now, until);
+        List<TaskActivation> activations = new ArrayList<>(claimed.size());
+        for (Token t : claimed) {
+            activationFor(tx, t, workerId, until).ifPresent(activations::add);
+        }
+        return activations;
+    }
+
+    private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
+        Instance inst = tx.findInstance(t.instanceId).orElse(null);
+        if (inst == null || inst.status != InstanceStatus.RUNNING) return Optional.empty();
+        Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
+        ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
+        return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
+                node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson), mode));
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -155,51 +179,75 @@ public final class WorkflowEngine {
         return until;
     }
 
+    // ------------------------------------------------------------ completion
+
+    /** A task's token re-read under its instance's write lock. */
+    private record LockedTask(Instance inst, Token token) {}
+
+    /** Takes the instance lock first, then re-reads the token under it. */
+    private static LockedTask lockTask(Tx tx, String taskId) {
+        Token probe = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+        Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+        Token token = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+        return new LockedTask(inst, token);
+    }
+
+    private static void requireRunning(Instance inst) {
+        if (inst.status != InstanceStatus.RUNNING) {
+            throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
+        }
+    }
+
     /**
      * Completes a task. For TASK nodes {@code result} is shallow-merged into the instance
      * context; for PREDICATE nodes it must carry a boolean under {@code "value"}.
      */
     public void complete(String taskId, String leaseOwner, Object result) {
         storage.inTxVoid(tx -> {
-            Token probe = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-            // Take the instance lock first, then re-read the token under it.
-            Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-            Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+            LockedTask locked = lockTask(tx, taskId);
+            Instance inst = locked.inst();
+            Token t = locked.token();
             requireLease(t, leaseOwner);
-            if (inst.status != InstanceStatus.RUNNING) {
-                throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
-            }
-
+            requireRunning(inst);
             long now = System.currentTimeMillis();
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-
-            String next;
-            if (node.kind() == NodeKind.PREDICATE) {
-                boolean value = predicateValue(result);
-                next = value ? node.next() : node.altNext();
-                LOG.log(System.Logger.Level.DEBUG, () -> "complete: predicate " + node.name()
-                        + " of instance " + inst.id + " evaluated " + value + " -> " + next);
-            } else {
-                mergeContext(inst, result);
-                next = node.next();
-                LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
-                        + " of instance " + inst.id + " done -> " + next);
-            }
-
-            t.status = TokenStatus.DONE;
-            t.leaseOwner = null;
-            t.leaseExpiresAt = 0;
-            t.updatedAt = now;
-            tx.updateToken(t);
-
-            inst.updatedAt = now;
-            tx.updateInstance(inst);
-
+            String next = routeCompletion(inst, node, result);
+            settleToken(tx, t, now);
+            touchInstance(tx, inst, now);
             Token cont = newToken(inst, next, t.joinStack, now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
+    }
+
+    /** Merges a task result (or routes a predicate) and returns the successor node id. */
+    private static String routeCompletion(Instance inst, Node node, Object result) {
+        if (node.kind() != NodeKind.PREDICATE) {
+            mergeContext(inst, result);
+            LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
+                    + " of instance " + inst.id + " done -> " + node.next());
+            return node.next();
+        }
+        boolean value = predicateValue(result);
+        String next = GraphTraversal.successor(node, value);
+        LOG.log(System.Logger.Level.DEBUG, () -> "complete: predicate " + node.name()
+                + " of instance " + inst.id + " evaluated " + value + " -> " + next);
+        return next;
+    }
+
+    /** Marks a token consumed and releases its lease. */
+    private static void settleToken(Tx tx, Token t, long now) {
+        t.status = TokenStatus.DONE;
+        t.leaseOwner = null;
+        t.leaseExpiresAt = 0;
+        t.updatedAt = now;
+        tx.updateToken(t);
+    }
+
+    private static void touchInstance(Tx tx, Instance inst, long now) {
+        inst.updatedAt = now;
+        tx.updateInstance(inst);
     }
 
     // ------------------------------------------------------ local execution
@@ -224,73 +272,83 @@ public final class WorkflowEngine {
      */
     public AdvanceOutcome advanceRun(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
         return storage.inTx(tx -> {
-            Token probe = tx.findToken(startTaskId).orElseThrow(() -> EngineException.notFound("task"));
-            Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+            LockedTask locked = lockTask(tx, startTaskId);
+            Instance inst = locked.inst();
             long now = System.currentTimeMillis();
             long lease = now + defaultLeaseMillis;
             if (inst.status != InstanceStatus.RUNNING) {
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
+            requireLease(locked.token(), leaseOwner);
             LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
-            Token current = tx.findToken(startTaskId).orElseThrow(() -> EngineException.notFound("task"));
-            requireLease(current, leaseOwner);
-
-            String nextTaskId = null;
-            for (int i = 0; i < steps.size(); i++) {
-                StepInput step = steps.get(i);
-                Node node = def.node(current.nodeId);
-                if (!node.id().equals(step.nodeId())) {
-                    throw EngineException.conflict("reported step " + step.nodeId() + " but token "
-                            + current.id + " is at " + node.id());
-                }
-                boolean value = step.predicateValue() != null && step.predicateValue();
-                String next;
-                if (node.kind() == NodeKind.PREDICATE) {
-                    next = GraphTraversal.successor(node, value);
-                } else {
-                    mergeContext(inst, step.merge());
-                    next = node.next();
-                }
-                current.status = TokenStatus.DONE;
-                current.leaseOwner = null;
-                current.leaseExpiresAt = 0;
-                current.updatedAt = now;
-                tx.updateToken(current);
-                inst.updatedAt = now;
-                tx.updateInstance(inst);
-
-                Token cont = newToken(inst, next, current.joinStack, now);
-                Node nextNode = def.node(next);
-                boolean lastStep = i == steps.size() - 1;
-                boolean nextRunnable = nextNode.kind() == NodeKind.TASK || nextNode.kind() == NodeKind.PREDICATE;
-
-                if ((lastStep && finalHandback) || !nextRunnable) {
-                    // Hand back: drive the continuation normally (READY for a worker, or a boundary).
-                    tx.insertToken(cont);
-                    LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
-                            + " handing back at " + next + " (" + nextNode.kind() + ")");
-                    drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
-                    nextTaskId = null;
-                    break;
-                }
-                // Keep the chain on this worker: lease the continuation straight back, no poll.
-                cont.status = TokenStatus.RUNNING;
-                cont.kind = nextNode.kind();
-                cont.activity = nextNode.activity();
-                cont.queue = nextNode.queue();
-                cont.leaseOwner = leaseOwner;
-                cont.leaseExpiresAt = lease;
-                cont.availableAt = now;
-                cont.updatedAt = now;
-                tx.insertToken(cont);
-                current = cont;
-                nextTaskId = cont.id;
-                LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
-                        + " chaining locally " + node.name() + " -> " + next);
-            }
-            return new AdvanceOutcome(inst.status.name(), lease, nextTaskId);
+            return applyRun(tx, def, inst, locked.token(), leaseOwner, steps, finalHandback, now, lease);
         });
     }
+
+    private AdvanceOutcome applyRun(Tx tx, LazyGraph def, Instance inst, Token current, String leaseOwner,
+                                    List<StepInput> steps, boolean finalHandback, long now, long lease) {
+        String nextTaskId = null;
+        for (int i = 0; i < steps.size(); i++) {
+            StepInput step = steps.get(i);
+            Node node = def.node(current.nodeId);
+            requireReportedNode(node, step, current);
+            String next = routeReportedStep(inst, node, step);
+            settleToken(tx, current, now);
+            touchInstance(tx, inst, now);
+            Token cont = newToken(inst, next, current.joinStack, now);
+            Node nextNode = def.node(next);
+            boolean lastStep = i == steps.size() - 1;
+            if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
+                handBack(tx, def, inst, cont, nextNode, now);
+                return new AdvanceOutcome(inst.status.name(), lease, null);
+            }
+            leaseBack(tx, cont, nextNode, leaseOwner, lease, now);
+            LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
+                    + " chaining locally " + node.name() + " -> " + next);
+            current = cont;
+            nextTaskId = cont.id;
+        }
+        return new AdvanceOutcome(inst.status.name(), lease, nextTaskId);
+    }
+
+    private static void requireReportedNode(Node node, StepInput step, Token current) {
+        if (!node.id().equals(step.nodeId())) {
+            throw EngineException.conflict("reported step " + step.nodeId() + " but token "
+                    + current.id + " is at " + node.id());
+        }
+    }
+
+    private static String routeReportedStep(Instance inst, Node node, StepInput step) {
+        if (node.kind() == NodeKind.PREDICATE) {
+            boolean value = step.predicateValue() != null && step.predicateValue();
+            return GraphTraversal.successor(node, value);
+        }
+        mergeContext(inst, step.merge());
+        return node.next();
+    }
+
+    /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */
+    private void handBack(Tx tx, LazyGraph def, Instance inst, Token cont, Node nextNode, long now) {
+        tx.insertToken(cont);
+        LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
+                + " handing back at " + cont.nodeId + " (" + nextNode.kind() + ")");
+        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+    }
+
+    /** Keep the chain on this worker: lease the continuation straight back, no poll. */
+    private static void leaseBack(Tx tx, Token cont, Node nextNode, String leaseOwner, long lease, long now) {
+        cont.status = TokenStatus.RUNNING;
+        cont.kind = nextNode.kind();
+        cont.activity = nextNode.activity();
+        cont.queue = nextNode.queue();
+        cont.leaseOwner = leaseOwner;
+        cont.leaseExpiresAt = lease;
+        cont.availableAt = now;
+        cont.updatedAt = now;
+        tx.insertToken(cont);
+    }
+
+    // ------------------------------------------------------------- user tasks
 
     /** The user tasks currently awaiting an external completion, oldest first. */
     public List<Token> pendingUserTasks(int max) {
@@ -304,26 +362,17 @@ public final class WorkflowEngine {
      */
     public void completeUserTask(String taskId, Object result) {
         storage.inTxVoid(tx -> {
-            Token probe = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-            Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-            Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-            if (t.status != TokenStatus.AWAITING || t.kind != NodeKind.USER_TASK) {
-                throw EngineException.conflict("task " + t.id + " is " + t.status + ", not an awaiting user task");
-            }
-            if (inst.status != InstanceStatus.RUNNING) {
-                throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
-            }
+            LockedTask locked = lockTask(tx, taskId);
+            Instance inst = locked.inst();
+            Token t = locked.token();
+            requireAwaitingUserTask(t);
+            requireRunning(inst);
             long now = System.currentTimeMillis();
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-
             mergeContext(inst, result);
-            t.status = TokenStatus.DONE;
-            t.updatedAt = now;
-            tx.updateToken(t);
-            inst.updatedAt = now;
-            tx.updateInstance(inst);
-
+            settleToken(tx, t, now);
+            touchInstance(tx, inst, now);
             Token cont = newToken(inst, node.next(), t.joinStack, now);
             tx.insertToken(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "completeUserTask: user task " + node.name()
@@ -332,94 +381,176 @@ public final class WorkflowEngine {
         });
     }
 
-    /** Leader duty: user tasks whose deadline has passed escalate (to {@code altNext}) or fail. */
-    public int fireDueUserTaskDeadlines(int max) {
-        long now = System.currentTimeMillis();
-        List<Token> due = storage.inTx(tx -> tx.dueUserTasks(now, max));
-        if (!due.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "fireDueUserTaskDeadlines: " + due.size() + " due");
+    private static void requireAwaitingUserTask(Token t) {
+        if (t.status != TokenStatus.AWAITING || t.kind != NodeKind.USER_TASK) {
+            throw EngineException.conflict("task " + t.id + " is " + t.status + ", not an awaiting user task");
         }
-        int fired = 0;
-        for (Token task : due) {
+    }
+
+    // --------------------------------------------------------- housekeeping
+
+    /** A per-token action executed in its own transaction by a leader sweep. */
+    private interface SweepAction {
+        void apply(Tx tx, Token token);
+    }
+
+    /** Runs {@code action} once per token, each in its own transaction, isolating failures. */
+    private int sweep(List<Token> due, String what, SweepAction action) {
+        int done = 0;
+        for (Token token : due) {
             try {
-                storage.inTxVoid(tx -> {
-                    Instance inst = tx.lockInstance(task.instanceId).orElse(null);
-                    if (inst == null || inst.status != InstanceStatus.RUNNING) return;
-                    Token t = tx.findToken(task.id).orElse(null);
-                    if (t == null || t.status != TokenStatus.AWAITING) return;
-                    long ts = System.currentTimeMillis();
-                    if (t.availableAt <= 0 || t.availableAt > ts) return;   // deadline cleared or moved
-                    LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-                    Node node = def.node(t.nodeId);
-                    t.status = TokenStatus.DONE;
-                    t.updatedAt = ts;
-                    tx.updateToken(t);
-                    if (node.altNext() != null) {
-                        Token cont = newToken(inst, node.altNext(), t.joinStack, ts);
-                        tx.insertToken(cont);
-                        LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
-                                + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
-                        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
-                    } else {
-                        LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
-                                + " of instance " + inst.id + " missed its deadline, no escalation -> failing instance");
-                        failInstance(tx, inst, "user task '" + node.name() + "' timed out", ts);
-                    }
-                });
-                fired++;
+                storage.inTxVoid(tx -> action.apply(tx, token));
+                done++;
             } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.WARNING, "user-task deadline " + task.id + " failed: " + e);
+                LOG.log(System.Logger.Level.WARNING, what + " " + token.id + " failed: " + e);
             }
         }
-        return fired;
+        return done;
+    }
+
+    private static void logDue(String what, List<Token> due) {
+        if (!due.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> what + ": " + due.size() + " due");
+        }
+    }
+
+    /** Leader duty: advance sleep timers that have come due. */
+    public int fireDueTimers(int max) {
+        List<Token> due = storage.inTx(tx -> tx.dueTimers(System.currentTimeMillis(), max));
+        logDue("fireDueTimers", due);
+        return sweep(due, "timer", this::fireTimer);
+    }
+
+    private void fireTimer(Tx tx, Token timer) {
+        Instance inst = tx.lockInstance(timer.instanceId).orElse(null);
+        if (inst == null || inst.status != InstanceStatus.RUNNING) return;
+        Token t = tx.findToken(timer.id).orElse(null);
+        if (t == null || t.status != TokenStatus.WAITING) return;
+        long ts = System.currentTimeMillis();
+        LazyGraph def = definitions.graph(tx, t.workflow, t.version);
+        Node node = def.node(t.nodeId);
+        t.status = TokenStatus.DONE;
+        t.updatedAt = ts;
+        tx.updateToken(t);
+        Token cont = newToken(inst, node.next(), t.joinStack, ts);
+        tx.insertToken(cont);
+        LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
+                + " of instance " + inst.id + " fired -> " + node.next());
+        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
+    }
+
+    /** Leader duty: user tasks whose deadline has passed escalate (to {@code altNext}) or fail. */
+    public int fireDueUserTaskDeadlines(int max) {
+        List<Token> due = storage.inTx(tx -> tx.dueUserTasks(System.currentTimeMillis(), max));
+        logDue("fireDueUserTaskDeadlines", due);
+        return sweep(due, "user-task deadline", this::escalateOrFailUserTask);
+    }
+
+    private void escalateOrFailUserTask(Tx tx, Token task) {
+        Instance inst = tx.lockInstance(task.instanceId).orElse(null);
+        if (inst == null || inst.status != InstanceStatus.RUNNING) return;
+        Token t = tx.findToken(task.id).orElse(null);
+        if (t == null || t.status != TokenStatus.AWAITING) return;
+        long ts = System.currentTimeMillis();
+        if (t.availableAt <= 0 || t.availableAt > ts) return;   // deadline cleared or moved
+        LazyGraph def = definitions.graph(tx, t.workflow, t.version);
+        Node node = def.node(t.nodeId);
+        t.status = TokenStatus.DONE;
+        t.updatedAt = ts;
+        tx.updateToken(t);
+        if (node.altNext() == null) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
+                    + " of instance " + inst.id + " missed its deadline, no escalation -> failing instance");
+            failInstance(tx, inst, "user task '" + node.name() + "' timed out", ts);
+            return;
+        }
+        Token cont = newToken(inst, node.altNext(), t.joinStack, ts);
+        tx.insertToken(cont);
+        LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
+                + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
+        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
+    }
+
+    /** Leader duty: return tasks whose worker died back to the ready pool. */
+    public int reclaimExpiredLeases(int max) {
+        List<Token> orphans = storage.inTx(tx -> tx.expiredLeases(System.currentTimeMillis(), max));
+        logDue("reclaimExpiredLeases", orphans);
+        return sweep(orphans, "reclaim of", this::reclaimOrphan);
+    }
+
+    private void reclaimOrphan(Tx tx, Token orphan) {
+        Instance inst = tx.lockInstance(orphan.instanceId).orElse(null);
+        if (inst == null) return;
+        Token t = tx.findToken(orphan.id).orElse(null);
+        if (t == null || t.status != TokenStatus.RUNNING || t.leaseExpiresAt >= System.currentTimeMillis()) return;
+        Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
+        long ts = System.currentTimeMillis();
+        LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
+                + " orphaned by worker " + t.leaseOwner);
+        failToken(tx, inst, t, node, "lease expired (worker unreachable)", "lease expired", true, ts);
     }
 
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
         storage.inTxVoid(tx -> {
-            Token probe = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-            Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-            Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+            LockedTask locked = lockTask(tx, taskId);
+            Instance inst = locked.inst();
+            Token t = locked.token();
             requireLease(t, leaseOwner);
             if (inst.status != InstanceStatus.RUNNING) return;
-
-            long now = System.currentTimeMillis();
-            LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-            Node node = def.node(t.nodeId);
-            RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
-
-            t.attempt++;
-            t.lastError = message;
-            t.leaseOwner = null;
-            t.leaseExpiresAt = 0;
-            t.updatedAt = now;
-
-            if (retryable && t.attempt < policy.maxAttempts()) {
-                t.status = TokenStatus.READY;
-                t.availableAt = now + policy.backoffMillis(t.attempt);
-                tx.updateToken(t);
-                long backoffMs = t.availableAt - now;
-                LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
-                        + " failed (" + message + "), retrying attempt " + t.attempt
-                        + "/" + policy.maxAttempts() + " in " + backoffMs + "ms");
-                return;
-            }
-
-            t.status = TokenStatus.FAILED;
-            tx.updateToken(t);
-            LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
-                    + " exhausted retries (attempt " + t.attempt + "/" + policy.maxAttempts()
-                    + ", retryable=" + retryable + ") -> failing instance");
-            failInstance(tx, inst, node.name() + ": " + message, now);
+            Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
+            failToken(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
         });
     }
 
+    /**
+     * The shared retry-or-fail transition: bumps the attempt, releases the lease, then either
+     * reschedules the token per the node's retry policy or fails it (and, if the instance is
+     * still running, the whole instance -- as {@code node.name() + ": " + failReason}).
+     */
+    private void failToken(Tx tx, Instance inst, Token t, Node node,
+                           String lastError, String failReason, boolean retryable, long now) {
+        RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
+        t.attempt++;
+        t.lastError = lastError;
+        t.leaseOwner = null;
+        t.leaseExpiresAt = 0;
+        t.updatedAt = now;
+        if (retryable && t.attempt < policy.maxAttempts()) {
+            t.status = TokenStatus.READY;
+            t.availableAt = now + policy.backoffMillis(t.attempt);
+            tx.updateToken(t);
+            long backoffMs = t.availableAt - now;
+            LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
+                    + " failed (" + lastError + "), retrying attempt " + t.attempt
+                    + "/" + policy.maxAttempts() + " in " + backoffMs + "ms");
+            return;
+        }
+        t.status = TokenStatus.FAILED;
+        tx.updateToken(t);
+        LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
+                + " exhausted retries (attempt " + t.attempt + "/" + policy.maxAttempts()
+                + ", retryable=" + retryable + ") -> failing instance");
+        if (inst.status == InstanceStatus.RUNNING) {
+            failInstance(tx, inst, node.name() + ": " + failReason, now);
+        }
+    }
+
+    public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
+        long cutoff = System.currentTimeMillis() - retentionMillis;
+        int purged = storage.inTx(tx -> tx.deleteTerminalInstancesBefore(cutoff, max));
+        if (purged > 0) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "purgeTerminalInstancesOlderThan: removed " + purged
+                    + " instance(s) updated before " + cutoff);
+        }
+        return purged;
+    }
+
+    // ------------------------------------------------------------- helpers
+
     private static boolean predicateValue(Object result) {
         if (result instanceof Boolean b) return b;
-        if (result instanceof Map<?, ?> m) {
-            Object v = m.get("value");
-            if (v instanceof Boolean b) return b;
-        }
+        if (result instanceof Map<?, ?> m && m.get("value") instanceof Boolean b) return b;
         throw EngineException.badRequest("predicate result must be a boolean or {\"value\": <boolean>}");
     }
 
@@ -444,104 +575,12 @@ public final class WorkflowEngine {
         inst.contextJson = Json.write(ctx);
     }
 
-    /** Leader duty: advance sleep timers that have come due. */
-    public int fireDueTimers(int max) {
-        long now = System.currentTimeMillis();
-        List<Token> due = storage.inTx(tx -> tx.dueTimers(now, max));
-        if (!due.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "fireDueTimers: " + due.size() + " due");
-        }
-        int fired = 0;
-        for (Token timer : due) {
-            try {
-                storage.inTxVoid(tx -> {
-                    Instance inst = tx.lockInstance(timer.instanceId).orElse(null);
-                    if (inst == null || inst.status != InstanceStatus.RUNNING) return;
-                    Token t = tx.findToken(timer.id).orElse(null);
-                    if (t == null || t.status != TokenStatus.WAITING) return;
-                    long ts = System.currentTimeMillis();
-                    LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-                    Node node = def.node(t.nodeId);
-                    t.status = TokenStatus.DONE;
-                    t.updatedAt = ts;
-                    tx.updateToken(t);
-                    Token cont = newToken(inst, node.next(), t.joinStack, ts);
-                    tx.insertToken(cont);
-                    LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
-                            + " of instance " + inst.id + " fired -> " + node.next());
-                    drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
-                });
-                fired++;
-            } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.WARNING, "timer " + timer.id + " failed: " + e);
-            }
-        }
-        return fired;
-    }
-
-    /** Leader duty: return tasks whose worker died back to the ready pool. */
-    public int reclaimExpiredLeases(int max) {
-        long now = System.currentTimeMillis();
-        List<Token> orphans = storage.inTx(tx -> tx.expiredLeases(now, max));
-        if (!orphans.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "reclaimExpiredLeases: " + orphans.size() + " expired");
-        }
-        int reclaimed = 0;
-        for (Token orphan : orphans) {
-            try {
-                storage.inTxVoid(tx -> {
-                    Instance inst = tx.lockInstance(orphan.instanceId).orElse(null);
-                    if (inst == null) return;
-                    Token t = tx.findToken(orphan.id).orElse(null);
-                    if (t == null || t.status != TokenStatus.RUNNING || t.leaseExpiresAt >= System.currentTimeMillis()) return;
-                    LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-                    Node node = def.node(t.nodeId);
-                    RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
-                    long ts = System.currentTimeMillis();
-                    String previousOwner = t.leaseOwner;
-                    t.attempt++;
-                    t.leaseOwner = null;
-                    t.leaseExpiresAt = 0;
-                    t.lastError = "lease expired (worker unreachable)";
-                    t.updatedAt = ts;
-                    if (t.attempt < policy.maxAttempts()) {
-                        t.status = TokenStatus.READY;
-                        t.availableAt = ts + policy.backoffMillis(t.attempt);
-                        tx.updateToken(t);
-                        LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
-                                + " orphaned by worker " + previousOwner + ", redispatchable (attempt " + t.attempt + ")");
-                    } else {
-                        t.status = TokenStatus.FAILED;
-                        tx.updateToken(t);
-                        LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
-                                + " orphaned by worker " + previousOwner + ", retries exhausted -> failing instance");
-                        if (inst.status == InstanceStatus.RUNNING) {
-                            failInstance(tx, inst, node.name() + ": lease expired", ts);
-                        }
-                    }
-                });
-                reclaimed++;
-            } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.WARNING, "reclaim of " + orphan.id + " failed: " + e);
-            }
-        }
-        return reclaimed;
-    }
-
-    public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
-        long cutoff = System.currentTimeMillis() - retentionMillis;
-        int purged = storage.inTx(tx -> tx.deleteTerminalInstancesBefore(cutoff, max));
-        if (purged > 0) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "purgeTerminalInstancesOlderThan: removed " + purged
-                    + " instance(s) updated before " + cutoff);
-        }
-        return purged;
-    }
+    // ------------------------------------------------------ the state machine
 
     /**
      * Advances tokens until each one is parked on something that needs the outside
-     * world: a worker (READY), a clock (WAITING), a sibling (JOINED), or nothing at
-     * all (DONE at an END node).
+     * world: a worker (READY), a clock (WAITING), an external actor (AWAITING), a
+     * sibling (JOINED), or nothing at all (DONE at an END node).
      */
     private void drive(Tx tx, LazyGraph def, Instance inst, Deque<Token> work, long now) {
         int guard = 0;
@@ -549,117 +588,152 @@ public final class WorkflowEngine {
             if (++guard > 10_000) throw new IllegalStateException("cycle detected in workflow " + def.key());
             Token t = work.pop();
             Node node = def.node(t.nodeId);
-            TokenStatus before = t.status;
-            switch (node.kind()) {
-                case TASK, PREDICATE -> {
-                    t.status = TokenStatus.READY;
-                    t.kind = node.kind();
-                    t.activity = node.activity();
-                    t.queue = node.queue();
-                    t.availableAt = now;
-                    t.updatedAt = now;
-                    tx.updateToken(t);
-                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                            + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
-                }
-                case SLEEP -> {
-                    t.status = TokenStatus.WAITING;
-                    t.kind = NodeKind.SLEEP;
-                    t.availableAt = now + node.sleepMillis();
-                    t.updatedAt = now;
-                    tx.updateToken(t);
-                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                            + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
-                            + " (" + node.sleepMillis() + "ms)");
-                }
-                case USER_TASK -> {
-                    // Park until an external actor completes it. No worker leases an AWAITING
-                    // token; a positive availableAt is the (optional) deadline the leader sweeps.
-                    t.status = TokenStatus.AWAITING;
-                    t.kind = NodeKind.USER_TASK;
-                    t.activity = node.name();     // surfaced to the task list as the human name
-                    t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
-                    t.updatedAt = now;
-                    tx.updateToken(t);
-                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                            + node.name() + " (USER_TASK) " + before + " -> AWAITING, deadline="
-                            + (t.availableAt > 0 ? t.availableAt : "none"));
-                }
-                case FORK -> {
-                    t.status = TokenStatus.DONE;
-                    t.kind = NodeKind.FORK;
-                    t.updatedAt = now;
-                    tx.updateToken(t);
-                    String group = Ids.next("jg");
-                    String childStack = t.pushJoinStack(group);
-                    for (String branchStart : node.branches()) {
-                        Token child = newToken(inst, branchStart, childStack, now);
-                        tx.insertToken(child);
-                        work.push(child);
-                    }
-                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                            + node.name() + " (FORK) " + before + " -> DONE, spawned " + node.branches().size()
-                            + " branch(es) in group " + group + ": " + node.branches());
-                }
-                case JOIN -> {
-                    String group = t.currentJoinGroup();
-                    t.status = TokenStatus.JOINED;
-                    t.kind = NodeKind.JOIN;
-                    t.updatedAt = now;
-                    tx.updateToken(t);
-                    List<Token> atBarrier = tx.tokensOf(inst.id).stream()
-                            .filter(x -> x.status == TokenStatus.JOINED)
-                            .filter(x -> node.id().equals(x.nodeId))
-                            .filter(x -> Objects.equals(group, x.currentJoinGroup()))
-                            .toList();
-                    if (atBarrier.size() >= node.expected()) {
-                        // Consume the barrier: these tokens have served their purpose, and
-                        // leaving them parked would keep the instance looking active forever.
-                        for (Token parked : atBarrier) {
-                            parked.status = TokenStatus.DONE;
-                            parked.updatedAt = now;
-                            tx.updateToken(parked);
-                        }
-                        Token cont = newToken(inst, node.next(), t.popJoinStack(), now);
-                        tx.insertToken(cont);
-                        work.push(cont);
-                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                                + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
-                                + " satisfied (" + atBarrier.size() + "/" + node.expected() + ") -> " + node.next());
-                    } else {
-                        int atBarrierSize = atBarrier.size();
-                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                                + node.name() + " (JOIN) " + before + " -> JOINED, waiting on barrier " + group
-                                + " (" + atBarrierSize + "/" + node.expected() + ")");
-                    }
-                }
-                case END -> {
-                    t.status = TokenStatus.DONE;
-                    t.kind = NodeKind.END;
-                    t.updatedAt = now;
-                    tx.updateToken(t);
-                    if (!node.success()) {
-                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                                + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
-                        failInstance(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
-                        return;
-                    }
-                    boolean anyActive = tx.tokensOf(inst.id).stream().anyMatch(Token::isActive);
-                    if (!anyActive && work.isEmpty()) {
-                        inst.status = InstanceStatus.COMPLETED;
-                        inst.terminationReason = node.reason();
-                        inst.updatedAt = now;
-                        tx.updateInstance(inst);
-                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                                + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
-                                + (node.reason() != null ? " (" + node.reason() + ")" : ""));
-                    } else {
-                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                                + node.name() + " (END) " + before + " -> DONE, other tokens still active");
-                    }
-                }
-            }
+            boolean keepDriving = switch (node.kind()) {
+                case TASK, PREDICATE -> parkAtWorkerStep(tx, inst, t, node, now);
+                case SLEEP -> parkAtSleep(tx, inst, t, node, now);
+                case USER_TASK -> parkAtUserTask(tx, inst, t, node, now);
+                case FORK -> spawnForkBranches(tx, inst, t, node, work, now);
+                case JOIN -> arriveAtJoin(tx, inst, t, node, work, now);
+                case END -> finishAtEnd(tx, inst, t, node, work, now);
+            };
+            if (!keepDriving) return;
         }
+    }
+
+    private boolean parkAtWorkerStep(Tx tx, Instance inst, Token t, Node node, long now) {
+        TokenStatus before = t.status;
+        t.status = TokenStatus.READY;
+        t.kind = node.kind();
+        t.activity = node.activity();
+        t.queue = node.queue();
+        t.availableAt = now;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
+        return true;
+    }
+
+    private boolean parkAtSleep(Tx tx, Instance inst, Token t, Node node, long now) {
+        TokenStatus before = t.status;
+        t.status = TokenStatus.WAITING;
+        t.kind = NodeKind.SLEEP;
+        t.availableAt = now + node.sleepMillis();
+        t.updatedAt = now;
+        tx.updateToken(t);
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
+                + " (" + node.sleepMillis() + "ms)");
+        return true;
+    }
+
+    /**
+     * Parks until an external actor completes it. No worker leases an AWAITING token; a
+     * positive availableAt is the (optional) deadline the leader sweeps.
+     */
+    private boolean parkAtUserTask(Tx tx, Instance inst, Token t, Node node, long now) {
+        TokenStatus before = t.status;
+        t.status = TokenStatus.AWAITING;
+        t.kind = NodeKind.USER_TASK;
+        t.activity = node.name();     // surfaced to the task list as the human name
+        t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (USER_TASK) " + before + " -> AWAITING, deadline="
+                + (t.availableAt > 0 ? t.availableAt : "none"));
+        return true;
+    }
+
+    private boolean spawnForkBranches(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+        TokenStatus before = t.status;
+        t.status = TokenStatus.DONE;
+        t.kind = NodeKind.FORK;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        String group = Ids.next("jg");
+        String childStack = t.pushJoinStack(group);
+        for (String branchStart : node.branches()) {
+            Token child = newToken(inst, branchStart, childStack, now);
+            tx.insertToken(child);
+            work.push(child);
+        }
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (FORK) " + before + " -> DONE, spawned " + node.branches().size()
+                + " branch(es) in group " + group + ": " + node.branches());
+        return true;
+    }
+
+    private boolean arriveAtJoin(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+        String group = t.currentJoinGroup();
+        TokenStatus before = t.status;
+        t.status = TokenStatus.JOINED;
+        t.kind = NodeKind.JOIN;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        List<Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
+        if (atBarrier.size() < node.expected()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                    + node.name() + " (JOIN) " + before + " -> JOINED, waiting on barrier " + group
+                    + " (" + atBarrier.size() + "/" + node.expected() + ")");
+            return true;
+        }
+        consumeBarrier(tx, atBarrier, now);
+        Token cont = newToken(inst, node.next(), t.popJoinStack(), now);
+        tx.insertToken(cont);
+        work.push(cont);
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
+                + " satisfied (" + atBarrier.size() + "/" + node.expected() + ") -> " + node.next());
+        return true;
+    }
+
+    private static List<Token> joinedAtBarrier(Tx tx, Instance inst, Node node, String group) {
+        return tx.tokensOf(inst.id).stream()
+                .filter(x -> x.status == TokenStatus.JOINED)
+                .filter(x -> node.id().equals(x.nodeId))
+                .filter(x -> Objects.equals(group, x.currentJoinGroup()))
+                .toList();
+    }
+
+    /**
+     * Consumes the barrier: these tokens have served their purpose, and leaving them parked
+     * would keep the instance looking active forever.
+     */
+    private static void consumeBarrier(Tx tx, List<Token> atBarrier, long now) {
+        for (Token parked : atBarrier) {
+            parked.status = TokenStatus.DONE;
+            parked.updatedAt = now;
+            tx.updateToken(parked);
+        }
+    }
+
+    private boolean finishAtEnd(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+        TokenStatus before = t.status;
+        t.status = TokenStatus.DONE;
+        t.kind = NodeKind.END;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        if (!node.success()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                    + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
+            failInstance(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
+            return false;
+        }
+        boolean anyActive = tx.tokensOf(inst.id).stream().anyMatch(Token::isActive);
+        if (anyActive || !work.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                    + node.name() + " (END) " + before + " -> DONE, other tokens still active");
+            return true;
+        }
+        inst.status = InstanceStatus.COMPLETED;
+        inst.terminationReason = node.reason();
+        inst.updatedAt = now;
+        tx.updateInstance(inst);
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
+                + (node.reason() != null ? " (" + node.reason() + ")" : ""));
+        return true;
     }
 
     private void failInstance(Tx tx, Instance inst, String error, long now) {

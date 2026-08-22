@@ -1,6 +1,9 @@
 package dev.wiggle.core;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * One vertex of the compiled workflow graph. A single record with nullable slots
@@ -45,6 +48,10 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
 
     public Node withAltNext(String n) {
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason);
+    }
+
+    public Node withQueue(String q) {
+        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason);
     }
 
     public Node withBranches(List<String> b) {

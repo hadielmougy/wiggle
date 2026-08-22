@@ -2,19 +2,12 @@ package dev.wiggle.client.worker;
 
 import dev.wiggle.client.dsl.ActivityHandler;
 import dev.wiggle.client.dsl.Blueprint;
-import dev.wiggle.core.AdvanceResult;
-import dev.wiggle.core.ExecutionMode;
-import dev.wiggle.core.GraphTraversal;
-import dev.wiggle.core.Node;
-import dev.wiggle.core.NodeKind;
-import dev.wiggle.core.TaskActivation;
-import dev.wiggle.core.WorkflowDefinition;
+import dev.wiggle.core.*;
 
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The data plane. A worker registers its blueprints, then pulls work: it only ever
@@ -32,7 +25,6 @@ public final class Worker implements AutoCloseable {
     private final String workerId;
     private final WorkerOptions options;
     private final Map<String, ActivityHandler> handlers = new ConcurrentHashMap<>();
-    private final Map<String, NodeKind> kinds = new ConcurrentHashMap<>();
     private final Set<String> queues = ConcurrentHashMap.newKeySet();
     private final List<Blueprint<?>> blueprints = new CopyOnWriteArrayList<>();
     /** Compiled graphs by "name:version", for local-execution traversal. */
@@ -44,7 +36,7 @@ public final class Worker implements AutoCloseable {
     private ScheduledExecutorService heartbeats;
     private Thread pollThread;
 
-    private ThreadFactory heartbeatThreadFactory = new ThreadFactory() {
+    private final ThreadFactory heartbeatThreadFactory = new ThreadFactory() {
         private final AtomicInteger n = new AtomicInteger();
         @Override
         public Thread newThread(Runnable r) {
@@ -70,15 +62,11 @@ public final class Worker implements AutoCloseable {
 
     /** Adds a workflow's handlers to this worker's dispatch table. */
     public Worker register(Blueprint<?> blueprint) {
+        WorkflowDefinition def = blueprint.definition();
         blueprints.add(blueprint);
         handlers.putAll(blueprint.handlers());
-        graphs.put(blueprint.definition().key(), blueprint.definition());
-        blueprint.definition().nodes().values().stream()
-                .filter(n -> n.isWorkerDispatched())
-                .forEach(n -> {
-                    kinds.put(n.activity(), n.kind());
-                    if (n.queue() != null) queues.add(n.queue());
-                });
+        graphs.put(def.key(), def);
+        queues.addAll(def.workerQueues());
         return this;
     }
 
@@ -100,27 +88,7 @@ public final class Worker implements AutoCloseable {
     private void pollLoop() {
         while (running.get()) {
             try {
-                int free = options.concurrency() - inFlight.get();
-                if (free <= 0) {
-                    sleep(options.idleBackoff().toMillis());
-                    continue;
-                }
-                List<TaskActivation> tasks = client.poll(workerId, queues, free,
-                        options.lease().toMillis(), options.longPollWait().toMillis());
-                if (tasks.isEmpty()) {
-                    sleep(options.idleBackoff().toMillis());
-                    continue;
-                }
-                for (TaskActivation task : tasks) {
-                    inFlight.incrementAndGet();
-                    executor.submit(() -> {
-                        try {
-                            execute(task);
-                        } finally {
-                            inFlight.decrementAndGet();
-                        }
-                    });
-                }
+                pollOnce();
             } catch (RuntimeException e) {
                 if (!running.get()) return;
                 LOG.log(System.Logger.Level.WARNING, "poll failed: " + e.getMessage());
@@ -129,12 +97,40 @@ public final class Worker implements AutoCloseable {
         }
     }
 
+    private void pollOnce() {
+        int free = options.concurrency() - inFlight.get();
+        if (free <= 0) {
+            sleep(options.idleBackoff().toMillis());
+            return;
+        }
+        List<TaskActivation> tasks = client.poll(workerId, queues, free,
+                options.lease().toMillis(), options.longPollWait().toMillis());
+        if (tasks.isEmpty()) {
+            sleep(options.idleBackoff().toMillis());
+            return;
+        }
+        for (TaskActivation task : tasks) {
+            submit(task);
+        }
+    }
+
+    private void submit(TaskActivation task) {
+        inFlight.incrementAndGet();
+        executor.submit(() -> {
+            try {
+                execute(task);
+            } finally {
+                inFlight.decrementAndGet();
+            }
+        });
+    }
+
     private void execute(TaskActivation task) {
         WorkflowDefinition def = graphs.get(task.workflow() + ":" + task.version());
         // Local execution needs the graph to traverse; without it (unregistered version) fall back
         // to server-driven, one step at a time.
         if (task.executionMode() != ExecutionMode.SERVER && def != null) {
-            executeLocal(task, def);
+            new LocalRun(task, def).run();
         } else {
             executeServer(task);
         }
@@ -147,21 +143,13 @@ public final class Worker implements AutoCloseable {
             reportFailure(task, "no handler registered for activity '" + task.activity() + "'", false);
             return;
         }
-        Heartbeat lease = new Heartbeat(heartbeats,
-                extend -> client.heartbeat(task.taskId(), task.leaseOwner(), extend),
-                options.lease().toMillis(), task.taskId());
+        Heartbeat lease = newHeartbeat(task.taskId(), task.leaseOwner());
         lease.start();
         Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId()));
         try {
             Object result = handler.invoke(task.context());
-            lease.stop();
-            if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
-                reportFailure(task, "predicate '" + task.stepName() + "' returned "
-                        + (result == null ? "null" : result.getClass().getSimpleName()), false);
-                return;
-            }
-            client.complete(task.taskId(), task.leaseOwner(),
-                    task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
+            lease.stop();   // the handler is done: no extension may race or trail the settle below
+            settle(task, result);
         } catch (PermanentActivityException e) {
             lease.stop();
             reportFailure(task, describe(e), false);
@@ -180,104 +168,158 @@ public final class Worker implements AutoCloseable {
         }
     }
 
-    /**
-     * Local execution: run consecutive same-queue steps in-worker, reporting to the server until
-     * the next node is a boundary (sleep / fork / join / user task / other queue / end) or the
-     * instance is no longer running. LOCAL_SYNC flushes every step (batch size 1, one-step crash
-     * blast radius); LOCAL_ASYNC buffers up to {@code localBatchSize} steps and flushes the run in
-     * one call (fewer round-trips, whole-batch crash blast radius).
-     *
-     * <p>{@code serverTaskId} always names the token the server currently has leased to us -- the
-     * node of the first un-flushed buffered step (or, when the buffer is empty, the next node to
-     * run). A single lease guard heartbeats that token across the whole run.
-     */
-    private void executeLocal(TaskActivation task, WorkflowDefinition def) {
-        int maxBatch = task.executionMode() == ExecutionMode.LOCAL_ASYNC ? options.localBatchSize() : 1;
-        String leaseOwner = task.leaseOwner();
-        String instanceId = task.instanceId();
-        Node node = def.node(task.nodeId());
-        Object ctx = task.context();
-        int attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
-
-        AtomicReference<String> serverTaskId = new AtomicReference<>(task.taskId());
-        List<WiggleClient.StepReport> buffer = new ArrayList<>();
-        Heartbeat lease = new Heartbeat(heartbeats,
-                extend -> client.heartbeat(serverTaskId.get(), leaseOwner, extend),
-                options.lease().toMillis(), task.taskId());
-        lease.start();
-        try {
-            while (true) {
-                ActivityHandler handler = handlers.get(node.activity());
-                if (handler == null) {
-                    flush(buffer, serverTaskId, leaseOwner);   // commit what succeeded
-                    client.fail(serverTaskId.get(), leaseOwner,
-                            "no handler registered for activity '" + node.activity() + "'", false);
-                    return;
-                }
-                Object result;
-                Step.begin(new Step.Info(attempt, node.name(), instanceId));
-                try {
-                    result = handler.invoke(ctx);
-                } catch (PermanentActivityException e) {
-                    Step.end();
-                    if (flush(buffer, serverTaskId, leaseOwner)) client.fail(serverTaskId.get(), leaseOwner, describe(e), false);
-                    return;
-                } catch (Exception e) {
-                    Step.end();
-                    String stepName = node.name();
-                    LOG.log(System.Logger.Level.DEBUG,
-                            () -> "local step " + stepName + " of " + instanceId + " failed: " + e);
-                    if (flush(buffer, serverTaskId, leaseOwner)) client.fail(serverTaskId.get(), leaseOwner, describe(e), true);
-                    return;
-                }
-                Step.end();
-
-                boolean isPredicate = node.kind() == NodeKind.PREDICATE;
-                if (isPredicate && !(result instanceof Boolean)) {
-                    if (flush(buffer, serverTaskId, leaseOwner)) client.fail(serverTaskId.get(), leaseOwner,
-                            "predicate '" + node.name() + "' returned "
-                                    + (result == null ? "null" : result.getClass().getSimpleName()), false);
-                    return;
-                }
-                boolean predicateValue = isPredicate && (Boolean) result;
-                Node next = def.node(GraphTraversal.successor(node, predicateValue));
-                boolean handback = GraphTraversal.classify(next, queues) != null;
-
-                buffer.add(isPredicate
-                        ? new WiggleClient.StepReport(node.id(), null, predicateValue)
-                        : new WiggleClient.StepReport(node.id(), result, null));
-                if (!isPredicate) ctx = applyMerge(ctx, result);
-
-                // A checkpoint forces a flush after this step even mid-chain (non-final), so it is
-                // committed before the next runs -- SYNC already flushes every step, so this only
-                // affects ASYNC.
-                boolean checkpoint = def.checkpoints().contains(node.id());
-                if (handback || checkpoint || buffer.size() >= maxBatch) {
-                    AdvanceResult advanced = client.advanceRun(serverTaskId.get(), leaseOwner, buffer, handback);
-                    buffer.clear();
-                    if (!advanced.running() || handback || advanced.nextTaskId() == null) return;
-                    serverTaskId.set(advanced.nextTaskId());
-                }
-                node = next;
-                attempt = 1;
-            }
-        } finally {
-            lease.stop();
+    /** Reports a finished step: a predicate must have produced a boolean, a task merges its result. */
+    private void settle(TaskActivation task, Object result) {
+        if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
+            reportFailure(task, "predicate '" + task.stepName() + "' returned " + typeName(result), false);
+            return;
         }
+        client.complete(task.taskId(), task.leaseOwner(),
+                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
+    }
+
+    private Heartbeat newHeartbeat(String taskId, String leaseOwner) {
+        return new Heartbeat(heartbeats,
+                extend -> client.heartbeat(taskId, leaseOwner, extend),
+                options.lease().toMillis(), taskId);
     }
 
     /**
-     * Flushes buffered successful steps to the server (non-final), leaving {@code serverTaskId} at
-     * the next node so a failure can be reported against the correct token.
-     *
-     * @return true if the instance is still running (safe to report a failure), false otherwise
+     * One local execution run (LOCAL_SYNC / LOCAL_ASYNC): consecutive same-queue steps executed
+     * in-worker until the next node is a boundary (sleep / fork / join / user task / other queue /
+     * end) or the instance stops running. LOCAL_SYNC flushes every step (one-step crash blast
+     * radius); LOCAL_ASYNC buffers up to {@code localBatchSize} steps and flushes the run in one
+     * call. Owning the chain state here keeps each step's logic flat.
      */
-    private boolean flush(List<WiggleClient.StepReport> buffer, AtomicReference<String> serverTaskId, String leaseOwner) {
-        if (buffer.isEmpty()) return true;
-        AdvanceResult advanced = client.advanceRun(serverTaskId.get(), leaseOwner, List.copyOf(buffer), false);
-        buffer.clear();
-        if (advanced.nextTaskId() != null) serverTaskId.set(advanced.nextTaskId());
-        return advanced.running();
+    private final class LocalRun {
+        private final WorkflowDefinition def;
+        private final String leaseOwner;
+        private final String instanceId;
+        private final int maxBatch;
+        private final List<WiggleClient.StepReport> buffer = new ArrayList<>();
+        /** The token the server currently has leased to us; read by the heartbeat thread. */
+        private volatile String serverTaskId;
+        private Node node;
+        private Object ctx;
+        private int attempt;
+
+        LocalRun(TaskActivation task, WorkflowDefinition def) {
+            this.def = def;
+            this.leaseOwner = task.leaseOwner();
+            this.instanceId = task.instanceId();
+            this.maxBatch = task.executionMode() == ExecutionMode.LOCAL_ASYNC ? options.localBatchSize() : 1;
+            this.serverTaskId = task.taskId();
+            this.node = def.node(task.nodeId());
+            this.ctx = task.context();
+            this.attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
+        }
+
+        void run() {
+            Heartbeat lease = new Heartbeat(heartbeats,
+                    extend -> client.heartbeat(serverTaskId, leaseOwner, extend),
+                    options.lease().toMillis(), serverTaskId);
+            lease.start();
+            try {
+                boolean chaining = true;
+                while (chaining) {
+                    chaining = runOneStep();
+                }
+            } finally {
+                lease.stop();
+            }
+        }
+
+        /** Executes the current node; true = keep chaining locally. */
+        private boolean runOneStep() {
+            ActivityHandler handler = handlers.get(node.activity());
+            if (handler == null) {
+                failRun("no handler registered for activity '" + node.activity() + "'", false);
+                return false;
+            }
+            Invocation outcome = invoke(handler);
+            if (!outcome.ok()) return false;
+            if (node.kind() == NodeKind.PREDICATE && !(outcome.result() instanceof Boolean)) {
+                failRun("predicate '" + node.name() + "' returned " + typeName(outcome.result()), false);
+                return false;
+            }
+            return advance(outcome.result());
+        }
+
+        private Invocation invoke(ActivityHandler handler) {
+            Step.begin(new Step.Info(attempt, node.name(), instanceId));
+            try {
+                return Invocation.ok(handler.invoke(ctx));
+            } catch (PermanentActivityException e) {
+                failRun(describe(e), false);
+                return Invocation.failed();
+            } catch (Exception e) {
+                String stepName = node.name();
+                LOG.log(System.Logger.Level.DEBUG,
+                        () -> "local step " + stepName + " of " + instanceId + " failed: " + e);
+                failRun(describe(e), true);
+                return Invocation.failed();
+            } finally {
+                Step.end();
+            }
+        }
+
+        /** Records the step, flushes when due, and moves to the successor; false = run is over. */
+        private boolean advance(Object result) {
+            boolean isPredicate = node.kind() == NodeKind.PREDICATE;
+            boolean predicateValue = isPredicate && (Boolean) result;
+            Node next = def.node(GraphTraversal.successor(node, predicateValue));
+            boolean handback = GraphTraversal.classify(next, queues) != null;
+            buffer.add(isPredicate
+                    ? new WiggleClient.StepReport(node.id(), null, predicateValue)
+                    : new WiggleClient.StepReport(node.id(), result, null));
+            if (!isPredicate) ctx = applyMerge(ctx, result);
+            if (shouldFlush(handback) && !flushAndContinue(handback)) return false;
+            node = next;
+            attempt = 1;
+            return true;
+        }
+
+        /**
+         * A boundary or a full buffer always flushes; so does a checkpoint, which commits its step
+         * before the next runs even mid-chain (SYNC already flushes every step, so this only
+         * affects ASYNC).
+         */
+        private boolean shouldFlush(boolean handback) {
+            return handback || def.checkpoints().contains(node.id()) || buffer.size() >= maxBatch;
+        }
+
+        /** Flushes the buffer; true = the server leased us the continuation, keep chaining. */
+        private boolean flushAndContinue(boolean handback) {
+            AdvanceResult advanced = client.advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), handback);
+            buffer.clear();
+            if (!advanced.running() || handback || advanced.nextTaskId() == null) return false;
+            serverTaskId = advanced.nextTaskId();
+            return true;
+        }
+
+        /**
+         * Commits any buffered successful steps (leaving {@code serverTaskId} at the failing node's
+         * token), then reports the failure -- unless the instance already stopped running.
+         */
+        private void failRun(String message, boolean retryable) {
+            if (!flushBeforeFailure()) return;
+            client.fail(serverTaskId, leaseOwner, message, retryable);
+        }
+
+        /** @return true if the instance is still running (safe to report a failure) */
+        private boolean flushBeforeFailure() {
+            if (buffer.isEmpty()) return true;
+            AdvanceResult advanced = client.advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), false);
+            buffer.clear();
+            if (advanced.nextTaskId() != null) serverTaskId = advanced.nextTaskId();
+            return advanced.running();
+        }
+    }
+
+    /** The outcome of invoking a handler: a result, or "already reported as failed". */
+    private record Invocation(boolean ok, Object result) {
+        static Invocation ok(Object result) { return new Invocation(true, result); }
+        static Invocation failed() { return new Invocation(false, null); }
     }
 
     /** Mirrors the server's context merge: a map result is shallow-merged; anything else replaces. */
@@ -305,6 +347,10 @@ public final class Worker implements AutoCloseable {
         }
     }
 
+    private static String typeName(Object result) {
+        return result == null ? "null" : result.getClass().getSimpleName();
+    }
+
     private static String describe(Throwable t) {
         String msg = t.getMessage();
         return t.getClass().getSimpleName() + (msg == null ? "" : ": " + msg);
@@ -323,14 +369,17 @@ public final class Worker implements AutoCloseable {
     public void close() {
         if (!running.compareAndSet(true, false)) return;
         if (pollThread != null) pollThread.interrupt();
-        if (executor != null) {
-            executor.shutdown();
-            try {
-                executor.awaitTermination(options.lease().toMillis(), TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        awaitExecutor();
         if (heartbeats != null) heartbeats.shutdownNow();
+    }
+
+    private void awaitExecutor() {
+        if (executor == null) return;
+        executor.shutdown();
+        try {
+            executor.awaitTermination(options.lease().toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

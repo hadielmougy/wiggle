@@ -5,11 +5,7 @@ import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.client.worker.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.client.worker.WorkerOptions;
-import dev.wiggle.core.ExecutionMode;
-import dev.wiggle.core.Ids;
-import dev.wiggle.core.InstanceView;
-import dev.wiggle.core.Json;
-import dev.wiggle.core.TaskActivation;
+import dev.wiggle.core.*;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.WiggleServer;
 import dev.wiggle.server.engine.DefinitionRegistry;
@@ -26,9 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 /** LOCAL_SYNC execution: identical results to SERVER, and consecutive steps chain on one worker. */
 class LocalSyncTest {

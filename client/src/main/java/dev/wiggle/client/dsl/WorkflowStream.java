@@ -1,13 +1,12 @@
 package dev.wiggle.client.dsl;
 
-import dev.wiggle.core.ContextCodec;
-import dev.wiggle.core.ExecutionMode;
-import dev.wiggle.core.Node;
-import dev.wiggle.core.RetryPolicy;
-import dev.wiggle.core.WorkflowDefinition;
+import dev.wiggle.core.*;
 
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
@@ -227,14 +226,7 @@ public final class WorkflowStream<T> {
 
         List<String> starts = new ArrayList<>(branches.length);
         for (Branch<T> branch : branches) {
-            String[] start = new String[1];
-            WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, joinId);
-            WorkflowStream<T> tail = branch.body().apply(sub);
-            if (start[0] == null) {
-                throw new IllegalArgumentException("branch '" + branch.name() + "' defines no steps");
-            }
-            starts.add(start[0]);
-            tail.wireOpenEndsTo(joinId);
+            starts.add(buildBranch(branch, joinId));
         }
         pipeline.put(pipeline.get(forkId).withBranches(starts));
 
@@ -242,6 +234,18 @@ public final class WorkflowStream<T> {
         openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
         lastStepId = null;
         return this;
+    }
+
+    /** Builds one fork branch as a sub-stream wired to the join; returns its start node id. */
+    private String buildBranch(Branch<T> branch, String joinId) {
+        String[] start = new String[1];
+        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, joinId);
+        WorkflowStream<T> tail = branch.body().apply(sub);
+        if (start[0] == null) {
+            throw new IllegalArgumentException("branch '" + branch.name() + "' defines no steps");
+        }
+        tail.wireOpenEndsTo(joinId);
+        return start[0];
     }
 
     /**
@@ -256,27 +260,15 @@ public final class WorkflowStream<T> {
      */
     @SafeVarargs
     public final WorkflowStream<T> choose(Case<T>... cases) {
-        if (cases.length == 0) throw new IllegalArgumentException("choose needs at least one case");
-        for (int i = 0; i < cases.length - 1; i++) {
-            if (cases[i].guard() == null) throw new IllegalArgumentException("otherwise() must be the last case");
-        }
-        boolean hasDefault = cases[cases.length - 1].guard() == null;
-        int guards = hasDefault ? cases.length - 1 : cases.length;
-        if (guards == 0) throw new IllegalArgumentException("choose needs at least one guarded case");
-
-        ContextCodec<T> codec = pipeline.codec;
+        List<Case<T>> all = new ArrayList<>(cases.length);
+        for (Case<T> c : cases) all.add(c);
+        boolean hasDefault = validateChoose(all);
+        int guards = hasDefault ? all.size() - 1 : all.size();
 
         // Lay down the guard predicates first, so each false path can point at the next guard.
         String[] guardIds = new String[guards];
         for (int i = 0; i < guards; i++) {
-            Case<T> c = cases[i];
-            Predicate<T> guard = c.guard();
-            String activity = pipeline.activityFor(c.name());
-            pipeline.handlers.put(activity, json -> guard.test(codec.decode(json)));
-            String id = pipeline.nextId("n");
-            pipeline.put(Node.predicate(id, c.name(), activity, pipeline.defaultQueue, pipeline.defaultRetry));
-            pipeline.queues.add(pipeline.defaultQueue);
-            guardIds[i] = id;
+            guardIds[i] = addGuardNode(all.get(i));
         }
 
         // Enter at the first guard, then take over the open-end bookkeeping ourselves.
@@ -291,19 +283,47 @@ public final class WorkflowStream<T> {
 
         // Each guard's true path runs its branch; the branch's open ends become the choose's.
         for (int i = 0; i < guards; i++) {
-            collectCaseBranch(cases[i], guardIds[i], NEXT);
+            collectCaseBranch(all.get(i), guardIds[i], NEXT);
         }
 
-        // The last false path: a default branch, or an open end that skips the choose entirely.
-        if (hasDefault) {
-            collectCaseBranch(cases[cases.length - 1], guardIds[guards - 1], ALT_NEXT);
-        } else {
-            openNodes.add(guardIds[guards - 1]);
-            openSlots.add(new int[]{ALT_NEXT});
-        }
-
+        wireChooseFallthrough(all, guardIds, hasDefault);
         lastStepId = null;
         return this;
+    }
+
+    private boolean validateChoose(List<Case<T>> cases) {
+        if (cases.isEmpty()) throw new IllegalArgumentException("choose needs at least one case");
+        for (int i = 0; i < cases.size() - 1; i++) {
+            if (cases.get(i).guard() == null) throw new IllegalArgumentException("otherwise() must be the last case");
+        }
+        boolean hasDefault = cases.get(cases.size() - 1).guard() == null;
+        if (hasDefault && cases.size() == 1) {
+            throw new IllegalArgumentException("choose needs at least one guarded case");
+        }
+        return hasDefault;
+    }
+
+    /** Adds one guard as a predicate node and registers its handler; returns the node id. */
+    private String addGuardNode(Case<T> c) {
+        Predicate<T> guard = c.guard();
+        ContextCodec<T> codec = pipeline.codec;
+        String activity = pipeline.activityFor(c.name());
+        pipeline.handlers.put(activity, json -> guard.test(codec.decode(json)));
+        String id = pipeline.nextId("n");
+        pipeline.put(Node.predicate(id, c.name(), activity, pipeline.defaultQueue, pipeline.defaultRetry));
+        pipeline.queues.add(pipeline.defaultQueue);
+        return id;
+    }
+
+    /** The last false path: a default branch, or an open end that skips the choose entirely. */
+    private void wireChooseFallthrough(List<Case<T>> cases, String[] guardIds, boolean hasDefault) {
+        String lastGuard = guardIds[guardIds.length - 1];
+        if (hasDefault) {
+            collectCaseBranch(cases.get(cases.size() - 1), lastGuard, ALT_NEXT);
+            return;
+        }
+        openNodes.add(lastGuard);
+        openSlots.add(new int[]{ALT_NEXT});
     }
 
     /** Builds one case's branch and wires the guard's {@code slot} to it, accumulating open ends. */
@@ -322,9 +342,7 @@ public final class WorkflowStream<T> {
         if (lastStepId == null) {
             throw new IllegalStateException("onQueue() must directly follow step(), effect() or gate()");
         }
-        Node n = pipeline.get(lastStepId);
-        pipeline.put(new Node(n.id(), n.kind(), n.name(), n.activity(), queue, n.retry(), n.sleepMillis(),
-                n.next(), n.altNext(), n.branches(), n.expected(), n.success(), n.reason()));
+        pipeline.put(pipeline.get(lastStepId).withQueue(queue));
         pipeline.queues.add(queue);
         return this;
     }
@@ -378,32 +396,41 @@ public final class WorkflowStream<T> {
 
     private static void validate(WorkflowDefinition def) {
         for (Node n : def.nodes().values()) {
-            if (n.next() != null && !def.nodes().containsKey(n.next())) {
-                throw new IllegalStateException("node " + n.id() + " points at unknown node " + n.next());
-            }
-            if (n.altNext() != null && !def.nodes().containsKey(n.altNext())) {
-                throw new IllegalStateException("node " + n.id() + " points at unknown node " + n.altNext());
-            }
-            switch (n.kind()) {
-                case TASK, PREDICATE -> {
-                    if (n.next() == null) throw new IllegalStateException("node " + n.id() + " has no successor");
-                    if (n.kind() == dev.wiggle.core.NodeKind.PREDICATE && n.altNext() == null) {
-                        throw new IllegalStateException("predicate " + n.id() + " has no false branch");
-                    }
-                }
-                case SLEEP, FORK, JOIN -> {
-                    if (n.kind() != dev.wiggle.core.NodeKind.FORK && n.next() == null) {
-                        throw new IllegalStateException("node " + n.id() + " has no successor");
-                    }
-                    if (n.kind() == dev.wiggle.core.NodeKind.FORK && n.branches().size() < 2) {
-                        throw new IllegalStateException("fork " + n.id() + " has fewer than two branches");
-                    }
-                }
-                case USER_TASK -> {
-                    if (n.next() == null) throw new IllegalStateException("user task " + n.id() + " has no successor");
-                }
-                case END -> { }
-            }
+            validateNode(def, n);
+        }
+    }
+
+    private static void validateNode(WorkflowDefinition def, Node n) {
+        requireKnownTarget(def, n, n.next());
+        requireKnownTarget(def, n, n.altNext());
+        switch (n.kind()) {
+            case TASK, SLEEP, JOIN, USER_TASK -> requireSuccessor(n);
+            case PREDICATE -> validatePredicate(n);
+            case FORK -> validateFork(n);
+            case END -> { }
+        }
+    }
+
+    private static void requireKnownTarget(WorkflowDefinition def, Node n, String target) {
+        if (target != null && !def.nodes().containsKey(target)) {
+            throw new IllegalStateException("node " + n.id() + " points at unknown node " + target);
+        }
+    }
+
+    private static void requireSuccessor(Node n) {
+        if (n.next() == null) throw new IllegalStateException("node " + n.id() + " has no successor");
+    }
+
+    private static void validatePredicate(Node n) {
+        requireSuccessor(n);
+        if (n.altNext() == null) {
+            throw new IllegalStateException("predicate " + n.id() + " has no false branch");
+        }
+    }
+
+    private static void validateFork(Node n) {
+        if (n.branches().size() < 2) {
+            throw new IllegalStateException("fork " + n.id() + " has fewer than two branches");
         }
     }
 

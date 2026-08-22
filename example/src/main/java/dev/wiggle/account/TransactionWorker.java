@@ -4,8 +4,6 @@ import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.worker.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.client.worker.WorkerOptions;
-import dev.wiggle.order.Order;
-import dev.wiggle.order.OrderFulfilment;
 
 import java.time.Duration;
 

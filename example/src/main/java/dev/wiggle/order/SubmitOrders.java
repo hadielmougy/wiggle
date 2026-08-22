@@ -1,10 +1,8 @@
 package dev.wiggle.order;
 
 import dev.wiggle.client.worker.WiggleClient;
-import dev.wiggle.core.InstanceView;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,7 +11,7 @@ public final class SubmitOrders {
 
     public static void main(String[] args) {
         String url = System.getenv().getOrDefault("WIGGLE_URL", "localhost:8080");
-        int count = args.length > 0 ? Integer.parseInt(args[0]) : 5000;
+        int count = args.length > 0 ? Integer.parseInt(args[0]) : 1000;
 
         try (WiggleClient client = new WiggleClient(url)) {
             // Registering here too means orders can be submitted before any worker exists;
