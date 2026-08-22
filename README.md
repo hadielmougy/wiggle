@@ -12,6 +12,9 @@ capacity.
 
 **Current version: `2.0.0`** · Java 21+ · Apache-2.0
 
+> New here, or looking for every configuration knob in one place? See
+> **[docs/onboarding.md](docs/onboarding.md)** — onboarding + the full configuration reference.
+
 ---
 
 ## Install
