@@ -65,7 +65,7 @@ public final class HttpDashboard implements AutoCloseable {
 
     private void workflows(HttpExchange ex) throws IOException {
         requireGet(ex);
-        sendJson(ex, 200, Map.of("workflows", engine.definitions().names()));
+        sendJson(ex, 200, Map.of("workflows", engine.workflowNames()));
     }
 
     private void clusterView(HttpExchange ex) throws IOException {
@@ -74,14 +74,7 @@ public final class HttpDashboard implements AutoCloseable {
         long deadAfter = cluster.deadAfterMillis();
         List<Object> members = new ArrayList<>();
         for (ServerNode n : cluster.members()) {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", n.id);
-            m.put("name", n.name);
-            m.put("workers", n.workers);
-            m.put("leader", n.leader);
-            m.put("alive", (now - n.lastHeartbeat) < deadAfter);
-            m.put("lastHeartbeat", n.lastHeartbeat);
-            members.add(m);
+            members.add(memberMap(n, now, deadAfter));
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("nodeId", cluster.nodeId());
@@ -90,36 +83,59 @@ public final class HttpDashboard implements AutoCloseable {
         sendJson(ex, 200, out);
     }
 
+    private static Map<String, Object> memberMap(ServerNode n, long now, long deadAfter) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", n.id);
+        m.put("name", n.name);
+        m.put("workers", n.workers);
+        m.put("leader", n.leader);
+        m.put("alive", (now - n.lastHeartbeat) < deadAfter);
+        m.put("lastHeartbeat", n.lastHeartbeat);
+        return m;
+    }
+
+    /** Dispatches "", "/{id}" and "/{id}/cancel" under /api/instances. */
     private void instances(HttpExchange ex) throws IOException {
-        String path = ex.getRequestURI().getPath();
-        String rest = path.substring("/api/instances".length());   // "", "/{id}", "/{id}/cancel"
+        String[] parts = subPath(ex, "/api/instances");
+        if (parts.length == 0) {
+            listInstances(ex);
+        } else if (parts.length == 2 && parts[1].equals("cancel")) {
+            cancelInstance(ex, parts[0]);
+        } else if (parts.length == 1) {
+            instanceDetail(ex, parts[0]);
+        } else {
+            sendError(ex, 404, "not found");
+        }
+    }
 
-        if (rest.isEmpty() || rest.equals("/")) {
-            requireGet(ex);
-            Map<String, String> q = query(ex.getRequestURI());
-            String workflow = emptyToNull(q.get("workflow"));
-            String status = emptyToNull(q.get("status"));
-            int limit = parseInt(q.get("limit"), 100);
-            List<Object> list = new ArrayList<>();
-            for (InstanceView v : engine.list(workflow, status, limit)) list.add(instanceMap(v));
-            sendJson(ex, 200, Map.of("instances", list));
+    private void listInstances(HttpExchange ex) throws IOException {
+        requireGet(ex);
+        Map<String, String> q = query(ex.getRequestURI());
+        String workflow = emptyToNull(q.get("workflow"));
+        String status = emptyToNull(q.get("status"));
+        int limit = parseInt(q.get("limit"), 100);
+        List<Object> list = new ArrayList<>();
+        for (InstanceView v : engine.list(workflow, status, limit)) list.add(instanceMap(v));
+        sendJson(ex, 200, Map.of("instances", list));
+    }
+
+    private void cancelInstance(HttpExchange ex, String id) throws IOException {
+        if (!ex.getRequestMethod().equals("POST")) {
+            sendError(ex, 405, "POST required");
             return;
         }
+        String reason = emptyToNull(query(ex.getRequestURI()).get("reason"));
+        engine.cancel(id, reason == null ? "cancelled from dashboard" : reason);
+        sendJson(ex, 200, Map.of("ok", true));
+    }
 
-        String[] parts = rest.substring(1).split("/");   // drop leading '/'
-        String id = parts[0];
-        if (parts.length == 2 && parts[1].equals("cancel")) {
-            if (!ex.getRequestMethod().equals("POST")) { sendError(ex, 405, "POST required"); return; }
-            String reason = emptyToNull(query(ex.getRequestURI()).get("reason"));
-            engine.cancel(id, reason == null ? "cancelled from dashboard" : reason);
-            sendJson(ex, 200, Map.of("ok", true));
-            return;
-        }
-        if (parts.length != 1) { sendError(ex, 404, "not found"); return; }
-
+    private void instanceDetail(HttpExchange ex, String id) throws IOException {
         requireGet(ex);
         InstanceView v = engine.instance(id).orElse(null);
-        if (v == null) { sendError(ex, 404, "no such instance"); return; }
+        if (v == null) {
+            sendError(ex, 404, "no such instance");
+            return;
+        }
         List<Object> tokens = new ArrayList<>();
         for (Token t : engine.tokens(id)) tokens.add(tokenMap(t));
         Map<String, Object> out = new LinkedHashMap<>();
@@ -128,27 +144,40 @@ public final class HttpDashboard implements AutoCloseable {
         sendJson(ex, 200, out);
     }
 
+    /** Dispatches "" and "/{id}/complete" under /api/tasks. */
     private void tasks(HttpExchange ex) throws IOException {
-        String rest = ex.getRequestURI().getPath().substring("/api/tasks".length());   // "", "/{id}/complete"
+        String[] parts = subPath(ex, "/api/tasks");
+        if (parts.length == 0) {
+            listTasks(ex);
+        } else if (parts.length == 2 && parts[1].equals("complete")) {
+            completeTask(ex, parts[0]);
+        } else {
+            sendError(ex, 404, "not found");
+        }
+    }
 
-        if (rest.isEmpty() || rest.equals("/")) {
-            requireGet(ex);
-            int limit = parseInt(query(ex.getRequestURI()).get("limit"), 200);
-            List<Object> list = new ArrayList<>();
-            for (Token t : engine.pendingUserTasks(limit)) list.add(taskMap(t));
-            sendJson(ex, 200, Map.of("tasks", list));
+    private void listTasks(HttpExchange ex) throws IOException {
+        requireGet(ex);
+        int limit = parseInt(query(ex.getRequestURI()).get("limit"), 200);
+        List<Object> list = new ArrayList<>();
+        for (Token t : engine.pendingUserTasks(limit)) list.add(taskMap(t));
+        sendJson(ex, 200, Map.of("tasks", list));
+    }
+
+    private void completeTask(HttpExchange ex, String taskId) throws IOException {
+        if (!ex.getRequestMethod().equals("POST")) {
+            sendError(ex, 405, "POST required");
             return;
         }
+        engine.completeUserTask(taskId, readJsonBody(ex));
+        sendJson(ex, 200, Map.of("ok", true));
+    }
 
-        String[] parts = rest.substring(1).split("/");
-        if (parts.length == 2 && parts[1].equals("complete")) {
-            if (!ex.getRequestMethod().equals("POST")) { sendError(ex, 405, "POST required"); return; }
-            Object result = readJsonBody(ex);
-            engine.completeUserTask(parts[0], result);
-            sendJson(ex, 200, Map.of("ok", true));
-            return;
-        }
-        sendError(ex, 404, "not found");
+    /** The path segments after {@code prefix}: [] for the collection, ["id"], or ["id", "verb"]. */
+    private static String[] subPath(HttpExchange ex, String prefix) {
+        String rest = ex.getRequestURI().getPath().substring(prefix.length());
+        if (rest.isEmpty() || rest.equals("/")) return new String[0];
+        return rest.substring(1).split("/");
     }
 
     private static Map<String, Object> taskMap(Token t) {

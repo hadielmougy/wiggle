@@ -38,6 +38,15 @@ public record WorkflowDefinition(String name, int version, String startNode,
         return n;
     }
 
+    /** The queues this graph's worker-dispatched nodes are routed to. */
+    public Set<String> workerQueues() {
+        Set<String> qs = new LinkedHashSet<>();
+        for (Node n : nodes.values()) {
+            if (n.isWorkerDispatched() && n.queue() != null) qs.add(n.queue());
+        }
+        return qs;
+    }
+
     public String key() {
         return name + ":" + version;
     }

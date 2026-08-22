@@ -3,10 +3,9 @@ package dev.wiggle.server.cluster;
 import dev.wiggle.core.Ids;
 import dev.wiggle.server.store.Rows.ServerNode;
 import dev.wiggle.server.store.Storage;
+import dev.wiggle.server.store.Tx;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -85,38 +84,42 @@ public final class ClusterManager implements AutoCloseable {
         }
     }
 
+    /** The outcome of one heartbeat: who leads, who is alive, and whether that is us. */
+    private record Election(String leaderId, Set<String> aliveIds, boolean self) {}
+
+    /** Longest-running node wins; ties broken by id so every node computes the same answer. */
+    private static final Comparator<ServerNode> BY_SENIORITY =
+            Comparator.comparingLong((ServerNode n) -> n.firstHeartbeat).thenComparing(n -> n.id);
+
     private void beat() {
         long now = System.currentTimeMillis();
         self.lastHeartbeat = now;
-        String[] electedId = new String[1];
-        Set<String> aliveIds = ConcurrentHashMap.newKeySet();
-        boolean nowLeader = storage.inTx(tx -> {
-            tx.upsertNode(self);
-            tx.deleteNodesOlderThan(now - deadAfterMillis() * 4);
-            List<ServerNode> alive = tx.nodes().stream()
-                    .filter(n -> now - n.lastHeartbeat < deadAfterMillis())
-                    .toList();
-            alive.forEach(n -> aliveIds.add(n.id));
-            Optional<ServerNode> elected = alive.stream()
-                    .min((a, b) -> a.firstHeartbeat != b.firstHeartbeat
-                            ? Long.compare(a.firstHeartbeat, b.firstHeartbeat)
-                            : a.id.compareTo(b.id));
-            electedId[0] = elected.map(n -> n.id).orElse(null);
-            boolean me = elected.map(n -> n.id.equals(self.id)).orElse(false);
-            tx.setLeader(self.id, me);
-            return me;
-        });
+        Election election = storage.inTx(tx -> heartbeatAndElect(tx, now));
         lastSuccessfulHeartbeat = now;
-        boolean was = leader.getAndSet(nowLeader);
+        boolean was = leader.getAndSet(election.self());
         LOG.log(System.Logger.Level.DEBUG, () -> "heartbeat: node " + self.id + " at " + now
-                + ", " + aliveIds.size() + " alive node(s), elected leader=" + electedId[0]
-                + ", self leader=" + nowLeader);
-        if (was != nowLeader) {
-            LOG.log(System.Logger.Level.INFO, () -> nowLeader
+                + ", " + election.aliveIds().size() + " alive node(s), elected leader=" + election.leaderId()
+                + ", self leader=" + election.self());
+        if (was != election.self()) {
+            LOG.log(System.Logger.Level.INFO, () -> election.self()
                     ? "node " + self.id + " became leader"
                     : "node " + self.id + " stepped down");
         }
-        logMembershipChanges(nowLeader, aliveIds);
+        logMembershipChanges(election.self(), election.aliveIds());
+    }
+
+    private Election heartbeatAndElect(Tx tx, long now) {
+        tx.upsertNode(self);
+        tx.deleteNodesOlderThan(now - deadAfterMillis() * 4);
+        List<ServerNode> alive = tx.nodes().stream()
+                .filter(n -> now - n.lastHeartbeat < deadAfterMillis())
+                .toList();
+        Optional<ServerNode> elected = alive.stream().min(BY_SENIORITY);
+        boolean me = elected.map(n -> n.id.equals(self.id)).orElse(false);
+        tx.setLeader(self.id, me);
+        Set<String> aliveIds = new LinkedHashSet<>();
+        alive.forEach(n -> aliveIds.add(n.id));
+        return new Election(elected.map(n -> n.id).orElse(null), aliveIds, me);
     }
 
     /** The leader logs roster changes once, so a cluster's log shows joins/leaves without N-way duplication. */

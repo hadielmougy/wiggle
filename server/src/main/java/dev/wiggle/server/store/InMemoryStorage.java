@@ -3,11 +3,7 @@ package dev.wiggle.server.store;
 import dev.wiggle.core.Node;
 import dev.wiggle.core.NodeKind;
 import dev.wiggle.core.WorkflowDefinition;
-import dev.wiggle.server.store.Rows.Instance;
-import dev.wiggle.server.store.Rows.InstanceStatus;
-import dev.wiggle.server.store.Rows.ServerNode;
-import dev.wiggle.server.store.Rows.Token;
-import dev.wiggle.server.store.Rows.TokenStatus;
+import dev.wiggle.server.store.Rows.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;

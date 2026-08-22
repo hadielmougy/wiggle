@@ -1,18 +1,10 @@
 package dev.wiggle.postgres;
 
-import dev.wiggle.core.Json;
-import dev.wiggle.core.Node;
-import dev.wiggle.core.NodeKind;
-import dev.wiggle.core.RetryPolicy;
-import dev.wiggle.core.WorkflowDefinition;
+import dev.wiggle.core.*;
+import dev.wiggle.server.store.Rows;
+import dev.wiggle.server.store.Rows.*;
 import dev.wiggle.server.store.Storage;
 import dev.wiggle.server.store.Tx;
-import dev.wiggle.server.store.Rows;
-import dev.wiggle.server.store.Rows.Instance;
-import dev.wiggle.server.store.Rows.InstanceStatus;
-import dev.wiggle.server.store.Rows.ServerNode;
-import dev.wiggle.server.store.Rows.Token;
-import dev.wiggle.server.store.Rows.TokenStatus;
 
 import java.sql.*;
 import java.util.*;
@@ -370,28 +362,41 @@ public final class JdbcStorage implements Storage {
         /** Reads a node's outgoing edges and folds them back into the node's typed next/altNext/branches. */
         private Node assemble(String workflow, int version, String id, NodeKind kind, String name, String activity,
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason) {
-            String next = null, altNext = null;
-            List<String> branches = new ArrayList<>();
+            EdgeTargets targets = new EdgeTargets(kind);
             try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
                     "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setString(3, id);
                 try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        String to = rs.getString(1), cond = rs.getString(2);
-                        if (kind == NodeKind.PREDICATE) {
-                            if ("false".equals(cond)) altNext = to; else next = to;
-                        } else if (kind == NodeKind.USER_TASK) {
-                            if ("escalate".equals(cond)) altNext = to; else next = to;
-                        } else if (kind == NodeKind.FORK) {
-                            branches.add(to);
-                        } else {
-                            next = to;
-                        }
-                    }
+                    while (rs.next()) targets.absorb(rs.getString(1), rs.getString(2));
                 }
             } catch (SQLException e) { throw wrap(e); }
-            return new Node(id, kind, name, activity, queue, retry, sleep, next, altNext,
-                    List.copyOf(branches), expected, success, reason);
+            return new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
+                    List.copyOf(targets.branches), expected, success, reason);
+        }
+
+        /** Folds edge rows back into a node's typed successor slots (the inverse of {@code edgesOf}). */
+        private static final class EdgeTargets {
+            private final NodeKind kind;
+            String next;
+            String altNext;
+            final List<String> branches = new ArrayList<>();
+
+            EdgeTargets(NodeKind kind) { this.kind = kind; }
+
+            void absorb(String to, String cond) {
+                if (kind == NodeKind.FORK) {
+                    branches.add(to);
+                } else if (isAltEdge(cond)) {
+                    altNext = to;
+                } else {
+                    next = to;
+                }
+            }
+
+            private boolean isAltEdge(String cond) {
+                return (kind == NodeKind.PREDICATE && "false".equals(cond))
+                        || (kind == NodeKind.USER_TASK && "escalate".equals(cond));
+            }
         }
 
         @Override public Optional<String> graphStartNode(String workflow, int version) {

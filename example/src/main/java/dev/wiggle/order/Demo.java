@@ -4,8 +4,8 @@ import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.worker.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.core.InstanceView;
-import dev.wiggle.server.WiggleServer;
 import dev.wiggle.server.ServerConfig;
+import dev.wiggle.server.WiggleServer;
 
 import java.math.BigDecimal;
 import java.time.Duration;

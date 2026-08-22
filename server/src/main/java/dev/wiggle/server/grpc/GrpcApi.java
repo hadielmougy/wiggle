@@ -13,7 +13,10 @@ import io.grpc.stub.StreamObserver;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -89,7 +92,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void listWorkflows(Empty req, StreamObserver<WorkflowNames> resp) {
         LOG.log(System.Logger.Level.DEBUG, "rpc ListWorkflows");
-        run(resp, () -> WorkflowNames.newBuilder().addAllWorkflows(engine.definitions().names()).build());
+        run(resp, () -> WorkflowNames.newBuilder().addAllWorkflows(engine.workflowNames()).build());
     }
 
     @Override
@@ -98,7 +101,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         run(resp, () -> {
             dev.wiggle.core.WorkflowDefinition def =
                     dev.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(req.getDefinition()));
-            engine.definitions().register(def);
+            engine.register(def);
             if (announced.add(def.key())) {
                 LOG.log(System.Logger.Level.INFO, () -> "registered workflow " + def.key()
                         + " (" + def.nodes().size() + " nodes, mode=" + def.executionMode() + ")");
@@ -115,7 +118,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void getWorkflow(GetWorkflowRequest req, StreamObserver<WorkflowDefinition> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetWorkflow name=" + req.getName());
         run(resp, () -> {
-            dev.wiggle.core.WorkflowDefinition def = engine.definitions().latest(req.getName())
+            dev.wiggle.core.WorkflowDefinition def = engine.latestDefinition(req.getName())
                     .orElseThrow(() -> EngineException.notFound("workflow"));
             return WorkflowDefinition.newBuilder().setDefinition(ProtoJson.toStruct(def.toJson())).build();
         });

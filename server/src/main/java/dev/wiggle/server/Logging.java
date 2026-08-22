@@ -2,11 +2,7 @@ package dev.wiggle.server;
 
 import java.io.IOException;
 import java.util.Locale;
-import java.util.logging.FileHandler;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import java.util.logging.SimpleFormatter;
+import java.util.logging.*;
 
 /**
  * Optional file logging for the standalone server, using the JDK's own {@code java.util.logging}
