@@ -17,8 +17,6 @@ import java.util.*;
 public final class Json {
     private Json() {}
 
-    // ---------------------------------------------------------------- writing
-
     public static String write(Object v) {
         StringBuilder sb = new StringBuilder(256);
         write(v, sb);
@@ -85,8 +83,6 @@ public final class Json {
         }
         sb.append('"');
     }
-
-    // ---------------------------------------------------------------- parsing
 
     public static Object parse(String text) {
         Parser p = new Parser(text);
@@ -216,8 +212,6 @@ public final class Json {
             return fp ? (Object) Double.valueOf(raw) : (Object) Long.valueOf(raw);
         }
     }
-
-    // ---------------------------------------------------------------- helpers
 
     @SuppressWarnings("unchecked")
     public static Map<String, Object> asObject(Object o) {

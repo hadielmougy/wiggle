@@ -45,25 +45,32 @@ public final class Housekeeper implements AutoCloseable {
     }
 
     private void tick() {
-        if (!cluster.isLeader()) return;
+        if (!cluster.isLeader()) {
+            LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: skipped, not leader");
+            return;
+        }
         try {
+            LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: leader running timers/leases/deadlines sweep");
             int fired = engine.fireDueTimers(batchSize);
             int reclaimed = engine.reclaimExpiredLeases(batchSize);
             int escalated = engine.fireDueUserTaskDeadlines(batchSize);
-            if (fired > 0 || reclaimed > 0 || escalated > 0) {
-                LOG.log(System.Logger.Level.DEBUG, () -> "housekeeping: " + fired + " timers fired, "
-                        + reclaimed + " leases reclaimed, " + escalated + " user-task deadlines fired");
-            }
+            LOG.log(System.Logger.Level.DEBUG, () -> "housekeeping tick: " + fired + " timers fired, "
+                    + reclaimed + " leases reclaimed, " + escalated + " user-task deadlines fired");
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "housekeeping tick failed: " + e);
         }
     }
 
     private void retain() {
-        if (!cluster.isLeader()) return;
+        if (!cluster.isLeader()) {
+            LOG.log(System.Logger.Level.DEBUG, "retention sweep: skipped, not leader");
+            return;
+        }
         try {
+            LOG.log(System.Logger.Level.DEBUG, "retention sweep: leader running");
             int purged = engine.purgeTerminalInstancesOlderThan(retention.toMillis(), batchSize * 10);
             if (purged > 0) LOG.log(System.Logger.Level.INFO, () -> "purged " + purged + " terminal instances");
+            else LOG.log(System.Logger.Level.DEBUG, "retention sweep: nothing to purge");
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "retention sweep failed: " + e);
         }

@@ -44,8 +44,6 @@ public final class WorkflowStream<T> {
         return new WorkflowStream<>(pipeline, id -> pipeline.startNode = id, null);
     }
 
-    // ------------------------------------------------- intermediate operations
-
     /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
     public WorkflowStream<T> step(String name, Activity<T> fn) {
         return step(name, fn, null);
@@ -336,8 +334,6 @@ public final class WorkflowStream<T> {
         return this;
     }
 
-    // ------------------------------------------------------ terminal operation
-
     public Blueprint<T> build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         consumed = true;
@@ -384,8 +380,6 @@ public final class WorkflowStream<T> {
             }
         }
     }
-
-    // ---------------------------------------------------------------- plumbing
 
     private void attach(String id) {
         if (openNodes.isEmpty()) {

@@ -2,6 +2,7 @@ package dev.wiggle.server;
 
 import dev.wiggle.server.cluster.ClusterManager;
 import dev.wiggle.server.cluster.Housekeeper;
+import dev.wiggle.server.cluster.QueueLagMonitor;
 import dev.wiggle.server.engine.DefinitionRegistry;
 import dev.wiggle.server.engine.WorkflowEngine;
 import dev.wiggle.server.grpc.GrpcApi;
@@ -24,6 +25,7 @@ public final class WiggleServer implements AutoCloseable {
     private final WorkflowEngine engine;
     private final ClusterManager cluster;
     private final Housekeeper housekeeper;
+    private final QueueLagMonitor queueLagMonitor;
     private final GrpcApi api;
     /** Null unless a dashboard port was configured. */
     private final HttpDashboard dashboard;
@@ -36,6 +38,8 @@ public final class WiggleServer implements AutoCloseable {
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch());
+        this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
+                config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis());
         this.dashboard = config.dashboardPort() > 0
                 ? new HttpDashboard(engine, cluster, config.dashboardPort())
@@ -57,6 +61,7 @@ public final class WiggleServer implements AutoCloseable {
     public WiggleServer start() {
         cluster.start();
         housekeeper.start();
+        queueLagMonitor.start();
         api.start();
         if (dashboard != null) dashboard.start();
         return this;
@@ -76,16 +81,20 @@ public final class WiggleServer implements AutoCloseable {
     @Override public void close() {
         if (dashboard != null) dashboard.close();
         api.close();
+        queueLagMonitor.close();
         housekeeper.close();
         cluster.close();
         storage.close();
     }
 
     public static void main(String[] args) throws Exception {
+        Logging.configureFromEnv();   // opt-in file logging, before anything logs
         ServerConfig config = ServerConfig.fromEnvironment();
         WiggleServer server = new WiggleServer(config).start();
         System.out.println("Wiggle server '" + config.nodeName() + "' on " + server.baseUrl()
                 + " (storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
+        String logFile = System.getenv("WIGGLE_LOG_FILE");
+        if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
         if (server.dashboardPort() > 0) {
             System.out.println("Dashboard at http://localhost:" + server.dashboardPort());
         }

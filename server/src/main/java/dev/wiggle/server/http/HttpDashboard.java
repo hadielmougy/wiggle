@@ -63,8 +63,6 @@ public final class HttpDashboard implements AutoCloseable {
         http.stop(0);
     }
 
-    // --------------------------------------------------------------- endpoints
-
     private void workflows(HttpExchange ex) throws IOException {
         requireGet(ex);
         sendJson(ex, 200, Map.of("workflows", engine.definitions().names()));
@@ -153,8 +151,6 @@ public final class HttpDashboard implements AutoCloseable {
         sendError(ex, 404, "not found");
     }
 
-    // ------------------------------------------------------------- projections
-
     private static Map<String, Object> taskMap(Token t) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", t.id);
@@ -197,16 +193,12 @@ public final class HttpDashboard implements AutoCloseable {
         return m;
     }
 
-    // ------------------------------------------------------------------ static
-
     private void staticFile(HttpExchange ex) throws IOException {
         String path = ex.getRequestURI().getPath();
         if (path.startsWith("/api/")) { sendError(ex, 404, "unknown endpoint"); return; }
         if (!path.equals("/") && !path.equals("/index.html")) { sendError(ex, 404, "not found"); return; }
         sendText(ex, 200, "text/html; charset=utf-8", INDEX_HTML);
     }
-
-    // ------------------------------------------------------------------ plumbing
 
     /** Wraps a handler so any thrown exception becomes a clean 400/500 instead of a dropped connection. */
     private HttpHandler guard(ThrowingHandler h) {

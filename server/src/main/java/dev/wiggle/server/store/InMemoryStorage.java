@@ -178,6 +178,24 @@ public final class InMemoryStorage implements Storage {
                     .toList();
         }
 
+        @Override public Rows.QueueDepth queueDepth(long now) {
+            List<Token> ready = tokens.values().stream()
+                    .filter(t -> t.status == TokenStatus.READY)
+                    .filter(t -> t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE)
+                    .filter(t -> t.availableAt <= now)
+                    .toList();
+            long oldest = ready.stream().mapToLong(t -> t.availableAt).min().orElse(0);
+            return new Rows.QueueDepth(ready.size(), oldest);
+        }
+
+        @Override public int countProcessedSince(long since) {
+            return (int) tokens.values().stream()
+                    .filter(t -> t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE)
+                    .filter(t -> t.status == TokenStatus.DONE)
+                    .filter(t -> t.updatedAt > since)
+                    .count();
+        }
+
         @Override public void upsertNode(ServerNode n) {
             ServerNode existing = nodes.get(n.id);
             if (existing != null) n.firstHeartbeat = existing.firstHeartbeat;

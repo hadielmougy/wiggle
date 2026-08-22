@@ -67,10 +67,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         pool.shutdownNow();
     }
 
-    // ------------------------------------------------------------- rpcs
-
     @Override
     public void healthCheck(Empty req, StreamObserver<HealthStatus> resp) {
+        LOG.log(System.Logger.Level.DEBUG, "rpc HealthCheck");
         run(resp, () -> HealthStatus.newBuilder()
                 .setStatus("UP")
                 .setNode(cluster.nodeId())
@@ -80,16 +79,19 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void getCluster(Empty req, StreamObserver<ClusterView> resp) {
+        LOG.log(System.Logger.Level.DEBUG, "rpc GetCluster");
         run(resp, this::clusterView);
     }
 
     @Override
     public void listWorkflows(Empty req, StreamObserver<WorkflowNames> resp) {
+        LOG.log(System.Logger.Level.DEBUG, "rpc ListWorkflows");
         run(resp, () -> WorkflowNames.newBuilder().addAllWorkflows(engine.definitions().names()).build());
     }
 
     @Override
     public void registerWorkflow(WorkflowDefinition req, StreamObserver<RegisterWorkflowResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, "rpc RegisterWorkflow");
         run(resp, () -> {
             dev.wiggle.core.WorkflowDefinition def =
                     dev.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(req.getDefinition()));
@@ -106,6 +108,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void getWorkflow(GetWorkflowRequest req, StreamObserver<WorkflowDefinition> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetWorkflow name=" + req.getName());
         run(resp, () -> {
             dev.wiggle.core.WorkflowDefinition def = engine.definitions().latest(req.getName())
                     .orElseThrow(() -> EngineException.notFound("workflow"));
@@ -115,6 +118,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void startInstance(StartInstanceRequest req, StreamObserver<StartInstanceResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc StartInstance workflow=" + req.getWorkflow()
+                + " version=" + (req.hasVersion() ? req.getVersion() : "latest")
+                + " correlationId=" + (req.hasCorrelationId() ? req.getCorrelationId() : null));
         run(resp, () -> {
             Integer version = req.hasVersion() ? req.getVersion() : null;
             String correlationId = req.hasCorrelationId() ? req.getCorrelationId() : null;
@@ -126,6 +132,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void listInstances(ListInstancesRequest req, StreamObserver<InstanceList> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ListInstances workflow="
+                + (req.hasWorkflow() ? req.getWorkflow() : null) + " status="
+                + (req.hasStatus() ? req.getStatus() : null) + " limit=" + req.getLimit());
         run(resp, () -> {
             String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
             String status = req.hasStatus() ? req.getStatus() : null;
@@ -138,6 +147,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void getInstance(InstanceIdRequest req, StreamObserver<InstanceDetail> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetInstance id=" + req.getInstanceId());
         run(resp, () -> {
             dev.wiggle.core.InstanceView v = engine.instance(req.getInstanceId())
                     .orElseThrow(() -> EngineException.notFound("instance"));
@@ -149,6 +159,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void cancelInstance(CancelInstanceRequest req, StreamObserver<CancelInstanceResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CancelInstance id=" + req.getInstanceId()
+                + " reason=" + req.getReason());
         run(resp, () -> {
             engine.cancel(req.getInstanceId(),
                     req.getReason().isEmpty() ? "cancelled via API" : req.getReason());
@@ -158,6 +170,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void pollTasks(PollRequest req, StreamObserver<TaskList> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
+                + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
         run(resp, () -> {
             Set<String> queues = new LinkedHashSet<>(req.getQueuesList());
             int max = req.getMax() > 0 ? req.getMax() : 1;
@@ -175,6 +189,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 }
                 tasks = engine.poll(req.getWorkerId(), queues, max, lease);
             }
+            List<dev.wiggle.core.TaskActivation> finalTasks = tasks;
+            LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
+                    + " returning " + finalTasks.size() + " task(s)");
             TaskList.Builder out = TaskList.newBuilder();
             for (dev.wiggle.core.TaskActivation t : tasks) out.addTasks(taskProto(t));
             return out.build();
@@ -183,6 +200,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void completeTask(TaskResultRequest req, StreamObserver<Ack> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CompleteTask taskId=" + req.getTaskId()
+                + " leaseOwner=" + req.getLeaseOwner());
         run(resp, () -> {
             Object result = req.hasResult() ? ProtoJson.fromValue(req.getResult()) : null;
             engine.complete(req.getTaskId(), req.getLeaseOwner(), result);
@@ -192,6 +211,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void failTask(TaskFailureRequest req, StreamObserver<Ack> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc FailTask taskId=" + req.getTaskId()
+                + " leaseOwner=" + req.getLeaseOwner() + " retryable=" + req.getRetryable()
+                + " message=" + req.getMessage());
         run(resp, () -> {
             engine.fail(req.getTaskId(), req.getLeaseOwner(), req.getMessage(), req.getRetryable());
             return Ack.newBuilder().setOk(true).build();
@@ -200,13 +222,13 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     @Override
     public void heartbeatTask(HeartbeatRequest req, StreamObserver<HeartbeatResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc HeartbeatTask taskId=" + req.getTaskId()
+                + " leaseOwner=" + req.getLeaseOwner() + " extendMillis=" + req.getExtendMillis());
         run(resp, () -> {
             long until = engine.extendLease(req.getTaskId(), req.getLeaseOwner(), req.getExtendMillis());
             return HeartbeatResult.newBuilder().setLeaseExpiresAt(until).build();
         });
     }
-
-    // ------------------------------------------------------------- conversion
 
     private ClusterView clusterView() {
         ClusterView.Builder out = ClusterView.newBuilder().setSelf(cluster.nodeId()).setLeader(cluster.isLeader());
@@ -270,17 +292,18 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         return m.build();
     }
 
-    // ------------------------------------------------------------- plumbing
-
     private interface Handler<T> { T call() throws Exception; }
 
     private <T> void run(StreamObserver<T> resp, Handler<T> handler) {
         try {
-            resp.onNext(handler.call());
+            T result = handler.call();
+            resp.onNext(result);
             resp.onCompleted();
         } catch (EngineException e) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with " + e.statusCode() + ": " + e.getMessage());
             resp.onError(status(e.statusCode()).withDescription(e.getMessage()).asRuntimeException());
         } catch (IllegalArgumentException e) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with bad request: " + e.getMessage());
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
         } catch (Exception e) {
             LOG.log(System.Logger.Level.ERROR, "unhandled error", e);

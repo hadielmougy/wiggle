@@ -344,6 +344,50 @@ Everything has a sensible default; override via environment variable or system p
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name shown in cluster membership |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | set a port to enable the web dashboard |
+| `WIGGLE_LOG_FILE` | *(unset)* | set a path to also log to a rotating file |
+| `WIGGLE_LOG_LEVEL` | `INFO` | file log level: `INFO`, `DEBUG`, `WARNING`, `ERROR` |
+| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `5000` | how often the leader checks the queue backlog |
+| `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `10000` | log a WARNING once the backlog isn't draining within this budget |
+
+### Queue lag monitoring
+
+The leader runs a background check (independent of housekeeping) that watches whether the
+dispatchable backlog is being drained fast enough. It compares the current queue depth
+against the actual completion rate across the whole cluster (read from the database, not an
+in-process counter, so every node's throughput counts) and logs a `WARNING` once the backlog
+either isn't draining or its oldest task has been waiting past the threshold:
+
+```
+WARNING: queue lag: 10 task(s) queued, consumption rate=0.00 tasks/sec, estimated drain
+time=never (no throughput), oldest queued task has waited 12595ms
+```
+
+This is a symptom of too few workers, a stuck/misbehaving worker pool, or a step that's
+much slower than its arrival rate -- add workers, check worker logs, or split the slow step
+onto its own queue (`onQueue`) to isolate it.
+
+### Logging
+
+Wiggle logs through the JDK's `System.Logger`, so there's **no logging dependency** — by
+default it goes to the console via `java.util.logging`. To also write to a **rotating file**
+(5 × 10 MB), just set an env var:
+
+```bash
+WIGGLE_LOG_FILE=/var/log/wiggle/wiggle-%g.log WIGGLE_LOG_LEVEL=DEBUG ./gradlew :server:run
+```
+
+For full control (formatters, per-package levels, console tuning), point the JVM at a
+`java.util.logging` config instead — see `deploy/logging.properties`:
+
+```bash
+WIGGLE_OPTS="-Djava.util.logging.config.file=/etc/wiggle/logging.properties" bin/wiggle
+```
+
+Note the level mapping when writing `logging.properties` by hand: `System.Logger`'s
+`DEBUG → FINE`, `TRACE → FINER`, `INFO → INFO`, `WARNING → WARNING`, `ERROR → SEVERE`. (The
+`WIGGLE_LOG_LEVEL` env var takes the `System.Logger` names and maps them for you.) The demo
+CLIs print to stdout directly, so their output isn't captured by the logging config — only
+the `dev.wiggle.*` server logs are.
 
 ### Schema migrations
 

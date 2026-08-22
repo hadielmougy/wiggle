@@ -61,6 +61,16 @@ public interface Tx {
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
 
+    /** Snapshot of the dispatchable backlog, for lag monitoring. */
+    Rows.QueueDepth queueDepth(long now);
+
+    /**
+     * Worker-dispatched tokens (TASK/PREDICATE) that finished (DONE) since {@code since} --
+     * the throughput signal for lag monitoring. DB-driven rather than an in-process counter,
+     * so it reflects consumption across every node in the cluster, not just this one.
+     */
+    int countProcessedSince(long since);
+
     void upsertNode(ServerNode node);
     List<ServerNode> nodes();
     void deleteNodesOlderThan(long lastHeartbeatBefore);

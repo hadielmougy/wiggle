@@ -1,6 +1,7 @@
 package dev.wiggle.server.engine;
 
 import dev.wiggle.core.*;
+import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.Instance;
 import dev.wiggle.server.store.Rows.InstanceStatus;
 import dev.wiggle.server.store.Rows.Token;
@@ -35,8 +36,6 @@ public final class WorkflowEngine {
 
     public DefinitionRegistry definitions() { return definitions; }
 
-    // ------------------------------------------------------------- lifecycle
-
     public String start(String workflow, Integer version, Object context, String correlationId) {
         return storage.inTx(tx -> {
             int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
@@ -58,6 +57,8 @@ public final class WorkflowEngine {
             Token t = newToken(inst, def.startNode(), "", now);
             tx.insertToken(t);
 
+            LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
+                    + " at node " + def.startNode() + " correlationId=" + correlationId);
             drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
             return inst.id;
         });
@@ -66,13 +67,18 @@ public final class WorkflowEngine {
     public void cancel(String instanceId, String reason) {
         storage.inTxVoid(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-            if (inst.status != InstanceStatus.RUNNING) return;
+            if (inst.status != InstanceStatus.RUNNING) {
+                LOG.log(System.Logger.Level.DEBUG, () ->
+                        "cancel: instance " + instanceId + " ignored, already " + inst.status);
+                return;
+            }
             long now = System.currentTimeMillis();
             cancelActiveTokens(tx, inst.id, null, now);
             inst.status = InstanceStatus.CANCELLED;
             inst.terminationReason = reason;
             inst.updatedAt = now;
             tx.updateInstance(inst);
+            LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
         });
     }
 
@@ -89,36 +95,53 @@ public final class WorkflowEngine {
         return storage.inTx(tx -> tx.tokensOf(instanceId));
     }
 
+    /** Snapshot of the dispatchable backlog right now: how many tasks are queued and waiting. */
+    public Rows.QueueDepth queueDepth() {
+        return storage.inTx(tx -> tx.queueDepth(System.currentTimeMillis()));
+    }
+
+    /**
+     * Worker-dispatched tasks completed since {@code since}, across every node in the cluster --
+     * the consumption-rate signal for lag monitoring.
+     */
+    public int tasksProcessedSince(long since) {
+        return storage.inTx(tx -> tx.countProcessedSince(since));
+    }
+
     private static InstanceView view(Instance i) {
         return new InstanceView(i.id, i.workflow, i.version, i.status.name(), i.terminationReason,
                 i.error, Json.parse(i.contextJson), i.createdAt, i.updatedAt);
     }
-
-    // ---------------------------------------------------------------- polling
 
     /** Leases up to {@code max} tasks for a worker. Returns immediately; long-polling lives in the HTTP layer. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis) {
         long now = System.currentTimeMillis();
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         long until = now + lease;
-        return storage.inTx(tx -> {
+        List<TaskActivation> out = storage.inTx(tx -> {
             List<Token> claimed = tx.claimTasks(workerId, queues, max, now, until);
-            List<TaskActivation> out = new ArrayList<>(claimed.size());
+            List<TaskActivation> activations = new ArrayList<>(claimed.size());
             for (Token t : claimed) {
                 Instance inst = tx.findInstance(t.instanceId).orElse(null);
                 if (inst == null || inst.status != InstanceStatus.RUNNING) continue;
                 LazyGraph def = definitions.graph(tx, t.workflow, t.version);
                 Node node = def.node(t.nodeId);
-                out.add(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
+                activations.add(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
                         node.activity(), node.kind(), t.attempt + 1, until, workerId, Json.parse(inst.contextJson)));
             }
-            return out;
+            return activations;
         });
+        if (!out.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
+                    + " claimed " + out.size() + " task(s): "
+                    + out.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
+        }
+        return out;
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
-        return storage.inTx(tx -> {
+        long until = storage.inTx(tx -> {
             Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
             requireLease(t, leaseOwner);
             t.leaseExpiresAt = System.currentTimeMillis() + extraMillis;
@@ -126,9 +149,10 @@ public final class WorkflowEngine {
             tx.updateToken(t);
             return t.leaseExpiresAt;
         });
+        LOG.log(System.Logger.Level.DEBUG, () ->
+                "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
+        return until;
     }
-
-    // ------------------------------------------------------------ completion
 
     /**
      * Completes a task. For TASK nodes {@code result} is shallow-merged into the instance
@@ -153,9 +177,13 @@ public final class WorkflowEngine {
             if (node.kind() == NodeKind.PREDICATE) {
                 boolean value = predicateValue(result);
                 next = value ? node.next() : node.altNext();
+                LOG.log(System.Logger.Level.DEBUG, () -> "complete: predicate " + node.name()
+                        + " of instance " + inst.id + " evaluated " + value + " -> " + next);
             } else {
                 mergeContext(inst, result);
                 next = node.next();
+                LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
+                        + " of instance " + inst.id + " done -> " + next);
             }
 
             t.status = TokenStatus.DONE;
@@ -172,8 +200,6 @@ public final class WorkflowEngine {
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
     }
-
-    // ------------------------------------------------------------- user tasks
 
     /** The user tasks currently awaiting an external completion, oldest first. */
     public List<Token> pendingUserTasks(int max) {
@@ -209,6 +235,8 @@ public final class WorkflowEngine {
 
             Token cont = newToken(inst, node.next(), t.joinStack, now);
             tx.insertToken(cont);
+            LOG.log(System.Logger.Level.DEBUG, () -> "completeUserTask: user task " + node.name()
+                    + " of instance " + inst.id + " completed externally -> " + node.next());
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
     }
@@ -217,6 +245,9 @@ public final class WorkflowEngine {
     public int fireDueUserTaskDeadlines(int max) {
         long now = System.currentTimeMillis();
         List<Token> due = storage.inTx(tx -> tx.dueUserTasks(now, max));
+        if (!due.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "fireDueUserTaskDeadlines: " + due.size() + " due");
+        }
         int fired = 0;
         for (Token task : due) {
             try {
@@ -235,8 +266,12 @@ public final class WorkflowEngine {
                     if (node.altNext() != null) {
                         Token cont = newToken(inst, node.altNext(), t.joinStack, ts);
                         tx.insertToken(cont);
+                        LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
+                                + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
                         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
                     } else {
+                        LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
+                                + " of instance " + inst.id + " missed its deadline, no escalation -> failing instance");
                         failInstance(tx, inst, "user task '" + node.name() + "' timed out", ts);
                     }
                 });
@@ -272,13 +307,18 @@ public final class WorkflowEngine {
                 t.status = TokenStatus.READY;
                 t.availableAt = now + policy.backoffMillis(t.attempt);
                 tx.updateToken(t);
-                LOG.log(System.Logger.Level.DEBUG, () ->
-                        "retrying " + node.name() + " attempt " + t.attempt + " of instance " + inst.id);
+                long backoffMs = t.availableAt - now;
+                LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
+                        + " failed (" + message + "), retrying attempt " + t.attempt
+                        + "/" + policy.maxAttempts() + " in " + backoffMs + "ms");
                 return;
             }
 
             t.status = TokenStatus.FAILED;
             tx.updateToken(t);
+            LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
+                    + " exhausted retries (attempt " + t.attempt + "/" + policy.maxAttempts()
+                    + ", retryable=" + retryable + ") -> failing instance");
             failInstance(tx, inst, node.name() + ": " + message, now);
         });
     }
@@ -313,12 +353,13 @@ public final class WorkflowEngine {
         inst.contextJson = Json.write(ctx);
     }
 
-    // --------------------------------------------------------- housekeeping
-
     /** Leader duty: advance sleep timers that have come due. */
     public int fireDueTimers(int max) {
         long now = System.currentTimeMillis();
         List<Token> due = storage.inTx(tx -> tx.dueTimers(now, max));
+        if (!due.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "fireDueTimers: " + due.size() + " due");
+        }
         int fired = 0;
         for (Token timer : due) {
             try {
@@ -335,6 +376,8 @@ public final class WorkflowEngine {
                     tx.updateToken(t);
                     Token cont = newToken(inst, node.next(), t.joinStack, ts);
                     tx.insertToken(cont);
+                    LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
+                            + " of instance " + inst.id + " fired -> " + node.next());
                     drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
                 });
                 fired++;
@@ -349,6 +392,9 @@ public final class WorkflowEngine {
     public int reclaimExpiredLeases(int max) {
         long now = System.currentTimeMillis();
         List<Token> orphans = storage.inTx(tx -> tx.expiredLeases(now, max));
+        if (!orphans.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "reclaimExpiredLeases: " + orphans.size() + " expired");
+        }
         int reclaimed = 0;
         for (Token orphan : orphans) {
             try {
@@ -361,6 +407,7 @@ public final class WorkflowEngine {
                     Node node = def.node(t.nodeId);
                     RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
                     long ts = System.currentTimeMillis();
+                    String previousOwner = t.leaseOwner;
                     t.attempt++;
                     t.leaseOwner = null;
                     t.leaseExpiresAt = 0;
@@ -370,9 +417,13 @@ public final class WorkflowEngine {
                         t.status = TokenStatus.READY;
                         t.availableAt = ts + policy.backoffMillis(t.attempt);
                         tx.updateToken(t);
+                        LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
+                                + " orphaned by worker " + previousOwner + ", redispatchable (attempt " + t.attempt + ")");
                     } else {
                         t.status = TokenStatus.FAILED;
                         tx.updateToken(t);
+                        LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
+                                + " orphaned by worker " + previousOwner + ", retries exhausted -> failing instance");
                         if (inst.status == InstanceStatus.RUNNING) {
                             failInstance(tx, inst, node.name() + ": lease expired", ts);
                         }
@@ -388,10 +439,13 @@ public final class WorkflowEngine {
 
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
         long cutoff = System.currentTimeMillis() - retentionMillis;
-        return storage.inTx(tx -> tx.deleteTerminalInstancesBefore(cutoff, max));
+        int purged = storage.inTx(tx -> tx.deleteTerminalInstancesBefore(cutoff, max));
+        if (purged > 0) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "purgeTerminalInstancesOlderThan: removed " + purged
+                    + " instance(s) updated before " + cutoff);
+        }
+        return purged;
     }
-
-    // ------------------------------------------------------ the state machine
 
     /**
      * Advances tokens until each one is parked on something that needs the outside
@@ -404,6 +458,7 @@ public final class WorkflowEngine {
             if (++guard > 10_000) throw new IllegalStateException("cycle detected in workflow " + def.key());
             Token t = work.pop();
             Node node = def.node(t.nodeId);
+            TokenStatus before = t.status;
             switch (node.kind()) {
                 case TASK, PREDICATE -> {
                     t.status = TokenStatus.READY;
@@ -413,6 +468,8 @@ public final class WorkflowEngine {
                     t.availableAt = now;
                     t.updatedAt = now;
                     tx.updateToken(t);
+                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                            + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
                 }
                 case SLEEP -> {
                     t.status = TokenStatus.WAITING;
@@ -420,6 +477,9 @@ public final class WorkflowEngine {
                     t.availableAt = now + node.sleepMillis();
                     t.updatedAt = now;
                     tx.updateToken(t);
+                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                            + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
+                            + " (" + node.sleepMillis() + "ms)");
                 }
                 case USER_TASK -> {
                     // Park until an external actor completes it. No worker leases an AWAITING
@@ -430,6 +490,9 @@ public final class WorkflowEngine {
                     t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
                     t.updatedAt = now;
                     tx.updateToken(t);
+                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                            + node.name() + " (USER_TASK) " + before + " -> AWAITING, deadline="
+                            + (t.availableAt > 0 ? t.availableAt : "none"));
                 }
                 case FORK -> {
                     t.status = TokenStatus.DONE;
@@ -443,6 +506,9 @@ public final class WorkflowEngine {
                         tx.insertToken(child);
                         work.push(child);
                     }
+                    LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                            + node.name() + " (FORK) " + before + " -> DONE, spawned " + node.branches().size()
+                            + " branch(es) in group " + group + ": " + node.branches());
                 }
                 case JOIN -> {
                     String group = t.currentJoinGroup();
@@ -466,6 +532,14 @@ public final class WorkflowEngine {
                         Token cont = newToken(inst, node.next(), t.popJoinStack(), now);
                         tx.insertToken(cont);
                         work.push(cont);
+                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                                + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
+                                + " satisfied (" + atBarrier.size() + "/" + node.expected() + ") -> " + node.next());
+                    } else {
+                        int atBarrierSize = atBarrier.size();
+                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                                + node.name() + " (JOIN) " + before + " -> JOINED, waiting on barrier " + group
+                                + " (" + atBarrierSize + "/" + node.expected() + ")");
                     }
                 }
                 case END -> {
@@ -474,6 +548,8 @@ public final class WorkflowEngine {
                     t.updatedAt = now;
                     tx.updateToken(t);
                     if (!node.success()) {
+                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                                + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
                         failInstance(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
                         return;
                     }
@@ -483,6 +559,12 @@ public final class WorkflowEngine {
                         inst.terminationReason = node.reason();
                         inst.updatedAt = now;
                         tx.updateInstance(inst);
+                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                                + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
+                                + (node.reason() != null ? " (" + node.reason() + ")" : ""));
+                    } else {
+                        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                                + node.name() + " (END) " + before + " -> DONE, other tokens still active");
                     }
                 }
             }
@@ -501,11 +583,14 @@ public final class WorkflowEngine {
     private static void cancelActiveTokens(Tx tx, String instanceId, String except, long now) {
         for (Token t : tx.tokensOf(instanceId)) {
             if (!t.isActive() || t.id.equals(except)) continue;
+            TokenStatus before = t.status;
             t.status = TokenStatus.CANCELLED;
             t.leaseOwner = null;
             t.leaseExpiresAt = 0;
             t.updatedAt = now;
             tx.updateToken(t);
+            LOG.log(System.Logger.Level.DEBUG, () -> "cancelActiveTokens: " + instanceId + " token " + t.id
+                    + " at " + t.nodeId + " " + before + " -> CANCELLED");
         }
     }
 
