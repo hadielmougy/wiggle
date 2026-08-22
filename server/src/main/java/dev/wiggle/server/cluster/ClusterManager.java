@@ -6,6 +6,8 @@ import dev.wiggle.server.store.Storage;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -41,6 +43,8 @@ public final class ClusterManager implements AutoCloseable {
             });
     private final AtomicBoolean leader = new AtomicBoolean(false);
     private volatile long lastSuccessfulHeartbeat;
+    /** The roster this node last saw while it was leader, to log joins/leaves once. */
+    private final Set<String> knownMembers = ConcurrentHashMap.newKeySet();
 
     public ClusterManager(Storage storage, String name, int workers,
                           long heartbeatIntervalMillis, int missedHeartbeatsBeforeDead) {
@@ -85,14 +89,14 @@ public final class ClusterManager implements AutoCloseable {
         long now = System.currentTimeMillis();
         self.lastHeartbeat = now;
         String[] electedId = new String[1];
-        int[] aliveCount = new int[1];
+        Set<String> aliveIds = ConcurrentHashMap.newKeySet();
         boolean nowLeader = storage.inTx(tx -> {
             tx.upsertNode(self);
             tx.deleteNodesOlderThan(now - deadAfterMillis() * 4);
             List<ServerNode> alive = tx.nodes().stream()
                     .filter(n -> now - n.lastHeartbeat < deadAfterMillis())
                     .toList();
-            aliveCount[0] = alive.size();
+            alive.forEach(n -> aliveIds.add(n.id));
             Optional<ServerNode> elected = alive.stream()
                     .min((a, b) -> a.firstHeartbeat != b.firstHeartbeat
                             ? Long.compare(a.firstHeartbeat, b.firstHeartbeat)
@@ -105,13 +109,34 @@ public final class ClusterManager implements AutoCloseable {
         lastSuccessfulHeartbeat = now;
         boolean was = leader.getAndSet(nowLeader);
         LOG.log(System.Logger.Level.DEBUG, () -> "heartbeat: node " + self.id + " at " + now
-                + ", " + aliveCount[0] + " alive node(s), elected leader=" + electedId[0]
+                + ", " + aliveIds.size() + " alive node(s), elected leader=" + electedId[0]
                 + ", self leader=" + nowLeader);
         if (was != nowLeader) {
             LOG.log(System.Logger.Level.INFO, () -> nowLeader
                     ? "node " + self.id + " became leader"
                     : "node " + self.id + " stepped down");
         }
+        logMembershipChanges(nowLeader, aliveIds);
+    }
+
+    /** The leader logs roster changes once, so a cluster's log shows joins/leaves without N-way duplication. */
+    private void logMembershipChanges(boolean nowLeader, Set<String> aliveIds) {
+        if (!nowLeader) {
+            knownMembers.clear();   // re-sync from scratch if we regain leadership later
+            return;
+        }
+        for (String id : aliveIds) {
+            if (knownMembers.add(id)) {
+                LOG.log(System.Logger.Level.INFO, () -> "cluster: node " + id + " joined (" + aliveIds.size() + " alive)");
+            }
+        }
+        knownMembers.removeIf(id -> {
+            if (!aliveIds.contains(id)) {
+                LOG.log(System.Logger.Level.INFO, () -> "cluster: node " + id + " left (" + aliveIds.size() + " alive)");
+                return true;
+            }
+            return false;
+        });
     }
 
     public List<ServerNode> members() {

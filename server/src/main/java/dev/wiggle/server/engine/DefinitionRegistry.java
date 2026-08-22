@@ -1,5 +1,6 @@
 package dev.wiggle.server.engine;
 
+import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.Json;
 import dev.wiggle.core.WorkflowDefinition;
 import dev.wiggle.server.store.Storage;
@@ -7,6 +8,7 @@ import dev.wiggle.server.store.Tx;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Owns workflow definitions. Registration stores two things: the raw submitted graph as a
@@ -18,6 +20,9 @@ import java.util.Optional;
 public final class DefinitionRegistry {
 
     private final Storage storage;
+    // A definition's execution mode is a single immutable enum per version -- cheap to cache,
+    // unlike the whole graph. Lets the hot poll path stamp the mode without parsing the blob.
+    private final ConcurrentHashMap<String, ExecutionMode> modeCache = new ConcurrentHashMap<>();
 
     public DefinitionRegistry(Storage storage) {
         this.storage = storage;
@@ -28,7 +33,16 @@ public final class DefinitionRegistry {
             tx.putDefinition(def.name(), def.version(), Json.write(def.toJson()));
             tx.putGraph(def);
         });
+        modeCache.put(def.key(), def.executionMode());
         return def;
+    }
+
+    /** The execution mode for a version, cached; parses the blob at most once per version. */
+    public ExecutionMode executionMode(Tx tx, String name, int version) {
+        return modeCache.computeIfAbsent(name + ":" + version, k ->
+                tx.definition(name, version)
+                        .map(body -> WorkflowDefinition.fromJson(Json.parse(body)).executionMode())
+                        .orElse(ExecutionMode.DEFAULT));
     }
 
     /** A memory-thrifty handle for the engine: fetches one node at a time, holds no whole graph. */

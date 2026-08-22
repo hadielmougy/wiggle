@@ -17,12 +17,14 @@ public final class WorkerMain {
         String url = env("WIGGLE_URL", "localhost:8080");
         String id = env("WIGGLE_WORKER_ID", "worker-" + ProcessHandle.current().pid());
         int concurrency = Integer.parseInt(env("WIGGLE_WORKER_CONCURRENCY", "8"));
+        int localBatch = Integer.parseInt(env("WIGGLE_LOCAL_BATCH_SIZE", "64"));   // LOCAL_ASYNC batch size
 
         WiggleClient client = new WiggleClient(url);
         Blueprint<Order> blueprint = OrderFulfilment.blueprint();
 
         Worker worker = new Worker(client, id, WorkerOptions.defaults()
                         .withConcurrency(concurrency)
+                        .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
                 .register(blueprint);
 

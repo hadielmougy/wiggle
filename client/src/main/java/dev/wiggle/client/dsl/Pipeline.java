@@ -1,6 +1,7 @@
 package dev.wiggle.client.dsl;
 
 import dev.wiggle.core.ContextCodec;
+import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.Node;
 import dev.wiggle.core.RetryPolicy;
 
@@ -19,8 +20,10 @@ final class Pipeline<T> {
     final Map<String, ActivityHandler> handlers = new LinkedHashMap<>();
     final Set<String> queues = new LinkedHashSet<>();
     final Set<String> stepNames = new LinkedHashSet<>();
+    final Set<String> checkpoints = new LinkedHashSet<>();
     String startNode;
     String defaultQueue;
+    ExecutionMode executionMode = ExecutionMode.DEFAULT;
     private int counter;
 
     Pipeline(String name, ContextCodec<T> codec, RetryPolicy defaultRetry) {

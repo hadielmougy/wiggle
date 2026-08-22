@@ -1,6 +1,7 @@
 package dev.wiggle.client.dsl;
 
 import dev.wiggle.core.ContextCodec;
+import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.Node;
 import dev.wiggle.core.RetryPolicy;
 import dev.wiggle.core.WorkflowDefinition;
@@ -334,6 +335,30 @@ public final class WorkflowStream<T> {
         return this;
     }
 
+    /**
+     * Sets how this workflow's steps are driven (default {@link ExecutionMode#DEFAULT}, i.e. the
+     * server's configured default). The mode is part of the definition's content hash, so an
+     * in-flight instance keeps the mode it started on.
+     */
+    public WorkflowStream<T> execution(ExecutionMode mode) {
+        pipeline.executionMode = Objects.requireNonNull(mode, "mode");
+        return this;
+    }
+
+    /**
+     * Marks the step just added as a checkpoint: under {@link ExecutionMode#LOCAL_ASYNC} the worker
+     * flushes its buffer to the server immediately after this step (committing it before running the
+     * next), narrowing the crash-replay window for a step you don't want re-run. A no-op under
+     * SERVER and LOCAL_SYNC, which already commit every step. Must directly follow a step.
+     */
+    public WorkflowStream<T> checkpoint() {
+        if (lastStepId == null) {
+            throw new IllegalStateException("checkpoint() must directly follow step(), effect() or gate()");
+        }
+        pipeline.checkpoints.add(lastStepId);
+        return this;
+    }
+
     public Blueprint<T> build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         consumed = true;
@@ -343,9 +368,10 @@ public final class WorkflowStream<T> {
         pipeline.put(Node.end(endId, true, null));
         wireOpenEndsTo(endId);
 
-        int version = WorkflowDefinition.contentVersion(pipeline.name, pipeline.startNode, pipeline.nodes.values());
+        int version = WorkflowDefinition.contentVersion(pipeline.name, pipeline.startNode,
+                pipeline.nodes.values(), pipeline.executionMode, pipeline.checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(pipeline.name, version, pipeline.startNode,
-                new LinkedHashMap<>(pipeline.nodes), pipeline.queues);
+                new LinkedHashMap<>(pipeline.nodes), pipeline.queues, pipeline.executionMode, pipeline.checkpoints);
         validate(def);
         return new Blueprint<>(def, pipeline.handlers, pipeline.codec);
     }

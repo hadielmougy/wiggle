@@ -26,6 +26,9 @@ service WiggleControlPlane {
     rpc CompleteTask(TaskResultRequest) returns (Ack);
     rpc FailTask(TaskFailureRequest) returns (Ack);
     rpc HeartbeatTask(HeartbeatRequest) returns (HeartbeatResult);
+    // Applies an ordered run of locally-executed steps atomically, keeps the lease, and reports
+    // whether the worker should keep going (LOCAL_SYNC / LOCAL_ASYNC execution).
+    rpc AdvanceRun(AdvanceRunRequest) returns (AdvanceRunResult);
 }
 
 message Empty {}
@@ -163,10 +166,33 @@ message TaskActivation {
     int64 lease_expires_at = 10;
     string lease_owner = 11;
     google.protobuf.Value context = 12;
+    string execution_mode = 13;   // SERVER | LOCAL_SYNC | LOCAL_ASYNC (already resolved by the server)
 }
 
 message TaskList {
     repeated TaskActivation tasks = 1;
+}
+
+// One locally-executed step reported back to the server (LOCAL_SYNC/LOCAL_ASYNC).
+message StepResult {
+    string node_id = 1;
+    oneof outcome {
+        google.protobuf.Value merge = 2;   // TASK: shallow diff to merge into context
+        bool predicate_value = 3;          // PREDICATE: branch selector
+    }
+}
+
+message AdvanceRunRequest {
+    string task_id = 1;                    // the currently-leased token being completed
+    string lease_owner = 2;
+    repeated StepResult steps = 3;         // ordered; one step for LOCAL_SYNC
+    bool final = 4;                        // true = worker reached a boundary and is handing back
+}
+
+message AdvanceRunResult {
+    string instance_status = 1;            // RUNNING | COMPLETED | FAILED | CANCELLED
+    int64 lease_expires_at = 2;            // renewed lease covering continued local execution
+    string next_task_id = 3;              // token to reference for the next local step (blank if handed back)
 }
 
 message TaskResultRequest {

@@ -6,7 +6,12 @@ import java.util.Map;
 /** A unit of work leased by a worker from the server. */
 public record TaskActivation(String taskId, String instanceId, String workflow, int version,
                              String nodeId, String stepName, String activity, NodeKind kind,
-                             int attempt, long leaseExpiresAt, String leaseOwner, Object context) {
+                             int attempt, long leaseExpiresAt, String leaseOwner, Object context,
+                             ExecutionMode executionMode) {
+
+    public TaskActivation {
+        executionMode = executionMode == null ? ExecutionMode.SERVER : executionMode;
+    }
 
     public Map<String, Object> toJson() {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -22,6 +27,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
         m.put("leaseExpiresAt", leaseExpiresAt);
         m.put("leaseOwner", leaseOwner);
         m.put("context", context);
+        m.put("executionMode", executionMode.name());
         return m;
     }
 
@@ -32,6 +38,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                 (int) Json.num(m, "version", 0), Json.reqStr(m, "nodeId"), Json.str(m, "stepName", null),
                 Json.reqStr(m, "activity"), NodeKind.valueOf(Json.reqStr(m, "kind")),
                 (int) Json.num(m, "attempt", 0), Json.num(m, "leaseExpiresAt", 0),
-                Json.str(m, "leaseOwner", null), m.get("context"));
+                Json.str(m, "leaseOwner", null), m.get("context"),
+                ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.SERVER.name())));
     }
 }

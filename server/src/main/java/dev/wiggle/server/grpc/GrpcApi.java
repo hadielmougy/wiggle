@@ -14,6 +14,7 @@ import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +32,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private final Server server;
     private final ExecutorService pool;
     private final long maxLongPollMillis;
+    /** Versions already announced at INFO, so N workers registering the same graph log it once. */
+    private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis)
             throws IOException {
@@ -50,7 +53,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        LOG.log(System.Logger.Level.INFO, () -> "Wiggle server listening on port " + port());
+        LOG.log(System.Logger.Level.DEBUG, () -> "gRPC listening on port " + port());
     }
 
     public int port() {
@@ -96,8 +99,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             dev.wiggle.core.WorkflowDefinition def =
                     dev.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(req.getDefinition()));
             engine.definitions().register(def);
-            LOG.log(System.Logger.Level.INFO, () -> "registered workflow " + def.key()
-                    + " (" + def.nodes().size() + " nodes, queues=" + def.queues() + ")");
+            if (announced.add(def.key())) {
+                LOG.log(System.Logger.Level.INFO, () -> "registered workflow " + def.key()
+                        + " (" + def.nodes().size() + " nodes, mode=" + def.executionMode() + ")");
+            }
             return RegisterWorkflowResult.newBuilder()
                     .setName(def.name())
                     .setVersion(String.valueOf(def.version()))
@@ -230,6 +235,29 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         });
     }
 
+    @Override
+    public void advanceRun(AdvanceRunRequest req, StreamObserver<AdvanceRunResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceRun taskId=" + req.getTaskId()
+                + " leaseOwner=" + req.getLeaseOwner() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
+        run(resp, () -> {
+            List<WorkflowEngine.StepInput> steps = new ArrayList<>(req.getStepsCount());
+            for (StepResult s : req.getStepsList()) {
+                Object merge = s.getOutcomeCase() == StepResult.OutcomeCase.MERGE
+                        ? ProtoJson.fromValue(s.getMerge()) : null;
+                Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
+                        ? s.getPredicateValue() : null;
+                steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate));
+            }
+            WorkflowEngine.AdvanceOutcome out =
+                    engine.advanceRun(req.getTaskId(), req.getLeaseOwner(), steps, req.getFinal());
+            return AdvanceRunResult.newBuilder()
+                    .setInstanceStatus(out.instanceStatus())
+                    .setLeaseExpiresAt(out.leaseExpiresAt())
+                    .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId())
+                    .build();
+        });
+    }
+
     private ClusterView clusterView() {
         ClusterView.Builder out = ClusterView.newBuilder().setSelf(cluster.nodeId()).setLeader(cluster.isLeader());
         long now = System.currentTimeMillis();
@@ -287,7 +315,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 .setKind(t.kind().name())
                 .setAttempt(t.attempt())
                 .setLeaseExpiresAt(t.leaseExpiresAt())
-                .setLeaseOwner(t.leaseOwner());
+                .setLeaseOwner(t.leaseOwner())
+                .setExecutionMode(t.executionMode().name());
         if (t.context() != null) m.setContext(ProtoJson.toValue(t.context()));
         return m.build();
     }
