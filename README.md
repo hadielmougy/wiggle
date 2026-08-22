@@ -26,9 +26,13 @@ dependencies {
     implementation("io.github.hadielmougy:wiggle-client:2.0.0")
 
     // Only if you embed the server in your own JVM (otherwise run it standalone).
+    // The server core is database-agnostic; with no JDBC URL it uses the in-memory store.
     implementation("io.github.hadielmougy:wiggle-server:2.0.0")
 
-    // Only for a real, multi-node deployment: a JDBC driver at runtime.
+    // For a real, multi-node deployment on PostgreSQL: add the database module (it plugs in
+    // via a ServiceLoader SPI) plus the JDBC driver. The standalone server distribution
+    // already bundles both.
+    runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.0.0")
     runtimeOnly("org.postgresql:postgresql:42.7.4")
 }
 ```
@@ -301,6 +305,11 @@ no JDBC URL is set.
 Point several server nodes at one Postgres and they form a cluster: every node serves the
 API and hands out work, and exactly one is elected to run clock-driven duties (timers,
 lease recovery). Kill any node — including the leader — and the rest carry on.
+
+> **Pluggable storage.** The server core knows nothing about any database; a JDBC store is a
+> separate module (`wiggle-postgres`) that plugs in through a `StorageProvider` SPI. With no
+> JDBC URL it runs in-memory; with one it picks the provider that matches the URL. Supporting
+> another database is a new module — no changes to the engine.
 
 ```bash
 docker compose up -d postgres

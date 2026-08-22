@@ -17,7 +17,7 @@ import java.util.function.Function;
 /**
  * Single-process store for development and tests. Uses one global lock, which is a
  * coarse but honest way to get the same serialisation guarantees the JDBC store gets
- * from row locks. Not suitable for multi-node clusters -- use {@link JdbcStorage}.
+ * from row locks. Not suitable for multi-node clusters -- use a JDBC-backed store.
  */
 public final class InMemoryStorage implements Storage {
 
