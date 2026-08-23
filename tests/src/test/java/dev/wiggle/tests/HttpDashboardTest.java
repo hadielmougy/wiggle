@@ -99,4 +99,51 @@ class HttpDashboardTest {
             }
         }
     }
+
+    @Test @DisplayName("serves the ClojureScript SPA bundle and a workflow's graph for the diagram")
+    void servesSpaAndWorkflowGraph() throws Exception {
+        int dash = freePort();
+        ServerConfig config = new ServerConfig(0, "dash-graph-node", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, dash, Duration.ofSeconds(5), Duration.ofSeconds(10));
+
+        // A graph exercising several node kinds so the diagram endpoint has edges to draw.
+        Blueprint<Map<String, Object>> bp = Workflow.defineJson("dash-graph")
+                .step("submit", ctx -> ctx)
+                .awaitSignal("approval", Duration.ofHours(1),
+                        b -> b.step("escalate", ctx -> ctx))
+                .step("finish", ctx -> ctx)
+                .build();
+
+        try (WiggleServer server = new WiggleServer(config).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+            client.register(bp);
+            String base = "http://localhost:" + server.dashboardPort();
+
+            // The SPA shell points at the compiled bundle, which is itself served.
+            HttpResponse<String> index = get(base + "/");
+            assertEquals(200, index.statusCode());
+            assertTrue(index.body().contains("id=\"app\""), "serves the SPA shell");
+            assertTrue(index.body().contains("/js/app.js"), "shell references the bundle");
+
+            HttpResponse<String> js = get(base + "/js/app.js");
+            assertEquals(200, js.statusCode());
+            assertTrue(js.headers().firstValue("Content-Type").orElse("").contains("javascript"),
+                    "bundle is served as javascript");
+            assertTrue(js.body().length() > 10_000, "bundle has real content");
+
+            // An unknown non-API route falls through to index.html for client-side routing.
+            assertEquals(200, get(base + "/workflows").statusCode());
+
+            // The workflow graph endpoint returns nodes and edges for the diagram.
+            HttpResponse<String> graph = get(base + "/api/workflows/dash-graph");
+            assertEquals(200, graph.statusCode());
+            String g = graph.body();
+            assertTrue(g.contains("\"startNode\""), "graph has a start node");
+            assertTrue(g.contains("\"SIGNAL\""), "graph exposes the signal node kind");
+            assertTrue(g.contains("\"next\"") && g.contains("\"altNext\""), "graph exposes edges");
+
+            assertEquals(404, get(base + "/api/workflows/no-such-workflow").statusCode());
+        }
+    }
 }

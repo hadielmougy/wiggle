@@ -512,19 +512,43 @@ destructive changes a release later, once every node is upgraded.
 
 ### Web dashboard
 
-A small, read-only web UI ships with the server — off by default. Give it a port to turn
-it on:
+A single-page dashboard ships with the server — off by default. Give it a port to turn it on:
 
 ```bash
 WIGGLE_DASHBOARD_PORT=8090 ./gradlew :server:run
 # → open http://localhost:8090
 ```
 
-It lists instances (filter by workflow/status), and clicking one shows its status, error,
-context, and token history; running instances can be cancelled. It reads the engine
-directly over a tiny JSON API (`/api/instances`, `/api/instances/{id}`, `/api/workflows`,
-`/api/cluster`) — no gRPC proxy, no build step, no extra dependencies. In a cluster, every
-node can run its own dashboard, and each shows the whole system (they share the database).
+It has four tabs:
+
+- **Instances** — filter by workflow/status; select one to see a **live trace**: the workflow
+  diagram with every node ringed by its token's status (done / running / failed / waiting),
+  plus the token table, context, and a cancel button. If the instance is parked on a signal,
+  an inline form delivers it.
+- **Workflows** — pick a workflow to render its compiled graph as a diagram (tasks, gates,
+  fork/join, signals, sub-workflows, and the back-edges that `doWhile` loops introduce).
+- **Schedules** — create interval or cron schedules (with a seed context) and delete them.
+- **Signals** — every instance currently waiting on a signal, with an inline deliver form.
+
+The UI is a **ClojureScript + Reagent** app under [`dashboard-ui/`](dashboard-ui/), compiled to
+a single JS bundle that ships inside the server jar and is served straight from its classpath —
+no gRPC proxy, no CDN, no runtime dependencies. It talks to the same JSON API the server always
+exposed (`/api/instances`, `/api/instances/{id}`, `/api/workflows`, `/api/workflows/{name}` for
+the graph, `/api/signals`, `/api/schedules`, `/api/cluster`). In a cluster, every node can run
+its own dashboard, and each shows the whole system (they share the database).
+
+Working on the UI:
+
+```bash
+cd dashboard-ui
+npm install
+npx shadow-cljs watch app     # hot-reloading dev build on http://localhost:8280,
+                              # proxying /api to a server running on :8090
+```
+
+`./gradlew :server:build` compiles the release bundle automatically (via `buildDashboard`).
+It needs Node on the PATH; without it — or with `-PskipDashboard` — the build skips the SPA and
+the server falls back to a built-in minimal HTML page, so a pure-JVM build still works.
 
 ---
 

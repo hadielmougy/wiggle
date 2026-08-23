@@ -65,9 +65,21 @@ public final class HttpDashboard implements AutoCloseable {
         http.stop(0);
     }
 
+    /** GET /api/workflows lists names; GET /api/workflows/{name} returns the compiled graph. */
     private void workflows(HttpExchange ex) throws IOException {
         requireGet(ex);
-        sendJson(ex, 200, Map.of("workflows", engine.workflowNames()));
+        String[] parts = subPath(ex, "/api/workflows");
+        if (parts.length == 0) {
+            sendJson(ex, 200, Map.of("workflows", engine.workflowNames()));
+            return;
+        }
+        if (parts.length != 1) {
+            sendError(ex, 404, "not found");
+            return;
+        }
+        var def = engine.latestDefinition(parts[0]).orElse(null);
+        if (def == null) sendError(ex, 404, "no such workflow");
+        else sendJson(ex, 200, def.toJson());
     }
 
     private void clusterView(HttpExchange ex) throws IOException {
@@ -265,11 +277,45 @@ public final class HttpDashboard implements AutoCloseable {
         return m;
     }
 
+    /**
+     * Serves the compiled ClojureScript single-page app from classpath resources under
+     * {@code /dashboard/}. The bundle is produced by {@code make cljs}; if it has not been
+     * built into the jar the dashboard responds 503. Unknown SPA routes fall through to
+     * {@code index.html} for client-side routing.
+     */
     private void staticFile(HttpExchange ex) throws IOException {
         String path = ex.getRequestURI().getPath();
         if (path.startsWith("/api/")) { sendError(ex, 404, "unknown endpoint"); return; }
-        if (!path.equals("/") && !path.equals("/index.html")) { sendError(ex, 404, "not found"); return; }
-        sendText(ex, 200, "text/html; charset=utf-8", INDEX_HTML);
+
+        byte[] bundle = resource("dashboard/index.html");
+        if (bundle == null) {                       // no CLJS build present
+            sendError(ex, 503, "dashboard UI not built -- run `make cljs`");
+            return;
+        }
+        String rel = path.equals("/") ? "index.html" : path.substring(1);
+        if (rel.contains("..")) { sendError(ex, 400, "bad path"); return; }
+        byte[] body = resource("dashboard/" + rel);
+        if (body == null) { sendBytes(ex, 200, HTML, bundle); return; }   // SPA fallback route
+        sendBytes(ex, 200, contentType(rel), body);
+    }
+
+    private static final String HTML = "text/html; charset=utf-8";
+
+    /** Reads a classpath resource fully, or null if it does not exist. */
+    private static byte[] resource(String name) throws IOException {
+        try (var in = HttpDashboard.class.getClassLoader().getResourceAsStream(name)) {
+            return in == null ? null : in.readAllBytes();
+        }
+    }
+
+    private static String contentType(String path) {
+        if (path.endsWith(".html")) return HTML;
+        if (path.endsWith(".js")) return "text/javascript; charset=utf-8";
+        if (path.endsWith(".css")) return "text/css; charset=utf-8";
+        if (path.endsWith(".json") || path.endsWith(".map")) return "application/json; charset=utf-8";
+        if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".woff2")) return "font/woff2";
+        return "application/octet-stream";
     }
 
     /** Wraps a handler so any thrown exception becomes a clean 400/500 instead of a dropped connection. */
@@ -336,177 +382,4 @@ public final class HttpDashboard implements AutoCloseable {
         try (OutputStream os = ex.getResponseBody()) {
             os.write(body);
         }
-    }
-
-    // The whole UI: one self-contained page that polls the JSON endpoints above.
-    private static final String INDEX_HTML = """
-            <!doctype html>
-            <html lang="en">
-            <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Wiggle</title>
-            <style>
-              :root { color-scheme: light dark; --bg:#0f1115; --panel:#171a21; --line:#2a2f3a;
-                      --fg:#e6e8ec; --muted:#8b93a1; --accent:#5b9dff; }
-              * { box-sizing: border-box; }
-              body { margin:0; font:14px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-              header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); }
-              header h1 { font-size:16px; margin:0; letter-spacing:.5px; }
-              header .cluster { color:var(--muted); font-size:12px; margin-left:auto; }
-              .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#3ecf7a; margin-right:4px; }
-              .dot.leader { background:var(--accent); }
-              main { display:grid; grid-template-columns: 1fr 1fr; gap:16px; padding:16px 20px; align-items:start; }
-              @media (max-width:900px){ main { grid-template-columns:1fr; } }
-              .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-              .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted);
-                          margin:0; padding:10px 14px; border-bottom:1px solid var(--line); }
-              .toolbar { display:flex; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
-              select, input, button { background:#0d0f14; color:var(--fg); border:1px solid var(--line);
-                                      border-radius:6px; padding:6px 8px; font:inherit; }
-              button { cursor:pointer; }
-              button.cancel { border-color:#5a2b2b; color:#ff9b9b; }
-              table { width:100%; border-collapse:collapse; }
-              th, td { text-align:left; padding:8px 14px; border-bottom:1px solid var(--line); font-size:13px;
-                       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:0; }
-              tbody tr { cursor:pointer; }
-              tbody tr:hover { background:#1e222b; }
-              tbody tr.sel { background:#20293b; }
-              .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); }
-              .RUNNING{color:#6ea8ff;border-color:#2d4a80} .COMPLETED{color:#3ecf7a;border-color:#1f5a3a}
-              .FAILED{color:#ff8080;border-color:#6a2b2b} .CANCELLED{color:#c9a86a;border-color:#5c4a24}
-              .muted{color:var(--muted)} pre{margin:0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font-size:12px}
-              .empty{padding:24px 14px;color:var(--muted)}
-              code{color:var(--muted)}
-            </style>
-            </head>
-            <body>
-            <header>
-              <h1>🌀 WIGGLE</h1>
-              <span class="cluster" id="cluster">connecting…</span>
-            </header>
-            <main>
-              <section class="panel" style="grid-column:1/-1">
-                <h2>Pending signals</h2>
-                <div id="signals"><div class="empty">loading…</div></div>
-              </section>
-              <section class="panel">
-                <h2>Instances</h2>
-                <div class="toolbar">
-                  <select id="workflow"><option value="">all workflows</option></select>
-                  <select id="status">
-                    <option value="">all statuses</option>
-                    <option>RUNNING</option><option>COMPLETED</option><option>FAILED</option><option>CANCELLED</option>
-                  </select>
-                  <input id="limit" type="number" value="100" min="1" style="width:80px" title="limit">
-                  <label class="muted" style="align-self:center"><input type="checkbox" id="auto" checked> auto</label>
-                </div>
-                <div id="rows"><div class="empty">loading…</div></div>
-              </section>
-              <section class="panel">
-                <h2>Detail</h2>
-                <div id="detail"><div class="empty">select an instance</div></div>
-              </section>
-            </main>
-            <script>
-            const $ = s => document.querySelector(s);
-            let selected = null;
-
-            async function j(url, opts) { const r = await fetch(url, opts); if(!r.ok) throw new Error((await r.json()).error||r.status); return r.json(); }
-            const esc = s => (s==null?'':String(s)).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-            const ago = t => { if(!t) return ''; const s=Math.max(0,(Date.now()-t)/1000);
-              return s<60?~~s+'s':s<3600?~~(s/60)+'m':~~(s/3600)+'h'; };
-
-            async function loadCluster(){
-              try { const c = await j('/api/cluster');
-                const alive = c.members.filter(m=>m.alive).length;
-                $('#cluster').innerHTML = c.members.map(m =>
-                  `<span class="dot ${m.leader?'leader':''}"></span>${esc(m.name)}`).join(' &nbsp; ')
-                  + ` &nbsp; <span class="muted">(${alive}/${c.members.length} alive)</span>`;
-              } catch(e){ $('#cluster').textContent = 'cluster: '+e.message; }
-            }
-
-            async function loadWorkflows(){
-              try { const w = await j('/api/workflows'); const sel = $('#workflow'); const cur = sel.value;
-                sel.innerHTML = '<option value="">all workflows</option>' + w.workflows.map(n=>`<option>${esc(n)}</option>`).join('');
-                sel.value = cur;
-              } catch(e){}
-            }
-
-            async function loadInstances(){
-              const wf = $('#workflow').value, st = $('#status').value, lim = $('#limit').value||100;
-              const qs = new URLSearchParams(); if(wf)qs.set('workflow',wf); if(st)qs.set('status',st); qs.set('limit',lim);
-              try {
-                const d = await j('/api/instances?'+qs);
-                if(!d.instances.length){ $('#rows').innerHTML='<div class="empty">no instances</div>'; return; }
-                $('#rows').innerHTML = `<table><thead><tr><th>id</th><th>workflow</th><th>status</th><th>updated</th></tr></thead><tbody>`
-                  + d.instances.map(i=>`<tr data-id="${esc(i.id)}" class="${i.id===selected?'sel':''}">
-                      <td><code>${esc(i.id)}</code></td><td>${esc(i.workflow)}</td>
-                      <td><span class="badge ${esc(i.status)}">${esc(i.status)}</span></td>
-                      <td class="muted">${ago(i.updatedAt)} ago</td></tr>`).join('')
-                  + `</tbody></table>`;
-                document.querySelectorAll('#rows tr[data-id]').forEach(tr =>
-                  tr.onclick = () => showDetail(tr.dataset.id));
-              } catch(e){ $('#rows').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
-            }
-
-            async function showDetail(id){
-              selected = id;
-              document.querySelectorAll('#rows tr').forEach(tr=>tr.classList.toggle('sel', tr.dataset.id===id));
-              try {
-                const d = await j('/api/instances/'+encodeURIComponent(id));
-                const i = d.instance;
-                const cancel = i.status==='RUNNING'
-                  ? `<button class="cancel" onclick="cancelInstance('${esc(i.id)}')">cancel</button>` : '';
-                const rows = d.tokens.map(t=>`<tr><td><code>${esc(t.nodeId)}</code></td><td>${esc(t.kind)}</td>
-                    <td><span class="badge">${esc(t.status)}</span></td><td>${t.attempt}</td>
-                    <td class="muted">${esc(t.lastError||'')}</td></tr>`).join('');
-                $('#detail').innerHTML = `
-                  <div class="toolbar"><span class="badge ${esc(i.status)}">${esc(i.status)}</span>
-                    <code>${esc(i.id)}</code><span style="margin-left:auto">${cancel}</span></div>
-                  ${i.error?`<pre style="color:#ff9b9b">${esc(i.error)}</pre>`:''}
-                  ${i.terminationReason?`<div class="empty">reason: ${esc(i.terminationReason)}</div>`:''}
-                  <h2>Context</h2><pre>${esc(JSON.stringify(i.context,null,2))}</pre>
-                  <h2>Tokens</h2>
-                  ${rows?`<table><thead><tr><th>node</th><th>kind</th><th>status</th><th>try</th><th>last error</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="empty">no tokens</div>'}`;
-              } catch(e){ $('#detail').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
-            }
-
-            async function cancelInstance(id){
-              try { await j('/api/instances/'+encodeURIComponent(id)+'/cancel',{method:'POST'}); showDetail(id); loadInstances(); }
-              catch(e){ alert('cancel failed: '+e.message); }
-            }
-
-            async function loadSignals(){
-              try {
-                const d = await j('/api/signals');
-                if(!d.signals.length){ $('#signals').innerHTML='<div class="empty">no pending signals</div>'; return; }
-                $('#signals').innerHTML = `<table><thead><tr><th>signal</th><th>workflow</th><th>instance</th><th>deadline</th><th></th></tr></thead><tbody>`
-                  + d.signals.map(t=>`<tr><td>${esc(t.signal)}</td><td>${esc(t.workflow)}</td>
-                      <td><code>${esc(t.instanceId)}</code></td>
-                      <td class="muted">${t.deadline?('in '+Math.max(0,Math.round((t.deadline-Date.now())/1000))+'s'):'—'}</td>
-                      <td><button onclick="sendSignal('${esc(t.instanceId)}','${esc(t.signal)}')">send</button></td></tr>`).join('')
-                  + `</tbody></table>`;
-              } catch(e){ $('#signals').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
-            }
-
-            async function sendSignal(instanceId, signal){
-              const body = prompt('signal payload JSON (merged into the context):', '{}');
-              if(body===null) return;
-              try {
-                await j('/api/instances/'+encodeURIComponent(instanceId)+'/signal/'+encodeURIComponent(signal),
-                        {method:'POST', headers:{'Content-Type':'application/json'}, body});
-                loadSignals(); loadInstances();
-              } catch(e){ alert('signal failed: '+e.message); }
-            }
-
-            function tick(){ loadInstances(); loadSignals(); if(selected) showDetail(selected); }
-            ['#workflow','#status','#limit'].forEach(s=>$(s).onchange=loadInstances);
-            loadWorkflows(); loadCluster(); loadInstances(); loadSignals();
-            setInterval(()=>{ if($('#auto').checked) tick(); }, 2000);
-            setInterval(()=>{ loadCluster(); loadWorkflows(); }, 5000);
-            </script>
-            </body>
-            </html>
-            """;
-}
+    }}
