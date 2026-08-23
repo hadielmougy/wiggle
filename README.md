@@ -14,6 +14,9 @@ capacity.
 
 > New here, or looking for every configuration knob in one place? See
 > **[docs/onboarding.md](docs/onboarding.md)** — onboarding + the full configuration reference.
+>
+> Want the 5-minute tour? See the **[slide deck](https://hadielmougy.github.io/wiggle/presentation.html)**
+> ([source](docs/presentation.html)).
 
 ---
 
