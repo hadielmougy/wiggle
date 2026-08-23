@@ -554,19 +554,44 @@ public final class WorkflowEngine {
     /** Creates a recurring start: {@code workflow} fires every {@code every}, first fire after one interval. */
     public String createSchedule(String workflow, java.time.Duration every, Object context) {
         if (every.toMillis() < 1) throw EngineException.badRequest("schedule interval must be positive");
+        Rows.Schedule s = new Rows.Schedule();
+        s.intervalMillis = every.toMillis();
+        s.nextFireAt = System.currentTimeMillis() + s.intervalMillis;
+        return putSchedule(workflow, context, s, "every " + s.intervalMillis + "ms");
+    }
+
+    /** Creates a recurring start on a five-field cron expression (evaluated in UTC). */
+    public String createCronSchedule(String workflow, String cron, Object context) {
+        dev.wiggle.core.Cron parsed;
+        try {
+            parsed = dev.wiggle.core.Cron.parse(cron);
+        } catch (IllegalArgumentException e) {
+            throw EngineException.badRequest(e.getMessage());
+        }
+        Rows.Schedule s = new Rows.Schedule();
+        s.cron = parsed.expression();
+        s.nextFireAt = parsed.next(System.currentTimeMillis());
+        return putSchedule(workflow, context, s, "cron '" + s.cron + "'");
+    }
+
+    /**
+     * Upserts by workflow: a workflow has at most one schedule, so re-creating one (e.g. from
+     * several app instances doing "ensure my schedule exists" on startup) updates the existing
+     * row's cadence/context in place instead of piling up duplicate firers.
+     */
+    private String putSchedule(String workflow, Object context, Rows.Schedule s, String cadence) {
         return storage.inTx(tx -> {
             tx.latestVersion(workflow).orElseThrow(
                     () -> EngineException.notFound("workflow '" + workflow + "'"));
-            Rows.Schedule s = new Rows.Schedule();
-            s.id = Ids.next("sched");
+            java.util.Optional<Rows.Schedule> existing = tx.scheduleByWorkflow(workflow);
+            s.id = existing.map(e -> e.id).orElseGet(() -> Ids.next("sched"));
             s.workflow = workflow;
-            s.intervalMillis = every.toMillis();
             s.contextJson = Json.write(context == null ? Map.of() : context);
-            s.nextFireAt = System.currentTimeMillis() + s.intervalMillis;
-            s.createdAt = System.currentTimeMillis();
+            s.createdAt = existing.map(e -> e.createdAt).orElseGet(System::currentTimeMillis);
             tx.putSchedule(s);
-            LOG.log(System.Logger.Level.INFO, () -> "schedule " + s.id + ": " + workflow
-                    + " every " + s.intervalMillis + "ms");
+            boolean replaced = existing.isPresent();
+            LOG.log(System.Logger.Level.INFO, () -> "schedule " + s.id + ": " + workflow + " " + cadence
+                    + (replaced ? " (replacing existing schedule for this workflow)" : ""));
             return s.id;
         });
     }
@@ -600,12 +625,18 @@ public final class WorkflowEngine {
 
     private boolean fireSchedule(Rows.Schedule sched, long now) {
         return storage.inTx(tx -> {
-            if (!tx.claimSchedule(sched.id, sched.nextFireAt, now + sched.intervalMillis)) return false;
+            if (!tx.claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
             String id = startInTx(tx, sched.workflow, null, Json.parse(sched.contextJson),
                     "schedule:" + sched.id, null);
             LOG.log(System.Logger.Level.DEBUG, () -> "schedule " + sched.id + " fired -> instance " + id);
             return true;
         });
+    }
+
+    /** Next fire after {@code now}: one interval ahead, or the cron's next UTC match. */
+    private static long nextFire(Rows.Schedule sched, long now) {
+        if (sched.cron == null) return now + sched.intervalMillis;
+        return dev.wiggle.core.Cron.parse(sched.cron).next(now);
     }
 
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {

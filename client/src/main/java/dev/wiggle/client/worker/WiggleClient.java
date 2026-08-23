@@ -135,6 +135,37 @@ public final class WiggleClient implements AutoCloseable {
         call(() -> stub.signalInstance(req.build()));
     }
 
+    /** Creates a recurring start on a fixed interval; returns the schedule id. */
+    public String createSchedule(String workflow, java.time.Duration every, Object context) {
+        CreateScheduleRequest.Builder req = CreateScheduleRequest.newBuilder()
+                .setWorkflow(workflow).setEveryMillis(every.toMillis());
+        if (context != null) req.setContext(ProtoJson.toValue(context));
+        return call(() -> stub.createSchedule(req.build())).getId();
+    }
+
+    /** Creates a recurring start on a five-field cron expression (evaluated in UTC); returns the schedule id. */
+    public String createCronSchedule(String workflow, String cron, Object context) {
+        CreateScheduleRequest.Builder req = CreateScheduleRequest.newBuilder()
+                .setWorkflow(workflow).setCron(cron);
+        if (context != null) req.setContext(ProtoJson.toValue(context));
+        return call(() -> stub.createSchedule(req.build())).getId();
+    }
+
+    /** All schedules on the server. {@code everyMillis} is 0 for cron schedules; {@code cron} is null for interval ones. */
+    public List<ScheduleInfo> schedules() {
+        return call(() -> stub.listSchedules(Empty.getDefaultInstance())).getSchedulesList().stream()
+                .map(s -> new ScheduleInfo(s.getId(), s.getWorkflow(), s.getEveryMillis(),
+                        s.getCron().isEmpty() ? null : s.getCron(), s.getNextFireAt(), s.getCreatedAt()))
+                .toList();
+    }
+
+    public void deleteSchedule(String id) {
+        call(() -> stub.deleteSchedule(ScheduleIdRequest.newBuilder().setId(id).build()));
+    }
+
+    public record ScheduleInfo(String id, String workflow, long everyMillis, String cron,
+                               long nextFireAt, long createdAt) {}
+
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {
         call(() -> stub.heartbeatTask(HeartbeatRequest.newBuilder()
                 .setTaskId(taskId)

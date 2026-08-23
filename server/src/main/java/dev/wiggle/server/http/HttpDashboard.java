@@ -167,7 +167,7 @@ public final class HttpDashboard implements AutoCloseable {
         sendJson(ex, 200, Map.of("signals", list));
     }
 
-    /** GET lists schedules; POST {workflow, everyMillis, context?} creates; DELETE /{id} removes. */
+    /** GET lists schedules; POST {workflow, everyMillis|cron, context?} creates; DELETE /{id} removes. */
     private void schedules(HttpExchange ex) throws IOException {
         String[] parts = subPath(ex, "/api/schedules");
         switch (ex.getRequestMethod()) {
@@ -187,8 +187,13 @@ public final class HttpDashboard implements AutoCloseable {
     private void createSchedule(HttpExchange ex) throws IOException {
         Map<String, Object> body = dev.wiggle.core.Json.asObject(readJsonBody(ex));
         String workflow = String.valueOf(body.get("workflow"));
-        long everyMillis = ((Number) body.get("everyMillis")).longValue();
-        String id = engine.createSchedule(workflow, java.time.Duration.ofMillis(everyMillis), body.get("context"));
+        String id;
+        if (body.get("cron") != null) {
+            id = engine.createCronSchedule(workflow, String.valueOf(body.get("cron")), body.get("context"));
+        } else {
+            long everyMillis = ((Number) body.get("everyMillis")).longValue();
+            id = engine.createSchedule(workflow, java.time.Duration.ofMillis(everyMillis), body.get("context"));
+        }
         sendJson(ex, 200, Map.of("id", id));
     }
 
@@ -223,6 +228,7 @@ public final class HttpDashboard implements AutoCloseable {
         m.put("id", s.id);
         m.put("workflow", s.workflow);
         m.put("everyMillis", s.intervalMillis);
+        if (s.cron != null) m.put("cron", s.cron);
         m.put("nextFireAt", s.nextFireAt);
         m.put("createdAt", s.createdAt);
         return m;

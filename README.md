@@ -356,21 +356,39 @@ Workflow.defineJson("onboarding")
 
 ## Schedules
 
-A schedule starts a workflow **on a fixed interval** — the leader fires it, a compare-and-set
-on the fire time makes each firing exactly-once even across leader failover, and a missed
-window does not burst (the next fire is one interval from now).
+A schedule starts a workflow on a **fixed interval** or a **cron expression** — the leader
+fires it, a compare-and-set on the fire time makes each firing exactly-once even across leader
+failover, and a missed window does not burst (the next fire is the next interval/cron match).
+
+**A workflow has at most one schedule.** Creating one is an upsert keyed on the workflow name,
+so calling `createSchedule`/`createCronSchedule` again (e.g. every app instance doing "ensure my
+schedule exists" on startup) updates the existing schedule's cadence/context in place instead of
+piling up duplicate firers — safe to call from as many client instances as you like.
+
+From the client (first-class gRPC RPCs):
+
+```java
+client.createSchedule("nightly-report", Duration.ofHours(1), Map.of("source", "timer"));
+client.createCronSchedule("nightly-report", "0 3 * * *", null);   // 03:00 UTC daily
+client.schedules();          // List<ScheduleInfo>: id, workflow, cadence, nextFireAt
+client.deleteSchedule(id);
+```
+
+Cron is the standard five fields (`minute hour day-of-month month day-of-week`) with `*`,
+lists, ranges and steps (`*/15`, `9-17`, `1,15`); both dom and dow restricted means *either*
+matches (vixie rule); evaluated in **UTC** so every node agrees. Or over HTTP:
 
 ```bash
-# create: fire "nightly-report" every hour, seeded with a context
 curl -X POST http://localhost:8090/api/schedules -H 'Content-Type: application/json' \
-     -d '{"workflow": "nightly-report", "everyMillis": 3600000, "context": {"source": "cron"}}'
+     -d '{"workflow": "nightly-report", "cron": "0 3 * * *"}'          # or "everyMillis": 3600000
 
 curl http://localhost:8090/api/schedules            # list
 curl -X DELETE http://localhost:8090/api/schedules/{id}   # stop
 ```
 
-Programmatically: `engine.createSchedule(workflow, Duration, context)` / `deleteSchedule(id)` /
-`schedules()`. Scheduled instances carry `correlationId = "schedule:<id>"`.
+Programmatically on the server: `engine.createSchedule(workflow, Duration, context)` /
+`createCronSchedule(workflow, cron, context)` / `deleteSchedule(id)` / `schedules()`.
+Scheduled instances carry `correlationId = "schedule:<id>"`.
 
 ---
 

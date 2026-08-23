@@ -314,9 +314,13 @@ branch instead. Signals are not buffered -- an early delivery is a retryable con
 its final context merges back, its failure/cancellation fails the parent, and cancelling the
 parent cascades to children.
 
-Schedules fire a workflow every fixed interval, leader-driven and exactly-once per fire:
-`POST /api/schedules {"workflow", "everyMillis", "context"?}`, `GET /api/schedules`,
-`DELETE /api/schedules/{id}` -- or `engine.createSchedule(...)` programmatically.
+Schedules fire a workflow on a fixed interval or a five-field cron expression (UTC),
+leader-driven and exactly-once per fire. From the client: `client.createSchedule(workflow,
+Duration, context)` / `createCronSchedule(workflow, "0 3 * * *", context)` / `schedules()` /
+`deleteSchedule(id)` (gRPC). Over HTTP: `POST /api/schedules {"workflow", "everyMillis"|"cron",
+"context"?}`, `GET /api/schedules`, `DELETE /api/schedules/{id}`. Creation is an **upsert keyed
+on workflow name** -- a workflow has at most one schedule, so calling create again from any
+number of client instances updates it in place rather than creating duplicates.
 
 ### 7.4 Schema migrations
 
