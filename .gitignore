@@ -7,3 +7,8 @@ out/
 .idea/
 *.iml
 .DS_Store
+
+# Generated ClojureScript dashboard bundle (built from dashboard-ui/)
+/server/src/main/resources/dashboard/js/
+node_modules/
+.shadow-cljs/

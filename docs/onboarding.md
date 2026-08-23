@@ -286,10 +286,15 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 
 ### 7.1 Web dashboard
 
-Off by default. Set `WIGGLE_DASHBOARD_PORT` to a port and open `http://localhost:<port>` — a
-read-only view of instances (filter by workflow/status), instance detail + token history, pending
-user tasks (with a complete action), and cluster membership. Any node can run its own; each shows
-the whole system.
+Off by default. Set `WIGGLE_DASHBOARD_PORT` to a port and open `http://localhost:<port>`. A
+ClojureScript + Reagent single-page app (source in `dashboard-ui/`, compiled into the server jar)
+with four tabs: **Instances** (filter, plus a live trace overlaying token status onto the workflow
+diagram, cancel, and inline signal delivery), **Workflows** (render any workflow's compiled graph
+as a diagram), **Schedules** (create interval/cron schedules and delete them), and **Signals**
+(deliver to instances waiting on a signal). Any node can run its own; each shows the whole system.
+`./gradlew :server:build` compiles the bundle automatically (needs Node; `-PskipDashboard` or a
+missing Node toolchain falls back to a built-in minimal page). Dev loop: `cd dashboard-ui &&
+npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a server on :8090).
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|

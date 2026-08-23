@@ -15,6 +15,16 @@ application {
     mainClass.set("dev.wiggle.order.Demo")
 }
 
+tasks.register<JavaExec>("seedDashboard") {
+    group = "application"
+    description = "Starts a dashboard-enabled server (:8090) seeded with data across every tab."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.wiggle.order.DashboardSeed")
+    systemProperty("wiggle.dashboard.port",
+        project.findProperty("port")?.toString()
+            ?: System.getenv("WIGGLE_DASHBOARD_PORT") ?: "8090")
+}
+
 tasks.register<JavaExec>("runWorker") {
     group = "application"
     description = "Runs a standalone worker against WIGGLE_URL (default localhost:8080)."
