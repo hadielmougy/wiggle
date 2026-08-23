@@ -10,7 +10,7 @@ capacity.
 - **Pull-based workers** — workers ask for work; the server never pushes. Backpressure is built in, and workers need no inbound connectivity.
 - **Automatic retries, timers, and parallel fork/join**, with at-least-once execution and lease-based recovery when a worker dies.
 
-**Current version: `2.1.1`** · Java 21+ · Apache-2.0
+**Current version: `2.1.2`** · Java 21+ · Apache-2.0
 
 > New here, or looking for every configuration knob in one place? See
 > **[docs/onboarding.md](docs/onboarding.md)** — onboarding + the full configuration reference.
@@ -33,16 +33,16 @@ Artifacts are published to Maven Central under `io.github.hadielmougy`.
 ```kotlin
 dependencies {
     // The DSL + worker + client — this is what your application needs.
-    implementation("io.github.hadielmougy:wiggle-client:2.1.1")
+    implementation("io.github.hadielmougy:wiggle-client:2.1.2")
 
     // Only if you embed the server in your own JVM (otherwise run it standalone).
     // The server core is database-agnostic; with no JDBC URL it uses the in-memory store.
-    implementation("io.github.hadielmougy:wiggle-server:2.1.1")
+    implementation("io.github.hadielmougy:wiggle-server:2.1.2")
 
     // For a real, multi-node deployment on PostgreSQL: add the database module (it plugs in
     // via a ServiceLoader SPI) plus the JDBC driver. The standalone server distribution
     // already bundles both.
-    runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.1.1")
+    runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.1.2")
     runtimeOnly("org.postgresql:postgresql:42.7.4")
 }
 ```
@@ -53,7 +53,7 @@ dependencies {
 <dependency>
   <groupId>io.github.hadielmougy</groupId>
   <artifactId>wiggle-client</artifactId>
-  <version>2.1.1</version>
+  <version>2.1.2</version>
 </dependency>
 ```
 
