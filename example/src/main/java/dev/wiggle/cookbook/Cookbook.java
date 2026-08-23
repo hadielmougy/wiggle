@@ -89,9 +89,12 @@ public final class Cookbook {
         return Workflow.defineJson("cb-foreach-queues").defaultQueue("cpu")
 
                 .forkEach("charge-items", "items", "item", b -> b
-                        .step("price", item -> with(item, "priced", true))
+                        // forkEach branches share one context, so a plain "priced" key would race
+                        // across items (last write wins) -- namespace by itemIndex instead.
+                        .step("price", item -> with(item, "priced-" + item.get("itemIndex"), true))
                         // Only this step moves to the "gpu" queue; the workflow default stays "cpu".
-                        .step("render-thumbnail", item -> with(item, "thumbnail", "thumb-" + item.get("itemIndex")))
+                        .step("render-thumbnail", item ->
+                                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")))
                         .onQueue("gpu"))
 
                 .step("summarise", ctx -> with(ctx, "done", true))
@@ -200,8 +203,9 @@ public final class Cookbook {
                                                 .effect("notice", ctx -> System.out.println("   [cookbook] VIP order held briefly"))))),
 
                         Case.otherwise("standard", b -> b
+                                // Namespaced by itemIndex for the same reason as example 3.
                                 .forkEach("pack-items", "items", "item", body -> body
-                                        .step("pack-item", item -> with(item, "packed", true)))))
+                                        .step("pack-item", item -> with(item, "packed-" + item.get("itemIndex"), true)))))
 
                 .awaitSignal("dock-clear", Duration.ofMillis(150),
                         esc -> esc.effect("auto-clear", ctx -> System.out.println("   [cookbook] dock auto-cleared")))

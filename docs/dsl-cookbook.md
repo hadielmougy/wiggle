@@ -66,8 +66,11 @@ Runtime fan-out over a list, with one step in the branch pinned to a different w
 ```java
 Workflow.defineJson("cb-foreach-queues").defaultQueue("cpu")
     .forkEach("charge-items", "items", "item", b -> b
-        .step("price", item -> with(item, "priced", true))
-        .step("render-thumbnail", item -> with(item, "thumbnail", "thumb-" + item.get("itemIndex")))
+        // forkEach branches share one context, so a plain "priced" key would race across
+        // items (last write wins) -- namespace by itemIndex instead.
+        .step("price", item -> with(item, "priced-" + item.get("itemIndex"), true))
+        .step("render-thumbnail", item ->
+                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")))
         .onQueue("gpu"))
     .step("summarise", ctx -> with(ctx, "done", true))
     .build();
@@ -175,7 +178,7 @@ Workflow.defineJson("cb-kitchen-sink").defaultQueue("default").execution(Executi
                     .effect("notice", Notify::vip)))),
         Case.otherwise("standard", b -> b
             .forkEach("pack-items", "items", "item", body -> body
-                .step("pack-item", item -> with(item, "packed", true)))))
+                .step("pack-item", item -> with(item, "packed-" + item.get("itemIndex"), true)))))
     .awaitSignal("dock-clear", Duration.ofMinutes(30),
         esc -> esc.effect("auto-clear", Dock::autoClear))
     .doWhile("more-checks", ctx -> checks(ctx) < 2, b -> b
