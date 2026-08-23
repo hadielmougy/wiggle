@@ -177,6 +177,17 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
+    public void signalInstance(SignalRequest req, StreamObserver<Ack> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SignalInstance id=" + req.getInstanceId()
+                + " signal=" + req.getSignal());
+        run(resp, () -> {
+            Object payload = req.hasPayload() ? ProtoJson.fromValue(req.getPayload()) : null;
+            engine.signal(req.getInstanceId(), req.getSignal(), payload);
+            return Ack.newBuilder().setOk(true).build();
+        });
+    }
+
+    @Override
     public void pollTasks(PollRequest req, StreamObserver<TaskList> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());

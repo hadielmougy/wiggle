@@ -11,51 +11,71 @@ import java.util.Map;
  */
 public record Node(String id, NodeKind kind, String name, String activity, String queue,
                    RetryPolicy retry, long sleepMillis, String next, String altNext,
-                   List<String> branches, int expected, boolean success, String reason) {
+                   List<String> branches, int expected, boolean success, String reason,
+                   String itemsKey, String itemKey) {
 
     public static Node task(String id, String name, String activity, String queue, RetryPolicy retry) {
-        return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null);
+        return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null);
     }
 
     public static Node predicate(String id, String name, String activity, String queue, RetryPolicy retry) {
-        return new Node(id, NodeKind.PREDICATE, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null);
+        return new Node(id, NodeKind.PREDICATE, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null);
     }
 
     public static Node sleep(String id, String name, long millis) {
-        return new Node(id, NodeKind.SLEEP, name, null, null, null, millis, null, null, List.of(), 0, false, null);
+        return new Node(id, NodeKind.SLEEP, name, null, null, null, millis, null, null, List.of(), 0, false, null, null, null);
     }
 
     public static Node fork(String id, String name) {
-        return new Node(id, NodeKind.FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null);
+        return new Node(id, NodeKind.FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null, null, null);
     }
 
+    /**
+     * Runtime fan-out over the list found in the context at {@code itemsKey}; each spawned token
+     * runs the single branch template with its element injected under {@code itemKey}. The
+     * {@code next} edge points at the paired join (used directly when the list is empty).
+     */
+    public static Node dynFork(String id, String name, String itemsKey, String itemKey) {
+        return new Node(id, NodeKind.DYN_FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null,
+                itemsKey, itemKey);
+    }
+
+    /** {@code expected == 0} marks a dynamic join: the width travels in the join group instead. */
     public static Node join(String id, String name, int expected) {
-        return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null);
+        return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null, null, null);
     }
 
-    /** {@code deadlineMillis == 0} means no deadline. Reuses {@code sleepMillis} for the deadline. */
-    public static Node userTask(String id, String name, long deadlineMillis) {
-        return new Node(id, NodeKind.USER_TASK, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null);
+    /**
+     * Waits for the signal named {@code name}. {@code deadlineMillis == 0} means no deadline
+     * (reuses {@code sleepMillis} for the deadline).
+     */
+    public static Node signal(String id, String name, long deadlineMillis) {
+        return new Node(id, NodeKind.SIGNAL, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null);
+    }
+
+    /** Runs the workflow named {@code workflow} as a child; reuses {@code activity} for its name. */
+    public static Node subWorkflow(String id, String name, String workflow) {
+        return new Node(id, NodeKind.SUB_WORKFLOW, name, workflow, null, null, 0, null, null, List.of(), 0, false, null, null, null);
     }
 
     public static Node end(String id, boolean success, String reason) {
-        return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason);
+        return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason, null, null);
     }
 
     public Node withNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey);
     }
 
     public Node withAltNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey);
     }
 
     public Node withQueue(String q) {
-        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason);
+        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey);
     }
 
     public Node withBranches(List<String> b) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey);
     }
 
     public boolean isWorkerDispatched() {
@@ -77,6 +97,8 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         if (expected > 0) m.put("expected", (long) expected);
         if (kind == NodeKind.END) m.put("success", success);
         if (reason != null) m.put("reason", reason);
+        if (itemsKey != null) m.put("itemsKey", itemsKey);
+        if (itemKey != null) m.put("itemKey", itemKey);
         return m;
     }
 
@@ -97,6 +119,8 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
                 List.copyOf(branches),
                 (int) Json.num(m, "expected", 0),
                 Json.bool(m, "success", false),
-                Json.str(m, "reason", null));
+                Json.str(m, "reason", null),
+                Json.str(m, "itemsKey", null),
+                Json.str(m, "itemKey", null));
     }
 }

@@ -52,11 +52,25 @@ public interface Tx {
     /** WAITING timer tokens whose fire time has passed. */
     List<Token> dueTimers(long now, int max);
 
-    /** AWAITING user-task tokens, oldest first -- what the task list shows. */
-    List<Token> pendingUserTasks(int max);
+    /** AWAITING signal tokens, oldest first -- what the pending-signals list shows. */
+    List<Token> pendingSignals(int max);
 
-    /** AWAITING user-task tokens with a deadline (availableAt > 0) that has passed. */
-    List<Token> dueUserTasks(long now, int max);
+    /** AWAITING signal tokens with a deadline (availableAt > 0) that has passed. */
+    List<Token> dueSignals(long now, int max);
+
+    /** Instances whose parent token belongs to {@code parentInstanceId} -- its sub-workflows. */
+    List<String> childInstanceIds(String parentInstanceId);
+
+    void putSchedule(Rows.Schedule schedule);
+    void deleteSchedule(String id);
+    List<Rows.Schedule> schedules();
+    /** Schedules whose fire time has passed. */
+    List<Rows.Schedule> dueSchedules(long now, int max);
+    /**
+     * Advances a schedule's fire time iff it still reads {@code expectedFireAt} -- the
+     * compare-and-set that keeps overlapping leaders from double-firing.
+     */
+    boolean claimSchedule(String id, long expectedFireAt, long nextFireAt);
 
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);

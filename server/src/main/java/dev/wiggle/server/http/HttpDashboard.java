@@ -7,6 +7,7 @@ import dev.wiggle.core.InstanceView;
 import dev.wiggle.core.Json;
 import dev.wiggle.server.cluster.ClusterManager;
 import dev.wiggle.server.engine.WorkflowEngine;
+import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.ServerNode;
 import dev.wiggle.server.store.Rows.Token;
 
@@ -44,7 +45,8 @@ public final class HttpDashboard implements AutoCloseable {
         this.http.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         this.http.createContext("/api/workflows", guard(this::workflows));
         this.http.createContext("/api/instances", guard(this::instances));
-        this.http.createContext("/api/tasks", guard(this::tasks));
+        this.http.createContext("/api/signals", guard(this::signals));
+        this.http.createContext("/api/schedules", guard(this::schedules));
         this.http.createContext("/api/cluster", guard(this::clusterView));
         this.http.createContext("/healthz", ex -> sendText(ex, 200, "text/plain", "ok"));
         this.http.createContext("/", this::staticFile);
@@ -101,6 +103,8 @@ public final class HttpDashboard implements AutoCloseable {
             listInstances(ex);
         } else if (parts.length == 2 && parts[1].equals("cancel")) {
             cancelInstance(ex, parts[0]);
+        } else if (parts.length == 3 && parts[1].equals("signal")) {
+            signalInstance(ex, parts[0], parts[2]);
         } else if (parts.length == 1) {
             instanceDetail(ex, parts[0]);
         } else {
@@ -129,6 +133,16 @@ public final class HttpDashboard implements AutoCloseable {
         sendJson(ex, 200, Map.of("ok", true));
     }
 
+    /** POST /api/instances/{id}/signal/{name}: delivers a signal; the JSON body merges into the context. */
+    private void signalInstance(HttpExchange ex, String id, String name) throws IOException {
+        if (!ex.getRequestMethod().equals("POST")) {
+            sendError(ex, 405, "POST required");
+            return;
+        }
+        engine.signal(id, name, readJsonBody(ex));
+        sendJson(ex, 200, Map.of("ok", true));
+    }
+
     private void instanceDetail(HttpExchange ex, String id) throws IOException {
         requireGet(ex);
         InstanceView v = engine.instance(id).orElse(null);
@@ -144,32 +158,46 @@ public final class HttpDashboard implements AutoCloseable {
         sendJson(ex, 200, out);
     }
 
-    /** Dispatches "" and "/{id}/complete" under /api/tasks. */
-    private void tasks(HttpExchange ex) throws IOException {
-        String[] parts = subPath(ex, "/api/tasks");
-        if (parts.length == 0) {
-            listTasks(ex);
-        } else if (parts.length == 2 && parts[1].equals("complete")) {
-            completeTask(ex, parts[0]);
-        } else {
-            sendError(ex, 404, "not found");
-        }
-    }
-
-    private void listTasks(HttpExchange ex) throws IOException {
+    /** GET /api/signals lists the waits pending an external delivery. */
+    private void signals(HttpExchange ex) throws IOException {
         requireGet(ex);
         int limit = parseInt(query(ex.getRequestURI()).get("limit"), 200);
         List<Object> list = new ArrayList<>();
-        for (Token t : engine.pendingUserTasks(limit)) list.add(taskMap(t));
-        sendJson(ex, 200, Map.of("tasks", list));
+        for (Token t : engine.pendingSignals(limit)) list.add(signalMap(t));
+        sendJson(ex, 200, Map.of("signals", list));
     }
 
-    private void completeTask(HttpExchange ex, String taskId) throws IOException {
-        if (!ex.getRequestMethod().equals("POST")) {
-            sendError(ex, 405, "POST required");
+    /** GET lists schedules; POST {workflow, everyMillis, context?} creates; DELETE /{id} removes. */
+    private void schedules(HttpExchange ex) throws IOException {
+        String[] parts = subPath(ex, "/api/schedules");
+        switch (ex.getRequestMethod()) {
+            case "GET" -> listSchedules(ex);
+            case "POST" -> createSchedule(ex);
+            case "DELETE" -> deleteSchedule(ex, parts);
+            default -> sendError(ex, 405, "GET, POST or DELETE");
+        }
+    }
+
+    private void listSchedules(HttpExchange ex) throws IOException {
+        List<Object> list = new ArrayList<>();
+        for (Rows.Schedule sched : engine.schedules()) list.add(scheduleMap(sched));
+        sendJson(ex, 200, Map.of("schedules", list));
+    }
+
+    private void createSchedule(HttpExchange ex) throws IOException {
+        Map<String, Object> body = dev.wiggle.core.Json.asObject(readJsonBody(ex));
+        String workflow = String.valueOf(body.get("workflow"));
+        long everyMillis = ((Number) body.get("everyMillis")).longValue();
+        String id = engine.createSchedule(workflow, java.time.Duration.ofMillis(everyMillis), body.get("context"));
+        sendJson(ex, 200, Map.of("id", id));
+    }
+
+    private void deleteSchedule(HttpExchange ex, String[] parts) throws IOException {
+        if (parts.length != 1) {
+            sendError(ex, 404, "not found");
             return;
         }
-        engine.completeUserTask(taskId, readJsonBody(ex));
+        engine.deleteSchedule(parts[0]);
         sendJson(ex, 200, Map.of("ok", true));
     }
 
@@ -180,14 +208,23 @@ public final class HttpDashboard implements AutoCloseable {
         return rest.substring(1).split("/");
     }
 
-    private static Map<String, Object> taskMap(Token t) {
+    private static Map<String, Object> signalMap(Token t) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", t.id);
         m.put("instanceId", t.instanceId);
         m.put("workflow", t.workflow);
-        m.put("name", t.activity);                 // the user task's human name (set when parked)
+        m.put("signal", t.activity);               // the signal's name (set when parked)
         m.put("deadline", t.availableAt);          // 0 = no deadline
         m.put("createdAt", t.createdAt);
+        return m;
+    }
+
+    private static Map<String, Object> scheduleMap(Rows.Schedule s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", s.id);
+        m.put("workflow", s.workflow);
+        m.put("everyMillis", s.intervalMillis);
+        m.put("nextFireAt", s.nextFireAt);
+        m.put("createdAt", s.createdAt);
         return m;
     }
 
@@ -344,8 +381,8 @@ public final class HttpDashboard implements AutoCloseable {
             </header>
             <main>
               <section class="panel" style="grid-column:1/-1">
-                <h2>User tasks — awaiting completion</h2>
-                <div id="tasks"><div class="empty">loading…</div></div>
+                <h2>Pending signals</h2>
+                <div id="signals"><div class="empty">loading…</div></div>
               </section>
               <section class="panel">
                 <h2>Instances</h2>
@@ -434,32 +471,32 @@ public final class HttpDashboard implements AutoCloseable {
               catch(e){ alert('cancel failed: '+e.message); }
             }
 
-            async function loadTasks(){
+            async function loadSignals(){
               try {
-                const d = await j('/api/tasks');
-                if(!d.tasks.length){ $('#tasks').innerHTML='<div class="empty">no pending user tasks</div>'; return; }
-                $('#tasks').innerHTML = `<table><thead><tr><th>task</th><th>workflow</th><th>instance</th><th>deadline</th><th></th></tr></thead><tbody>`
-                  + d.tasks.map(t=>`<tr><td>${esc(t.name)}</td><td>${esc(t.workflow)}</td>
+                const d = await j('/api/signals');
+                if(!d.signals.length){ $('#signals').innerHTML='<div class="empty">no pending signals</div>'; return; }
+                $('#signals').innerHTML = `<table><thead><tr><th>signal</th><th>workflow</th><th>instance</th><th>deadline</th><th></th></tr></thead><tbody>`
+                  + d.signals.map(t=>`<tr><td>${esc(t.signal)}</td><td>${esc(t.workflow)}</td>
                       <td><code>${esc(t.instanceId)}</code></td>
                       <td class="muted">${t.deadline?('in '+Math.max(0,Math.round((t.deadline-Date.now())/1000))+'s'):'—'}</td>
-                      <td><button onclick="completeTask('${esc(t.id)}')">complete</button></td></tr>`).join('')
+                      <td><button onclick="sendSignal('${esc(t.instanceId)}','${esc(t.signal)}')">send</button></td></tr>`).join('')
                   + `</tbody></table>`;
-              } catch(e){ $('#tasks').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
+              } catch(e){ $('#signals').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; }
             }
 
-            async function completeTask(id){
-              const body = prompt('result JSON (merged into the context):', '{}');
+            async function sendSignal(instanceId, signal){
+              const body = prompt('signal payload JSON (merged into the context):', '{}');
               if(body===null) return;
               try {
-                await j('/api/tasks/'+encodeURIComponent(id)+'/complete',
+                await j('/api/instances/'+encodeURIComponent(instanceId)+'/signal/'+encodeURIComponent(signal),
                         {method:'POST', headers:{'Content-Type':'application/json'}, body});
-                loadTasks(); loadInstances();
-              } catch(e){ alert('complete failed: '+e.message); }
+                loadSignals(); loadInstances();
+              } catch(e){ alert('signal failed: '+e.message); }
             }
 
-            function tick(){ loadInstances(); loadTasks(); if(selected) showDetail(selected); }
+            function tick(){ loadInstances(); loadSignals(); if(selected) showDetail(selected); }
             ['#workflow','#status','#limit'].forEach(s=>$(s).onchange=loadInstances);
-            loadWorkflows(); loadCluster(); loadInstances(); loadTasks();
+            loadWorkflows(); loadCluster(); loadInstances(); loadSignals();
             setInterval(()=>{ if($('#auto').checked) tick(); }, 2000);
             setInterval(()=>{ loadCluster(); loadWorkflows(); }, 5000);
             </script>

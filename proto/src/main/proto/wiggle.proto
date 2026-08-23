@@ -21,6 +21,8 @@ service WiggleControlPlane {
     rpc ListInstances(ListInstancesRequest) returns (InstanceList);
     rpc GetInstance(InstanceIdRequest) returns (InstanceDetail);
     rpc CancelInstance(CancelInstanceRequest) returns (CancelInstanceResult);
+    // Delivers a named signal to a running instance; the payload merges into its context.
+    rpc SignalInstance(SignalRequest) returns (Ack);
 
     rpc PollTasks(PollRequest) returns (TaskList);
     rpc CompleteTask(TaskResultRequest) returns (Ack);
@@ -139,6 +141,12 @@ message InstanceIdRequest {
 message CancelInstanceRequest {
     string instance_id = 1;
     string reason = 2;
+}
+
+message SignalRequest {
+    string instance_id = 1;
+    string signal = 2;
+    google.protobuf.Value payload = 3;
 }
 
 message CancelInstanceResult {

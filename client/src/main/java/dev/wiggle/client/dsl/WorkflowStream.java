@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 /**
  * A lazily-built workflow pipeline with a Stream-shaped API: intermediate operations
@@ -158,40 +159,41 @@ public final class WorkflowStream<T> {
     }
 
     /**
-     * Waits for an external actor (a human, or another system) to complete the task out of
-     * band -- the flow then continues down the following step. No worker is held while it
-     * waits. Complete it via the control API / dashboard ({@code POST /api/tasks/{id}/complete});
-     * the submitted result merges into the context like a {@link #step}.
+     * Waits for the named signal from an external actor (a human, or another system) -- the flow
+     * then continues down the following step. No worker is held while it waits. Deliver it via
+     * {@code client.signal(instanceId, name, payload)}, the gRPC {@code SignalInstance} RPC, or
+     * the dashboard ({@code POST /api/instances/{id}/signal/{name}}); the payload merges into the
+     * context like a {@link #step}'s result.
      */
-    public WorkflowStream<T> userTask(String name) {
-        return userTask(name, null, null);
+    public WorkflowStream<T> awaitSignal(String name) {
+        return awaitSignal(name, null, null);
     }
 
     /**
-     * A user task with a deadline. If nobody completes it within {@code timeout}, the instance
-     * fails with a timeout error. Use {@link #userTask(String, Duration, java.util.function.UnaryOperator)}
-     * to escalate to a branch instead.
+     * A signal wait with a deadline. If the signal does not arrive within {@code timeout}, the
+     * instance fails with a timeout error. Use
+     * {@link #awaitSignal(String, Duration, UnaryOperator)} to escalate to a branch instead.
      */
-    public WorkflowStream<T> userTask(String name, Duration timeout) {
-        return userTask(name, timeout, null);
+    public WorkflowStream<T> awaitSignal(String name, Duration timeout) {
+        return awaitSignal(name, timeout, null);
     }
 
     /**
-     * A user task with a deadline and an escalation branch: if it is not completed within
-     * {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow after
-     * the task (exactly one of completion / escalation happens).
+     * A signal wait with a deadline and an escalation branch: if the signal does not arrive
+     * within {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow
+     * after the wait (exactly one of delivery / escalation happens).
      */
-    public WorkflowStream<T> userTask(String name, Duration timeout,
-                                      java.util.function.UnaryOperator<WorkflowStream<T>> escalation) {
+    public WorkflowStream<T> awaitSignal(String name, Duration timeout,
+                                         UnaryOperator<WorkflowStream<T>> escalation) {
         if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
         if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
         if (!pipeline.stepNames.add(name)) {
             throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
         }
         String id = pipeline.nextId("n");
-        pipeline.put(Node.userTask(id, name, timeout == null ? 0 : timeout.toMillis()));
+        pipeline.put(Node.signal(id, name, timeout == null ? 0 : timeout.toMillis()));
         attach(id);
-        // The completion path (slot NEXT) is the open end; the escalation branch hangs off ALT_NEXT.
+        // The delivery path (slot NEXT) is the open end; the escalation branch hangs off ALT_NEXT.
         openNodes = new ArrayList<>(List.of(id));
         openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
         lastStepId = null;
@@ -205,6 +207,24 @@ public final class WorkflowStream<T> {
             openNodes.addAll(tail.openNodes);
             openSlots.addAll(tail.openSlots);
         }
+        return this;
+    }
+
+    /**
+     * Runs the workflow named {@code workflow} as a child instance: it starts with this
+     * instance's current context, and on completion its final context merges back here (a failed
+     * or cancelled child fails this instance). The child must be registered on the server; its
+     * latest version is used.
+     */
+    public WorkflowStream<T> subWorkflow(String name, String workflow) {
+        Objects.requireNonNull(workflow, "workflow");
+        if (!pipeline.stepNames.add(name)) {
+            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
+        }
+        String id = pipeline.nextId("n");
+        pipeline.put(Node.subWorkflow(id, name, workflow));
+        attach(id);
+        lastStepId = null;
         return this;
     }
 
@@ -232,6 +252,67 @@ public final class WorkflowStream<T> {
 
         openNodes = new ArrayList<>(List.of(joinId));
         openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        lastStepId = null;
+        return this;
+    }
+
+    /**
+     * Runtime fan-out: when the instance reaches this node, the engine reads the list stored in
+     * the context under {@code itemsKey} and spawns one parallel branch per element, each running
+     * {@code body} with its element injected into the context under {@code itemKey} (and its
+     * position under {@code itemKey + "Index"}) -- visible only within that branch. All branches
+     * join before the flow continues; an empty or missing list skips straight through.
+     *
+     * <p>Branch writes merge into the shared context like a static {@link #fork}: last write to
+     * the same key wins, so per-element results belong under per-element keys (use the index).
+     */
+    public WorkflowStream<T> forkEach(String name, String itemsKey, String itemKey,
+                                      UnaryOperator<WorkflowStream<T>> body) {
+        Objects.requireNonNull(itemsKey, "itemsKey");
+        Objects.requireNonNull(itemKey, "itemKey");
+        if (!pipeline.stepNames.add(name)) {
+            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
+        }
+        String forkId = pipeline.nextId("dynfork");
+        pipeline.put(Node.dynFork(forkId, name, itemsKey, itemKey));
+        attach(forkId);
+        String joinId = pipeline.nextId("join");
+        pipeline.put(Node.join(joinId, "join", 0));   // 0 = dynamic width, carried in the join group
+        String templateStart = buildBranch(Branch.of(name, body), joinId);
+        pipeline.put(pipeline.get(forkId).withBranches(List.of(templateStart)).withNext(joinId));
+        openNodes = new ArrayList<>(List.of(joinId));
+        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        lastStepId = null;
+        return this;
+    }
+
+    /**
+     * A do-while loop: runs {@code body} once, then evaluates {@code condition} on a worker;
+     * while it holds, the body runs again. Compiles to a plain cycle in the graph -- the
+     * condition is an ordinary predicate whose true edge points back at the body -- so it works
+     * identically under every execution mode (a local chain simply keeps iterating in-worker).
+     */
+    public WorkflowStream<T> doWhile(String conditionName, Predicate<T> condition,
+                                     UnaryOperator<WorkflowStream<T>> body) {
+        Objects.requireNonNull(condition, "condition");
+        String[] start = new String[1];
+        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, enclosingJoinId);
+        WorkflowStream<T> tail = body.apply(sub);
+        if (start[0] == null) throw new IllegalArgumentException("doWhile body defines no steps");
+
+        ContextCodec<T> codec = pipeline.codec;
+        String activity = pipeline.activityFor(conditionName);
+        pipeline.handlers.put(activity, json -> condition.test(codec.decode(json)));
+        String condId = pipeline.nextId("n");
+        pipeline.put(Node.predicate(condId, conditionName, activity, pipeline.defaultQueue, pipeline.defaultRetry));
+        pipeline.queues.add(pipeline.defaultQueue);
+
+        // Enter at the body; body tail feeds the condition; true loops, false continues onward.
+        if (openNodes.isEmpty()) startSink.accept(start[0]); else wireOpenEndsTo(start[0]);
+        tail.wireOpenEndsTo(condId);
+        pipeline.wire(condId, NEXT, start[0]);
+        openNodes = new ArrayList<>(List.of(condId));
+        openSlots = new ArrayList<>(List.of(new int[]{ALT_NEXT}));
         lastStepId = null;
         return this;
     }
@@ -404,10 +485,21 @@ public final class WorkflowStream<T> {
         requireKnownTarget(def, n, n.next());
         requireKnownTarget(def, n, n.altNext());
         switch (n.kind()) {
-            case TASK, SLEEP, JOIN, USER_TASK -> requireSuccessor(n);
+            case TASK, SLEEP, JOIN, SIGNAL, SUB_WORKFLOW -> requireSuccessor(n);
             case PREDICATE -> validatePredicate(n);
             case FORK -> validateFork(n);
+            case DYN_FORK -> validateDynFork(n);
             case END -> { }
+        }
+    }
+
+    private static void validateDynFork(Node n) {
+        requireSuccessor(n);
+        if (n.branches().size() != 1) {
+            throw new IllegalStateException("dynamic fork " + n.id() + " needs exactly one branch template");
+        }
+        if (n.itemsKey() == null || n.itemKey() == null) {
+            throw new IllegalStateException("dynamic fork " + n.id() + " is missing its items/item keys");
         }
     }
 

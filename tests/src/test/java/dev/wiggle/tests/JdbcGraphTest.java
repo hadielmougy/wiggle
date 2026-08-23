@@ -32,8 +32,13 @@ class JdbcGraphTest {
         nodes.put("b1", Node.task("b1", "left", "left-act", "q", null).withNext("jn"));
         nodes.put("b2", Node.task("b2", "right", "right-act", "q", null).withNext("jn"));
         nodes.put("jn", Node.join("jn", "merge", 2).withNext("ut"));
-        // A user task with a deadline: next = completion path, altNext = escalation path.
-        nodes.put("ut", Node.userTask("ut", "approve", 1000).withNext("ok").withAltNext("bad"));
+        // A signal wait with a deadline: next = delivery path, altNext = escalation path.
+        nodes.put("ut", Node.signal("ut", "approve", 1000).withNext("df").withAltNext("bad"));
+        // A dynamic fork: one branch template, next = the paired (dynamic-width) join.
+        nodes.put("df", Node.dynFork("df", "per-item", "items", "item")
+                .withBranches(List.of("db")).withNext("djn"));
+        nodes.put("db", Node.task("db", "each", "each-act", "q", null).withNext("djn"));
+        nodes.put("djn", Node.join("djn", "dyn-merge", 0).withNext("ok"));
         nodes.put("ok", Node.end("ok", true, "done"));
         nodes.put("bad", Node.end("bad", false, "nope"));
         int version = WorkflowDefinition.contentVersion("sample", "t", nodes.values(),
@@ -66,9 +71,14 @@ class JdbcGraphTest {
                 Node fk = tx.graphNode("sample", def.version(), "fk").orElseThrow();
                 assertEquals(List.of("b1", "b2"), fk.branches());
                 Node ut = tx.graphNode("sample", def.version(), "ut").orElseThrow();
-                assertEquals("ok", ut.next(), "user task completion path");
-                assertEquals("bad", ut.altNext(), "user task escalation path");
-                assertEquals(1000, ut.sleepMillis(), "user task deadline");
+                assertEquals("df", ut.next(), "signal delivery path");
+                assertEquals("bad", ut.altNext(), "signal escalation path");
+                assertEquals(1000, ut.sleepMillis(), "signal deadline");
+                Node df = tx.graphNode("sample", def.version(), "df").orElseThrow();
+                assertEquals(List.of("db"), df.branches(), "dynamic fork branch template");
+                assertEquals("djn", df.next(), "dynamic fork's paired join");
+                assertEquals("items", df.itemsKey());
+                assertEquals("item", df.itemKey());
 
                 assertTrue(tx.graphNode("sample", def.version(), "nope").isEmpty());
             });

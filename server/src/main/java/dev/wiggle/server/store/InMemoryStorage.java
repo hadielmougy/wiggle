@@ -25,6 +25,7 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, Map<String, Node>> graphNodes = new ConcurrentHashMap<>();
     private final Map<String, String> graphStart = new ConcurrentHashMap<>();
     private final Map<String, ServerNode> nodes = new ConcurrentHashMap<>();
+    private final Map<String, Rows.Schedule> schedules = new ConcurrentHashMap<>();
     private final ReentrantLock lock = new ReentrantLock();
 
     @Override public void migrate() { /* nothing to do */ }
@@ -147,23 +148,66 @@ public final class InMemoryStorage implements Storage {
                     .toList();
         }
 
-        @Override public List<Token> pendingUserTasks(int max) {
+        @Override public List<Token> pendingSignals(int max) {
             return tokens.values().stream()
-                    .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.USER_TASK)
+                    .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.SIGNAL)
                     .sorted(Comparator.comparingLong((Token t) -> t.createdAt).thenComparing(t -> t.id))
                     .limit(max)
                     .map(Token::clone)
                     .toList();
         }
 
-        @Override public List<Token> dueUserTasks(long now, int max) {
+        @Override public List<Token> dueSignals(long now, int max) {
             return tokens.values().stream()
-                    .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.USER_TASK
+                    .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.SIGNAL
                             && t.availableAt > 0 && t.availableAt <= now)
                     .sorted(Comparator.comparingLong((Token t) -> t.availableAt))
                     .limit(max)
                     .map(Token::clone)
                     .toList();
+        }
+
+        @Override public List<String> childInstanceIds(String parentInstanceId) {
+            Set<String> parentTokens = new LinkedHashSet<>();
+            for (Token t : tokens.values()) {
+                if (t.instanceId.equals(parentInstanceId)) parentTokens.add(t.id);
+            }
+            return instances.values().stream()
+                    .filter(i -> i.parentTokenId != null && parentTokens.contains(i.parentTokenId))
+                    .map(i -> i.id)
+                    .sorted()
+                    .toList();
+        }
+
+        @Override public void putSchedule(Rows.Schedule schedule) {
+            schedules.put(schedule.id, schedule.clone());
+        }
+
+        @Override public void deleteSchedule(String id) {
+            schedules.remove(id);
+        }
+
+        @Override public List<Rows.Schedule> schedules() {
+            return schedules.values().stream()
+                    .sorted(Comparator.comparing(sch -> sch.id))
+                    .map(Rows.Schedule::clone)
+                    .toList();
+        }
+
+        @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
+            return schedules.values().stream()
+                    .filter(sch -> sch.nextFireAt <= now)
+                    .sorted(Comparator.comparingLong(sch -> sch.nextFireAt))
+                    .limit(max)
+                    .map(Rows.Schedule::clone)
+                    .toList();
+        }
+
+        @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
+            Rows.Schedule live = schedules.get(id);
+            if (live == null || live.nextFireAt != expectedFireAt) return false;
+            live.nextFireAt = nextFireAt;
+            return true;
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {

@@ -28,6 +28,8 @@ public final class Rows {
         public String terminationReason;
         public String error;
         public String contextJson = "{}";
+        /** When this instance is a sub-workflow: the parent's waiting token; null otherwise. */
+        public String parentTokenId;
         public long createdAt;
         public long updatedAt;
         public long revision;
@@ -54,6 +56,12 @@ public final class Rows {
         public long leaseExpiresAt;
         /** Comma separated stack of enclosing fork groups; last element is innermost. */
         public String joinStack = "";
+        /**
+         * Branch-scoped JSON overlaid on the instance context when this token is dispatched --
+         * how a dynamic-fork child carries its item. Inherited along the branch, restored from
+         * the fork token after a join; null outside dynamic branches.
+         */
+        public String payloadJson;
         public String lastError;
         public long createdAt;
         public long updatedAt;
@@ -96,6 +104,20 @@ public final class Rows {
 
         @Override public ServerNode clone() {
             try { return (ServerNode) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
+        }
+    }
+
+    /** A recurring start: fires the workflow every {@code intervalMillis}, leader-driven. */
+    public static final class Schedule implements Cloneable {
+        public String id;
+        public String workflow;
+        public long intervalMillis;
+        public String contextJson = "{}";
+        public long nextFireAt;
+        public long createdAt;
+
+        @Override public Schedule clone() {
+            try { return (Schedule) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
         }
     }
 

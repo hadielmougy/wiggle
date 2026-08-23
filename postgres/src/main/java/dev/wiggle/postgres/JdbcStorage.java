@@ -154,6 +154,26 @@ public final class JdbcStorage implements Storage {
             // that query is a full table scan that gets slower as DONE tokens accumulate.
             new Migration(2, "index-token-throughput", """
             CREATE INDEX IF NOT EXISTS ix_token_throughput ON wf_token (kind, status, updated_at);
+            """),
+            // Dynamic fan-out (forkEach): per-token branch payload, and the DYN_FORK node's
+            // items/item context keys. All nullable, so the change is rolling-deploy safe.
+            new Migration(3, "dynamic-fanout", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS payload TEXT;
+            ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS items_key VARCHAR(200);
+            ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS item_key VARCHAR(200);
+            """),
+            // Sub-workflows (the parent's waiting token) and recurring schedules.
+            new Migration(4, "sub-workflows-and-schedules", """
+            ALTER TABLE wf_instance ADD COLUMN IF NOT EXISTS parent_token_id VARCHAR(64);
+            CREATE TABLE IF NOT EXISTS wf_schedule (
+              id              VARCHAR(64)  PRIMARY KEY,
+              workflow        VARCHAR(200) NOT NULL,
+              interval_millis BIGINT       NOT NULL,
+              context         TEXT         NOT NULL,
+              next_fire_at    BIGINT       NOT NULL,
+              created_at      BIGINT       NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_schedule_due ON wf_schedule (next_fire_at);
             """));
 
     @Override public void migrate() {
@@ -277,7 +297,11 @@ public final class JdbcStorage implements Storage {
                     int i = 0;
                     for (String b : n.branches()) out.add(new Edge(b, "branch", i++));
                 }
-                case USER_TASK -> {
+                case DYN_FORK -> {
+                    out.add(new Edge(n.branches().get(0), "branch", 0));
+                    if (n.next() != null) out.add(new Edge(n.next(), null, 1));
+                }
+                case SIGNAL -> {
                     if (n.next() != null) out.add(new Edge(n.next(), null, 0));
                     if (n.altNext() != null) out.add(new Edge(n.altNext(), "escalate", 1));
                 }
@@ -307,8 +331,8 @@ public final class JdbcStorage implements Storage {
             // clean no-op even if two nodes race.
             if (graphExists(def.name(), def.version())) return;
             try (PreparedStatement node = ps("INSERT INTO wf_graph_node " +
-                    "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING");
+                    "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
+                    "items_key,item_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING");
                  PreparedStatement edge = ps("INSERT INTO wf_graph_edge " +
                     "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING")) {
                 for (Node n : def.nodes().values()) {
@@ -319,6 +343,7 @@ public final class JdbcStorage implements Storage {
                     node.setLong(9, n.sleepMillis()); node.setInt(10, n.expected());
                     node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
                     node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
+                    node.setString(14, n.itemsKey()); node.setString(15, n.itemKey());
                     node.addBatch();
                     for (Edge e : edgesOf(n)) {
                         edge.setString(1, def.name()); edge.setInt(2, def.version()); edge.setString(3, n.id());
@@ -340,8 +365,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
-            try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason " +
-                    "FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
+            try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason," +
+                    "items_key,item_key FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
                 try (ResultSet rs = p.executeQuery()) {
                     if (!rs.next()) return Optional.empty();
@@ -353,15 +378,18 @@ public final class JdbcStorage implements Storage {
                     int expected = rs.getInt(7);
                     boolean success = rs.getInt(8) != 0;
                     String reason = rs.getString(9);
+                    String itemsKey = rs.getString(10);
+                    String itemKey = rs.getString(11);
                     return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
-                            retry, sleep, expected, success, reason));
+                            retry, sleep, expected, success, reason, itemsKey, itemKey));
                 }
             } catch (SQLException e) { throw wrap(e); }
         }
 
         /** Reads a node's outgoing edges and folds them back into the node's typed next/altNext/branches. */
         private Node assemble(String workflow, int version, String id, NodeKind kind, String name, String activity,
-                              String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason) {
+                              String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
+                              String itemsKey, String itemKey) {
             EdgeTargets targets = new EdgeTargets(kind);
             try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
                     "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
@@ -371,7 +399,7 @@ public final class JdbcStorage implements Storage {
                 }
             } catch (SQLException e) { throw wrap(e); }
             return new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
-                    List.copyOf(targets.branches), expected, success, reason);
+                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey);
         }
 
         /** Folds edge rows back into a node's typed successor slots (the inverse of {@code edgesOf}). */
@@ -384,7 +412,7 @@ public final class JdbcStorage implements Storage {
             EdgeTargets(NodeKind kind) { this.kind = kind; }
 
             void absorb(String to, String cond) {
-                if (kind == NodeKind.FORK) {
+                if (kind == NodeKind.FORK || (kind == NodeKind.DYN_FORK && "branch".equals(cond))) {
                     branches.add(to);
                 } else if (isAltEdge(cond)) {
                     altNext = to;
@@ -395,7 +423,7 @@ public final class JdbcStorage implements Storage {
 
             private boolean isAltEdge(String cond) {
                 return (kind == NodeKind.PREDICATE && "false".equals(cond))
-                        || (kind == NodeKind.USER_TASK && "escalate".equals(cond));
+                        || (kind == NodeKind.SIGNAL && "escalate".equals(cond));
             }
         }
 
@@ -439,12 +467,13 @@ public final class JdbcStorage implements Storage {
 
         @Override public void insertInstance(Instance i) {
             try (PreparedStatement p = ps("INSERT INTO wf_instance " +
-                    "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)")) {
+                    "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision," +
+                    "parent_token_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")) {
                 p.setString(1, i.id); p.setString(2, i.workflow); p.setInt(3, i.version);
                 p.setString(4, i.correlationId); p.setString(5, i.status.name());
                 p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.contextJson);
                 p.setLong(9, i.createdAt); p.setLong(10, i.updatedAt); p.setLong(11, i.revision);
+                p.setString(12, i.parentTokenId);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -500,14 +529,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public void insertToken(Token t) {
             try (PreparedStatement p = ps("INSERT INTO wf_token (id,instance_id,workflow,version,node_id,kind,status," +
-                    "activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,last_error,created_at,updated_at) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+                    "activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,last_error,created_at,updated_at," +
+                    "payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
                 bindToken(p, t);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /** Binds parameters 1..17 in wf_token insert column order. */
+        /** Binds parameters 1..18 in wf_token insert column order. */
         private void bindToken(PreparedStatement p, Token t) throws SQLException {
             p.setString(1, t.id);
             p.setString(2, t.instanceId);
@@ -526,6 +555,7 @@ public final class JdbcStorage implements Storage {
             p.setString(15, t.lastError);
             p.setLong(16, t.createdAt);
             p.setLong(17, t.updatedAt);
+            p.setString(18, t.payloadJson);
         }
 
         @Override public Optional<Token> findToken(String id) {
@@ -550,12 +580,13 @@ public final class JdbcStorage implements Storage {
 
         @Override public void updateToken(Token t) {
             try (PreparedStatement p = ps("UPDATE wf_token SET node_id=?,kind=?,status=?,activity=?,queue=?," +
-                    "attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?,last_error=?,updated_at=? WHERE id=?")) {
+                    "attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?,last_error=?,updated_at=?," +
+                    "payload=? WHERE id=?")) {
                 p.setString(1, t.nodeId); p.setString(2, t.kind.name()); p.setString(3, t.status.name());
                 p.setString(4, t.activity); p.setString(5, t.queue); p.setInt(6, t.attempt);
                 p.setLong(7, t.availableAt); p.setString(8, t.leaseOwner); p.setLong(9, t.leaseExpiresAt);
                 p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
-                p.setLong(12, t.updatedAt); p.setString(13, t.id);
+                p.setLong(12, t.updatedAt); p.setString(13, t.payloadJson); p.setString(14, t.id);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -648,8 +679,8 @@ public final class JdbcStorage implements Storage {
                     "ORDER BY lease_expires LIMIT ?", now, max);
         }
 
-        @Override public List<Token> pendingUserTasks(int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
+        @Override public List<Token> pendingSignals(int max) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
                     "ORDER BY created_at LIMIT ?")) {
                 p.setInt(1, max);
                 try (ResultSet rs = p.executeQuery()) {
@@ -660,9 +691,76 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        @Override public List<Token> dueUserTasks(long now, int max) {
-            return query("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
+        @Override public List<Token> dueSignals(long now, int max) {
+            return query("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
                     "AND available_at>0 AND available_at<=? ORDER BY available_at LIMIT ?", now, max);
+        }
+
+        @Override public List<String> childInstanceIds(String parentInstanceId) {
+            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE parent_token_id IN " +
+                    "(SELECT id FROM wf_token WHERE instance_id=?) ORDER BY id")) {
+                p.setString(1, parentInstanceId);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<String> out = new ArrayList<>();
+                    while (rs.next()) out.add(rs.getString(1));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void putSchedule(Rows.Schedule s) {
+            try (PreparedStatement p = ps("INSERT INTO wf_schedule " +
+                    "(id,workflow,interval_millis,context,next_fire_at,created_at) VALUES (?,?,?,?,?,?)")) {
+                p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
+                p.setString(4, s.contextJson); p.setLong(5, s.nextFireAt); p.setLong(6, s.createdAt);
+                p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void deleteSchedule(String id) {
+            try (PreparedStatement p = ps("DELETE FROM wf_schedule WHERE id=?")) {
+                p.setString(1, id);
+                p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Rows.Schedule> schedules() {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule ORDER BY id");
+                 ResultSet rs = p.executeQuery()) {
+                List<Rows.Schedule> out = new ArrayList<>();
+                while (rs.next()) out.add(readSchedule(rs));
+                return out;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
+                    "ORDER BY next_fire_at LIMIT ?")) {
+                p.setLong(1, now); p.setInt(2, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Rows.Schedule> out = new ArrayList<>();
+                    while (rs.next()) out.add(readSchedule(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
+            try (PreparedStatement p = ps("UPDATE wf_schedule SET next_fire_at=? WHERE id=? AND next_fire_at=?")) {
+                p.setLong(1, nextFireAt); p.setString(2, id); p.setLong(3, expectedFireAt);
+                return p.executeUpdate() == 1;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        private static Rows.Schedule readSchedule(ResultSet rs) throws SQLException {
+            Rows.Schedule s = new Rows.Schedule();
+            s.id = rs.getString("id");
+            s.workflow = rs.getString("workflow");
+            s.intervalMillis = rs.getLong("interval_millis");
+            s.contextJson = rs.getString("context");
+            s.nextFireAt = rs.getLong("next_fire_at");
+            s.createdAt = rs.getLong("created_at");
+            return s;
         }
 
         @Override public Rows.QueueDepth queueDepth(long now) {
@@ -775,6 +873,7 @@ public final class JdbcStorage implements Storage {
             i.terminationReason = rs.getString("term_reason");
             i.error = rs.getString("error");
             i.contextJson = rs.getString("context");
+            i.parentTokenId = rs.getString("parent_token_id");
             i.createdAt = rs.getLong("created_at");
             i.updatedAt = rs.getLong("updated_at");
             i.revision = rs.getLong("revision");
@@ -798,6 +897,7 @@ public final class JdbcStorage implements Storage {
             t.leaseExpiresAt = rs.getLong("lease_expires");
             t.joinStack = rs.getString("join_stack");
             t.lastError = rs.getString("last_error");
+            t.payloadJson = rs.getString("payload");
             t.createdAt = rs.getLong("created_at");
             t.updatedAt = rs.getLong("updated_at");
             return t;

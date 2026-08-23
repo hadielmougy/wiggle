@@ -42,7 +42,8 @@ class GraphTraversalTest {
         assertEquals(Handback.FORK, GraphTraversal.classify(
                 Node.fork("f", "f").withBranches(List.of("a", "b")), SERVED));
         assertEquals(Handback.JOIN, GraphTraversal.classify(Node.join("j", "j", 2), SERVED));
-        assertEquals(Handback.USER_TASK, GraphTraversal.classify(Node.userTask("u", "u", 0), SERVED));
+        assertEquals(Handback.SIGNAL, GraphTraversal.classify(Node.signal("u", "u", 0), SERVED));
+        assertEquals(Handback.SUB_WORKFLOW, GraphTraversal.classify(Node.subWorkflow("sw", "sw", "child"), SERVED));
         assertEquals(Handback.TERMINAL, GraphTraversal.classify(Node.end("e", true, null), SERVED));
     }
 }

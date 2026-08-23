@@ -147,8 +147,11 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `gate(name, pred)` | continue only while true; false ends the instance as `gated:<name>` |
 | `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
 | `fork(branches…)` | run branches in parallel, then join |
+| `forkEach(name, itemsKey, itemKey, body)` | runtime fan-out: one branch per element of the list at `itemsKey` |
+| `doWhile(name, cond, body)` | run `body`, then repeat while `cond` holds (at least once) |
 | `sleep(name, duration)` | server-side timer; holds no worker |
-| `userTask(name[, timeout[, escalation]])` | wait for a human/external completion; optional deadline escalates or fails |
+| `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
+| `subWorkflow(name, workflow)` | run another workflow as a child; result merges back, failure propagates |
 | `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |
 | `execution(mode)` | set the execution mode (§6.4) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
@@ -299,12 +302,21 @@ No JDBC URL → in-memory (single node, dev/test). With a URL, the server resolv
 supports `jdbc:postgresql:` and `jdbc:h2:`. Another database is a new module implementing the SPI —
 no engine change.
 
-### 7.3 User tasks
+### 7.3 Signals, sub-workflows and schedules
 
-`userTask(name)` parks an instance until completed out of band; no worker is held. Complete via the
-dashboard's Tasks panel or `POST /api/tasks/{taskId}/complete` with a JSON body (merged into the
-context). Optional deadline: `userTask(name, timeout)` fails the instance on timeout;
-`userTask(name, timeout, escalation)` runs the escalation branch instead.
+`awaitSignal(name)` parks an instance until the named signal arrives; no worker is held. Deliver
+via `client.signal(instanceId, name, payload)` (gRPC), the dashboard's Pending-signals panel, or
+`POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
+`awaitSignal(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
+branch instead. Signals are not buffered -- an early delivery is a retryable conflict.
+
+`subWorkflow(name, workflow)` runs a registered workflow as a child with the parent's context;
+its final context merges back, its failure/cancellation fails the parent, and cancelling the
+parent cascades to children.
+
+Schedules fire a workflow every fixed interval, leader-driven and exactly-once per fire:
+`POST /api/schedules {"workflow", "everyMillis", "context"?}`, `GET /api/schedules`,
+`DELETE /api/schedules/{id}` -- or `engine.createSchedule(...)` programmatically.
 
 ### 7.4 Schema migrations
 

@@ -128,6 +128,13 @@ public final class WiggleClient implements AutoCloseable {
                 .build()));
     }
 
+    /** Delivers a named signal to a running instance; {@code payload} merges into its context. */
+    public void signal(String instanceId, String signal, Object payload) {
+        SignalRequest.Builder req = SignalRequest.newBuilder().setInstanceId(instanceId).setSignal(signal);
+        if (payload != null) req.setPayload(ProtoJson.toValue(payload));
+        call(() -> stub.signalInstance(req.build()));
+    }
+
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {
         call(() -> stub.heartbeatTask(HeartbeatRequest.newBuilder()
                 .setTaskId(taskId)
