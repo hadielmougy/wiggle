@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Cluster membership and leader election, modelled on JobRunr's background job server
+ * Cluster membership and leader election, modelled on background job server
  * announce/heartbeat scheme:
  *
  *  - every node announces itself once and then heartbeats on a fixed interval;

@@ -1,7 +1,7 @@
 package dev.wiggle.server.engine;
 
 import dev.wiggle.core.Node;
-import dev.wiggle.server.store.Tx;
+import dev.wiggle.server.store.GraphStore;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -20,7 +20,7 @@ public final class LazyGraph {
 
     private static final int CACHE_MAX = 64;
 
-    private final Tx tx;
+    private final GraphStore graphs;
     private final String name;
     private final int version;
     private final Map<String, Node> lru = new LinkedHashMap<>(16, 0.75f, true) {
@@ -30,8 +30,8 @@ public final class LazyGraph {
     };
     private String startNode; // resolved lazily; only lifecycle start needs it
 
-    LazyGraph(Tx tx, String name, int version) {
-        this.tx = tx;
+    LazyGraph(GraphStore graphs, String name, int version) {
+        this.graphs = graphs;
         this.name = name;
         this.version = version;
     }
@@ -44,7 +44,7 @@ public final class LazyGraph {
 
     public String startNode() {
         if (startNode == null) {
-            startNode = tx.graphStartNode(name, version).orElseThrow(
+            startNode = graphs.graphStartNode(name, version).orElseThrow(
                     () -> new IllegalArgumentException("no such workflow definition: " + key()));
         }
         return startNode;
@@ -53,7 +53,7 @@ public final class LazyGraph {
     public Node node(String id) {
         Node cached = lru.get(id);
         if (cached != null) return cached;
-        Node n = tx.graphNode(name, version, id).orElseThrow(
+        Node n = graphs.graphNode(name, version, id).orElseThrow(
                 () -> new IllegalStateException("unknown node '" + id + "' in workflow " + name));
         lru.put(id, n);
         return n;

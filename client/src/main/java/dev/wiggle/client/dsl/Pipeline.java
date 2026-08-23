@@ -153,9 +153,13 @@ final class Pipeline<T> {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(
-                name, version, startNode, new LinkedHashMap<>(nodes), queues, executionMode, checkpoints);
+                name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);
         return new Blueprint<>(def, handlers, codec);
+    }
+
+    private Set<String> copyOf(Set<String> set) {
+        return set == null ? Set.of() : Set.copyOf(set);
     }
 
     private RetryPolicy retryOr(RetryPolicy retry) {

@@ -48,8 +48,6 @@ public final class WorkflowEngine {
     /** The most recently registered version of a workflow, if any. */
     public Optional<WorkflowDefinition> latestDefinition(String name) { return definitions.latest(name); }
 
-    // ------------------------------------------------------------- lifecycle
-
     public String start(String workflow, Integer version, Object context, String correlationId) {
         return storage.inTx(tx -> startInTx(tx, workflow, version, context, correlationId, null));
     }
@@ -145,8 +143,6 @@ public final class WorkflowEngine {
                 i.error, Json.parse(i.contextJson), i.createdAt, i.updatedAt);
     }
 
-    // ---------------------------------------------------------------- polling
-
     /** Leases up to {@code max} tasks for a worker. Returns immediately; long-polling lives in the HTTP layer. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis) {
         long now = System.currentTimeMillis();
@@ -194,8 +190,6 @@ public final class WorkflowEngine {
                 "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
         return until;
     }
-
-    // ------------------------------------------------------------ completion
 
     /** A task's token re-read under its instance's write lock. */
     private record LockedTask(Instance inst, Token token) {}
@@ -265,8 +259,6 @@ public final class WorkflowEngine {
         inst.updatedAt = now;
         tx.updateInstance(inst);
     }
-
-    // ------------------------------------------------------ local execution
 
     /** DEFAULT resolves to the reference {@link ExecutionMode#SERVER} for now (no server-wide override yet). */
     private static ExecutionMode resolveMode(ExecutionMode mode) {
@@ -364,7 +356,6 @@ public final class WorkflowEngine {
         tx.insertToken(cont);
     }
 
-    // ---------------------------------------------------------------- signals
 
     /** The signal waits currently pending an external delivery, oldest first. */
     public List<Token> pendingSignals(int max) {
@@ -399,8 +390,6 @@ public final class WorkflowEngine {
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
     }
-
-    // --------------------------------------------------------- housekeeping
 
     /** A per-token action executed in its own transaction by a leader sweep. */
     private interface SweepAction {
@@ -549,8 +538,6 @@ public final class WorkflowEngine {
         }
     }
 
-    // -------------------------------------------------------------- schedules
-
     /** Creates a recurring start: {@code workflow} fires every {@code every}, first fire after one interval. */
     public String createSchedule(String workflow, java.time.Duration every, Object context) {
         if (every.toMillis() < 1) throw EngineException.badRequest("schedule interval must be positive");
@@ -649,8 +636,6 @@ public final class WorkflowEngine {
         return purged;
     }
 
-    // ------------------------------------------------------------- helpers
-
     private static boolean predicateValue(Object result) {
         if (result instanceof Boolean b) return b;
         if (result instanceof Map<?, ?> m && m.get("value") instanceof Boolean b) return b;
@@ -677,8 +662,6 @@ public final class WorkflowEngine {
         ctx.putAll((Map<String, Object>) result);
         inst.contextJson = Json.write(ctx);
     }
-
-    // ------------------------------------------------------ the state machine
 
     /**
      * Advances tokens until each one is parked on something that needs the outside

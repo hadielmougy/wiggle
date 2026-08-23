@@ -93,7 +93,6 @@ public final class Rows {
         }
     }
 
-    /** A server node in the cluster -- the JobRunr "background job server" analogue. */
     public static final class ServerNode implements Cloneable {
         public String id;
         public String name;

@@ -3,6 +3,7 @@ package dev.wiggle.server.engine;
 import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.Json;
 import dev.wiggle.core.WorkflowDefinition;
+import dev.wiggle.server.store.GraphStore;
 import dev.wiggle.server.store.Storage;
 import dev.wiggle.server.store.Tx;
 
@@ -38,16 +39,16 @@ public final class DefinitionRegistry {
     }
 
     /** The execution mode for a version, cached; parses the blob at most once per version. */
-    public ExecutionMode executionMode(Tx tx, String name, int version) {
+    public ExecutionMode executionMode(GraphStore graphs, String name, int version) {
         return modeCache.computeIfAbsent(name + ":" + version, k ->
-                tx.definition(name, version)
+                graphs.definition(name, version)
                         .map(body -> WorkflowDefinition.fromJson(Json.parse(body)).executionMode())
                         .orElse(ExecutionMode.DEFAULT));
     }
 
     /** A memory-thrifty handle for the engine: fetches one node at a time, holds no whole graph. */
-    public LazyGraph graph(Tx tx, String name, int version) {
-        return new LazyGraph(tx, name, version);
+    public LazyGraph graph(GraphStore graphs, String name, int version) {
+        return new LazyGraph(graphs, name, version);
     }
 
     public WorkflowDefinition get(String name, int version) {
@@ -59,8 +60,8 @@ public final class DefinitionRegistry {
         return storage.inTx(tx -> load(tx, name, version));
     }
 
-    private Optional<WorkflowDefinition> load(Tx tx, String name, int version) {
-        return tx.definition(name, version).map(body -> WorkflowDefinition.fromJson(Json.parse(body)));
+    private Optional<WorkflowDefinition> load(GraphStore graphs, String name, int version) {
+        return graphs.definition(name, version).map(body -> WorkflowDefinition.fromJson(Json.parse(body)));
     }
 
     public Optional<WorkflowDefinition> latest(String name) {

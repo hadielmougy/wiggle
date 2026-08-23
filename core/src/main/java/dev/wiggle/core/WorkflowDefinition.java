@@ -14,10 +14,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
                                  Set<String> checkpoints) {
 
     public WorkflowDefinition {
-        nodes = Map.copyOf(nodes);
-        queues = Set.copyOf(queues);
         executionMode = executionMode == null ? ExecutionMode.DEFAULT : executionMode;
-        checkpoints = checkpoints == null ? Set.of() : Set.copyOf(checkpoints);
     }
 
     /** Convenience constructor with no checkpoints. */
