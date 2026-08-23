@@ -1,0 +1,515 @@
+<title>Wiggle — Workflow Engine for Java 21</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg:#0e1420; --panel:#161d2b; --panel-2:#1c2536; --line:#28324a;
+    --fg:#eef1f6; --muted:#8892a6; --dim:#5c6780;
+    --accent:#f5b544; --accent-soft:#f5b54426; --teal:#3fb6a8; --blue:#5b9dff;
+    --good:#3ecf7a; --bad:#ff8080; --warn:#c9a86a;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  :root[data-theme="light"] {
+    --bg:#f3f1ea; --panel:#ffffff; --panel-2:#f7f5ef; --line:#e2ddce;
+    --fg:#1a2030; --muted:#5f6a80; --dim:#9aa2b3;
+    --accent:#c8801a; --accent-soft:#c8801a1a; --teal:#1f8a7e; --blue:#2f6fd6;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; }
+  body {
+    background:var(--bg); color:var(--fg); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+
+  /* ---- deck scaffolding ---- */
+  .deck { height:100vh; width:100vw; position:relative; }
+  .slide {
+    position:absolute; inset:0; display:none; flex-direction:column;
+    justify-content:center;
+    padding:clamp(28px,6vw,110px); padding-bottom:clamp(64px,9vh,120px);
+    opacity:0; transform:translateY(14px);
+    transition:opacity .45s ease, transform .45s ease;
+  }
+  .slide.active { display:flex; opacity:1; transform:none; }
+  .slide.active .rise { animation:rise .55s cubic-bezier(.2,.7,.2,1) both; }
+  .slide.active .rise:nth-child(2){animation-delay:.05s}
+  .slide.active .rise:nth-child(3){animation-delay:.1s}
+  .slide.active .rise:nth-child(4){animation-delay:.15s}
+  .slide.active .rise:nth-child(5){animation-delay:.2s}
+  @keyframes rise { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:none} }
+  @media (prefers-reduced-motion:reduce){ .slide,.rise{transition:none!important;animation:none!important} }
+
+  .eyebrow {
+    font-size:12px; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--accent); font-weight:600; margin-bottom:18px;
+    display:flex; align-items:center; gap:12px;
+  }
+  .eyebrow::before{ content:""; width:26px; height:2px; background:var(--accent); display:inline-block; }
+  h1 { font-size:clamp(38px,7vw,92px); line-height:.98; letter-spacing:-.02em; text-wrap:balance; font-weight:800; }
+  h2 { font-size:clamp(26px,4.2vw,52px); line-height:1.05; letter-spacing:-.015em; text-wrap:balance; font-weight:750; margin-bottom:8px; }
+  .lead { font-size:clamp(16px,1.7vw,22px); color:var(--muted); max-width:64ch; line-height:1.5; }
+  p.body { font-size:clamp(15px,1.4vw,18px); color:var(--muted); max-width:62ch; line-height:1.6; }
+  .accent { color:var(--accent); }
+  .teal { color:var(--teal); }
+
+  /* ---- wiggle motif ---- */
+  .wiggle { width:100%; height:34px; overflow:visible; display:block; }
+  .wiggle path { fill:none; stroke:var(--accent); stroke-width:3; stroke-linecap:round;
+    stroke-dasharray:1400; stroke-dashoffset:1400; }
+  .slide.active .wiggle path { animation:draw 1.2s ease forwards .15s; }
+  @keyframes draw { to { stroke-dashoffset:0; } }
+
+  /* ---- layout helpers ---- */
+  .grid2 { display:grid; grid-template-columns:1.05fr .95fr; gap:clamp(24px,4vw,64px); align-items:center; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+  @media (max-width:820px){ .grid2{grid-template-columns:1fr} .grid3{grid-template-columns:1fr} }
+
+  .card {
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:24px; display:flex; flex-direction:column; gap:8px;
+  }
+  .card h3 { font-size:17px; letter-spacing:-.01em; }
+  .card p { font-size:14px; color:var(--muted); line-height:1.55; }
+  .card .k { font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--teal); font-weight:600; }
+
+  pre {
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:22px 24px; overflow:auto; font-family:var(--mono);
+    font-size:clamp(12px,1.15vw,15px); line-height:1.65;
+  }
+  pre code{ color:var(--fg); }
+  .c-key{color:var(--blue)} .c-str{color:var(--teal)} .c-fn{color:var(--accent)}
+  .c-com{color:var(--dim); font-style:italic} .c-typ{color:#c99bff}
+
+  ul.feat { list-style:none; display:flex; flex-direction:column; gap:14px; max-width:60ch; }
+  ul.feat li { display:flex; gap:14px; font-size:clamp(15px,1.5vw,19px); line-height:1.45; }
+  ul.feat li b { color:var(--fg); font-weight:700; }
+  ul.feat li span.mk { color:var(--accent); font-weight:800; flex:none; }
+  ul.feat li p { color:var(--muted); font-size:.92em; margin-top:2px; }
+
+  table.ops { border-collapse:collapse; width:100%; font-size:clamp(13px,1.25vw,16px); }
+  table.ops td { padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table.ops td:first-child { font-family:var(--mono); color:var(--accent); white-space:nowrap; width:1%; padding-right:28px; }
+  table.ops td:last-child { color:var(--muted); }
+  table.ops tr:last-child td{ border-bottom:none; }
+
+  .flow { display:flex; align-items:center; gap:0; flex-wrap:wrap; margin-top:8px; }
+  .node {
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:12px 16px; font-family:var(--mono); font-size:13px; white-space:nowrap;
+  }
+  .node.fork{ border-color:var(--accent); color:var(--accent); }
+  .arrow { color:var(--dim); padding:0 10px; font-size:18px; }
+  .branchwrap{ display:flex; flex-direction:column; gap:10px; padding:0 6px; }
+
+  .stat { display:flex; flex-direction:column; gap:2px; }
+  .stat b { font-size:clamp(30px,4vw,48px); letter-spacing:-.02em; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .stat span { font-size:13px; color:var(--muted); letter-spacing:.04em; }
+
+  .badge{ font-family:var(--mono); font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--line); }
+  .b-run{color:var(--blue);border-color:#2d4a80} .b-done{color:var(--good);border-color:#1f5a3a}
+  .b-fail{color:var(--bad);border-color:#6a2b2b} .b-wait{color:var(--warn);border-color:#5c4a24}
+
+  /* ---- chrome: progress, counter, controls, theme ---- */
+  .rail { position:fixed; top:0; left:0; height:3px; background:var(--accent); width:0; transition:width .4s ease; z-index:30; }
+  .counter { position:fixed; bottom:22px; right:26px; font-family:var(--mono); font-size:13px; color:var(--muted); z-index:30; font-variant-numeric:tabular-nums; }
+  .counter b{ color:var(--fg); }
+  .dots { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); display:flex; gap:9px; z-index:30; }
+  .dots i { width:7px; height:7px; border-radius:50%; background:var(--dim); opacity:.5; cursor:pointer; transition:all .25s; }
+  .dots i.on { background:var(--accent); opacity:1; transform:scale(1.25); }
+  .hint { position:fixed; bottom:22px; left:26px; font-size:12px; color:var(--dim); z-index:30; }
+  .hint kbd { font-family:var(--mono); border:1px solid var(--line); border-radius:5px; padding:1px 6px; color:var(--muted); }
+  .themebtn {
+    position:fixed; top:16px; right:22px; z-index:30; background:var(--panel);
+    border:1px solid var(--line); color:var(--muted); border-radius:8px;
+    width:34px; height:34px; cursor:pointer; font-size:15px;
+  }
+  .themebtn:hover{ color:var(--fg); border-color:var(--accent); }
+  :focus-visible{ outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+
+  .brand { display:flex; align-items:baseline; gap:14px; }
+  .brand .logo { font-size:clamp(40px,7vw,92px); }
+  .meta { display:flex; gap:26px; flex-wrap:wrap; margin-top:8px; color:var(--muted); font-size:14px; }
+  .meta span b{ color:var(--fg); }
+  .kicker { font-family:var(--mono); color:var(--teal); font-size:14px; }
+</style>
+
+<div class="rail" id="rail"></div>
+<button class="themebtn" id="themebtn" aria-label="Toggle theme">◑</button>
+
+<div class="deck" id="deck">
+
+  <!-- 1 — TITLE -->
+  <section class="slide">
+    <div class="eyebrow rise">Workflow engine · Java 21 · Apache-2.0</div>
+    <div class="brand rise">
+      <span class="logo">🌀</span>
+      <h1>Wiggle</h1>
+    </div>
+    <svg class="wiggle rise" viewBox="0 0 1200 34" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0,17 C60,-8 120,42 180,17 S300,-8 360,17 S480,42 540,17 S660,-8 720,17 S840,42 900,17 S1020,-8 1080,17 S1200,42 1200,17"/>
+    </svg>
+    <p class="lead rise" style="margin-top:22px">
+      A lightweight, embeddable workflow engine. Describe a flow with a
+      <span class="accent">stream-style DSL</span>, run it embedded or as a cluster, and let
+      <span class="teal">pull-based workers</span> process the steps.
+    </p>
+    <div class="meta rise" style="margin-top:26px">
+      <span><b>Durable</b> · survives restarts</span>
+      <span><b>At-least-once</b> · lease recovery</span>
+      <span><b>No runtime deps</b> · JDK only</span>
+    </div>
+  </section>
+
+  <!-- 2 — THE PROBLEM -->
+  <section class="slide">
+    <div class="eyebrow rise">The problem</div>
+    <h2 class="rise">Long-running work outlives a single request.</h2>
+    <p class="body rise" style="margin-top:14px">
+      Payments, fulfilment, approvals, ETL — real business processes span retries, timers,
+      human input, and parallel branches. Bolting that onto request threads and cron jobs
+      leaks state, loses work on crashes, and hides the flow across a dozen services.
+    </p>
+    <div class="grid3 rise" style="margin-top:38px">
+      <div class="card"><span class="k">Without an engine</span><h3>Scattered state</h3><p>Retry counters, timers, and "where was I" live in ad-hoc tables and queues.</p></div>
+      <div class="card"><span class="k">Without an engine</span><h3>Lost on crash</h3><p>A dead process forgets in-flight work; nothing reclaims or resumes it.</p></div>
+      <div class="card"><span class="k">Wiggle</span><h3>One durable flow</h3><p>The workflow <i>is</i> the source of truth — persisted, resumable, observable.</p></div>
+    </div>
+  </section>
+
+  <!-- 3 — DEFINE A WORKFLOW -->
+  <section class="slide">
+    <div class="grid2">
+      <div>
+        <div class="eyebrow rise">Define</div>
+        <h2 class="rise">A workflow is a chain of steps.</h2>
+        <p class="body rise" style="margin-top:14px">
+          Nothing runs while you build it. <span class="accent">build()</span> produces an
+          immutable <span class="accent">Blueprint</span> you register and start. The context
+          is one type from first step to last — typed records or JSON maps.
+        </p>
+        <div class="meta rise" style="margin-top:22px">
+          <span><b class="teal">step</b> transform</span>
+          <span><b class="teal">gate</b> filter</span>
+          <span><b class="teal">fork</b> parallel</span>
+          <span><b class="teal">sleep</b> timer</span>
+        </div>
+      </div>
+      <pre class="rise" aria-label="Workflow definition example"><code><span class="c-typ">Blueprint</span>&lt;Order&gt; orders = <span class="c-fn">Workflow</span>.define(<span class="c-str">"order-fulfilment"</span>,
+        <span class="c-fn">ContextCodec</span>.records(Order.class))
+
+    .<span class="c-fn">step</span>(<span class="c-str">"validate"</span>, o -&gt; o.withStatus(<span class="c-str">"VALIDATED"</span>))
+
+    <span class="c-com">// false ends the instance successfully</span>
+    .<span class="c-fn">gate</span>(<span class="c-str">"in-stock"</span>, o -&gt; o.quantity() &gt; <span class="c-key">0</span>)
+
+    .<span class="c-fn">fork</span>(
+        <span class="c-fn">Branch</span>.of(<span class="c-str">"payment"</span>, s -&gt; s
+            .<span class="c-fn">step</span>(<span class="c-str">"authorise"</span>, Payments::authorise)
+            .<span class="c-fn">step</span>(<span class="c-str">"capture"</span>,   Payments::capture)),
+        <span class="c-fn">Branch</span>.of(<span class="c-str">"shipping"</span>, s -&gt; s
+            .<span class="c-fn">step</span>(<span class="c-str">"reserve"</span>, Stock::reserve)
+            .<span class="c-fn">sleep</span>(<span class="c-str">"warehouse"</span>, ofMillis(<span class="c-key">300</span>))
+            .<span class="c-fn">step</span>(<span class="c-str">"label"</span>,   Labels::print)))
+
+    .<span class="c-fn">step</span>(<span class="c-str">"notify"</span>, Notifier::send)
+    .<span class="c-fn">build</span>();</code></pre>
+    </div>
+  </section>
+
+  <!-- 4 — THE OPERATIONS -->
+  <section class="slide">
+    <div class="eyebrow rise">The DSL</div>
+    <h2 class="rise">Everything a real process needs.</h2>
+    <div class="grid2 rise" style="margin-top:26px; align-items:start">
+      <table class="ops">
+        <tr><td>step / effect</td><td>run on a worker; return value becomes the new context</td></tr>
+        <tr><td>gate</td><td>continue only while a predicate holds</td></tr>
+        <tr><td>choose</td><td>switch/case — the first matching branch runs</td></tr>
+        <tr><td>fork / join</td><td>run branches in parallel, wait for all</td></tr>
+        <tr><td>forkEach</td><td>runtime fan-out: one branch per list element</td></tr>
+      </table>
+      <table class="ops">
+        <tr><td>sleep</td><td>server-side timer — no worker held while waiting</td></tr>
+        <tr><td>awaitSignal</td><td>pause for external input; optional deadline escalates</td></tr>
+        <tr><td>subWorkflow</td><td>run another workflow as a child; result merges back</td></tr>
+        <tr><td>doWhile</td><td>run a body, repeat while a condition holds</td></tr>
+        <tr><td>onQueue</td><td>route steps to a dedicated worker pool</td></tr>
+      </table>
+    </div>
+    <p class="body rise" style="margin-top:26px">
+      Any of <span class="accent">step</span>, <span class="accent">effect</span>, and
+      <span class="accent">gate</span> take an optional <span class="accent">RetryPolicy</span> —
+      exponential backoff with jitter by default.
+    </p>
+  </section>
+
+  <!-- 5 — ARCHITECTURE -->
+  <section class="slide">
+    <div class="eyebrow rise">Architecture</div>
+    <h2 class="rise">Server holds the truth. Workers pull the work.</h2>
+    <p class="body rise" style="margin-top:14px">
+      The server never pushes. Workers ask for work when they have capacity, so backpressure
+      is built in and workers need no inbound connectivity. A step that stalls has its lease
+      expire and is redelivered — <span class="accent">at-least-once</span>, always.
+    </p>
+    <div class="grid3 rise" style="margin-top:36px">
+      <div class="card">
+        <span class="k">Server</span><h3>Durable orchestration</h3>
+        <p>Persists instances &amp; tokens, drives timers, elects a leader for clock-driven duties. In-memory for dev, Postgres for a cluster.</p>
+      </div>
+      <div class="card">
+        <span class="k">Workers</span><h3>Pull-based execution</h3>
+        <p>Register blueprints, long-poll for steps, run them with configurable concurrency &amp; leases. Add processes to scale — they share load automatically.</p>
+      </div>
+      <div class="card">
+        <span class="k">Storage SPI</span><h3>Pluggable</h3>
+        <p>The core knows no database. A JDBC module plugs in via <span style="font-family:var(--mono);color:var(--teal)">StorageProvider</span>; another DB is a new module, not an engine change.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 — EXECUTION MODES -->
+  <section class="slide">
+    <div class="eyebrow rise">Execution modes</div>
+    <h2 class="rise">Trade round-trips for throughput — per workflow.</h2>
+    <p class="body rise" style="margin-top:14px">
+      By default the server drives one step at a time. For step-heavy linear flows, let a worker
+      chain consecutive same-queue steps locally. The mode is part of the definition's content
+      hash, so an in-flight instance keeps the mode it started on.
+    </p>
+    <div class="grid3 rise" style="margin-top:34px; align-items:start">
+      <div class="card">
+        <span class="k">Default</span><h3 class="teal">SERVER</h3>
+        <p>Server-driven: every step is a poll → execute → complete round-trip. Maximum control and visibility.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <span class="badge b-done">most durable</span>
+          <span class="badge b-wait">most round-trips</span>
+        </div>
+      </div>
+      <div class="card" style="border-color:var(--accent)">
+        <span class="k accent" style="color:var(--accent)">Balanced</span><h3 class="accent">LOCAL_SYNC</h3>
+        <p>Worker runs consecutive same-queue steps back-to-back, committing each before the next. <b>As durable as SERVER</b> — a crash re-runs at most one step.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <span class="badge b-done">durable</span>
+          <span class="badge b-run">fewer hops</span>
+        </div>
+      </div>
+      <div class="card">
+        <span class="k">Throughput</span><h3 style="color:var(--blue)">LOCAL_ASYNC</h3>
+        <p>Buffers up to <span style="font-family:var(--mono)">localBatchSize</span> steps, reports in one call. Fewest commits — but a killed worker re-runs the batch, so steps must be idempotent.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <span class="badge b-run">fastest</span>
+          <span class="badge b-fail">wider blast radius</span>
+        </div>
+      </div>
+    </div>
+    <p class="body rise" style="margin-top:26px">
+      Every mode hands control back to the server at a boundary — a <span class="accent">sleep</span>,
+      <span class="accent">fork</span>, <span class="accent">join</span>,
+      <span class="accent">awaitSignal</span>, a sub-workflow, a different queue, or a retry — so
+      those always coordinate centrally. <span class="teal">.checkpoint()</span> forces an async
+      step to commit early; a graceful <span style="font-family:var(--mono)">close()</span> drains
+      the buffer, losing nothing.
+    </p>
+  </section>
+
+  <!-- 7 — RESILIENCE / SIGNALS -->
+  <section class="slide">
+    <div class="grid2">
+      <div>
+        <div class="eyebrow rise">Resilience &amp; humans</div>
+        <h2 class="rise">Retries, timers, and days-long waits.</h2>
+        <ul class="feat rise" style="margin-top:22px">
+          <li><span class="mk">↻</span><div><b>Automatic retries</b><p>Per-step policy; throw <span style="font-family:var(--mono)">PermanentActivityException</span> to skip them.</p></div></li>
+          <li><span class="mk">⏱</span><div><b>Server-side timers</b><p><span style="font-family:var(--mono)">sleep</span> parks the instance — no worker thread is held.</p></div></li>
+          <li><span class="mk">✋</span><div><b>Signals</b><p>Wait for a human to approve or a system to report back. Deadlines escalate or fail.</p></div></li>
+          <li><span class="mk">⛓</span><div><b>Lease recovery</b><p>A worker dies mid-step → its lease expires → another picks it up.</p></div></li>
+        </ul>
+      </div>
+      <pre class="rise" aria-label="Signal example"><code><span class="c-fn">Workflow</span>.defineJson(<span class="c-str">"expense"</span>)
+    .<span class="c-fn">step</span>(<span class="c-str">"submit"</span>, Expenses::record)
+
+    <span class="c-com">// wait up to 48h for a human;</span>
+    <span class="c-com">// escalate if nobody acts</span>
+    .<span class="c-fn">awaitSignal</span>(<span class="c-str">"manager-approval"</span>,
+        ofHours(<span class="c-key">48</span>),
+        b -&gt; b.<span class="c-fn">step</span>(<span class="c-str">"escalate"</span>,
+                 Escalations::toDirector))
+
+    .<span class="c-fn">step</span>(<span class="c-str">"pay-out"</span>, Expenses::disburse)
+    .<span class="c-fn">build</span>();
+
+<span class="c-com">// deliver from anywhere:</span>
+client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approval"</span>,
+              <span class="c-fn">Map</span>.of(<span class="c-str">"decision"</span>, <span class="c-str">"approved"</span>));</code></pre>
+    </div>
+  </section>
+
+  <!-- 7 — DASHBOARD -->
+  <section class="slide">
+    <div class="eyebrow rise">Observability</div>
+    <h2 class="rise">A live dashboard, in the box.</h2>
+    <p class="body rise" style="margin-top:14px">
+      A <span class="accent">ClojureScript + Reagent</span> single-page app ships inside the
+      server jar and is served straight from its classpath — no proxy, no CDN. Every node runs
+      its own; each shows the whole system.
+    </p>
+    <div class="grid2 rise" style="margin-top:34px; align-items:start">
+      <div class="grid3" style="grid-template-columns:1fr 1fr; gap:16px">
+        <div class="card"><span class="k">Instances</span><h3>Live trace</h3><p>The diagram with every node ringed by its token status; context, tokens, cancel.</p></div>
+        <div class="card"><span class="k">Workflows</span><h3>Graph view</h3><p>Compiled graph as a diagram — gates, fork/join, signals, loop back-edges.</p></div>
+        <div class="card"><span class="k">Schedules</span><h3>Interval &amp; cron</h3><p>Create and delete timers with a seed context.</p></div>
+        <div class="card"><span class="k">Signals</span><h3>Deliver inline</h3><p>Every instance parked on a signal, with a form to send it.</p></div>
+      </div>
+      <div class="card" style="gap:16px">
+        <span class="k">Instance · order-fulfilment</span>
+        <div class="flow" style="gap:8px">
+          <span class="node" style="border-color:var(--good)">validate</span>
+          <span class="arrow">→</span>
+          <span class="node" style="border-color:var(--good)">gate</span>
+          <span class="arrow">→</span>
+          <span class="node fork">fork</span>
+        </div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px">
+          <span class="badge b-done">payment ✓</span>
+          <span class="badge b-run">shipping ●</span>
+          <span class="badge b-wait">notify ⏸</span>
+        </div>
+        <p style="font-family:var(--mono); font-size:12px; color:var(--muted); margin-top:6px">
+          GET /api/instances/{id} · JSON, same API the SPA uses
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 — SCALE / DEPLOY -->
+  <section class="slide">
+    <div class="eyebrow rise">Deploy</div>
+    <h2 class="rise">One JVM to a Postgres cluster — same code.</h2>
+    <p class="body rise" style="margin-top:14px">
+      Point several nodes at one Postgres and they form a cluster: every node serves the API and
+      hands out work; exactly one leader runs clock-driven duties. Kill any node — the rest carry on.
+    </p>
+    <div class="grid3 rise" style="margin-top:40px">
+      <div class="stat"><b>0</b><span>runtime dependencies (JDK only)</span></div>
+      <div class="stat"><b>1&nbsp;→&nbsp;N</b><span>nodes, set by a JDBC URL</span></div>
+      <div class="stat"><b>≥1×</b><span>at-least-once execution</span></div>
+    </div>
+    <pre class="rise" style="margin-top:36px"><code><span class="c-com"># single node, in-memory — dev &amp; tests</span>
+./gradlew :server:run
+
+<span class="c-com"># cluster on Postgres — just add a JDBC URL</span>
+<span class="c-key">WIGGLE_JDBC_URL</span>=jdbc:postgresql://localhost:5432/wiggle \
+<span class="c-key">WIGGLE_DASHBOARD_PORT</span>=8090 ./gradlew :server:run</code></pre>
+  </section>
+
+  <!-- 9 — QUICK START -->
+  <section class="slide">
+    <div class="grid2">
+      <div>
+        <div class="eyebrow rise">Quick start</div>
+        <h2 class="rise">End to end in one JVM.</h2>
+        <p class="body rise" style="margin-top:14px">
+          An embedded server, one worker, and a running instance — the whole loop in a single
+          <span class="accent">try-with-resources</span> block.
+        </p>
+        <div class="meta rise" style="margin-top:24px">
+          <span class="kicker">io.github.hadielmougy:wiggle-client:2.1.0</span>
+        </div>
+      </div>
+      <pre class="rise" aria-label="Quick start example"><code><span class="c-typ">Blueprint</span>&lt;Map&lt;String,Object&gt;&gt; greet =
+    <span class="c-fn">Workflow</span>.defineJson(<span class="c-str">"greet"</span>)
+        .<span class="c-fn">step</span>(<span class="c-str">"hello"</span>, ctx -&gt;
+            <span class="c-fn">Map</span>.of(<span class="c-str">"greeting"</span>,
+                   <span class="c-str">"hello, "</span> + ctx.get(<span class="c-str">"name"</span>)))
+        .<span class="c-fn">build</span>();
+
+<span class="c-key">try</span> (var server = <span class="c-key">new</span> <span class="c-fn">WiggleServer</span>(cfg).start();
+     var client = <span class="c-key">new</span> <span class="c-fn">WiggleClient</span>(server.baseUrl());
+     var worker = <span class="c-key">new</span> <span class="c-fn">Worker</span>(client, <span class="c-str">"w-1"</span>)
+                      .register(greet)) {
+    worker.start();
+
+    <span class="c-typ">String</span> id = client.<span class="c-fn">start</span>(greet,
+                      <span class="c-fn">Map</span>.of(<span class="c-str">"name"</span>, <span class="c-str">"ada"</span>));
+    var r = client.<span class="c-fn">awaitCompletion</span>(id, ofSeconds(<span class="c-key">10</span>));
+
+    <span class="c-fn">System</span>.out.println(r.status());  <span class="c-com">// COMPLETED</span>
+}</code></pre>
+    </div>
+  </section>
+
+  <!-- 10 — CLOSE -->
+  <section class="slide">
+    <div class="eyebrow rise">Wrap-up</div>
+    <div class="brand rise"><span class="logo">🌀</span><h1>Durable flows,<br>ordinary Java.</h1></div>
+    <svg class="wiggle rise" viewBox="0 0 1200 34" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0,17 C60,-8 120,42 180,17 S300,-8 360,17 S480,42 540,17 S660,-8 720,17 S840,42 900,17 S1020,-8 1080,17 S1200,42 1200,17"/>
+    </svg>
+    <ul class="feat rise" style="margin-top:24px">
+      <li><span class="mk">→</span><div><b>Fluent DSL</b> — steps, gates, forks, signals, schedules, sub-workflows.</div></li>
+      <li><span class="mk">→</span><div><b>Durable &amp; resilient</b> — survives restarts; at-least-once with lease recovery.</div></li>
+      <li><span class="mk">→</span><div><b>Scales in place</b> — embed it, or cluster on Postgres with the same code.</div></li>
+    </ul>
+    <p class="body rise" style="margin-top:26px">
+      <span class="kicker">./gradlew :example:run</span> &nbsp;·&nbsp; docs/onboarding.md &nbsp;·&nbsp; Apache-2.0
+    </p>
+  </section>
+
+</div>
+
+<div class="dots" id="dots"></div>
+<div class="counter" id="counter"><b>01</b> / 11</div>
+<div class="hint"><kbd>←</kbd> <kbd>→</kbd> or <kbd>space</kbd> to navigate</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const rail = document.getElementById('rail');
+  const counter = document.getElementById('counter');
+  const dotsWrap = document.getElementById('dots');
+  let i = 0;
+
+  slides.forEach((_, n) => {
+    const d = document.createElement('i');
+    d.addEventListener('click', () => go(n));
+    dotsWrap.appendChild(d);
+  });
+  const dots = Array.from(dotsWrap.children);
+
+  function go(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    dots.forEach((d, k) => d.classList.toggle('on', k === i));
+    rail.style.width = ((i + 1) / slides.length * 100) + '%';
+    counter.innerHTML = '<b>' + String(i + 1).padStart(2, '0') + '</b> / ' + slides.length;
+  }
+  function next(){ go(i + 1); }
+  function prev(){ go(i - 1); }
+
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight','ArrowDown',' ','PageDown'].includes(e.key)) { e.preventDefault(); next(); }
+    else if (['ArrowLeft','ArrowUp','PageUp'].includes(e.key)) { e.preventDefault(); prev(); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(slides.length - 1);
+  });
+  let sx = null;
+  document.addEventListener('touchstart', e => sx = e.touches[0].clientX, {passive:true});
+  document.addEventListener('touchend', e => {
+    if (sx === null) return;
+    const dx = e.changedTouches[0].clientX - sx;
+    if (Math.abs(dx) > 50) dx < 0 ? next() : prev();
+    sx = null;
+  }, {passive:true});
+
+  // theme toggle
+  const tb = document.getElementById('themebtn');
+  tb.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const dark = cur ? cur === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  });
+
+  go(0);
+</script>
