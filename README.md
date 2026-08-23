@@ -547,8 +547,9 @@ npx shadow-cljs watch app     # hot-reloading dev build on http://localhost:8280
 ```
 
 `./gradlew :server:build` compiles the release bundle automatically (via `buildDashboard`).
-It needs Node on the PATH; without it — or with `-PskipDashboard` — the build skips the SPA and
-the server falls back to a built-in minimal HTML page, so a pure-JVM build still works.
+It needs Node on the PATH; without it — or with `-PskipDashboard` — the build skips the SPA, and
+the dashboard responds `503 dashboard UI not built` until you run the bundle build (`make cljs`).
+The rest of the server (gRPC API, JSON endpoints) works regardless.
 
 ---
 
