@@ -17,6 +17,10 @@ capacity.
 >
 > Want the 5-minute tour? See the **[slide deck](https://hadielmougy.github.io/wiggle/presentation.html)**
 > ([source](docs/presentation.html)).
+>
+> Want to see every operator combined in runnable code? See the
+> **[DSL cookbook](docs/dsl-cookbook.md)** — eight workflows, run them all with
+> `./gradlew :example:runCookbook`.
 
 ---
 
@@ -67,11 +71,19 @@ import dev.wiggle.core.InstanceView;
 import dev.wiggle.server.*;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 
 // 1. Define a workflow. Here the context is a plain Map; see below for typed records.
+// A step must return the whole context, not just the fields it changed -- the engine
+// diffs the return value against what it was given, so a bare Map.of("greeting", ...)
+// would tell it "name" was deliberately cleared.
 Blueprint<Map<String, Object>> greet = Workflow.defineJson("greet")
-        .step("say-hello", ctx -> Map.of("greeting", "hello, " + ctx.get("name")))
+        .step("say-hello", ctx -> {
+            Map<String, Object> next = new HashMap<>(ctx);
+            next.put("greeting", "hello, " + ctx.get("name"));
+            return next;
+        })
         .build();
 
 // 2. Start an embedded, in-memory server (great for dev and tests).

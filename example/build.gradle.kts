@@ -40,6 +40,13 @@ tasks.register<JavaExec>("submitOrders") {
     args = listOf(project.findProperty("count")?.toString() ?: "5")
 }
 
+tasks.register<JavaExec>("runCookbook") {
+    group = "application"
+    description = "Runs every DSL cookbook example (embedded server + worker, one JVM)."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.wiggle.cookbook.CookbookDemo")
+}
+
 tasks.register<JavaExec>("bench") {
     group = "application"
     description = "Throughput benchmark of a linear pipeline. Set WIGGLE_EXECUTION_MODE etc."
