@@ -1,3 +1,11 @@
-# Keep the build context tiny: only the server distribution is needed by the image.
-*
-!server/build/install/wiggle
+# Keep the build context small and reproducible: never ship host build output or caches.
+.git
+.gradle
+**/build
+out
+node_modules
+dashboard-ui/node_modules
+server/src/main/resources/dashboard/js
+*.log
+.DS_Store
+docs/*.html
