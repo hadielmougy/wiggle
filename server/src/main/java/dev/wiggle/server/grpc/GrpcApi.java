@@ -188,6 +188,47 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
+    public void createSchedule(CreateScheduleRequest req, StreamObserver<ScheduleView> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CreateSchedule workflow=" + req.getWorkflow());
+        run(resp, () -> {
+            Object context = req.hasContext() ? ProtoJson.fromValue(req.getContext()) : null;
+            String id = req.getCadenceCase() == CreateScheduleRequest.CadenceCase.CRON
+                    ? engine.createCronSchedule(req.getWorkflow(), req.getCron(), context)
+                    : engine.createSchedule(req.getWorkflow(),
+                            java.time.Duration.ofMillis(req.getEveryMillis()), context);
+            return engine.schedules().stream().filter(s -> s.id.equals(id)).findFirst()
+                    .map(GrpcApi::scheduleView).orElseThrow();
+        });
+    }
+
+    @Override
+    public void listSchedules(Empty req, StreamObserver<ScheduleList> resp) {
+        run(resp, () -> {
+            ScheduleList.Builder out = ScheduleList.newBuilder();
+            engine.schedules().forEach(s -> out.addSchedules(scheduleView(s)));
+            return out.build();
+        });
+    }
+
+    @Override
+    public void deleteSchedule(ScheduleIdRequest req, StreamObserver<Ack> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc DeleteSchedule id=" + req.getId());
+        run(resp, () -> {
+            engine.deleteSchedule(req.getId());
+            return Ack.newBuilder().setOk(true).build();
+        });
+    }
+
+    private static ScheduleView scheduleView(dev.wiggle.server.store.Rows.Schedule s) {
+        ScheduleView.Builder b = ScheduleView.newBuilder()
+                .setId(s.id).setWorkflow(s.workflow)
+                .setEveryMillis(s.intervalMillis)
+                .setNextFireAt(s.nextFireAt).setCreatedAt(s.createdAt);
+        if (s.cron != null) b.setCron(s.cron);
+        return b.build();
+    }
+
+    @Override
     public void pollTasks(PollRequest req, StreamObserver<TaskList> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());

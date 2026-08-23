@@ -64,6 +64,8 @@ public interface Tx {
     void putSchedule(Rows.Schedule schedule);
     void deleteSchedule(String id);
     List<Rows.Schedule> schedules();
+    /** The schedule for a workflow, if one exists -- workflow is a unique key for schedules. */
+    java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow);
     /** Schedules whose fire time has passed. */
     List<Rows.Schedule> dueSchedules(long now, int max);
     /**

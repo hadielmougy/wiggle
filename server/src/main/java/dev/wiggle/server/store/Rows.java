@@ -107,11 +107,15 @@ public final class Rows {
         }
     }
 
-    /** A recurring start: fires the workflow every {@code intervalMillis}, leader-driven. */
+    /**
+     * A recurring start, leader-driven. Cadence is either a fixed interval
+     * ({@code intervalMillis > 0}) or a cron expression ({@code cron != null}, evaluated in UTC).
+     */
     public static final class Schedule implements Cloneable {
         public String id;
         public String workflow;
         public long intervalMillis;
+        public String cron;
         public String contextJson = "{}";
         public long nextFireAt;
         public long createdAt;

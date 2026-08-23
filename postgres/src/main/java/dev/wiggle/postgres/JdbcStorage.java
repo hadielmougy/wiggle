@@ -174,6 +174,15 @@ public final class JdbcStorage implements Storage {
               created_at      BIGINT       NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_schedule_due ON wf_schedule (next_fire_at);
+            """),
+            // Cron cadence for schedules (null = interval-based).
+            new Migration(5, "cron-schedules", """
+            ALTER TABLE wf_schedule ADD COLUMN IF NOT EXISTS cron VARCHAR(120);
+            """),
+            // Workflow is a unique key for schedules: concurrent creates for the same workflow
+            // collapse onto one row instead of firing the same workflow on N duplicate cadences.
+            new Migration(6, "schedule-workflow-unique", """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_schedule_workflow ON wf_schedule (workflow);
             """));
 
     @Override public void migrate() {
@@ -709,11 +718,26 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void putSchedule(Rows.Schedule s) {
+            // Upsert by id: the engine reuses the existing id when a schedule for the same
+            // workflow already exists, so a re-create updates the row rather than duplicating it.
             try (PreparedStatement p = ps("INSERT INTO wf_schedule " +
-                    "(id,workflow,interval_millis,context,next_fire_at,created_at) VALUES (?,?,?,?,?,?)")) {
+                    "(id,workflow,interval_millis,cron,context,next_fire_at,created_at) VALUES (?,?,?,?,?,?,?) " +
+                    "ON CONFLICT (id) DO UPDATE SET workflow=EXCLUDED.workflow, " +
+                    "interval_millis=EXCLUDED.interval_millis, cron=EXCLUDED.cron, " +
+                    "context=EXCLUDED.context, next_fire_at=EXCLUDED.next_fire_at")) {
                 p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
-                p.setString(4, s.contextJson); p.setLong(5, s.nextFireAt); p.setLong(6, s.createdAt);
+                p.setString(4, s.cron); p.setString(5, s.contextJson);
+                p.setLong(6, s.nextFireAt); p.setLong(7, s.createdAt);
                 p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE workflow=?")) {
+                p.setString(1, workflow);
+                try (ResultSet rs = p.executeQuery()) {
+                    return rs.next() ? java.util.Optional.of(readSchedule(rs)) : java.util.Optional.empty();
+                }
             } catch (SQLException e) { throw wrap(e); }
         }
 
@@ -757,6 +781,7 @@ public final class JdbcStorage implements Storage {
             s.id = rs.getString("id");
             s.workflow = rs.getString("workflow");
             s.intervalMillis = rs.getLong("interval_millis");
+            s.cron = rs.getString("cron");
             s.contextJson = rs.getString("context");
             s.nextFireAt = rs.getLong("next_fire_at");
             s.createdAt = rs.getLong("created_at");

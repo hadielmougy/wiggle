@@ -95,4 +95,39 @@ class ScheduleTest {
                     "the interval must be positive");
         }
     }
+
+    @Test @DisplayName("a cron schedule arms at the expression's next UTC match and re-arms by cron on fire")
+    void cronSchedule() throws Exception {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            WorkflowEngine engine = engine(storage);
+            engine.register(probe().definition());
+
+            long before = System.currentTimeMillis();
+            String id = engine.createCronSchedule("sched-probe", "0 3 * * *", Map.of("via", "cron"));
+            Rows.Schedule sched = engine.schedules().get(0);
+            assertEquals("0 3 * * *", sched.cron);
+            assertEquals(dev.wiggle.core.Cron.parse("0 3 * * *").next(before), sched.nextFireAt,
+                    "armed at the cron's next match, not now+interval");
+            assertEquals(0, engine.fireDueSchedules(10), "3am UTC is not due right now");
+
+            // Backdate the fire time through the CAS (the only mutator) to force it due.
+            long past = System.currentTimeMillis() - 10;
+            boolean backdated = storage.inTx(tx -> tx.claimSchedule(id, sched.nextFireAt, past));
+            assertTrue(backdated);
+            assertEquals(1, engine.fireDueSchedules(10), "fires once due");
+            assertEquals(1, engine.list("sched-probe", null, 10).size());
+            assertEquals("cron", Json.asObject(engine.list("sched-probe", null, 10).get(0).context()).get("via"));
+
+            long rearmed = engine.schedules().get(0).nextFireAt;
+            var t = java.time.Instant.ofEpochMilli(rearmed).atZone(java.time.ZoneOffset.UTC);
+            assertTrue(rearmed > System.currentTimeMillis() - 60_000, "re-armed into the future");
+            assertEquals(3, t.getHour(), "re-armed by the cron, not by an interval");
+            assertEquals(0, t.getMinute());
+
+            assertThrows(RuntimeException.class,
+                    () -> engine.createCronSchedule("sched-probe", "not a cron", Map.of()),
+                    "invalid expressions are rejected");
+        }
+    }
 }

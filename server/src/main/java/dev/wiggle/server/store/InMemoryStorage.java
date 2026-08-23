@@ -194,6 +194,13 @@ public final class InMemoryStorage implements Storage {
                     .toList();
         }
 
+        @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
+            return schedules.values().stream()
+                    .filter(sch -> sch.workflow.equals(workflow))
+                    .findFirst()
+                    .map(Rows.Schedule::clone);
+        }
+
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
             return schedules.values().stream()
                     .filter(sch -> sch.nextFireAt <= now)

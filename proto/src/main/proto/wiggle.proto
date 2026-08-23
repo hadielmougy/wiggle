@@ -24,6 +24,10 @@ service WiggleControlPlane {
     // Delivers a named signal to a running instance; the payload merges into its context.
     rpc SignalInstance(SignalRequest) returns (Ack);
 
+    rpc CreateSchedule(CreateScheduleRequest) returns (ScheduleView);
+    rpc ListSchedules(Empty) returns (ScheduleList);
+    rpc DeleteSchedule(ScheduleIdRequest) returns (Ack);
+
     rpc PollTasks(PollRequest) returns (TaskList);
     rpc CompleteTask(TaskResultRequest) returns (Ack);
     rpc FailTask(TaskFailureRequest) returns (Ack);
@@ -147,6 +151,32 @@ message SignalRequest {
     string instance_id = 1;
     string signal = 2;
     google.protobuf.Value payload = 3;
+}
+
+message CreateScheduleRequest {
+    string workflow = 1;
+    oneof cadence {
+        int64 every_millis = 2;   // fixed interval
+        string cron = 3;          // five-field cron, evaluated in UTC
+    }
+    google.protobuf.Value context = 4;
+}
+
+message ScheduleView {
+    string id = 1;
+    string workflow = 2;
+    int64 every_millis = 3;       // 0 when cron-based
+    string cron = 4;              // empty when interval-based
+    int64 next_fire_at = 5;
+    int64 created_at = 6;
+}
+
+message ScheduleList {
+    repeated ScheduleView schedules = 1;
+}
+
+message ScheduleIdRequest {
+    string id = 1;
 }
 
 message CancelInstanceResult {
