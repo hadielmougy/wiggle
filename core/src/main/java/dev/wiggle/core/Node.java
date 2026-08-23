@@ -45,9 +45,17 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null, null, null);
     }
 
-    /** {@code deadlineMillis == 0} means no deadline. Reuses {@code sleepMillis} for the deadline. */
-    public static Node userTask(String id, String name, long deadlineMillis) {
-        return new Node(id, NodeKind.USER_TASK, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null);
+    /**
+     * Waits for the signal named {@code name}. {@code deadlineMillis == 0} means no deadline
+     * (reuses {@code sleepMillis} for the deadline).
+     */
+    public static Node signal(String id, String name, long deadlineMillis) {
+        return new Node(id, NodeKind.SIGNAL, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null);
+    }
+
+    /** Runs the workflow named {@code workflow} as a child; reuses {@code activity} for its name. */
+    public static Node subWorkflow(String id, String name, String workflow) {
+        return new Node(id, NodeKind.SUB_WORKFLOW, name, workflow, null, null, 0, null, null, List.of(), 0, false, null, null, null);
     }
 
     public static Node end(String id, boolean success, String reason) {

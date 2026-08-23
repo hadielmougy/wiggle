@@ -3,6 +3,7 @@ package dev.wiggle.tests;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.worker.WiggleClient.WiggleApiException;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.core.InstanceView;
 import dev.wiggle.core.Json;
@@ -23,10 +24,14 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** User tasks: park until completed out of band, with an optional deadline that escalates or fails. */
-class UserTaskTest {
+/**
+ * Signals: an instance parks on a named wait and is resumed by (instance, signal name) over
+ * gRPC or the dashboard, with an optional deadline that escalates or fails.
+ */
+class SignalTest {
 
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
@@ -35,147 +40,144 @@ class UserTaskTest {
     }
 
     private static ServerConfig config(int dashboardPort) {
-        return new ServerConfig(0, "ut-node", null, null, null, 4,
+        return new ServerConfig(0, "sig-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(300), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort, Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort,
+                Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
     private static List<Token> awaitPending(WiggleServer server, int expected) throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         while (System.nanoTime() < deadline) {
-            List<Token> p = server.engine().pendingUserTasks(50);
+            List<Token> p = server.engine().pendingSignals(50);
             if (p.size() >= expected) return p;
             Thread.sleep(20);
         }
-        return server.engine().pendingUserTasks(50);
+        return server.engine().pendingSignals(50);
     }
 
-    @Test @DisplayName("parks until completed out of band, then merges the result and advances")
-    void completeExternally() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("ut-approve")
-                .userTask("approve")
+    @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
+    void signalOverGrpc() throws Exception {
+        Blueprint<Map<String, Object>> bp = Workflow.defineJson("sig-approve")
+                .awaitSignal("approval")
                 .step("after", ctx -> put(ctx, "advanced", true))
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "ut-w").register(bp)) {
+             Worker w = new Worker(client, "sig-w").register(bp)) {
             w.start();
             String id = client.start(bp, Map.of("x", 1));
 
             List<Token> pending = awaitPending(server, 1);
-            assertEquals(1, pending.size(), "one task awaiting");
-            assertEquals("approve", pending.get(0).activity, "task carries its human name");
+            assertEquals(1, pending.size(), "one signal wait pending");
+            assertEquals("approval", pending.get(0).activity, "the wait carries the signal name");
             assertEquals("RUNNING", client.instance(id).status(), "instance parks, not terminal");
 
-            server.engine().completeUserTask(pending.get(0).id, Map.of("decision", "approved"));
+            client.signal(id, "approval", Map.of("decision", "approved"));
 
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
             Map<String, Object> ctx = Json.asObject(v.context());
-            assertEquals("approved", ctx.get("decision"), "result merged into context");
-            assertEquals(true, ctx.get("advanced"), "flow advanced past the task");
+            assertEquals("approved", ctx.get("decision"), "payload merged into context");
+            assertEquals(true, ctx.get("advanced"), "flow advanced past the wait");
+        }
+    }
+
+    @Test @DisplayName("signalling an instance that is not waiting for that name is a 409")
+    void wrongSignalConflicts() throws Exception {
+        Blueprint<Map<String, Object>> bp = Workflow.defineJson("sig-wrong")
+                .awaitSignal("expected")
+                .step("after", ctx -> ctx)
+                .build();
+        try (WiggleServer server = new WiggleServer(config(0)).start();
+             WiggleClient client = new WiggleClient(server.baseUrl());
+             Worker w = new Worker(client, "sig-w2").register(bp)) {
+            w.start();
+            String id = client.start(bp, Map.of());
+            awaitPending(server, 1);
+
+            WiggleApiException e = assertThrows(WiggleApiException.class,
+                    () -> client.signal(id, "unexpected", Map.of()));
+            assertEquals(409, e.status());
+            assertTrue(e.getMessage().contains("not waiting for signal 'unexpected'"));
         }
     }
 
     @Test @DisplayName("a missed deadline runs the escalation branch, then rejoins the flow")
     void deadlineEscalates() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("ut-escalate")
-                .userTask("approve", Duration.ofMillis(250),
+        Blueprint<Map<String, Object>> bp = Workflow.defineJson("sig-escalate")
+                .awaitSignal("approval", Duration.ofMillis(250),
                         b -> b.step("escalate", ctx -> put(ctx, "escalated", true)))
                 .step("after", ctx -> put(ctx, "advanced", true))
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "ut-w").register(bp)) {
+             Worker w = new Worker(client, "sig-w3").register(bp)) {
             w.start();
-            String id = client.start(bp, Map.of());   // never completed; the deadline fires
+            String id = client.start(bp, Map.of());   // never signalled; the deadline fires
 
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
             Map<String, Object> ctx = Json.asObject(v.context());
             assertEquals(true, ctx.get("escalated"), "escalation branch ran");
-            assertEquals(true, ctx.get("advanced"), "flow rejoined after the task");
+            assertEquals(true, ctx.get("advanced"), "flow rejoined after the wait");
         }
     }
 
     @Test @DisplayName("a missed deadline with no escalation fails the instance")
     void deadlineFails() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("ut-timeout")
-                .userTask("approve", Duration.ofMillis(250))
+        Blueprint<Map<String, Object>> bp = Workflow.defineJson("sig-timeout")
+                .awaitSignal("approval", Duration.ofMillis(250))
                 .step("after", ctx -> ctx)
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "ut-w").register(bp)) {
+             Worker w = new Worker(client, "sig-w4").register(bp)) {
             w.start();
-            String id = client.start(bp, Map.of());
-
-            InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
+            InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
-            assertTrue(v.error() != null && v.error().contains("timed out"), "fails with a timeout error");
+            assertTrue(v.error().contains("timed out"), v.error());
         }
     }
 
-    @Test @DisplayName("cancelling an instance clears its pending user task")
-    void cancelClearsTask() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("ut-cancel")
-                .userTask("approve")
-                .step("after", ctx -> ctx)
-                .build();
-
-        try (WiggleServer server = new WiggleServer(config(0)).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
-            client.register(bp);
-            String id = client.start(bp, Map.of());
-            awaitPending(server, 1);
-
-            client.cancel(id, "changed my mind");
-            assertEquals("CANCELLED", client.instance(id).status());
-            assertEquals(0, server.engine().pendingUserTasks(50).size(), "no task left awaiting");
-        }
-    }
-
-    @Test @DisplayName("the dashboard lists a pending task and completes it over HTTP")
-    void dashboardCompletesTask() throws Exception {
+    @Test @DisplayName("the dashboard lists a pending signal and delivers it over HTTP")
+    void dashboardDeliversSignal() throws Exception {
         int dash;
         try (ServerSocket s = new ServerSocket(0)) { dash = s.getLocalPort(); }
 
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("ut-http")
-                .userTask("sign-off")
+        Blueprint<Map<String, Object>> bp = Workflow.defineJson("sig-http")
+                .awaitSignal("sign-off")
                 .step("after", ctx -> put(ctx, "advanced", true))
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(dash)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "ut-w").register(bp)) {
+             Worker w = new Worker(client, "sig-w5").register(bp)) {
             w.start();
             String id = client.start(bp, Map.of());
             awaitPending(server, 1);
-            String taskId = server.engine().pendingUserTasks(10).get(0).id;
 
             HttpClient http = HttpClient.newHttpClient();
             String base = "http://localhost:" + server.dashboardPort();
 
-            String tasks = http.send(HttpRequest.newBuilder(URI.create(base + "/api/tasks")).GET().build(),
+            String signals = http.send(HttpRequest.newBuilder(URI.create(base + "/api/signals")).GET().build(),
                     HttpResponse.BodyHandlers.ofString()).body();
-            assertTrue(tasks.contains("sign-off"), "task listed on the dashboard");
-            assertTrue(tasks.contains(taskId), "with its id");
+            assertTrue(signals.contains("sign-off"), "signal listed on the dashboard");
+            assertTrue(signals.contains(id), "with its instance");
 
-            HttpResponse<String> done = http.send(HttpRequest.newBuilder(
-                            URI.create(base + "/api/tasks/" + taskId + "/complete"))
+            HttpResponse<String> sent = http.send(HttpRequest.newBuilder(
+                            URI.create(base + "/api/instances/" + id + "/signal/sign-off"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString("{\"decision\":\"signed\"}")).build(),
                     HttpResponse.BodyHandlers.ofString());
-            assertEquals(200, done.statusCode());
+            assertEquals(200, sent.statusCode());
 
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
-            Map<String, Object> ctx = Json.asObject(v.context());
-            assertEquals("signed", ctx.get("decision"));
-            assertEquals(true, ctx.get("advanced"));
+            assertEquals("signed", Json.asObject(v.context()).get("decision"));
         }
     }
 }

@@ -18,11 +18,17 @@ public enum NodeKind {
     /** Fan-in: continues once every sibling token has arrived. */
     JOIN,
     /**
-     * Waits for an external actor (a human, or another system) to complete it. No worker is
-     * held. Completed out of band via the control API; an optional deadline routes to
-     * {@code altNext} (escalation) or fails the instance if none is set.
+     * Waits for a named signal from an external actor (a human, or another system). No worker
+     * is held. Delivered via the control API by (instance, signal name); an optional deadline
+     * routes to {@code altNext} (escalation) or fails the instance if none is set.
      */
-    USER_TASK,
+    SIGNAL,
+    /**
+     * Starts an instance of another workflow with this instance's context as input, then waits;
+     * the child's final context merges back on completion, and a failed or cancelled child fails
+     * the parent.
+     */
+    SUB_WORKFLOW,
     /** Terminal. */
     END
 }

@@ -135,7 +135,8 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `gate(name, pred)` | continue only while `pred` is true; a false result ends the instance as `gated:<name>` |
 | `choose(cases…)` | switch/case: run the branch of the **first** matching guard, then continue |
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
-| `userTask(name[, timeout[, escalation]])` | wait for a human/external completion; optional deadline escalates or fails |
+| `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
+| `subWorkflow(name, workflow)` | run another workflow as a child; its result merges back, its failure fails the parent |
 | `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
 | `forkEach(name, itemsKey, itemKey, body)` | **runtime** fan-out: one parallel branch per element of the list at `itemsKey`, each seeing its element as `itemKey` (and `itemKey + "Index"`); empty list skips through |
 | `doWhile(name, cond, body)` | run `body`, then re-run while `cond` holds (body runs at least once) |
@@ -210,7 +211,7 @@ Workflow.defineJson("etl").execution(ExecutionMode.LOCAL_SYNC)
   to commit before the next runs. A **graceful** `worker.close()` does not pay this cost: it
   drains any buffered steps to the server before returning, so a rolling deploy or scale-down
   loses nothing already computed — only an unclean process death does.
-- The worker hands control back at any boundary — a `sleep`, `fork`, `join`, `userTask`, a step
+- The worker hands control back at any boundary — a `sleep`, `fork`, `join`, `awaitSignal`, a `subWorkflow`, a step
   on a different queue, a failure/retry, or the end — so those still coordinate through the server.
 
 The mode is part of the definition's content hash, so an in-flight instance keeps the mode it
@@ -297,38 +298,79 @@ running step.
 
 ---
 
-## Human / external tasks
+## Signals (human / external input)
 
-A `userTask` pauses the instance until a human (or another system) completes it — no worker
-is held while it waits, so it can sit for days.
+`awaitSignal` pauses the instance until a **named signal** arrives from the outside — a human
+approving, another system reporting back. No worker is held while it waits, so it can sit for
+days. Signals are addressed by *(instance, name)*, not an opaque task id.
 
 ```java
 Workflow.defineJson("expense")
         .step("submit", Expenses::record)
 
-        // Waits until someone completes it via the control API / dashboard.
-        // Optional deadline (here 48h) runs the escalation branch if nobody acts.
-        .userTask("manager-approval", Duration.ofHours(48),
+        // Waits for the "manager-approval" signal. Optional deadline (here 48h)
+        // runs the escalation branch if nobody acts.
+        .awaitSignal("manager-approval", Duration.ofHours(48),
                 b -> b.step("auto-escalate", Escalations::toDirector))
 
         .step("pay-out", Expenses::disburse)
         .build();
 ```
 
-- `userTask(name)` — waits indefinitely.
-- `userTask(name, timeout)` — if unmet by the deadline, the **instance fails** with a timeout error.
-- `userTask(name, timeout, escalation)` — if unmet, the **escalation branch runs**, then rejoins the flow.
+- `awaitSignal(name)` — waits indefinitely.
+- `awaitSignal(name, timeout)` — if it never arrives, the **instance fails** with a timeout error.
+- `awaitSignal(name, timeout, escalation)` — if it never arrives, the **escalation branch runs**, then rejoins.
 
-Complete a task from the [dashboard](#web-dashboard) (a "User tasks" panel lists them with a
-**complete** button) or over its HTTP API:
+Deliver a signal from code (`client.signal(instanceId, "manager-approval", payload)` — a
+first-class gRPC RPC), from the [dashboard](#web-dashboard) (a "Pending signals" panel), or
+over HTTP:
 
 ```bash
-curl -X POST http://localhost:8090/api/tasks/{taskId}/complete \
+curl -X POST http://localhost:8090/api/instances/{id}/signal/manager-approval \
      -H 'Content-Type: application/json' -d '{"decision":"approved"}'
 ```
 
-The posted JSON is merged into the context, exactly like a `step`'s return value, and the
-flow continues. Cancelling the instance clears any task it was waiting on.
+The payload merges into the context like a `step`'s return value, and the flow continues.
+Signals are **not buffered**: the instance must currently be waiting on that name, otherwise
+the delivery is rejected with a conflict the sender can retry. Cancelling the instance clears
+any pending wait.
+
+---
+
+## Sub-workflows
+
+`subWorkflow(name, workflow)` runs another registered workflow as a **child instance**: the
+child starts with the parent's current context, the parent waits (holding no worker), and on
+completion the child's final context merges back. A failed or cancelled child **fails the
+parent** with the child's error; cancelling the parent **cascades** to running children.
+
+```java
+Workflow.defineJson("onboarding")
+        .step("create-account", Accounts::create)
+        .subWorkflow("run-kyc", "kyc-checks")     // reuse the whole kyc-checks workflow
+        .step("activate", Accounts::activate)
+        .build();
+```
+
+---
+
+## Schedules
+
+A schedule starts a workflow **on a fixed interval** — the leader fires it, a compare-and-set
+on the fire time makes each firing exactly-once even across leader failover, and a missed
+window does not burst (the next fire is one interval from now).
+
+```bash
+# create: fire "nightly-report" every hour, seeded with a context
+curl -X POST http://localhost:8090/api/schedules -H 'Content-Type: application/json' \
+     -d '{"workflow": "nightly-report", "everyMillis": 3600000, "context": {"source": "cron"}}'
+
+curl http://localhost:8090/api/schedules            # list
+curl -X DELETE http://localhost:8090/api/schedules/{id}   # stop
+```
+
+Programmatically: `engine.createSchedule(workflow, Duration, context)` / `deleteSchedule(id)` /
+`schedules()`. Scheduled instances carry `correlationId = "schedule:<id>"`.
 
 ---
 

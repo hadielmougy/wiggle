@@ -161,6 +161,19 @@ public final class JdbcStorage implements Storage {
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS payload TEXT;
             ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS items_key VARCHAR(200);
             ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS item_key VARCHAR(200);
+            """),
+            // Sub-workflows (the parent's waiting token) and recurring schedules.
+            new Migration(4, "sub-workflows-and-schedules", """
+            ALTER TABLE wf_instance ADD COLUMN IF NOT EXISTS parent_token_id VARCHAR(64);
+            CREATE TABLE IF NOT EXISTS wf_schedule (
+              id              VARCHAR(64)  PRIMARY KEY,
+              workflow        VARCHAR(200) NOT NULL,
+              interval_millis BIGINT       NOT NULL,
+              context         TEXT         NOT NULL,
+              next_fire_at    BIGINT       NOT NULL,
+              created_at      BIGINT       NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_schedule_due ON wf_schedule (next_fire_at);
             """));
 
     @Override public void migrate() {
@@ -288,7 +301,7 @@ public final class JdbcStorage implements Storage {
                     out.add(new Edge(n.branches().get(0), "branch", 0));
                     if (n.next() != null) out.add(new Edge(n.next(), null, 1));
                 }
-                case USER_TASK -> {
+                case SIGNAL -> {
                     if (n.next() != null) out.add(new Edge(n.next(), null, 0));
                     if (n.altNext() != null) out.add(new Edge(n.altNext(), "escalate", 1));
                 }
@@ -410,7 +423,7 @@ public final class JdbcStorage implements Storage {
 
             private boolean isAltEdge(String cond) {
                 return (kind == NodeKind.PREDICATE && "false".equals(cond))
-                        || (kind == NodeKind.USER_TASK && "escalate".equals(cond));
+                        || (kind == NodeKind.SIGNAL && "escalate".equals(cond));
             }
         }
 
@@ -454,12 +467,13 @@ public final class JdbcStorage implements Storage {
 
         @Override public void insertInstance(Instance i) {
             try (PreparedStatement p = ps("INSERT INTO wf_instance " +
-                    "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision) " +
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)")) {
+                    "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision," +
+                    "parent_token_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")) {
                 p.setString(1, i.id); p.setString(2, i.workflow); p.setInt(3, i.version);
                 p.setString(4, i.correlationId); p.setString(5, i.status.name());
                 p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.contextJson);
                 p.setLong(9, i.createdAt); p.setLong(10, i.updatedAt); p.setLong(11, i.revision);
+                p.setString(12, i.parentTokenId);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -665,8 +679,8 @@ public final class JdbcStorage implements Storage {
                     "ORDER BY lease_expires LIMIT ?", now, max);
         }
 
-        @Override public List<Token> pendingUserTasks(int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
+        @Override public List<Token> pendingSignals(int max) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
                     "ORDER BY created_at LIMIT ?")) {
                 p.setInt(1, max);
                 try (ResultSet rs = p.executeQuery()) {
@@ -677,9 +691,76 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        @Override public List<Token> dueUserTasks(long now, int max) {
-            return query("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='USER_TASK' " +
+        @Override public List<Token> dueSignals(long now, int max) {
+            return query("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
                     "AND available_at>0 AND available_at<=? ORDER BY available_at LIMIT ?", now, max);
+        }
+
+        @Override public List<String> childInstanceIds(String parentInstanceId) {
+            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE parent_token_id IN " +
+                    "(SELECT id FROM wf_token WHERE instance_id=?) ORDER BY id")) {
+                p.setString(1, parentInstanceId);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<String> out = new ArrayList<>();
+                    while (rs.next()) out.add(rs.getString(1));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void putSchedule(Rows.Schedule s) {
+            try (PreparedStatement p = ps("INSERT INTO wf_schedule " +
+                    "(id,workflow,interval_millis,context,next_fire_at,created_at) VALUES (?,?,?,?,?,?)")) {
+                p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
+                p.setString(4, s.contextJson); p.setLong(5, s.nextFireAt); p.setLong(6, s.createdAt);
+                p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void deleteSchedule(String id) {
+            try (PreparedStatement p = ps("DELETE FROM wf_schedule WHERE id=?")) {
+                p.setString(1, id);
+                p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Rows.Schedule> schedules() {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule ORDER BY id");
+                 ResultSet rs = p.executeQuery()) {
+                List<Rows.Schedule> out = new ArrayList<>();
+                while (rs.next()) out.add(readSchedule(rs));
+                return out;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
+                    "ORDER BY next_fire_at LIMIT ?")) {
+                p.setLong(1, now); p.setInt(2, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Rows.Schedule> out = new ArrayList<>();
+                    while (rs.next()) out.add(readSchedule(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
+            try (PreparedStatement p = ps("UPDATE wf_schedule SET next_fire_at=? WHERE id=? AND next_fire_at=?")) {
+                p.setLong(1, nextFireAt); p.setString(2, id); p.setLong(3, expectedFireAt);
+                return p.executeUpdate() == 1;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        private static Rows.Schedule readSchedule(ResultSet rs) throws SQLException {
+            Rows.Schedule s = new Rows.Schedule();
+            s.id = rs.getString("id");
+            s.workflow = rs.getString("workflow");
+            s.intervalMillis = rs.getLong("interval_millis");
+            s.contextJson = rs.getString("context");
+            s.nextFireAt = rs.getLong("next_fire_at");
+            s.createdAt = rs.getLong("created_at");
+            return s;
         }
 
         @Override public Rows.QueueDepth queueDepth(long now) {
@@ -792,6 +873,7 @@ public final class JdbcStorage implements Storage {
             i.terminationReason = rs.getString("term_reason");
             i.error = rs.getString("error");
             i.contextJson = rs.getString("context");
+            i.parentTokenId = rs.getString("parent_token_id");
             i.createdAt = rs.getLong("created_at");
             i.updatedAt = rs.getLong("updated_at");
             i.revision = rs.getLong("revision");

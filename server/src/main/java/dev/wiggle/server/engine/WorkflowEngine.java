@@ -51,27 +51,33 @@ public final class WorkflowEngine {
     // ------------------------------------------------------------- lifecycle
 
     public String start(String workflow, Integer version, Object context, String correlationId) {
-        return storage.inTx(tx -> {
-            int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
-                    () -> EngineException.notFound("workflow '" + workflow + "'"));
-            LazyGraph def = definitions.graph(tx, workflow, v);
-            long now = System.currentTimeMillis();
-            Instance inst = insertNewInstance(tx, def, context, correlationId, now);
-            Token t = newToken(inst, def.startNode(), "", null, now);
-            tx.insertToken(t);
-            LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
-                    + " at node " + def.startNode() + " correlationId=" + correlationId);
-            drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
-            return inst.id;
-        });
+        return storage.inTx(tx -> startInTx(tx, workflow, version, context, correlationId, null));
     }
 
-    private static Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId, long now) {
+    /** Starts an instance inside an existing transaction; {@code parentTokenId} links a sub-workflow. */
+    private String startInTx(Tx tx, String workflow, Integer version, Object context,
+                             String correlationId, String parentTokenId) {
+        int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
+                () -> EngineException.notFound("workflow '" + workflow + "'"));
+        LazyGraph def = definitions.graph(tx, workflow, v);
+        long now = System.currentTimeMillis();
+        Instance inst = insertNewInstance(tx, def, context, correlationId, parentTokenId, now);
+        Token t = newToken(inst, def.startNode(), "", null, now);
+        tx.insertToken(t);
+        LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
+                + " at node " + def.startNode() + " correlationId=" + correlationId);
+        drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
+        return inst.id;
+    }
+
+    private static Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId,
+                                              String parentTokenId, long now) {
         Instance inst = new Instance();
         inst.id = Ids.next("wfi");
         inst.workflow = def.name();
         inst.version = def.version();
         inst.correlationId = correlationId;
+        inst.parentTokenId = parentTokenId;
         inst.status = InstanceStatus.RUNNING;
         inst.contextJson = Json.write(context == null ? Map.of() : context);
         inst.createdAt = now;
@@ -81,12 +87,12 @@ public final class WorkflowEngine {
     }
 
     public void cancel(String instanceId, String reason) {
-        storage.inTxVoid(tx -> {
+        List<String> children = storage.inTx(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             if (inst.status != InstanceStatus.RUNNING) {
                 LOG.log(System.Logger.Level.DEBUG, () ->
                         "cancel: instance " + instanceId + " ignored, already " + inst.status);
-                return;
+                return List.of();
             }
             long now = System.currentTimeMillis();
             cancelActiveTokens(tx, inst.id, null, now);
@@ -94,8 +100,18 @@ public final class WorkflowEngine {
             inst.terminationReason = reason;
             inst.updatedAt = now;
             tx.updateInstance(inst);
+            notifyParent(tx, inst, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
+            return tx.childInstanceIds(instanceId);
         });
+        // Cancelling in separate transactions keeps lock ordering one-way (child -> parent only).
+        for (String child : children) {
+            try {
+                cancel(child, "parent instance cancelled");
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "cascade cancel of " + child + " failed: " + e);
+            }
+        }
     }
 
     public Optional<InstanceView> instance(String id) {
@@ -348,43 +364,40 @@ public final class WorkflowEngine {
         tx.insertToken(cont);
     }
 
-    // ------------------------------------------------------------- user tasks
+    // ---------------------------------------------------------------- signals
 
-    /** The user tasks currently awaiting an external completion, oldest first. */
-    public List<Token> pendingUserTasks(int max) {
-        return storage.inTx(tx -> tx.pendingUserTasks(max));
+    /** The signal waits currently pending an external delivery, oldest first. */
+    public List<Token> pendingSignals(int max) {
+        return storage.inTx(tx -> tx.pendingSignals(max));
     }
 
     /**
-     * Completes a user task on behalf of an external actor. Unlike {@link #complete}, there is
-     * no lease to hold -- the token only has to be AWAITING. {@code result} is merged into the
-     * instance context and the flow advances down the task's completion path.
+     * Delivers a named signal to an instance. The instance must currently be waiting on that
+     * signal (there is no buffering; an early signal is a conflict the sender can retry).
+     * {@code payload} merges into the context and the flow advances down the signal's path.
      */
-    public void completeUserTask(String taskId, Object result) {
+    public void signal(String instanceId, String name, Object payload) {
         storage.inTxVoid(tx -> {
-            LockedTask locked = lockTask(tx, taskId);
-            Instance inst = locked.inst();
-            Token t = locked.token();
-            requireAwaitingUserTask(t);
+            Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             requireRunning(inst);
+            Token t = tx.tokensOf(instanceId).stream()
+                    .filter(x -> x.status == TokenStatus.AWAITING && x.kind == NodeKind.SIGNAL)
+                    .filter(x -> name.equals(x.activity))
+                    .findFirst()
+                    .orElseThrow(() -> EngineException.conflict(
+                            "instance " + instanceId + " is not waiting for signal '" + name + "'"));
             long now = System.currentTimeMillis();
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-            mergeContext(inst, result);
+            mergeContext(inst, payload);
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
             Token cont = newToken(inst, node.next(), t.joinStack, t.payloadJson, now);
             tx.insertToken(cont);
-            LOG.log(System.Logger.Level.DEBUG, () -> "completeUserTask: user task " + node.name()
-                    + " of instance " + inst.id + " completed externally -> " + node.next());
+            LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
+                    + inst.id + " -> " + node.next());
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
-    }
-
-    private static void requireAwaitingUserTask(Token t) {
-        if (t.status != TokenStatus.AWAITING || t.kind != NodeKind.USER_TASK) {
-            throw EngineException.conflict("task " + t.id + " is " + t.status + ", not an awaiting user task");
-        }
     }
 
     // --------------------------------------------------------- housekeeping
@@ -439,14 +452,14 @@ public final class WorkflowEngine {
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
     }
 
-    /** Leader duty: user tasks whose deadline has passed escalate (to {@code altNext}) or fail. */
-    public int fireDueUserTaskDeadlines(int max) {
-        List<Token> due = storage.inTx(tx -> tx.dueUserTasks(System.currentTimeMillis(), max));
-        logDue("fireDueUserTaskDeadlines", due);
-        return sweep(due, "user-task deadline", this::escalateOrFailUserTask);
+    /** Leader duty: signal waits whose deadline has passed escalate (to {@code altNext}) or fail. */
+    public int fireDueSignalDeadlines(int max) {
+        List<Token> due = storage.inTx(tx -> tx.dueSignals(System.currentTimeMillis(), max));
+        logDue("fireDueSignalDeadlines", due);
+        return sweep(due, "signal deadline", this::escalateOrFailSignal);
     }
 
-    private void escalateOrFailUserTask(Tx tx, Token task) {
+    private void escalateOrFailSignal(Tx tx, Token task) {
         Instance inst = tx.lockInstance(task.instanceId).orElse(null);
         if (inst == null || inst.status != InstanceStatus.RUNNING) return;
         Token t = tx.findToken(task.id).orElse(null);
@@ -459,14 +472,14 @@ public final class WorkflowEngine {
         t.updatedAt = ts;
         tx.updateToken(t);
         if (node.altNext() == null) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
+            LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                     + " of instance " + inst.id + " missed its deadline, no escalation -> failing instance");
-            failInstance(tx, inst, "user task '" + node.name() + "' timed out", ts);
+            failInstance(tx, inst, "signal '" + node.name() + "' timed out", ts);
             return;
         }
         Token cont = newToken(inst, node.altNext(), t.joinStack, t.payloadJson, ts);
         tx.insertToken(cont);
-        LOG.log(System.Logger.Level.DEBUG, () -> "user task " + node.name()
+        LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
     }
@@ -536,6 +549,65 @@ public final class WorkflowEngine {
         }
     }
 
+    // -------------------------------------------------------------- schedules
+
+    /** Creates a recurring start: {@code workflow} fires every {@code every}, first fire after one interval. */
+    public String createSchedule(String workflow, java.time.Duration every, Object context) {
+        if (every.toMillis() < 1) throw EngineException.badRequest("schedule interval must be positive");
+        return storage.inTx(tx -> {
+            tx.latestVersion(workflow).orElseThrow(
+                    () -> EngineException.notFound("workflow '" + workflow + "'"));
+            Rows.Schedule s = new Rows.Schedule();
+            s.id = Ids.next("sched");
+            s.workflow = workflow;
+            s.intervalMillis = every.toMillis();
+            s.contextJson = Json.write(context == null ? Map.of() : context);
+            s.nextFireAt = System.currentTimeMillis() + s.intervalMillis;
+            s.createdAt = System.currentTimeMillis();
+            tx.putSchedule(s);
+            LOG.log(System.Logger.Level.INFO, () -> "schedule " + s.id + ": " + workflow
+                    + " every " + s.intervalMillis + "ms");
+            return s.id;
+        });
+    }
+
+    public void deleteSchedule(String id) {
+        storage.inTxVoid(tx -> tx.deleteSchedule(id));
+    }
+
+    public List<Rows.Schedule> schedules() {
+        return storage.inTx(Tx::schedules);
+    }
+
+    /**
+     * Leader duty: start instances for schedules whose fire time has passed. The compare-and-set
+     * on the fire time makes each fire exactly-once even if two leaders briefly overlap; missed
+     * fires do not burst -- the next fire is one interval from now.
+     */
+    public int fireDueSchedules(int max) {
+        long now = System.currentTimeMillis();
+        List<Rows.Schedule> due = storage.inTx(tx -> tx.dueSchedules(now, max));
+        int fired = 0;
+        for (Rows.Schedule sched : due) {
+            try {
+                if (fireSchedule(sched, now)) fired++;
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "schedule " + sched.id + " failed to fire: " + e);
+            }
+        }
+        return fired;
+    }
+
+    private boolean fireSchedule(Rows.Schedule sched, long now) {
+        return storage.inTx(tx -> {
+            if (!tx.claimSchedule(sched.id, sched.nextFireAt, now + sched.intervalMillis)) return false;
+            String id = startInTx(tx, sched.workflow, null, Json.parse(sched.contextJson),
+                    "schedule:" + sched.id, null);
+            LOG.log(System.Logger.Level.DEBUG, () -> "schedule " + sched.id + " fired -> instance " + id);
+            return true;
+        });
+    }
+
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
         long cutoff = System.currentTimeMillis() - retentionMillis;
         int purged = storage.inTx(tx -> tx.deleteTerminalInstancesBefore(cutoff, max));
@@ -591,7 +663,8 @@ public final class WorkflowEngine {
             boolean keepDriving = switch (node.kind()) {
                 case TASK, PREDICATE -> parkAtWorkerStep(tx, inst, t, node, now);
                 case SLEEP -> parkAtSleep(tx, inst, t, node, now);
-                case USER_TASK -> parkAtUserTask(tx, inst, t, node, now);
+                case SIGNAL -> parkAtSignal(tx, inst, t, node, now);
+                case SUB_WORKFLOW -> launchSubWorkflow(tx, inst, t, node, now);
                 case FORK -> spawnForkBranches(tx, inst, t, node, work, now);
                 case DYN_FORK -> spawnDynamicBranches(tx, inst, t, node, work, now);
                 case JOIN -> arriveAtJoin(tx, inst, t, node, work, now);
@@ -629,21 +702,79 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Parks until an external actor completes it. No worker leases an AWAITING token; a
-     * positive availableAt is the (optional) deadline the leader sweeps.
+     * Parks until the named signal arrives. No worker leases an AWAITING token; a positive
+     * availableAt is the (optional) deadline the leader sweeps.
      */
-    private boolean parkAtUserTask(Tx tx, Instance inst, Token t, Node node, long now) {
+    private boolean parkAtSignal(Tx tx, Instance inst, Token t, Node node, long now) {
         TokenStatus before = t.status;
         t.status = TokenStatus.AWAITING;
-        t.kind = NodeKind.USER_TASK;
-        t.activity = node.name();     // surfaced to the task list as the human name
+        t.kind = NodeKind.SIGNAL;
+        t.activity = node.name();     // the signal's name, matched by signal()
         t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
         t.updatedAt = now;
         tx.updateToken(t);
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (USER_TASK) " + before + " -> AWAITING, deadline="
+                + node.name() + " (SIGNAL) " + before + " -> AWAITING, deadline="
                 + (t.availableAt > 0 ? t.availableAt : "none"));
         return true;
+    }
+
+    /**
+     * Starts a child instance of the workflow named by the node and parks this token until the
+     * child reaches a terminal state ({@link #notifyParent}). The child's input is the parent's
+     * context (with any branch payload overlaid); an unregistered child workflow fails the parent.
+     */
+    private boolean launchSubWorkflow(Tx tx, Instance inst, Token t, Node node, long now) {
+        TokenStatus before = t.status;
+        t.status = TokenStatus.AWAITING;
+        t.kind = NodeKind.SUB_WORKFLOW;
+        t.activity = node.activity();   // the child workflow's name
+        t.availableAt = 0;
+        t.updatedAt = now;
+        tx.updateToken(t);
+        String childId;
+        try {
+            childId = startInTx(tx, node.activity(), null, dispatchContext(inst, t), "sub:" + t.id, t.id);
+        } catch (EngineException e) {
+            failInstance(tx, inst, "sub-workflow '" + node.activity() + "': " + e.getMessage(), now);
+            return false;
+        }
+        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
+                + node.name() + " (SUB_WORKFLOW) " + before + " -> AWAITING child " + childId);
+        return true;
+    }
+
+    /**
+     * Called whenever an instance reaches a terminal state: if it was a sub-workflow, resume (or
+     * fail) the parent's waiting token. Lock ordering is always child -> parent, never the
+     * reverse in one transaction, so parent/child completions cannot deadlock.
+     */
+    private void notifyParent(Tx tx, Instance child, long now) {
+        if (child.parentTokenId == null) return;
+        Token probe = tx.findToken(child.parentTokenId).orElse(null);
+        if (probe == null) return;
+        Instance parent = tx.lockInstance(probe.instanceId).orElse(null);
+        if (parent == null || parent.status != InstanceStatus.RUNNING) return;
+        Token t = tx.findToken(child.parentTokenId).orElse(null);   // re-read under the lock
+        if (t == null || t.status != TokenStatus.AWAITING || t.kind != NodeKind.SUB_WORKFLOW) return;
+        LazyGraph def = definitions.graph(tx, parent.workflow, parent.version);
+        Node node = def.node(t.nodeId);
+        if (child.status != InstanceStatus.COMPLETED) {
+            t.status = TokenStatus.FAILED;
+            t.updatedAt = now;
+            tx.updateToken(t);
+            failInstance(tx, parent, "sub-workflow '" + node.activity() + "' " + child.status
+                    + (child.error == null ? "" : ": " + child.error), now);
+            return;
+        }
+        mergeContext(parent, Json.parse(child.contextJson));
+        settleToken(tx, t, now);
+        touchInstance(tx, parent, now);
+        Token cont = newToken(parent, node.next(), t.joinStack, t.payloadJson, now);
+        tx.insertToken(cont);
+        LOG.log(System.Logger.Level.DEBUG, () -> "sub-workflow " + child.id + " completed -> resuming parent "
+                + parent.id + " at " + node.next());
+        drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);
     }
 
     private boolean spawnForkBranches(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
@@ -815,6 +946,7 @@ public final class WorkflowEngine {
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                 + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
                 + (node.reason() != null ? " (" + node.reason() + ")" : ""));
+        notifyParent(tx, inst, now);
         return true;
     }
 
@@ -825,6 +957,7 @@ public final class WorkflowEngine {
         inst.updatedAt = now;
         tx.updateInstance(inst);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed: " + error);
+        notifyParent(tx, inst, now);
     }
 
     private static void cancelActiveTokens(Tx tx, String instanceId, String except, long now) {

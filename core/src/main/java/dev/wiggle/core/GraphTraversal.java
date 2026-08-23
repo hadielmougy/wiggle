@@ -12,7 +12,7 @@ public final class GraphTraversal {
     private GraphTraversal() {}
 
     /** Why a worker cannot keep running the next node locally; {@code null} means it can. */
-    public enum Handback { SLEEP, FORK, JOIN, USER_TASK, OTHER_QUEUE, TERMINAL }
+    public enum Handback { SLEEP, FORK, JOIN, SIGNAL, SUB_WORKFLOW, OTHER_QUEUE, TERMINAL }
 
     /** The successor of a completed worker step: task -> {@code next}; predicate -> next/altNext. */
     public static String successor(Node node, boolean predicateValue) {
@@ -34,7 +34,8 @@ public final class GraphTraversal {
             case SLEEP -> Handback.SLEEP;
             case FORK, DYN_FORK -> Handback.FORK;
             case JOIN -> Handback.JOIN;
-            case USER_TASK -> Handback.USER_TASK;
+            case SIGNAL -> Handback.SIGNAL;
+            case SUB_WORKFLOW -> Handback.SUB_WORKFLOW;
             case END -> Handback.TERMINAL;
         };
     }

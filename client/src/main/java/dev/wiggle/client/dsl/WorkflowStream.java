@@ -159,40 +159,41 @@ public final class WorkflowStream<T> {
     }
 
     /**
-     * Waits for an external actor (a human, or another system) to complete the task out of
-     * band -- the flow then continues down the following step. No worker is held while it
-     * waits. Complete it via the control API / dashboard ({@code POST /api/tasks/{id}/complete});
-     * the submitted result merges into the context like a {@link #step}.
+     * Waits for the named signal from an external actor (a human, or another system) -- the flow
+     * then continues down the following step. No worker is held while it waits. Deliver it via
+     * {@code client.signal(instanceId, name, payload)}, the gRPC {@code SignalInstance} RPC, or
+     * the dashboard ({@code POST /api/instances/{id}/signal/{name}}); the payload merges into the
+     * context like a {@link #step}'s result.
      */
-    public WorkflowStream<T> userTask(String name) {
-        return userTask(name, null, null);
+    public WorkflowStream<T> awaitSignal(String name) {
+        return awaitSignal(name, null, null);
     }
 
     /**
-     * A user task with a deadline. If nobody completes it within {@code timeout}, the instance
-     * fails with a timeout error. Use {@link #userTask(String, Duration, java.util.function.UnaryOperator)}
-     * to escalate to a branch instead.
+     * A signal wait with a deadline. If the signal does not arrive within {@code timeout}, the
+     * instance fails with a timeout error. Use
+     * {@link #awaitSignal(String, Duration, UnaryOperator)} to escalate to a branch instead.
      */
-    public WorkflowStream<T> userTask(String name, Duration timeout) {
-        return userTask(name, timeout, null);
+    public WorkflowStream<T> awaitSignal(String name, Duration timeout) {
+        return awaitSignal(name, timeout, null);
     }
 
     /**
-     * A user task with a deadline and an escalation branch: if it is not completed within
-     * {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow after
-     * the task (exactly one of completion / escalation happens).
+     * A signal wait with a deadline and an escalation branch: if the signal does not arrive
+     * within {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow
+     * after the wait (exactly one of delivery / escalation happens).
      */
-    public WorkflowStream<T> userTask(String name, Duration timeout,
-                                      java.util.function.UnaryOperator<WorkflowStream<T>> escalation) {
+    public WorkflowStream<T> awaitSignal(String name, Duration timeout,
+                                         UnaryOperator<WorkflowStream<T>> escalation) {
         if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
         if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
         if (!pipeline.stepNames.add(name)) {
             throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
         }
         String id = pipeline.nextId("n");
-        pipeline.put(Node.userTask(id, name, timeout == null ? 0 : timeout.toMillis()));
+        pipeline.put(Node.signal(id, name, timeout == null ? 0 : timeout.toMillis()));
         attach(id);
-        // The completion path (slot NEXT) is the open end; the escalation branch hangs off ALT_NEXT.
+        // The delivery path (slot NEXT) is the open end; the escalation branch hangs off ALT_NEXT.
         openNodes = new ArrayList<>(List.of(id));
         openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
         lastStepId = null;
@@ -206,6 +207,24 @@ public final class WorkflowStream<T> {
             openNodes.addAll(tail.openNodes);
             openSlots.addAll(tail.openSlots);
         }
+        return this;
+    }
+
+    /**
+     * Runs the workflow named {@code workflow} as a child instance: it starts with this
+     * instance's current context, and on completion its final context merges back here (a failed
+     * or cancelled child fails this instance). The child must be registered on the server; its
+     * latest version is used.
+     */
+    public WorkflowStream<T> subWorkflow(String name, String workflow) {
+        Objects.requireNonNull(workflow, "workflow");
+        if (!pipeline.stepNames.add(name)) {
+            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
+        }
+        String id = pipeline.nextId("n");
+        pipeline.put(Node.subWorkflow(id, name, workflow));
+        attach(id);
+        lastStepId = null;
         return this;
     }
 
@@ -466,7 +485,7 @@ public final class WorkflowStream<T> {
         requireKnownTarget(def, n, n.next());
         requireKnownTarget(def, n, n.altNext());
         switch (n.kind()) {
-            case TASK, SLEEP, JOIN, USER_TASK -> requireSuccessor(n);
+            case TASK, SLEEP, JOIN, SIGNAL, SUB_WORKFLOW -> requireSuccessor(n);
             case PREDICATE -> validatePredicate(n);
             case FORK -> validateFork(n);
             case DYN_FORK -> validateDynFork(n);
