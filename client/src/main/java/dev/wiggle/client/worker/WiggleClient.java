@@ -2,11 +2,15 @@ package dev.wiggle.client.worker;
 
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.core.NodeKind;
+import dev.wiggle.core.Tls;
 import dev.wiggle.proto.*;
+import io.grpc.ChannelCredentials;
+import io.grpc.Grpc;
+import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import io.grpc.TlsChannelCredentials;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -16,9 +20,27 @@ public final class WiggleClient implements AutoCloseable {
     private final ManagedChannel channel;
     private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
 
+    /** Connects with TLS if {@code WIGGLE_TLS_*} is configured, otherwise plaintext. */
     public WiggleClient(String target) {
-        this.channel = ManagedChannelBuilder.forTarget(stripScheme(target)).usePlaintext().build();
+        this(target, Tls.Options.fromEnvironment());
+    }
+
+    /**
+     * Connects to {@code target}, using TLS when {@code tls} carries a keystore and/or truststore:
+     * the truststore verifies the server, and the keystore presents a client certificate for mTLS.
+     * With neither, the channel is plaintext.
+     */
+    public WiggleClient(String target, Tls.Options tls) {
+        this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls)).build();
         this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
+    }
+
+    private static ChannelCredentials channelCredentials(Tls.Options tls) {
+        if (!tls.any()) return InsecureChannelCredentials.create();
+        TlsChannelCredentials.Builder b = TlsChannelCredentials.newBuilder();
+        if (tls.hasTrustStore()) b.trustManager(Tls.trustManagers(tls));
+        if (tls.hasKeyStore()) b.keyManager(Tls.keyManagers(tls));   // client cert for mTLS
+        return b.build();
     }
 
     private static String stripScheme(String target) {

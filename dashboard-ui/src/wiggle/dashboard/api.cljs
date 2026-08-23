@@ -28,6 +28,7 @@
 
 ;; ---- specific endpoints ------------------------------------------------------
 
+(defn auth          [] (GET "/api/auth"))
 (defn cluster       [] (GET "/api/cluster"))
 (defn workflows     [] (GET "/api/workflows"))
 (defn workflow-graph [name] (GET (str "/api/workflows/" (enc name))))

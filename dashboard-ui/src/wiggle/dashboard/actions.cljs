@@ -6,6 +6,9 @@
 
 (defn- store! [k] (fn [v] (swap! db assoc k v)))
 
+(defn load-auth! []
+  (-> (api/auth) (.then (store! :auth)) (.catch (fn [_] nil))))
+
 (defn load-cluster! []
   (-> (api/cluster) (.then (store! :cluster)) (.catch (fn [_] nil))))
 

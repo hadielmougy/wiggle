@@ -462,6 +462,12 @@ Everything has a sensible default; override via environment variable or system p
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name shown in cluster membership |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | set a port to enable the web dashboard |
+| `WIGGLE_DASHBOARD_PASSWORD` | *(unset)* | admin password for the dashboard/API; **unset = unauthenticated** |
+| `WIGGLE_DASHBOARD_USER` | `admin` | admin username for the dashboard/API |
+| `WIGGLE_TLS_KEYSTORE` | *(unset)* | keystore path; **unset = plaintext** for gRPC + HTTP. Enables TLS for both |
+| `WIGGLE_TLS_KEYSTORE_PASSWORD` | *(unset)* | password for the keystore |
+| `WIGGLE_TLS_TRUSTSTORE` | *(unset)* | truststore path; on a server this **requires client certs (mTLS)** |
+| `WIGGLE_TLS_TRUSTSTORE_PASSWORD` | *(unset)* | password for the truststore |
 | `WIGGLE_LOG_FILE` | *(unset)* | set a path to also log to a rotating file |
 | `WIGGLE_LOG_LEVEL` | `INFO` | file log level: `INFO`, `DEBUG`, `WARNING`, `ERROR` |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `5000` | how often the leader checks the queue backlog |
@@ -534,6 +540,25 @@ WIGGLE_DASHBOARD_PORT=8090 ./gradlew :server:run
 # → open http://localhost:8090
 ```
 
+**Securing it.** Set `WIGGLE_DASHBOARD_PASSWORD` and the dashboard and its JSON API require
+authentication against a single admin account (`WIGGLE_DASHBOARD_USER`, default `admin`). In a
+browser, an unauthenticated visit redirects to a **`/login` page**; signing in sets an HttpOnly
+session cookie (12h) that carries the whole SPA, and **`/logout`** ends the session. Programmatic
+clients can skip the form and use HTTP **Basic auth** instead (`curl -u admin:…`). The `/healthz`
+endpoint is always exempt so load balancers and probes reach it without credentials.
+
+```bash
+WIGGLE_DASHBOARD_PORT=8090 WIGGLE_DASHBOARD_PASSWORD=$(openssl rand -hex 16) \
+  ./gradlew :server:run
+curl -u admin:$PASS http://localhost:8090/api/instances
+```
+
+With no password set the dashboard is **unauthenticated** and logs a warning at startup — fine on
+a trusted network, but credentials travel in cleartext over plain HTTP, so serve it over TLS
+(`WIGGLE_TLS_KEYSTORE`, or a reverse proxy) for anything exposed. Auth is per-node — set the same
+credentials on every node, and note sessions aren't shared across nodes (logging into one node's
+dashboard doesn't log you into another's).
+
 It has four tabs:
 
 - **Instances** — filter by workflow/status; select one to see a **live trace**: the workflow
@@ -596,8 +621,37 @@ copy from:
   per-element keys (use `itemKey + "Index"`); two branches writing the same key race,
   last write wins.
 - **A failed instance stops; it does not roll back.** There's no built-in saga/compensation.
-- **The gRPC API is plaintext** (no auth/TLS). Keep it on a trusted network or front it
-  with something that terminates TLS.
+- **Transport security is opt-in.** With no `WIGGLE_TLS_KEYSTORE` the gRPC API and HTTP dashboard
+  are plaintext — keep them on a trusted network or enable TLS (see below).
+
+---
+
+## Transport security (TLS / mTLS)
+
+TLS is off by default. Point the server at a keystore and **both** the gRPC API and the HTTP
+dashboard serve over TLS; add a truststore to also **require client certificates (mTLS)**. With
+nothing set, both fall back to plaintext.
+
+```bash
+# server-side TLS for gRPC + HTTPS dashboard
+WIGGLE_TLS_KEYSTORE=/etc/wiggle/server.p12 WIGGLE_TLS_KEYSTORE_PASSWORD=… \
+WIGGLE_DASHBOARD_PORT=8090 ./gradlew :server:run
+
+# mutual TLS: also verify client certs against a truststore
+WIGGLE_TLS_KEYSTORE=/etc/wiggle/server.p12   WIGGLE_TLS_KEYSTORE_PASSWORD=… \
+WIGGLE_TLS_TRUSTSTORE=/etc/wiggle/trust.p12  WIGGLE_TLS_TRUSTSTORE_PASSWORD=… \
+  ./gradlew :server:run
+```
+
+Workers and clients read the same variables: `WIGGLE_TLS_TRUSTSTORE` verifies the server, and
+`WIGGLE_TLS_KEYSTORE` presents a client certificate when the server requires mTLS. Stores are
+PKCS12 (`.p12`) by default; a `.jks` path is loaded as JKS. Set the credentials per role (a
+server's keystore holds its server cert; a worker's holds its client cert).
+
+> **TLS authenticates the connection; it is not authorization.** Any client with a trusted
+> certificate can call any gRPC RPC, including privileged ones (start/cancel/signal/schedule).
+> For per-role restrictions, terminate at a gateway or gate the privileged RPCs separately. The
+> dashboard's HTTP API additionally supports Basic auth (`WIGGLE_DASHBOARD_PASSWORD`).
 
 ---
 

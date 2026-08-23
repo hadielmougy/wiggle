@@ -7,6 +7,7 @@
 (defonce db
   (r/atom
    {:tab       :instances          ; :instances | :workflows | :schedules | :signals
+    :auth      nil                 ; {:required bool :user ".."} — drives the logout button
     :cluster   nil
     :workflows []
     :instances []

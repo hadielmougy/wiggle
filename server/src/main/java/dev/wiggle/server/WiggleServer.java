@@ -44,9 +44,10 @@ public final class WiggleServer implements AutoCloseable {
                 config.retention(), config.housekeepingBatch());
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
-        this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis());
+        this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(), config.tls());
         this.dashboard = config.dashboardPort() > 0
-                ? new HttpDashboard(engine, cluster, config.dashboardPort())
+                ? new HttpDashboard(engine, cluster, config.dashboardPort(),
+                        config.dashboardUser(), config.dashboardPassword(), config.tls())
                 : null;
     }
 
@@ -99,12 +100,14 @@ public final class WiggleServer implements AutoCloseable {
         Logging.configureFromEnv();   // opt-in file logging, before anything logs
         ServerConfig config = ServerConfig.fromEnvironment();
         WiggleServer server = new WiggleServer(config).start();
+        boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle server '" + config.nodeName() + "' on " + server.baseUrl()
-                + " (storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
+                + " (gRPC: " + (tls ? "TLS" : "plaintext")
+                + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
         String logFile = System.getenv("WIGGLE_LOG_FILE");
         if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
         if (server.dashboardPort() > 0) {
-            System.out.println("Dashboard at http://localhost:" + server.dashboardPort());
+            System.out.println("Dashboard at " + (tls ? "https" : "http") + "://localhost:" + server.dashboardPort());
         }
         Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         Thread.currentThread().join();

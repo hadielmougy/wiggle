@@ -14,7 +14,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -35,6 +37,12 @@ class HttpDashboardTest {
 
     private HttpResponse<String> post(String url) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.noBody()).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> getAuth(String url, String user, String pass) throws Exception {
+        String cred = Base64.getEncoder().encodeToString((user + ":" + pass).getBytes(StandardCharsets.UTF_8));
+        return http.send(HttpRequest.newBuilder(URI.create(url)).header("Authorization", "Basic " + cred).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 
@@ -145,5 +153,91 @@ class HttpDashboardTest {
 
             assertEquals(404, get(base + "/api/workflows/no-such-workflow").statusCode());
         }
+    }
+
+    @Test @DisplayName("with a password set, the API needs auth, pages redirect to /login, /healthz stays open")
+    void securedDashboardRequiresAuth() throws Exception {
+        int dash = freePort();
+        ServerConfig config = securedConfig(dash);
+
+        try (WiggleServer server = new WiggleServer(config).start()) {
+            String base = "http://localhost:" + server.dashboardPort();
+
+            // Health check is exempt -- probes and load balancers reach it without credentials.
+            HttpResponse<String> health = get(base + "/healthz");
+            assertEquals(200, health.statusCode());
+            assertEquals("ok", health.body());
+
+            // An anonymous API call is challenged; an anonymous page is redirected to the login form.
+            HttpResponse<String> anonApi = get(base + "/api/instances");
+            assertEquals(401, anonApi.statusCode());
+            assertTrue(anonApi.headers().firstValue("WWW-Authenticate").orElse("").contains("Basic"));
+            HttpResponse<String> anonPage = get(base + "/");
+            assertEquals(302, anonPage.statusCode(), "the SPA redirects to login");
+            assertEquals("/login", anonPage.headers().firstValue("Location").orElse(""));
+
+            // The login form is always reachable.
+            HttpResponse<String> loginForm = get(base + "/login");
+            assertEquals(200, loginForm.statusCode());
+            assertTrue(loginForm.body().contains("Sign in"), "serves the login page");
+
+            // Basic auth still works for curl/programmatic clients.
+            assertEquals(401, getAuth(base + "/api/instances", "admin", "wrong").statusCode());
+            HttpResponse<String> viaBasic = getAuth(base + "/api/cluster", "admin", "s3cret");
+            assertEquals(200, viaBasic.statusCode());
+            assertTrue(viaBasic.body().contains("\"members\""));
+        }
+    }
+
+    @Test @DisplayName("the login form establishes a session cookie, and /logout revokes it")
+    void loginEstablishesSession() throws Exception {
+        int dash = freePort();
+        try (WiggleServer server = new WiggleServer(securedConfig(dash)).start()) {
+            String base = "http://localhost:" + server.dashboardPort();
+
+            // Wrong credentials are rejected, no cookie issued.
+            assertEquals(401, postJson(base + "/api/login", "{\"user\":\"admin\",\"password\":\"nope\"}").statusCode());
+
+            // Correct credentials mint a session cookie.
+            HttpResponse<String> login = postJson(base + "/api/login", "{\"user\":\"admin\",\"password\":\"s3cret\"}");
+            assertEquals(200, login.statusCode());
+            String cookie = sessionCookie(login);
+            assertTrue(cookie.startsWith("wiggle_session="), "issues a session cookie");
+            assertTrue(login.headers().firstValue("Set-Cookie").orElse("").contains("HttpOnly"), "cookie is HttpOnly");
+
+            // The cookie authorises the API and the SPA -- no Basic header needed.
+            assertEquals(200, getCookie(base + "/api/cluster", cookie).statusCode());
+            assertEquals(200, getCookie(base + "/", cookie).statusCode());
+
+            // Logout revokes the session server-side; the same cookie no longer authorises.
+            HttpResponse<String> logout = getCookie(base + "/logout", cookie);
+            assertEquals(302, logout.statusCode());
+            assertEquals("/login", logout.headers().firstValue("Location").orElse(""));
+            assertEquals(401, getCookie(base + "/api/cluster", cookie).statusCode(), "session revoked");
+        }
+    }
+
+    private static ServerConfig securedConfig(int dashboardPort) {
+        return new ServerConfig(0, "dash-secure-node", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort,
+                Duration.ofSeconds(5), Duration.ofSeconds(10), "admin", "s3cret");
+    }
+
+    private HttpResponse<String> postJson(String url, String json) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(url))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> getCookie(String url, String cookie) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create(url)).header("Cookie", cookie).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** The bare {@code name=value} of the Set-Cookie header, for replaying as a Cookie. */
+    private static String sessionCookie(HttpResponse<String> r) {
+        String setCookie = r.headers().firstValue("Set-Cookie").orElseThrow();
+        return setCookie.split(";", 2)[0];
     }
 }

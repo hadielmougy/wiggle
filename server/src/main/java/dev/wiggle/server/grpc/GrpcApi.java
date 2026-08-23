@@ -1,5 +1,6 @@
 package dev.wiggle.server.grpc;
 
+import dev.wiggle.core.Tls;
 import dev.wiggle.proto.*;
 import dev.wiggle.server.cluster.ClusterManager;
 import dev.wiggle.server.engine.EngineException;
@@ -8,7 +9,9 @@ import dev.wiggle.server.store.Rows.ServerNode;
 import io.grpc.Grpc;
 import io.grpc.InsecureServerCredentials;
 import io.grpc.Server;
+import io.grpc.ServerCredentials;
 import io.grpc.Status;
+import io.grpc.TlsServerCredentials;
 import io.grpc.stub.StreamObserver;
 
 import java.io.IOException;
@@ -40,14 +43,35 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis)
             throws IOException {
+        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED);
+    }
+
+    public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls)
+            throws IOException {
         this.engine = engine;
         this.cluster = cluster;
         this.maxLongPollMillis = maxLongPollMillis;
         this.pool = Executors.newVirtualThreadPerTaskExecutor();
-        this.server = Grpc.newServerBuilderForPort(port, InsecureServerCredentials.create())
+        this.server = Grpc.newServerBuilderForPort(port, credentials(tls))
                 .executor(pool)
                 .addService(this)
                 .build();
+    }
+
+    /** TLS credentials when a keystore is configured (mTLS when a truststore is too); else plaintext. */
+    private static ServerCredentials credentials(Tls.Options tls) throws IOException {
+        if (!tls.hasKeyStore()) {
+            LOG.log(System.Logger.Level.WARNING, "gRPC API is PLAINTEXT; set WIGGLE_TLS_KEYSTORE to enable TLS");
+            return InsecureServerCredentials.create();
+        }
+        TlsServerCredentials.Builder b = TlsServerCredentials.newBuilder().keyManager(Tls.keyManagers(tls));
+        if (tls.hasTrustStore()) {
+            b.trustManager(Tls.trustManagers(tls)).clientAuth(TlsServerCredentials.ClientAuth.REQUIRE);  // mTLS
+            LOG.log(System.Logger.Level.INFO, "gRPC API TLS enabled with required client certificates (mTLS)");
+        } else {
+            LOG.log(System.Logger.Level.INFO, "gRPC API TLS enabled (server-side)");
+        }
+        return b.build();
     }
 
     public void start() {
