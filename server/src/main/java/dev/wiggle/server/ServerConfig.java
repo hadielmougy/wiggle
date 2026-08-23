@@ -1,13 +1,49 @@
 package dev.wiggle.server;
 
+import dev.wiggle.core.Tls;
+
 import java.time.Duration;
 
-/** Configuration with sane defaults; every field is overridable from env or system properties. */
+/**
+ * Configuration with sane defaults; every field is overridable from env or system properties.
+ *
+ * <p>{@code dashboardUser}/{@code dashboardPassword} secure the HTTP dashboard and its JSON API
+ * with HTTP Basic auth. Auth is enforced only when a password is set (the {@code /healthz}
+ * endpoint is always open); with no password the dashboard is unauthenticated.
+ */
 public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
                            int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                            int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                            Duration retention, int housekeepingBatch, int dashboardPort,
-                           Duration queueLagCheckInterval, Duration queueLagWarnThreshold) {
+                           Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
+                           String dashboardUser, String dashboardPassword, Tls.Options tls) {
+
+    /** Back-compat constructor: no dashboard auth (password unset), admin as the default user. */
+    public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
+                        int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
+                        int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
+                        Duration retention, int housekeepingBatch, int dashboardPort,
+                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold) {
+        this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
+                queueLagCheckInterval, queueLagWarnThreshold, "admin", null);
+    }
+
+    /** Constructor with dashboard auth but no TLS (plaintext). */
+    public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
+                        int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
+                        int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
+                        Duration retention, int housekeepingBatch, int dashboardPort,
+                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
+                        String dashboardUser, String dashboardPassword) {
+        this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
+                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, Tls.Options.DISABLED);
+    }
+
+    public ServerConfig {
+        if (tls == null) tls = Tls.Options.DISABLED;
+    }
 
     public static ServerConfig fromEnvironment() {
         return new ServerConfig(
@@ -29,7 +65,12 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 Duration.ofMillis(intProp("wiggle.queueLag.checkIntervalMillis",
                         "WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS", 5_000)),
                 Duration.ofMillis(intProp("wiggle.queueLag.warnThresholdMillis",
-                        "WIGGLE_QUEUE_LAG_WARN_MILLIS", 10_000)));
+                        "WIGGLE_QUEUE_LAG_WARN_MILLIS", 10_000)),
+                // HTTP Basic credentials for the dashboard/API; no password => unauthenticated.
+                strProp("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
+                strProp("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),
+                // TLS for gRPC + HTTP; no keystore => plaintext, no truststore => no client-cert (mTLS).
+                Tls.Options.fromEnvironment());
     }
 
     public boolean isInMemory() {

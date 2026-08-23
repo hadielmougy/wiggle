@@ -21,6 +21,10 @@ import java.util.Map;
  *
  * Every tab has something to see: Instances (with a live trace), Workflows (diagrams),
  * Signals (two pending approvals), Schedules (one cron, one interval).
+ *
+ * <p>Config comes from the environment ({@link ServerConfig#fromEnvironment()}), so the same
+ * playground can run in-memory (the default) or against a database ({@code WIGGLE_JDBC_URL}),
+ * and can be secured with {@code WIGGLE_DASHBOARD_PASSWORD} / TLS just like a real deployment.
  */
 public final class DashboardSeed {
 
@@ -31,13 +35,11 @@ public final class DashboardSeed {
     }
 
     public static void main(String[] args) throws Exception {
-        int dashboardPort = Integer.getInteger("wiggle.dashboard.port",
-                Integer.parseInt(System.getenv().getOrDefault("WIGGLE_DASHBOARD_PORT", "8090")));
-
-        ServerConfig config = new ServerConfig(0, "seed-node", null, null, null, 4,
-                Duration.ofMillis(200), Duration.ofSeconds(2), 3, Duration.ofSeconds(30),
-                Duration.ofSeconds(2), Duration.ofHours(1), 100, dashboardPort,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+        // Default the dashboard on (the whole point of this tool) unless the caller set a port.
+        if (System.getProperty("wiggle.dashboard.port") == null && System.getenv("WIGGLE_DASHBOARD_PORT") == null) {
+            System.setProperty("wiggle.dashboard.port", "8090");
+        }
+        ServerConfig config = ServerConfig.fromEnvironment();
 
         Blueprint<Map<String, Object>> kyc = Workflow.defineJson("kyc-checks")
                 .step("verify-id", ctx -> put(ctx, "idOk", true))

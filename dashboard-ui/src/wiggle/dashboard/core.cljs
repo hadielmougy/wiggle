@@ -32,6 +32,7 @@
 
 (defn init []
   ;; initial load
+  (act/load-auth!)
   (act/load-cluster!)
   (act/load-workflows!)
   (act/load-instances!)

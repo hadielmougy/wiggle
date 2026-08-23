@@ -21,6 +21,9 @@ header .spacer { margin-left: auto; }
 .tabs button:hover { color: var(--fg); }
 .tabs button.active { color: var(--fg); background: var(--panel); border-color: var(--line); }
 .cluster { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 12px; }
+.account { display: flex; align-items: center; gap: 10px; }
+.account .user { color: var(--muted); font-size: 12px; }
+.account button { padding: 4px 10px; font-size: 12px; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 5px; }
 .dot.leader { background: var(--accent); }
 .dot.dead { background: var(--err); }

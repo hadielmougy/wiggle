@@ -41,7 +41,8 @@
           (:name m) (when (:leader m) " (leader)")]))]))
 
 (defn header []
-  (let [tab (st/tab)]
+  (let [tab (st/tab)
+        auth (:auth @db)]
     [:header
      [:h1 "🌀 WIGGLE"]
      [:div.tabs
@@ -53,7 +54,11 @@
      [:div.spacer]
      [:label.inline [:input {:type "checkbox" :checked (:auto? @db)
                              :on-change #(swap! db assoc :auto? (.. % -target -checked))}] "auto-refresh"]
-     [cluster-view]]))
+     [cluster-view]
+     (when (:required auth)
+       [:div.account
+        [:span.user (:user auth)]
+        [:button.ghost {:on-click #(set! (.. js/window -location -href) "/logout")} "Log out"]])]))
 
 ;; ---------------------------------------------------------------- signal form
 

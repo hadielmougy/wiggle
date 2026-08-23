@@ -296,9 +296,34 @@ as a diagram), **Schedules** (create interval/cron schedules and delete them), a
 missing Node toolchain falls back to a built-in minimal page). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a server on :8090).
 
+**Auth.** Set `WIGGLE_DASHBOARD_PASSWORD` to protect the dashboard and its JSON API against one
+admin account (`WIGGLE_DASHBOARD_USER`, default `admin`). Browsers get a `/login` form that sets a
+12h HttpOnly session cookie (`/logout` ends it); programmatic clients can use HTTP Basic auth
+instead. `/healthz`, `/login` and `/api/login` are always open. Unset = unauthenticated (warning at
+startup). Credentials are cleartext over plain HTTP, so serve over TLS for anything exposed; set the
+same credentials on every node (sessions are per-node, not shared).
+
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | HTTP port for the dashboard |
+| `WIGGLE_DASHBOARD_PASSWORD` | `wiggle.dashboard.password` | *(unset)* | admin password; unset = unauthenticated |
+| `WIGGLE_DASHBOARD_USER` | `wiggle.dashboard.user` | `admin` | admin username |
+
+### 7.1a Transport security (TLS / mTLS)
+
+Opt-in and shared by the gRPC API and the HTTP dashboard. A **keystore** turns TLS on for both;
+a **truststore** additionally requires client certificates (mTLS on the server) and presents a
+client certificate (on a worker/client). Unset ⇒ plaintext for both. Stores are PKCS12 by default;
+a `.jks` path is loaded as JKS. Clients/workers read the same variables. TLS secures the channel
+and (with mTLS) authenticates the peer, but it is **not authorization** — any trusted peer may call
+any RPC; layer the dashboard's Basic auth or an external gateway on top for role separation.
+
+| Env var | System property | Default | Meaning |
+|---|---|---|---|
+| `WIGGLE_TLS_KEYSTORE` | `wiggle.tls.keystore` | *(unset)* | keystore path; unset = plaintext |
+| `WIGGLE_TLS_KEYSTORE_PASSWORD` | `wiggle.tls.keystore.password` | *(unset)* | keystore password |
+| `WIGGLE_TLS_TRUSTSTORE` | `wiggle.tls.truststore` | *(unset)* | truststore path; server ⇒ require client certs (mTLS) |
+| `WIGGLE_TLS_TRUSTSTORE_PASSWORD` | `wiggle.tls.truststore.password` | *(unset)* | truststore password |
 
 ### 7.2 Storage backends (SPI)
 
