@@ -12,6 +12,11 @@ capacity.
 
 **Current version: `2.1.2`** · Java 21+ · Apache-2.0
 
+```bash
+# Run the server (dashboard + PostgreSQL support bundled) as a container:
+docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.2
+```
+
 > New here, or looking for every configuration knob in one place? See
 > **[docs/onboarding.md](docs/onboarding.md)** — onboarding + the full configuration reference.
 >
@@ -417,6 +422,41 @@ no JDBC URL is set.
 ```bash
 ./gradlew :server:run           # or run WiggleServer with ServerConfig.fromEnvironment()
 ```
+
+### Docker
+
+A prebuilt image runs the standalone server with the dashboard and the PostgreSQL provider
+bundled in. It reads the same environment variables as the JAR (see [Configuration](#configuration)).
+
+```bash
+# in-memory, secured dashboard — gRPC on :8080, dashboard on http://localhost:8090
+docker run --rm -p 8080:8080 -p 8090:8090 \
+  -e WIGGLE_DASHBOARD_PASSWORD=change-me \
+  hadielmougy/wiggle:2.1.2
+
+# against PostgreSQL
+docker run --rm -p 8080:8080 -p 8090:8090 \
+  -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
+  -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
+  -e WIGGLE_DASHBOARD_PASSWORD=change-me \
+  hadielmougy/wiggle:2.1.2
+```
+
+Or bring up a **complete stack** — server + Postgres, dashboard with admin login, durable
+volume — with the bundled compose file:
+
+```bash
+docker compose -f docker-compose.full.yml up -d     # → http://localhost:8090 (admin / change-me)
+docker compose -f docker-compose.full.yml down      # add -v to wipe the database
+```
+
+TLS works the same as the JAR: set `WIGGLE_TLS_KEYSTORE` (+ password) and mount the keystore
+(e.g. `-v $PWD/certs:/certs:ro -e WIGGLE_TLS_KEYSTORE=/certs/server.p12`). Build the image
+yourself with `docker build -t wiggle .`; publish a multi-arch image with `scripts/docker-release.sh`.
+
+> The server image runs the control plane and dashboard; it does not include a **worker**. Run
+> workers as your own processes against `:8080` (your app on `wiggle-client`, or
+> `./gradlew :example:runWorker`) so steps actually execute.
 
 ### A cluster (Postgres)
 

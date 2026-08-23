@@ -1,0 +1,60 @@
+# A complete, batteries-included Wiggle environment: the released server backed by PostgreSQL,
+# with the web dashboard + admin login enabled and durable storage. TLS is intentionally left
+# OFF -- plain HTTP/gRPC, meant for a trusted network or local use. To secure transport, add the
+# WIGGLE_TLS_* variables and a mounted keystore (see the README "Transport security" section).
+#
+#   docker compose -f docker-compose.full.yml up -d
+#   open http://localhost:8090        # sign in as admin / <WIGGLE_DASHBOARD_PASSWORD>
+#   docker compose -f docker-compose.full.yml down          # stop  (add -v to wipe the DB)
+#
+# This is separate from the minimal ./docker-compose.yml (which is just Postgres for dev); it uses
+# its own project name so the two never share containers/volumes.
+name: wiggle-stack
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wiggle
+      POSTGRES_USER: wiggle
+      POSTGRES_PASSWORD: wiggle
+    volumes:
+      - pgdata:/var/lib/postgresql/data        # durable: survives `down` (use `down -v` to wipe)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wiggle -d wiggle"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    # Uncomment to reach the DB from the host (5433 avoids clashing with a local Postgres on 5432):
+    # ports:
+    #   - "5433:5432"
+
+  wiggle:
+    image: hadielmougy/wiggle:2.1.2            # the latest release; or `build: .` to build locally
+    depends_on:
+      postgres:
+        condition: service_healthy             # wait for the DB before starting
+    environment:
+      WIGGLE_NODE_NAME: wiggle-1
+      # --- storage: the bundled PostgreSQL provider, over the compose network ---
+      WIGGLE_JDBC_URL: jdbc:postgresql://postgres:5432/wiggle
+      WIGGLE_JDBC_USER: wiggle
+      WIGGLE_JDBC_PASSWORD: wiggle
+      # --- gRPC control plane ---
+      WIGGLE_PORT: "8080"
+      # --- web dashboard + admin login (change the password!) ---
+      WIGGLE_DASHBOARD_PORT: "8090"
+      WIGGLE_DASHBOARD_USER: admin
+      WIGGLE_DASHBOARD_PASSWORD: change-me
+      # --- TLS intentionally omitted (plaintext). To enable, set e.g.:
+      #   WIGGLE_TLS_KEYSTORE: /certs/server.p12
+      #   WIGGLE_TLS_KEYSTORE_PASSWORD: ...
+      # and mount the keystore with a `volumes:` entry below.
+    ports:
+      - "8080:8080"                            # gRPC: clients & workers connect here
+      - "8090:8090"                            # web dashboard
+    restart: unless-stopped
+
+volumes:
+  pgdata:
