@@ -63,7 +63,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `io.github.hadielmougy`, version **2.0.0**. The server core is
+Published under group `io.github.hadielmougy`, version **0.0.1**. The server core is
 database-agnostic; a DB is a separate module contributed via the SPI (§7.3).
 
 ---
