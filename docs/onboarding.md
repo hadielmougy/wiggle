@@ -97,7 +97,28 @@ scripts/run-workers.sh 5 20            # 5 local workers, then submit 20 orders
 scripts/kind-down.sh                   # tear down
 ```
 
-### 4.4 Handy scripts
+### 4.4 As a container (Docker)
+
+The `Dockerfile` builds a standalone server image (dashboard + PostgreSQL provider bundled); it
+reads the same env vars as the JAR (§6). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a
+mounted keystore.
+
+```bash
+# run the released image, in-memory, secured dashboard
+docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.2
+
+# a complete stack: server + Postgres, dashboard login, durable volume, no TLS
+docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
+
+# build locally / publish multi-arch
+docker build -t wiggle .
+scripts/docker-release.sh                             # buildx amd64+arm64, pushes to a registry
+```
+
+The image is the control plane + dashboard only; run **workers** as separate processes against
+`:8080` (your app on `wiggle-client`, or `./gradlew :example:runWorker`).
+
+### 4.5 Handy scripts
 
 | Script | Purpose |
 |---|---|
@@ -107,8 +128,9 @@ scripts/kind-down.sh                   # tear down
 | `scripts/cluster.sh [count]` | 3 nodes + 2 workers on local Postgres |
 | `scripts/kind-up.sh [nodes]` / `kind-down.sh` | Postgres cluster on kind |
 | `scripts/run-workers.sh <workers> [submit]` | run N worker JVMs against `WIGGLE_URL` |
+| `scripts/docker-release.sh` | build & push the multi-arch server image |
 
-### 4.5 Gradle tasks
+### 4.6 Gradle tasks
 
 | Task | Runs |
 |---|---|
