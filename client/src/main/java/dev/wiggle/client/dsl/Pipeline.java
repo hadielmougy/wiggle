@@ -57,26 +57,34 @@ final class Pipeline<T> {
 
     /** A task node: {@code fn}'s result is diffed against the context and merged back. */
     String addStep(String name, Activity<T> fn, RetryPolicy retry) {
-        return addWorkerNode(name, json -> Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json)))),
-                retry, false);
+        return addWorkerTask(
+                name,
+                json -> Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json)))),
+                retry);
     }
 
     /** A task node run for its side effect only; the context is left unchanged. */
     String addEffect(String name, SideEffect<T> fn, RetryPolicy retry) {
-        return addWorkerNode(name, json -> { fn.accept(codec.decode(json)); return null; }, retry, false);
+        return addWorkerTask(
+                name,
+                json -> { fn.accept(codec.decode(json)); return null; },
+                retry);
     }
 
     /** A predicate node evaluated on a worker; its handler returns a {@link Boolean}. */
     String addGuard(String name, Predicate<T> test, RetryPolicy retry) {
-        return addWorkerNode(name, json -> test.test(codec.decode(json)), retry, true);
+        return addWorkerPredicate(name, json -> test.test(codec.decode(json)), retry);
     }
 
-    private String addWorkerNode(String name, ActivityHandler handler, RetryPolicy retry, boolean predicate) {
-        String activity = registerActivity(name, handler);
+    private String addWorkerPredicate(String name, ActivityHandler handler, RetryPolicy retry) {
         queues.add(defaultQueue);
-        NodeDraft draft = predicate
-                ? NodeDraft.predicate(name, activity, defaultQueue, retryOr(retry))
-                : NodeDraft.task(name, activity, defaultQueue, retryOr(retry));
+        NodeDraft draft = NodeDraft.predicate(name, registerActivity(name, handler), defaultQueue, retryOr(retry));
+        return add(draft);
+    }
+
+    private String addWorkerTask(String name, ActivityHandler handler, RetryPolicy retry) {
+        queues.add(defaultQueue);
+        NodeDraft draft = NodeDraft.task(name, registerActivity(name, handler), defaultQueue, retryOr(retry));
         return add(draft);
     }
 
@@ -144,13 +152,11 @@ final class Pipeline<T> {
     Blueprint<T> build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
-        WorkflowDefinition def = new WorkflowDefinition(name, version, startNode,
-                new LinkedHashMap<>(nodes), queues, executionMode, checkpoints);
+        WorkflowDefinition def = new WorkflowDefinition(
+                name, version, startNode, new LinkedHashMap<>(nodes), queues, executionMode, checkpoints);
         validate(def);
         return new Blueprint<>(def, handlers, codec);
     }
-
-    // ------------------------------------------------------------- internals
 
     private RetryPolicy retryOr(RetryPolicy retry) {
         return retry != null ? retry : defaultRetry;
