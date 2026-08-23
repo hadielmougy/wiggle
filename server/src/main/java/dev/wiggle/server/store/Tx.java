@@ -1,7 +1,5 @@
 package dev.wiggle.server.store;
 
-import dev.wiggle.core.Node;
-import dev.wiggle.core.WorkflowDefinition;
 import dev.wiggle.server.store.Rows.Instance;
 import dev.wiggle.server.store.Rows.InstanceStatus;
 import dev.wiggle.server.store.Rows.ServerNode;
@@ -11,24 +9,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-public interface Tx {
-
-    void putDefinition(String name, int version, String json);
-    Optional<String> definition(String name, int version);
-    /** Most recently registered version for a name. */
-    Optional<Integer> latestVersion(String name);
-    List<String> definitionNames();
-
-    /**
-     * Normalises a definition's graph into per-node and per-edge rows so the runtime can
-     * fetch a single node's neighbourhood without materialising the whole graph. Idempotent:
-     * the version is a content hash, so re-registering the same graph is a no-op.
-     */
-    void putGraph(WorkflowDefinition def);
-    /** One node plus its outgoing edges, reconstructed from the normalised rows. */
-    Optional<Node> graphNode(String workflow, int version, String nodeId);
-    /** The graph's entry node, without loading any other node. */
-    Optional<String> graphStartNode(String workflow, int version);
+/**
+ * The mutable runtime state of one transaction: instances, tokens, leases, schedules, and cluster
+ * nodes. It also extends {@link GraphStore} -- the immutable definition/graph reference data -- so a
+ * single transaction can read the graph and mutate runtime state atomically. Every engine mutation
+ * runs inside {@link Storage#inTx}.
+ */
+public interface Tx extends GraphStore {
 
     void insertInstance(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */

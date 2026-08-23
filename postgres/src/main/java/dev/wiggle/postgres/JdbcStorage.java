@@ -307,7 +307,7 @@ public final class JdbcStorage implements Storage {
                     for (String b : n.branches()) out.add(new Edge(b, "branch", i++));
                 }
                 case DYN_FORK -> {
-                    out.add(new Edge(n.branches().get(0), "branch", 0));
+                    out.add(new Edge(n.branches().getFirst(), "branch", 0));
                     if (n.next() != null) out.add(new Edge(n.next(), null, 1));
                 }
                 case SIGNAL -> {

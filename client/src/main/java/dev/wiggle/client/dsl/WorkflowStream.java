@@ -1,10 +1,10 @@
 package dev.wiggle.client.dsl;
 
-import dev.wiggle.core.*;
+import dev.wiggle.core.ExecutionMode;
+import dev.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -15,7 +15,13 @@ import java.util.function.UnaryOperator;
  * append nodes and return a stream, and the terminal {@link #build()} produces the
  * artifact. Nothing executes at definition time.
  *
- * One deliberate departure from {@code java.util.stream}: the context type does not
+ * <p>This class owns the graph's <em>shape</em> -- how nodes chain, branch, and rejoin -- while
+ * {@link Pipeline} owns the graph's <em>storage</em> (nodes, handlers, ids, assembly). A stream
+ * tracks its own "open ends" (nodes whose outgoing edge is not yet wired) and, for a branch,
+ * the join it must fall back to; it asks the pipeline to create nodes and connect edges but
+ * never touches the pipeline's collections.
+ *
+ * <p>One deliberate departure from {@code java.util.stream}: the context type does not
  * change from step to step. A workflow context is a durable document that survives
  * process restarts and is merged across parallel branches, so a single type for the
  * whole pipeline is what actually models the storage. {@code map} is therefore closer
@@ -23,14 +29,14 @@ import java.util.function.UnaryOperator;
  */
 public final class WorkflowStream<T> {
 
-    private static final int NEXT = 0;
-    private static final int ALT_NEXT = 1;
+    /** Which outgoing edge of a node an open end occupies. */
+    private enum Edge { NEXT, ALT }
 
     private final Pipeline<T> pipeline;
     private final Consumer<String> startSink;
     /** Non-null when this stream is a fork branch: where a short-circuited branch must land. */
     private final String enclosingJoinId;
-    private List<int[]> openSlots = new ArrayList<>();   // parallel arrays with openNodes
+    private List<Edge> openSlots = new ArrayList<>();     // parallel arrays with openNodes
     private List<String> openNodes = new ArrayList<>();
     private String lastStepId;
     private boolean consumed;
@@ -42,7 +48,7 @@ public final class WorkflowStream<T> {
     }
 
     static <T> WorkflowStream<T> root(Pipeline<T> pipeline) {
-        return new WorkflowStream<>(pipeline, id -> pipeline.startNode = id, null);
+        return new WorkflowStream<>(pipeline, pipeline::startAt, null);
     }
 
     /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
@@ -57,13 +63,7 @@ public final class WorkflowStream<T> {
      */
     public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry) {
         Objects.requireNonNull(fn, "activity");
-        String activity = pipeline.activityFor(name);
-        ContextCodec<T> codec = pipeline.codec;
-        pipeline.handlers.put(activity,
-                json -> dev.wiggle.core.Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json)))));
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.task(id, name, activity, pipeline.defaultQueue, retryOr(retry)));
-        pipeline.queues.add(pipeline.defaultQueue);
+        String id = pipeline.addStep(name, fn, retry);
         attach(id);
         lastStepId = id;
         return this;
@@ -87,15 +87,7 @@ public final class WorkflowStream<T> {
     /** {@link #effect} with an explicit retry policy; a {@code null} policy uses the workflow default. */
     public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry) {
         Objects.requireNonNull(fn, "side effect");
-        String activity = pipeline.activityFor(name);
-        ContextCodec<T> codec = pipeline.codec;
-        pipeline.handlers.put(activity, json -> {
-            fn.accept(codec.decode(json));
-            return null;
-        });
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.task(id, name, activity, pipeline.defaultQueue, retryOr(retry)));
-        pipeline.queues.add(pipeline.defaultQueue);
+        String id = pipeline.addEffect(name, fn, retry);
         attach(id);
         lastStepId = id;
         return this;
@@ -117,30 +109,18 @@ public final class WorkflowStream<T> {
      */
     public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry) {
         Objects.requireNonNull(test, "predicate");
-        String activity = pipeline.activityFor(name);
-        ContextCodec<T> codec = pipeline.codec;
-        pipeline.handlers.put(activity, json -> test.test(codec.decode(json)));
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.predicate(id, name, activity, pipeline.defaultQueue, retryOr(retry)));
-        pipeline.queues.add(pipeline.defaultQueue);
+        String id = pipeline.addGuard(name, test, retry);
         attach(id);
 
         if (enclosingJoinId != null) {
-            pipeline.wire(id, ALT_NEXT, enclosingJoinId);
+            pipeline.wireAlt(id, enclosingJoinId);
         } else {
-            String stop = pipeline.nextId("n");
-            pipeline.put(Node.end(stop, true, "gated:" + name));
-            pipeline.wire(id, ALT_NEXT, stop);
+            pipeline.wireAlt(id, pipeline.addEnd("gated:" + name));
         }
 
-        openNodes = new ArrayList<>(List.of(id));
-        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        openAt(id, Edge.NEXT);
         lastStepId = id;
         return this;
-    }
-
-    private RetryPolicy retryOr(RetryPolicy retry) {
-        return retry != null ? retry : pipeline.defaultRetry;
     }
 
     /** Server-side timer. No worker is occupied while the instance waits. */
@@ -150,10 +130,7 @@ public final class WorkflowStream<T> {
 
     public WorkflowStream<T> sleep(String stepName, Duration duration) {
         if (duration.isNegative()) throw new IllegalArgumentException("sleep duration must not be negative");
-        pipeline.stepNames.add(stepName);
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.sleep(id, stepName, duration.toMillis()));
-        attach(id);
+        attach(pipeline.addSleep(stepName, duration.toMillis()));
         lastStepId = null;
         return this;
     }
@@ -187,25 +164,17 @@ public final class WorkflowStream<T> {
                                          UnaryOperator<WorkflowStream<T>> escalation) {
         if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
         if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
-        if (!pipeline.stepNames.add(name)) {
-            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
-        }
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.signal(id, name, timeout == null ? 0 : timeout.toMillis()));
+        String id = pipeline.addSignal(name, timeout == null ? 0 : timeout.toMillis());
         attach(id);
-        // The delivery path (slot NEXT) is the open end; the escalation branch hangs off ALT_NEXT.
-        openNodes = new ArrayList<>(List.of(id));
-        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        // The delivery path (NEXT) is the open end; the escalation branch hangs off ALT.
+        openAt(id, Edge.NEXT);
         lastStepId = null;
 
         if (escalation != null) {
-            String[] start = new String[1];
-            WorkflowStream<T> sub = new WorkflowStream<>(pipeline, s -> start[0] = s, enclosingJoinId);
-            WorkflowStream<T> tail = escalation.apply(sub);
-            if (start[0] == null) throw new IllegalArgumentException("escalation branch of '" + name + "' defines no steps");
-            pipeline.wire(id, ALT_NEXT, start[0]);
-            openNodes.addAll(tail.openNodes);
-            openSlots.addAll(tail.openSlots);
+            Sub<T> esc = subStream(escalation, enclosingJoinId, "escalation branch of '" + name + "'");
+            pipeline.wireAlt(id, esc.start());
+            openNodes.addAll(esc.tail().openNodes);
+            openSlots.addAll(esc.tail().openSlots);
         }
         return this;
     }
@@ -218,12 +187,7 @@ public final class WorkflowStream<T> {
      */
     public WorkflowStream<T> subWorkflow(String name, String workflow) {
         Objects.requireNonNull(workflow, "workflow");
-        if (!pipeline.stepNames.add(name)) {
-            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
-        }
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.subWorkflow(id, name, workflow));
-        attach(id);
+        attach(pipeline.addSubWorkflow(name, workflow));
         lastStepId = null;
         return this;
     }
@@ -237,21 +201,17 @@ public final class WorkflowStream<T> {
     @SafeVarargs
     public final WorkflowStream<T> fork(Branch<T>... branches) {
         if (branches.length < 2) throw new IllegalArgumentException("fork needs at least two branches");
-        String forkId = pipeline.nextId("fork");
-        pipeline.put(Node.fork(forkId, "fork"));
+        String forkId = pipeline.addFork();
         attach(forkId);
 
-        String joinId = pipeline.nextId("join");
-        pipeline.put(Node.join(joinId, "join", branches.length));
-
+        String joinId = pipeline.addJoin(branches.length);
         List<String> starts = new ArrayList<>(branches.length);
         for (Branch<T> branch : branches) {
             starts.add(buildBranch(branch, joinId));
         }
-        pipeline.put(pipeline.get(forkId).withBranches(starts));
+        pipeline.setBranches(forkId, starts);
 
-        openNodes = new ArrayList<>(List.of(joinId));
-        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        openAt(joinId, Edge.NEXT);
         lastStepId = null;
         return this;
     }
@@ -270,18 +230,13 @@ public final class WorkflowStream<T> {
                                       UnaryOperator<WorkflowStream<T>> body) {
         Objects.requireNonNull(itemsKey, "itemsKey");
         Objects.requireNonNull(itemKey, "itemKey");
-        if (!pipeline.stepNames.add(name)) {
-            throw new IllegalArgumentException("duplicate step name '" + name + "' in workflow " + pipeline.name);
-        }
-        String forkId = pipeline.nextId("dynfork");
-        pipeline.put(Node.dynFork(forkId, name, itemsKey, itemKey));
+        String forkId = pipeline.addDynFork(name, itemsKey, itemKey);
         attach(forkId);
-        String joinId = pipeline.nextId("join");
-        pipeline.put(Node.join(joinId, "join", 0));   // 0 = dynamic width, carried in the join group
+        String joinId = pipeline.addJoin(0);   // 0 = dynamic width, carried in the join group
         String templateStart = buildBranch(Branch.of(name, body), joinId);
-        pipeline.put(pipeline.get(forkId).withBranches(List.of(templateStart)).withNext(joinId));
-        openNodes = new ArrayList<>(List.of(joinId));
-        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        pipeline.setBranches(forkId, List.of(templateStart));
+        pipeline.wireNext(forkId, joinId);     // followed directly when the list is empty
+        openAt(joinId, Edge.NEXT);
         lastStepId = null;
         return this;
     }
@@ -295,38 +250,16 @@ public final class WorkflowStream<T> {
     public WorkflowStream<T> doWhile(String conditionName, Predicate<T> condition,
                                      UnaryOperator<WorkflowStream<T>> body) {
         Objects.requireNonNull(condition, "condition");
-        String[] start = new String[1];
-        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, enclosingJoinId);
-        WorkflowStream<T> tail = body.apply(sub);
-        if (start[0] == null) throw new IllegalArgumentException("doWhile body defines no steps");
-
-        ContextCodec<T> codec = pipeline.codec;
-        String activity = pipeline.activityFor(conditionName);
-        pipeline.handlers.put(activity, json -> condition.test(codec.decode(json)));
-        String condId = pipeline.nextId("n");
-        pipeline.put(Node.predicate(condId, conditionName, activity, pipeline.defaultQueue, pipeline.defaultRetry));
-        pipeline.queues.add(pipeline.defaultQueue);
+        Sub<T> body0 = subStream(body, enclosingJoinId, "doWhile body");
+        String condId = pipeline.addGuard(conditionName, condition, null);
 
         // Enter at the body; body tail feeds the condition; true loops, false continues onward.
-        if (openNodes.isEmpty()) startSink.accept(start[0]); else wireOpenEndsTo(start[0]);
-        tail.wireOpenEndsTo(condId);
-        pipeline.wire(condId, NEXT, start[0]);
-        openNodes = new ArrayList<>(List.of(condId));
-        openSlots = new ArrayList<>(List.of(new int[]{ALT_NEXT}));
+        if (openNodes.isEmpty()) startSink.accept(body0.start()); else wireOpenEndsTo(body0.start());
+        body0.tail().wireOpenEndsTo(condId);
+        pipeline.wireNext(condId, body0.start());
+        openAt(condId, Edge.ALT);
         lastStepId = null;
         return this;
-    }
-
-    /** Builds one fork branch as a sub-stream wired to the join; returns its start node id. */
-    private String buildBranch(Branch<T> branch, String joinId) {
-        String[] start = new String[1];
-        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, joinId);
-        WorkflowStream<T> tail = branch.body().apply(sub);
-        if (start[0] == null) {
-            throw new IllegalArgumentException("branch '" + branch.name() + "' defines no steps");
-        }
-        tail.wireOpenEndsTo(joinId);
-        return start[0];
     }
 
     /**
@@ -349,7 +282,8 @@ public final class WorkflowStream<T> {
         // Lay down the guard predicates first, so each false path can point at the next guard.
         String[] guardIds = new String[guards];
         for (int i = 0; i < guards; i++) {
-            guardIds[i] = addGuardNode(all.get(i));
+            Case<T> c = all.get(i);
+            guardIds[i] = pipeline.addGuard(c.name(), c.guard(), null);
         }
 
         // Enter at the first guard, then take over the open-end bookkeeping ourselves.
@@ -359,12 +293,12 @@ public final class WorkflowStream<T> {
 
         // Chain each guard's false path to the next guard.
         for (int i = 0; i < guards - 1; i++) {
-            pipeline.wire(guardIds[i], ALT_NEXT, guardIds[i + 1]);
+            pipeline.wireAlt(guardIds[i], guardIds[i + 1]);
         }
 
         // Each guard's true path runs its branch; the branch's open ends become the choose's.
         for (int i = 0; i < guards; i++) {
-            collectCaseBranch(all.get(i), guardIds[i], NEXT);
+            collectCaseBranch(all.get(i), guardIds[i], Edge.NEXT);
         }
 
         wireChooseFallthrough(all, guardIds, hasDefault);
@@ -384,38 +318,45 @@ public final class WorkflowStream<T> {
         return hasDefault;
     }
 
-    /** Adds one guard as a predicate node and registers its handler; returns the node id. */
-    private String addGuardNode(Case<T> c) {
-        Predicate<T> guard = c.guard();
-        ContextCodec<T> codec = pipeline.codec;
-        String activity = pipeline.activityFor(c.name());
-        pipeline.handlers.put(activity, json -> guard.test(codec.decode(json)));
-        String id = pipeline.nextId("n");
-        pipeline.put(Node.predicate(id, c.name(), activity, pipeline.defaultQueue, pipeline.defaultRetry));
-        pipeline.queues.add(pipeline.defaultQueue);
-        return id;
-    }
-
     /** The last false path: a default branch, or an open end that skips the choose entirely. */
     private void wireChooseFallthrough(List<Case<T>> cases, String[] guardIds, boolean hasDefault) {
         String lastGuard = guardIds[guardIds.length - 1];
         if (hasDefault) {
-            collectCaseBranch(cases.get(cases.size() - 1), lastGuard, ALT_NEXT);
-            return;
+            collectCaseBranch(cases.get(cases.size() - 1), lastGuard, Edge.ALT);
+        } else {
+            openNodes.add(lastGuard);
+            openSlots.add(Edge.ALT);
         }
-        openNodes.add(lastGuard);
-        openSlots.add(new int[]{ALT_NEXT});
     }
 
-    /** Builds one case's branch and wires the guard's {@code slot} to it, accumulating open ends. */
-    private void collectCaseBranch(Case<T> c, String guardId, int slot) {
+    /** Builds one case's branch and wires the guard's {@code edge} to it, accumulating open ends. */
+    private void collectCaseBranch(Case<T> c, String guardId, Edge edge) {
+        Sub<T> branch = subStream(c.body(), enclosingJoinId, "case '" + c.name() + "'");
+        wire(guardId, edge, branch.start());
+        openNodes.addAll(branch.tail().openNodes);
+        openSlots.addAll(branch.tail().openSlots);
+    }
+
+    /** Builds one fork branch as a sub-stream wired to the join; returns its start node id. */
+    private String buildBranch(Branch<T> branch, String joinId) {
+        Sub<T> built = subStream(branch.body(), joinId, "branch '" + branch.name() + "'");
+        built.tail().wireOpenEndsTo(joinId);
+        return built.start();
+    }
+
+    /** A built nested sub-stream: its first node ({@code start}) and its open-ended {@code tail}. */
+    private record Sub<U>(String start, WorkflowStream<U> tail) {}
+
+    /**
+     * Builds a nested sub-stream from {@code body} over the same pipeline, falling back to
+     * {@code joinId} for any short-circuit. Throws with {@code what} if the body defines no steps.
+     */
+    private Sub<T> subStream(UnaryOperator<WorkflowStream<T>> body, String joinId, String what) {
         String[] start = new String[1];
-        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, enclosingJoinId);
-        WorkflowStream<T> tail = c.body().apply(sub);
-        if (start[0] == null) throw new IllegalArgumentException("case '" + c.name() + "' defines no steps");
-        pipeline.wire(guardId, slot, start[0]);
-        openNodes.addAll(tail.openNodes);
-        openSlots.addAll(tail.openSlots);
+        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, joinId);
+        WorkflowStream<T> tail = body.apply(sub);
+        if (start[0] == null) throw new IllegalArgumentException(what + " defines no steps");
+        return new Sub<>(start[0], tail);
     }
 
     /** Routes the step that was just added to a dedicated queue (for worker specialisation). */
@@ -423,14 +364,13 @@ public final class WorkflowStream<T> {
         if (lastStepId == null) {
             throw new IllegalStateException("onQueue() must directly follow step(), effect() or gate()");
         }
-        pipeline.put(pipeline.get(lastStepId).withQueue(queue));
-        pipeline.queues.add(queue);
+        pipeline.setQueue(lastStepId, queue);
         return this;
     }
 
     /** Sets the queue used by every subsequently defined step. */
     public WorkflowStream<T> defaultQueue(String queue) {
-        pipeline.defaultQueue = Objects.requireNonNull(queue);
+        pipeline.defaultQueue(queue);
         return this;
     }
 
@@ -440,7 +380,7 @@ public final class WorkflowStream<T> {
      * in-flight instance keeps the mode it started on.
      */
     public WorkflowStream<T> execution(ExecutionMode mode) {
-        pipeline.executionMode = Objects.requireNonNull(mode, "mode");
+        pipeline.executionMode(mode);
         return this;
     }
 
@@ -454,93 +394,47 @@ public final class WorkflowStream<T> {
         if (lastStepId == null) {
             throw new IllegalStateException("checkpoint() must directly follow step(), effect() or gate()");
         }
-        pipeline.checkpoints.add(lastStepId);
+        pipeline.markCheckpoint(lastStepId);
         return this;
     }
 
     public Blueprint<T> build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         consumed = true;
-        if (pipeline.startNode == null) throw new IllegalStateException("workflow defines no steps");
-
-        String endId = pipeline.nextId("end");
-        pipeline.put(Node.end(endId, true, null));
-        wireOpenEndsTo(endId);
-
-        int version = WorkflowDefinition.contentVersion(pipeline.name, pipeline.startNode,
-                pipeline.nodes.values(), pipeline.executionMode, pipeline.checkpoints);
-        WorkflowDefinition def = new WorkflowDefinition(pipeline.name, version, pipeline.startNode,
-                new LinkedHashMap<>(pipeline.nodes), pipeline.queues, pipeline.executionMode, pipeline.checkpoints);
-        validate(def);
-        return new Blueprint<>(def, pipeline.handlers, pipeline.codec);
+        wireOpenEndsTo(pipeline.addEnd(null));
+        return pipeline.build();
     }
 
-    private static void validate(WorkflowDefinition def) {
-        for (Node n : def.nodes().values()) {
-            validateNode(def, n);
-        }
-    }
+    // ------------------------------------------------------ open-end bookkeeping
 
-    private static void validateNode(WorkflowDefinition def, Node n) {
-        requireKnownTarget(def, n, n.next());
-        requireKnownTarget(def, n, n.altNext());
-        switch (n.kind()) {
-            case TASK, SLEEP, JOIN, SIGNAL, SUB_WORKFLOW -> requireSuccessor(n);
-            case PREDICATE -> validatePredicate(n);
-            case FORK -> validateFork(n);
-            case DYN_FORK -> validateDynFork(n);
-            case END -> { }
-        }
-    }
-
-    private static void validateDynFork(Node n) {
-        requireSuccessor(n);
-        if (n.branches().size() != 1) {
-            throw new IllegalStateException("dynamic fork " + n.id() + " needs exactly one branch template");
-        }
-        if (n.itemsKey() == null || n.itemKey() == null) {
-            throw new IllegalStateException("dynamic fork " + n.id() + " is missing its items/item keys");
-        }
-    }
-
-    private static void requireKnownTarget(WorkflowDefinition def, Node n, String target) {
-        if (target != null && !def.nodes().containsKey(target)) {
-            throw new IllegalStateException("node " + n.id() + " points at unknown node " + target);
-        }
-    }
-
-    private static void requireSuccessor(Node n) {
-        if (n.next() == null) throw new IllegalStateException("node " + n.id() + " has no successor");
-    }
-
-    private static void validatePredicate(Node n) {
-        requireSuccessor(n);
-        if (n.altNext() == null) {
-            throw new IllegalStateException("predicate " + n.id() + " has no false branch");
-        }
-    }
-
-    private static void validateFork(Node n) {
-        if (n.branches().size() < 2) {
-            throw new IllegalStateException("fork " + n.id() + " has fewer than two branches");
-        }
-    }
-
+    /** Appends {@code id}, wiring any pending open ends into it, then makes it the sole open end. */
     private void attach(String id) {
         if (openNodes.isEmpty()) {
             startSink.accept(id);
         } else {
             wireOpenEndsTo(id);
         }
+        openAt(id, Edge.NEXT);
+    }
+
+    /** Replaces the open-end set with the single edge {@code edge} of node {@code id}. */
+    private void openAt(String id, Edge edge) {
         openNodes = new ArrayList<>(List.of(id));
-        openSlots = new ArrayList<>(List.of(new int[]{NEXT}));
+        openSlots = new ArrayList<>(List.of(edge));
     }
 
     private void wireOpenEndsTo(String target) {
         for (int i = 0; i < openNodes.size(); i++) {
-            pipeline.wire(openNodes.get(i), openSlots.get(i)[0], target);
+            wire(openNodes.get(i), openSlots.get(i), target);
         }
         openNodes = new ArrayList<>();
         openSlots = new ArrayList<>();
+    }
+
+    private void wire(String from, Edge edge, String target) {
+        switch (edge) {
+            case NEXT -> pipeline.wireNext(from, target);
+            case ALT -> pipeline.wireAlt(from, target);
+        }
     }
 }
