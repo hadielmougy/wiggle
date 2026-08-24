@@ -4,6 +4,7 @@ import dev.wiggle.core.Node;
 import dev.wiggle.core.RetryPolicy;
 import dev.wiggle.core.WorkflowDefinition;
 import dev.wiggle.jdbc.JdbcStorage;
+import dev.wiggle.postgres.H2Dialect;
 import dev.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,7 +51,8 @@ class JdbcGraphTest {
     void jdbcGraphRoundTrip() {
         WorkflowDefinition def = sampleGraph();
         try (Storage storage = new JdbcStorage(
-                "jdbc:h2:mem:graph-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2)) {
+                "jdbc:h2:mem:graph-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2,
+                new H2Dialect())) {
             storage.migrate();
             storage.inTxVoid(tx -> tx.putGraph(def));
 

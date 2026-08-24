@@ -1,6 +1,5 @@
 package dev.wiggle.postgres;
 
-import dev.wiggle.jdbc.H2Dialect;
 import dev.wiggle.jdbc.JdbcStorage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,7 +38,7 @@ class SchemaMigrationTest {
     @Test @DisplayName("bootstraps a fresh database to the latest recorded version")
     void bootstrap() throws Exception {
         String url = "jdbc:h2:mem:mig-boot-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2)) {
+        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
             storage.migrate();
             try (Connection c = DriverManager.getConnection(url, "sa", "")) {
                 assertEquals(baselineVersion(), schemaVersion(c), "every real migration applied");
@@ -52,7 +51,7 @@ class SchemaMigrationTest {
     @Test @DisplayName("applies a new migration once, evolving an existing table, and is idempotent")
     void incrementalAndIdempotent() throws Exception {
         String url = "jdbc:h2:mem:mig-inc-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2)) {
+        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
             storage.migrate();   // every real migration up to baselineVersion()
             int next = baselineVersion() + 1;
 
@@ -84,7 +83,7 @@ class SchemaMigrationTest {
     @Test @DisplayName("a failing migration rolls back and records nothing (Postgres-style atomicity)")
     void failingMigrationLeavesNoTrace() throws Exception {
         String url = "jdbc:h2:mem:mig-fail-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2)) {
+        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
             storage.migrate();
             int baseline = baselineVersion();
 

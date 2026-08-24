@@ -1,4 +1,6 @@
-package dev.wiggle.jdbc;
+package dev.wiggle.postgres;
+
+import dev.wiggle.jdbc.Dialect;
 
 import java.sql.Connection;
 import java.sql.SQLException;

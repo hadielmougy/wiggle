@@ -78,7 +78,8 @@ class QueueLagMonitorTest {
     @Test @DisplayName("the same lag detection works against a JDBC store")
     void warnsWhenBacklogIsNotDrainingOnJdbc() throws Exception {
         warnsWhenBacklogIsNotDraining(new dev.wiggle.jdbc.JdbcStorage(
-                "jdbc:h2:mem:lag-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2));
+                "jdbc:h2:mem:lag-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2,
+                new dev.wiggle.postgres.H2Dialect()));
     }
 
     private void warnsWhenBacklogIsNotDraining(Storage newStorage) throws Exception {

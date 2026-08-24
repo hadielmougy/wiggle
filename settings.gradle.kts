@@ -9,6 +9,7 @@ include(
     "mysql",
     "oracle",
     "sqlserver",
+    "cassandra",
     "client",
     "example",
     "tests"

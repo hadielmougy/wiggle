@@ -1,4 +1,6 @@
-package dev.wiggle.jdbc;
+package dev.wiggle.postgres;
+
+import dev.wiggle.jdbc.Dialect;
 
 /**
  * H2 in PostgreSQL-compatibility mode: the embedded database used for development and the test

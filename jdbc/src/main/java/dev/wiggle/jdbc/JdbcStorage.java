@@ -44,22 +44,6 @@ public final class JdbcStorage implements Storage {
         this.ds = new HikariDataSource(cfg);
     }
 
-    /**
-     * URL-detecting constructor for the built-in dialects (PostgreSQL and H2). The MySQL and Oracle
-     * modules pass their dialect explicitly through the five-argument constructor.
-     */
-    public JdbcStorage(String url, String user, String password, int poolSize) {
-        this(url, user, password, poolSize, defaultDialect(url));
-    }
-
-    /** Resolves the built-in dialect from a JDBC URL. */
-    private static Dialect defaultDialect(String url) {
-        if (url != null && url.startsWith("jdbc:postgresql:")) return new PostgresDialect();
-        if (url != null && url.startsWith("jdbc:h2:")) return new H2Dialect();
-        throw new StorageException("no built-in dialect for JDBC URL '" + url +
-                "' -- pass a Dialect explicitly", null);
-    }
-
     private Connection borrow() {
         try {
             return ds.getConnection();
