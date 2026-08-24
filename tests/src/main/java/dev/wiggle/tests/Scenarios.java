@@ -292,13 +292,13 @@ public final class Scenarios {
             String id = client.start(bp, Map.of());
 
             // Simulate a worker that leases the task and then disappears without reporting.
-            List<TaskActivation> leased = client.poll("doomed-worker", bp.queues(), 1, 400, 2000);
+            List<TaskActivation> leased = client.poll("doomed-worker", bp.queues(), 1, 400, 2000).tasks();
             Check.equal(leased.size(), 1, "tasks leased by the doomed worker");
 
             // The leader must hand the same step back out once the lease expires.
             AtomicReference<TaskActivation> reclaimed = new AtomicReference<>();
             Check.eventually("the lease to be reclaimed", 10_000, () -> {
-                List<TaskActivation> again = client.poll("survivor", bp.queues(), 1, 30_000, 0);
+                List<TaskActivation> again = client.poll("survivor", bp.queues(), 1, 30_000, 0).tasks();
                 if (again.isEmpty()) return false;
                 reclaimed.set(again.get(0));
                 return true;
@@ -322,7 +322,7 @@ public final class Scenarios {
         withServer((server, client) -> {
             client.register(bp);
             client.start(bp, Map.of());
-            List<TaskActivation> leased = client.poll("owner", bp.queues(), 1, 30_000, 2000);
+            List<TaskActivation> leased = client.poll("owner", bp.queues(), 1, 30_000, 2000).tasks();
             Check.equal(leased.size(), 1, "leased tasks");
 
             boolean rejected = false;

@@ -16,7 +16,45 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                            Duration retention, int housekeepingBatch, int dashboardPort,
                            Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
-                           String dashboardUser, String dashboardPassword, Tls.Options tls) {
+                           String dashboardUser, String dashboardPassword, Tls.Options tls, Stability stability) {
+
+    /**
+     * Load-shedding backpressure driven by the gRPC handler <em>thread-pool queue</em> -- a purely
+     * server-local signal, so it can never depend on (or be defeated by) storage state. When enabled
+     * the RPC handlers run on a bounded pool of {@code threads}; requests waiting for a thread sit in
+     * its queue. When that queue is high <em>and growing</em> the server is saturated, so it stops
+     * long-polling worker requests: it returns immediately and hands each worker a jittered
+     * {@code holdOff} to wait before retrying, and already-parked long-polls exit early -- draining
+     * the queue instead of letting parked requests pile up and block clients / exhaust memory.
+     * Shedding clears once the queue stops growing or falls back below {@code lowWatermark}. Disabled
+     * by default (then the handler pool is the unbounded virtual-thread executor, as before).
+     */
+    public record Stability(boolean enabled, int threads, int highWatermark, int lowWatermark,
+                            Duration checkInterval, Duration holdOff, Duration holdOffJitter) {
+
+        public static final Stability DISABLED =
+                new Stability(false, 0, 0, 0, Duration.ofMillis(500), Duration.ofSeconds(2), Duration.ZERO);
+
+        public Stability {
+            if (checkInterval == null) checkInterval = Duration.ofMillis(500);
+            if (holdOff == null) holdOff = Duration.ofSeconds(2);
+            if (holdOffJitter == null) holdOffJitter = Duration.ZERO;
+        }
+
+        public static Stability fromEnvironment() {
+            return new Stability(
+                    boolProp("wiggle.stability.enabled", "WIGGLE_STABILITY_ENABLED", false),
+                    intProp("wiggle.stability.threads", "WIGGLE_STABILITY_THREADS", 200),
+                    intProp("wiggle.stability.highWatermark", "WIGGLE_STABILITY_HIGH_WATERMARK", 100),
+                    intProp("wiggle.stability.lowWatermark", "WIGGLE_STABILITY_LOW_WATERMARK", 20),
+                    Duration.ofMillis(intProp("wiggle.stability.checkIntervalMillis",
+                            "WIGGLE_STABILITY_CHECK_INTERVAL_MILLIS", 500)),
+                    Duration.ofMillis(intProp("wiggle.stability.holdOffMillis",
+                            "WIGGLE_STABILITY_HOLD_OFF_MILLIS", 2_000)),
+                    Duration.ofMillis(intProp("wiggle.stability.holdOffJitterMillis",
+                            "WIGGLE_STABILITY_HOLD_OFF_JITTER_MILLIS", 1_000)));
+        }
+    }
 
     /** Back-compat constructor: no dashboard auth (password unset), admin as the default user. */
     public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
@@ -41,8 +79,21 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, Tls.Options.DISABLED);
     }
 
+    /** Back-compat constructor: TLS but default (disabled) stability. */
+    public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
+                        int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
+                        int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
+                        Duration retention, int housekeepingBatch, int dashboardPort,
+                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
+                        String dashboardUser, String dashboardPassword, Tls.Options tls) {
+        this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
+                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, Stability.DISABLED);
+    }
+
     public ServerConfig {
         if (tls == null) tls = Tls.Options.DISABLED;
+        if (stability == null) stability = Stability.DISABLED;
     }
 
     public static ServerConfig fromEnvironment() {
@@ -70,7 +121,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 strProp("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
                 strProp("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),
                 // TLS for gRPC + HTTP; no keystore => plaintext, no truststore => no client-cert (mTLS).
-                Tls.Options.fromEnvironment());
+                Tls.Options.fromEnvironment(),
+                // Load-shedding backpressure for worker polls; disabled unless WIGGLE_STABILITY_ENABLED=true.
+                Stability.fromEnvironment());
     }
 
     public boolean isInMemory() {
@@ -94,5 +147,10 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     private static int intProp(String sysProp, String env, int def) {
         String v = strProp(sysProp, env, null);
         return v == null ? def : Integer.parseInt(v.trim());
+    }
+
+    private static boolean boolProp(String sysProp, String env, boolean def) {
+        String v = strProp(sysProp, env, null);
+        return v == null ? def : Boolean.parseBoolean(v.trim());
     }
 }

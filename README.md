@@ -528,6 +528,13 @@ Everything has a sensible default; override via environment variable or system p
 | `WIGGLE_LOG_LEVEL` | `INFO` | file log level: `INFO`, `DEBUG`, `WARNING`, `ERROR` |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `5000` | how often the leader checks the queue backlog |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `10000` | log a WARNING once the backlog isn't draining within this budget |
+| `WIGGLE_STABILITY_ENABLED` | `false` | **load shedding**: run gRPC handlers on a bounded pool and, when its **request queue** is high and growing (the server is saturated), stop long-polling and hand workers a hold-off — so parked poll requests can't pile up and block clients / exhaust memory. Off = the unbounded virtual-thread executor, as before |
+| `WIGGLE_STABILITY_THREADS` | `200` | size of the bounded gRPC handler pool (when enabled) |
+| `WIGGLE_STABILITY_HIGH_WATERMARK` | `100` | pending requests in the pool queue at/above which (while growing) the node starts shedding polls |
+| `WIGGLE_STABILITY_LOW_WATERMARK` | `20` | queue depth the node must fall back to (or stop growing) before it accepts polls normally again |
+| `WIGGLE_STABILITY_CHECK_INTERVAL_MILLIS` | `500` | how often each node samples the pool queue for the shedding decision |
+| `WIGGLE_STABILITY_HOLD_OFF_MILLIS` | `2000` | base time a shed worker is told to wait before polling again |
+| `WIGGLE_STABILITY_HOLD_OFF_JITTER_MILLIS` | `1000` | random extra added per response to the hold-off, so workers don't retry in lockstep |
 
 ### Queue lag monitoring
 

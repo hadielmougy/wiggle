@@ -2,7 +2,9 @@ package dev.wiggle.server.grpc;
 
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.*;
+import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.cluster.ClusterManager;
+import dev.wiggle.server.cluster.StabilityController;
 import dev.wiggle.server.engine.EngineException;
 import dev.wiggle.server.engine.WorkflowEngine;
 import dev.wiggle.server.store.Rows.ServerNode;
@@ -23,7 +25,11 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The control-plane API. Workers pull work from here; nothing is ever pushed to them,
@@ -38,20 +44,33 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private final Server server;
     private final ExecutorService pool;
     private final long maxLongPollMillis;
+    private final StabilityController stability;
     /** Versions already announced at INFO, so N workers registering the same graph log it once. */
     private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis)
             throws IOException {
-        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED);
+        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED, ServerConfig.Stability.DISABLED);
     }
 
-    public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls)
-            throws IOException {
+    public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls,
+                   ServerConfig.Stability stabilityConfig) throws IOException {
         this.engine = engine;
         this.cluster = cluster;
         this.maxLongPollMillis = maxLongPollMillis;
-        this.pool = Executors.newVirtualThreadPerTaskExecutor();
+        // With shedding enabled the handlers run on a bounded pool, so requests waiting for a thread
+        // sit in an observable queue -- the saturation signal shedding watches. Disabled, the pool is
+        // the unbounded virtual-thread executor (no queue, no shedding), exactly as before.
+        if (stabilityConfig.enabled()) {
+            ThreadPoolExecutor bounded = new ThreadPoolExecutor(
+                    stabilityConfig.threads(), stabilityConfig.threads(), 0L, TimeUnit.MILLISECONDS,
+                    new LinkedBlockingQueue<>(), namedThreads("wiggle-grpc"));
+            this.pool = bounded;
+            this.stability = new StabilityController(() -> bounded.getQueue().size(), stabilityConfig);
+        } else {
+            this.pool = Executors.newVirtualThreadPerTaskExecutor();
+            this.stability = new StabilityController(() -> 0, stabilityConfig);
+        }
         this.server = Grpc.newServerBuilderForPort(port, credentials(tls))
                 .executor(pool)
                 .addService(this)
@@ -74,7 +93,18 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         return b.build();
     }
 
+    /** Daemon threads with a stable name prefix for the bounded handler pool. */
+    private static ThreadFactory namedThreads(String prefix) {
+        AtomicLong n = new AtomicLong();
+        return r -> {
+            Thread t = new Thread(r, prefix + "-" + n.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        };
+    }
+
     public void start() {
+        stability.start();
         try {
             server.start();
         } catch (IOException e) {
@@ -88,6 +118,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override public void close() {
+        stability.close();
         server.shutdown();
         try {
             server.awaitTermination(1, TimeUnit.SECONDS);
@@ -260,23 +291,35 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             Set<String> queues = new LinkedHashSet<>(req.getQueuesList());
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
-            long wait = Math.min(maxLongPollMillis, req.getWaitMillis());
 
-            long deadline = System.currentTimeMillis() + wait;
+            // One immediate claim first. When the server is shedding load (a growing backlog risks
+            // memory from parked long-polls), we stop here: no long-poll parking, and if nothing was
+            // claimable we hand back a jittered hold-off so the worker backs off instead of retrying
+            // in a tight loop. Any instantly-available work is still delivered.
             List<dev.wiggle.core.TaskActivation> tasks = engine.poll(req.getWorkerId(), queues, max, lease);
-            while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-                try {
-                    Thread.sleep(Math.min(100, Math.max(1, deadline - System.currentTimeMillis())));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
+            long retryAfter = 0;
+            if (stability.shedding()) {
+                retryAfter = tasks.isEmpty() ? stability.retryAfterMillis() : 0;
+            } else {
+                long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
+                while (tasks.isEmpty() && System.currentTimeMillis() < deadline && !stability.shedding()) {
+                    try {
+                        Thread.sleep(Math.min(100, Math.max(1, deadline - System.currentTimeMillis())));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    tasks = engine.poll(req.getWorkerId(), queues, max, lease);
                 }
-                tasks = engine.poll(req.getWorkerId(), queues, max, lease);
+                // If shedding began mid-wait, tell the worker to hold off rather than retry immediately.
+                if (tasks.isEmpty() && stability.shedding()) retryAfter = stability.retryAfterMillis();
             }
             List<dev.wiggle.core.TaskActivation> finalTasks = tasks;
+            long finalRetry = retryAfter;
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
-                    + " returning " + finalTasks.size() + " task(s)");
-            TaskList.Builder out = TaskList.newBuilder();
+                    + " returning " + finalTasks.size() + " task(s)"
+                    + (finalRetry > 0 ? ", retryAfter=" + finalRetry + "ms (shedding)" : ""));
+            TaskList.Builder out = TaskList.newBuilder().setRetryAfterMillis(retryAfter);
             for (dev.wiggle.core.TaskActivation t : tasks) out.addTasks(taskProto(t));
             return out.build();
         });

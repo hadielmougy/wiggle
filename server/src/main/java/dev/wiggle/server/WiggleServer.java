@@ -54,7 +54,8 @@ public final class WiggleServer implements AutoCloseable {
                 config.retention(), config.housekeepingBatch());
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
-        this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(), config.tls());
+        this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
+                config.tls(), config.stability());
         this.dashboard = config.dashboardPort() > 0
                 ? new HttpDashboard(engine, cluster, config.dashboardPort(),
                         config.dashboardUser(), config.dashboardPassword(), config.tls())

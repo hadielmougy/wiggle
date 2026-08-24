@@ -112,10 +112,15 @@ public final class Worker implements AutoCloseable {
             sleep(options.idleBackoff().toMillis());
             return;
         }
-        List<TaskActivation> tasks = client.poll(workerId, servedQueues(), free,
+        PollResult result = client.poll(workerId, servedQueues(), free,
                 options.lease().toMillis(), options.longPollWait().toMillis());
+        List<TaskActivation> tasks = result.tasks();
         if (tasks.isEmpty()) {
-            sleep(options.idleBackoff().toMillis());
+            // The server's hold-off hint (set when it is shedding load) takes precedence over the
+            // normal idle backoff, so a backed-up server can push workers to wait longer.
+            long backoff = result.retryAfterMillis() > 0 ? result.retryAfterMillis()
+                    : options.idleBackoff().toMillis();
+            sleep(backoff);
             return;
         }
         for (TaskActivation task : tasks) {

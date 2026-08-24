@@ -209,6 +209,10 @@ message TaskActivation {
 
 message TaskList {
     repeated TaskActivation tasks = 1;
+    // Backpressure hint: when > 0 the server is shedding load (a growing backlog is risking server
+    // memory from parked long-polls); the worker should hold off this many millis before polling
+    // again instead of retrying immediately. The value already includes per-response jitter.
+    int64 retry_after_millis = 2;
 }
 
 // One locally-executed step reported back to the server (LOCAL_SYNC/LOCAL_ASYNC).
