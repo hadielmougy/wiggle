@@ -63,7 +63,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `io.github.hadielmougy`, version **2.1.2**. The server core is
+Published under group `io.github.hadielmougy`, version **2.1.3**. The server core is
 database-agnostic; a DB is a separate module contributed via the SPI (§7.3).
 
 ---
@@ -105,7 +105,7 @@ mounted keystore.
 
 ```bash
 # run the released image, in-memory, secured dashboard
-docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.2
+docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.3
 
 # a complete stack: server + Postgres, dashboard login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
