@@ -10,6 +10,7 @@ import dev.wiggle.core.InstanceView;
 import dev.wiggle.core.Json;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.WiggleServer;
+import dev.wiggle.dist.WiggleStorageFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -46,7 +47,7 @@ class DynamicConstructsTest {
 
     private InstanceView run(Blueprint<Map<String, Object>> bp, Map<String, Object> input, String jdbcUrl)
             throws Exception {
-        try (WiggleServer server = new WiggleServer(config(jdbcUrl)).start();
+        try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "dyn-" + Ids.next("x")).register(bp)) {
             w.start();

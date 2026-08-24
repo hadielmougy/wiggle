@@ -44,21 +44,21 @@ dependencies {
     // The server core is database-agnostic; with no JDBC URL it uses the in-memory store.
     implementation("io.github.hadielmougy:wiggle-server:2.1.2")
 
-    // For a real, multi-node deployment: add the database module for your engine (it plugs in
-    // via a ServiceLoader SPI and pools connections with HikariCP) plus the JDBC driver. The
-    // standalone server distribution already bundles the PostgreSQL module and driver.
-    runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.1.2")   // PostgreSQL + H2
+    // For a database in an embedded server, add the storage module you want (each pools with
+    // HikariCP) and build the store explicitly with a StorageFactory -- no ServiceLoader:
+    //   new WiggleServer(config, cfg -> new JdbcStorage(
+    //       cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), new PostgresDialect()));
+    // (The standalone server image bundles EVERY backend and picks one from the URL scheme, so as a
+    // container you never choose at build time -- see "Clustering" below.)
+    implementation("io.github.hadielmougy:wiggle-postgres:2.1.2")   // PostgreSQL + H2 dialects
     runtimeOnly("org.postgresql:postgresql:42.7.4")
 
-    // Or MySQL/MariaDB, Oracle, SQL Server, or Cassandra -- each is a drop-in module; the engine
-    // is detected from the URL:
-    //   runtimeOnly("io.github.hadielmougy:wiggle-mysql:2.1.2")
-    //   runtimeOnly("com.mysql:mysql-connector-j:9.1.0")
-    //   runtimeOnly("io.github.hadielmougy:wiggle-oracle:2.1.2")
-    //   runtimeOnly("com.oracle.database.jdbc:ojdbc11:23.5.0.24.07")
-    //   runtimeOnly("io.github.hadielmougy:wiggle-sqlserver:2.1.2")
-    //   runtimeOnly("com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11")
-    //   runtimeOnly("io.github.hadielmougy:wiggle-cassandra:2.1.2")   // cassandra:// URLs
+    // Other backends are drop-in modules, each contributing a dialect (or, for Cassandra, its own
+    // partition-aware store):
+    //   io.github.hadielmougy:wiggle-mysql      + com.mysql:mysql-connector-j
+    //   io.github.hadielmougy:wiggle-oracle     + com.oracle.database.jdbc:ojdbc11
+    //   io.github.hadielmougy:wiggle-sqlserver  + com.microsoft.sqlserver:mssql-jdbc
+    //   io.github.hadielmougy:wiggle-cassandra  (cassandra:// URLs)
 }
 ```
 
@@ -474,14 +474,16 @@ Point several server nodes at one Postgres and they form a cluster: every node s
 API and hands out work, and exactly one is elected to run clock-driven duties (timers,
 lease recovery). Kill any node — including the leader — and the rest carry on.
 
-> **Pluggable storage.** The server core knows nothing about any database; a store plugs in
-> through a `StorageProvider` SPI. PostgreSQL and H2 (`wiggle-postgres`), MySQL/MariaDB
-> (`wiggle-mysql`), Oracle (`wiggle-oracle`) and SQL Server (`wiggle-sqlserver`) all share one
-> HikariCP-pooled, dialect-aware JDBC store (`wiggle-jdbc`); **Cassandra** (`wiggle-cassandra`) is a
-> separate, partition-aware store on the CQL driver (lightweight transactions in place of row locks
-> — see `cassandra/README.md`). The engine is **detected from the URL** (`jdbc:…` or
-> `cassandra://…`). With none set it runs in-memory; with one it picks the provider that matches.
-> Supporting another database is a new module — no changes to the engine.
+> **Pluggable storage.** The server core knows nothing about any database; it builds its store from
+> an injected `StorageFactory` (an explicit switch on the URL — no `ServiceLoader`). PostgreSQL and
+> H2 (`wiggle-postgres`), MySQL/MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`) and SQL Server
+> (`wiggle-sqlserver`) all share one HikariCP-pooled, dialect-aware JDBC store (`wiggle-jdbc`);
+> **Cassandra** (`wiggle-cassandra`) is a separate, partition-aware store on the CQL driver
+> (lightweight transactions in place of row locks — see `cassandra/README.md`). The standalone
+> distribution (`wiggle-dist`, what the Docker image runs) bundles **every** backend and picks one
+> from the URL scheme (`jdbc:…` or `cassandra://…`); with none set it runs in-memory. **One image,
+> all databases** — you never build a per-database image. Supporting another database is a new
+> module — no changes to the engine core.
 
 ```bash
 docker compose up -d postgres
