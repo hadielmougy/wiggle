@@ -9,15 +9,20 @@ import dev.wiggle.server.grpc.GrpcApi;
 import dev.wiggle.server.http.HttpDashboard;
 import dev.wiggle.server.store.InMemoryStorage;
 import dev.wiggle.server.store.Storage;
-import dev.wiggle.server.store.StorageProvider;
+import dev.wiggle.server.store.StorageFactory;
 
 import java.io.IOException;
-import java.util.ServiceLoader;
 
 /**
  * Wires one server node together. Multiple nodes pointed at the same JDBC URL form a
  * cluster: they all serve the API and hand out work, and exactly one of them holds the
  * leader role and runs the clock-driven housekeeping.
+ *
+ * <p>The server core is storage-agnostic. With no URL configured it uses the in-memory store; to
+ * run on a database, pass a {@link StorageFactory} that knows how to build the store for the URL
+ * (the standalone {@code wiggle-dist} distribution supplies one covering every backend). The
+ * single-argument constructor is in-memory only, so an embedder that wants a database must use the
+ * two-argument form.
  */
 public final class WiggleServer implements AutoCloseable {
 
@@ -33,9 +38,14 @@ public final class WiggleServer implements AutoCloseable {
     /** Null unless a dashboard port was configured. */
     private final HttpDashboard dashboard;
 
+    /** In-memory only. To run on a database, use {@link #WiggleServer(ServerConfig, StorageFactory)}. */
     public WiggleServer(ServerConfig config) throws IOException {
+        this(config, WiggleServer::inMemoryOnly);
+    }
+
+    public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
         this.config = config;
-        this.storage = config.isInMemory() ? new InMemoryStorage() : databaseStorage(config);
+        this.storage = storageFactory.create(config);
         this.storage.migrate();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis());
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
@@ -51,16 +61,12 @@ public final class WiggleServer implements AutoCloseable {
                 : null;
     }
 
-    /**
-     * Finds the {@link StorageProvider} for the configured JDBC URL via {@link ServiceLoader}.
-     * Add a database module (e.g. {@code wiggle-postgres}) to the classpath to supply one.
-     */
-    private static Storage databaseStorage(ServerConfig config) {
-        for (StorageProvider provider : ServiceLoader.load(StorageProvider.class)) {
-            if (provider.supports(config.jdbcUrl())) return provider.create(config);
-        }
-        throw new IllegalStateException("no storage provider for JDBC URL '" + config.jdbcUrl()
-                + "' -- add a database module such as wiggle-postgres to the classpath");
+    /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
+    private static Storage inMemoryOnly(ServerConfig config) {
+        if (config.isInMemory()) return new InMemoryStorage();
+        throw new IllegalStateException("a storage URL is set ('" + config.jdbcUrl()
+                + "') but no StorageFactory was provided -- use WiggleServer(config, factory), or run the "
+                + "standalone distribution (wiggle-dist), which wires every backend by URL scheme");
     }
 
     public WiggleServer start() {
@@ -94,22 +100,5 @@ public final class WiggleServer implements AutoCloseable {
         housekeeper.close();
         cluster.close();
         storage.close();
-    }
-
-    public static void main(String[] args) throws Exception {
-        Logging.configureFromEnv();   // opt-in file logging, before anything logs
-        ServerConfig config = ServerConfig.fromEnvironment();
-        WiggleServer server = new WiggleServer(config).start();
-        boolean tls = config.tls().hasKeyStore();
-        System.out.println("Wiggle server '" + config.nodeName() + "' on " + server.baseUrl()
-                + " (gRPC: " + (tls ? "TLS" : "plaintext")
-                + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
-        String logFile = System.getenv("WIGGLE_LOG_FILE");
-        if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
-        if (server.dashboardPort() > 0) {
-            System.out.println("Dashboard at " + (tls ? "https" : "http") + "://localhost:" + server.dashboardPort());
-        }
-        Runtime.getRuntime().addShutdownHook(new Thread(server::close));
-        Thread.currentThread().join();
     }
 }

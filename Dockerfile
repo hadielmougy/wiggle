@@ -7,7 +7,8 @@
 #   docker build -t hadielmougy/wiggle:2.1.2 .
 #   docker run --rm -p 8080:8080 -p 8090:8090 hadielmougy/wiggle:2.1.2      # in-memory
 #
-# The image bundles the PostgreSQL storage provider, so pointing it at a database is just env:
+# The image bundles every storage backend (PostgreSQL/H2, MySQL/MariaDB, Oracle, SQL Server,
+# Cassandra); the engine is picked from the URL scheme, so pointing it at a database is just env:
 #   docker run --rm -p 8080:8080 -p 8090:8090 \
 #     -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
 #     -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
@@ -32,10 +33,11 @@ COPY dashboard-ui/package.json dashboard-ui/package-lock.json ./dashboard-ui/
 RUN cd dashboard-ui && (npm ci || npm install)
 
 # Then the rest of the sources and the full build (compiles Java + dashboard, assembles the dist).
+# The :dist module bundles every storage backend; the engine is picked from the URL at runtime.
 COPY . .
 RUN chmod +x gradlew \
- && ./gradlew --no-daemon --console=plain :server:installDist
-# -> /src/server/build/install/wiggle/{bin,lib}
+ && ./gradlew --no-daemon --console=plain :dist:installDist
+# -> /src/dist/build/install/wiggle/{bin,lib}
 
 # ---- runtime stage: slim JRE + the assembled distribution ----
 FROM eclipse-temurin:21-jre-jammy AS runtime
@@ -46,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget \
  && groupadd -r wiggle && useradd -r -g wiggle -d /opt/wiggle wiggle
 
 WORKDIR /opt/wiggle
-COPY --from=build /src/server/build/install/wiggle/ ./
+COPY --from=build /src/dist/build/install/wiggle/ ./
 USER wiggle
 
 # gRPC control plane and the (optional) HTTP dashboard. Storage defaults to in-memory; set

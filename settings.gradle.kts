@@ -11,6 +11,7 @@ include(
     "sqlserver",
     "cassandra",
     "client",
+    "dist",
     "example",
     "tests"
 )

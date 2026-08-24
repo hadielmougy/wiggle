@@ -60,7 +60,7 @@ class CassandraStoreTest {
     }
 
     private InstanceView run(Blueprint<Map<String, Object>> bp, Map<String, Object> input) throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new dev.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "cass-" + Ids.next("x")).register(bp)) {
             w.start();
@@ -123,7 +123,7 @@ class CassandraStoreTest {
                 .subWorkflow("delegate", "cass-child")
                 .step("wrap-up", ctx -> put(ctx, "wrapped", true))
                 .build();
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new dev.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "cass-sub-" + Ids.next("x")).register(parent).register(child)) {
             w.start();
