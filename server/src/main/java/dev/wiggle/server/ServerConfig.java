@@ -16,7 +16,40 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                            Duration retention, int housekeepingBatch, int dashboardPort,
                            Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
-                           String dashboardUser, String dashboardPassword, Tls.Options tls) {
+                           String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory) {
+
+    /**
+     * Memory-pressure admission control for worker polls. When GC-accurate heap utilization crosses
+     * {@code threshold} the server is under pressure and starts <em>probabilistically</em> rejecting
+     * new polls: it rejects a {@code rejectRatio} fraction of them (default 0.10 -- accept 90%,
+     * reject 10%) rather than shedding all at once, easing load gently. A rejected poll returns
+     * immediately empty with a jittered hold-off ({@code retryInterval} + up to {@code retryJitter})
+     * telling the worker to wait before trying again. Disabled by default.
+     */
+    public record Memory(boolean enabled, double threshold, double rejectRatio,
+                         Duration retryInterval, Duration retryJitter) {
+
+        public static final Memory DISABLED =
+                new Memory(false, 0.90, 0.10, Duration.ofSeconds(2), Duration.ofSeconds(1));
+
+        public Memory {
+            if (threshold <= 0 || threshold > 1) threshold = 0.90;
+            if (rejectRatio < 0 || rejectRatio > 1) rejectRatio = 0.10;
+            if (retryInterval == null) retryInterval = Duration.ofSeconds(2);
+            if (retryJitter == null) retryJitter = Duration.ZERO;
+        }
+
+        public static Memory fromEnvironment() {
+            return new Memory(
+                    boolProp("wiggle.memory.shedding.enabled", "WIGGLE_MEMORY_SHEDDING_ENABLED", false),
+                    doubleProp("wiggle.memory.threshold", "WIGGLE_MEMORY_THRESHOLD", 0.90),
+                    doubleProp("wiggle.memory.rejectRatio", "WIGGLE_MEMORY_REJECT_RATIO", 0.10),
+                    Duration.ofMillis(intProp("wiggle.memory.retryMillis",
+                            "WIGGLE_MEMORY_RETRY_MILLIS", 2_000)),
+                    Duration.ofMillis(intProp("wiggle.memory.retryJitterMillis",
+                            "WIGGLE_MEMORY_RETRY_JITTER_MILLIS", 1_000)));
+        }
+    }
 
     /** Back-compat constructor: no dashboard auth (password unset), admin as the default user. */
     public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
@@ -41,8 +74,21 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, Tls.Options.DISABLED);
     }
 
+    /** Back-compat constructor: TLS but default (disabled) memory shedding. */
+    public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
+                        int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
+                        int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
+                        Duration retention, int housekeepingBatch, int dashboardPort,
+                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
+                        String dashboardUser, String dashboardPassword, Tls.Options tls) {
+        this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
+                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, Memory.DISABLED);
+    }
+
     public ServerConfig {
         if (tls == null) tls = Tls.Options.DISABLED;
+        if (memory == null) memory = Memory.DISABLED;
     }
 
     public static ServerConfig fromEnvironment() {
@@ -70,7 +116,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 strProp("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
                 strProp("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),
                 // TLS for gRPC + HTTP; no keystore => plaintext, no truststore => no client-cert (mTLS).
-                Tls.Options.fromEnvironment());
+                Tls.Options.fromEnvironment(),
+                // Memory-pressure load shedding; disabled unless WIGGLE_MEMORY_SHEDDING_ENABLED=true.
+                Memory.fromEnvironment());
     }
 
     public boolean isInMemory() {
@@ -94,5 +142,15 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     private static int intProp(String sysProp, String env, int def) {
         String v = strProp(sysProp, env, null);
         return v == null ? def : Integer.parseInt(v.trim());
+    }
+
+    private static boolean boolProp(String sysProp, String env, boolean def) {
+        String v = strProp(sysProp, env, null);
+        return v == null ? def : Boolean.parseBoolean(v.trim());
+    }
+
+    private static double doubleProp(String sysProp, String env, double def) {
+        String v = strProp(sysProp, env, null);
+        return v == null ? def : Double.parseDouble(v.trim());
     }
 }

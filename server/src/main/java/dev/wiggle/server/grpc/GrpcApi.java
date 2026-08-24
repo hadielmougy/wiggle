@@ -2,6 +2,7 @@ package dev.wiggle.server.grpc;
 
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.*;
+import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.cluster.ClusterManager;
 import dev.wiggle.server.engine.EngineException;
 import dev.wiggle.server.engine.WorkflowEngine;
@@ -38,22 +39,25 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private final Server server;
     private final ExecutorService pool;
     private final long maxLongPollMillis;
+    private final MemoryGuard memory;
     /** Versions already announced at INFO, so N workers registering the same graph log it once. */
     private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis)
             throws IOException {
-        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED);
+        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED, ServerConfig.Memory.DISABLED);
     }
 
-    public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls)
-            throws IOException {
+    public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls,
+                   ServerConfig.Memory memoryConfig) throws IOException {
         this.engine = engine;
         this.cluster = cluster;
         this.maxLongPollMillis = maxLongPollMillis;
+        this.memory = new MemoryGuard(memoryConfig);
         this.pool = Executors.newVirtualThreadPerTaskExecutor();
         this.server = Grpc.newServerBuilderForPort(port, credentials(tls))
                 .executor(pool)
+                .intercept(new MemorySizeInterceptor(memory))   // sums in-flight request/response bytes
                 .addService(this)
                 .build();
     }
@@ -257,12 +261,22 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
         run(resp, () -> {
+            // Admission control: under memory pressure, reject a configured fraction of incoming
+            // polls outright (empty + a jittered hold-off), before doing any work. The other polls
+            // are served normally, so load eases gently instead of stopping dead.
+            if (memory.rejectPoll()) {
+                long retryAfter = memory.retryAfterMillis();
+                LOG.log(System.Logger.Level.WARNING, () -> "memory pressure ("
+                        + String.format("%.0f%%", MemoryGuard.heapUtilization() * 100)
+                        + " heap, in-flight req/resp " + memory.inFlightBytes() + " bytes): rejecting poll from "
+                        + req.getWorkerId() + ", retry after " + retryAfter + "ms");
+                return TaskList.newBuilder().setRetryAfterMillis(retryAfter).build();
+            }
+
             Set<String> queues = new LinkedHashSet<>(req.getQueuesList());
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
-            long wait = Math.min(maxLongPollMillis, req.getWaitMillis());
-
-            long deadline = System.currentTimeMillis() + wait;
+            long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
             List<dev.wiggle.core.TaskActivation> tasks = engine.poll(req.getWorkerId(), queues, max, lease);
             while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
                 try {

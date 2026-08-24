@@ -76,7 +76,7 @@ class GrpcErrorMappingTest {
             client.register(bp);
             client.start(bp, Map.of());
             List<TaskActivation> claimed =
-                    client.poll("w", bp.definition().workerQueues(), 1, 30_000, 500);
+                    client.poll("w", bp.definition().workerQueues(), 1, 30_000, 500).tasks();
             assertEquals(1, claimed.size(), "the gate step is claimable");
             TaskActivation gate = claimed.get(0);
 

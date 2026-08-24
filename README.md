@@ -528,6 +528,11 @@ Everything has a sensible default; override via environment variable or system p
 | `WIGGLE_LOG_LEVEL` | `INFO` | file log level: `INFO`, `DEBUG`, `WARNING`, `ERROR` |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `5000` | how often the leader checks the queue backlog |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `10000` | log a WARNING once the backlog isn't draining within this budget |
+| `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | **memory admission control**: when GC-accurate heap utilization crosses the threshold, the server rejects a fraction of new worker polls (empty + a hold-off) instead of taking on request/response memory it can't hold; it recovers on its own once utilization falls |
+| `WIGGLE_MEMORY_THRESHOLD` | `0.90` | live-heap utilization (post-GC used / max, `0`–`1`) at/above which the server is "under pressure" |
+| `WIGGLE_MEMORY_REJECT_RATIO` | `0.10` | fraction of polls to reject while under pressure (`0.10` = accept 90%, reject 10%) |
+| `WIGGLE_MEMORY_RETRY_MILLIS` | `2000` | retry interval a rejected worker is told to wait before polling again |
+| `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` | `1000` | random extra added per response to the retry interval, so workers don't retry in lockstep |
 
 ### Queue lag monitoring
 

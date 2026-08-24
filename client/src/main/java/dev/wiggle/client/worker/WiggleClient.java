@@ -118,8 +118,8 @@ public final class WiggleClient implements AutoCloseable {
         return m;
     }
 
-    public List<dev.wiggle.core.TaskActivation> poll(String workerId, Collection<String> queues, int max,
-                                     long leaseMillis, long waitMillis) {
+    public PollResult poll(String workerId, Collection<String> queues, int max,
+                           long leaseMillis, long waitMillis) {
         PollRequest req = PollRequest.newBuilder()
                 .setWorkerId(workerId)
                 .addAllQueues(queues)
@@ -130,7 +130,7 @@ public final class WiggleClient implements AutoCloseable {
         TaskList res = call(() -> stub.pollTasks(req));
         List<dev.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
         for (dev.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(toTaskActivation(t));
-        return out;
+        return new PollResult(out, res.getRetryAfterMillis());
     }
 
     public void complete(String taskId, String leaseOwner, Object result) {
