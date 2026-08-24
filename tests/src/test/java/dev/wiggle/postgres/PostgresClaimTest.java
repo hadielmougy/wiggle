@@ -4,6 +4,7 @@ import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.core.Ids;
 import dev.wiggle.core.TaskActivation;
+import dev.wiggle.jdbc.JdbcStorage;
 import dev.wiggle.server.engine.DefinitionRegistry;
 import dev.wiggle.server.engine.WorkflowEngine;
 import org.junit.jupiter.api.DisplayName;

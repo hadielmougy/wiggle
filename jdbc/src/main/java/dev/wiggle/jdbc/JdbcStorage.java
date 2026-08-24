@@ -1,5 +1,7 @@
-package dev.wiggle.postgres;
+package dev.wiggle.jdbc;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import dev.wiggle.core.*;
 import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.*;
@@ -8,7 +10,6 @@ import dev.wiggle.server.store.Tx;
 
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.function.Function;
 
 /**
@@ -17,48 +18,63 @@ import java.util.function.Function;
  * conditional UPDATE (compare-and-set on status), and leader election from the
  * wf_node heartbeat table.
  *
- * Tested against PostgreSQL 14+ and H2 2.x in PostgreSQL compatibility mode.
+ * <p>The store body is dialect-neutral: it writes canonical, PostgreSQL-flavoured SQL and
+ * defers every non-portable fragment to a {@link Dialect}. That single body backs PostgreSQL
+ * and H2 (via {@code wiggle-postgres}), MySQL/MariaDB (via {@code wiggle-mysql}) and Oracle
+ * (via {@code wiggle-oracle}). Connection pooling is provided by HikariCP.
  */
 public final class JdbcStorage implements Storage {
 
-    private final String url, user, password;
-    private final ArrayBlockingQueue<Connection> pool;
-    private final int poolSize;
-    /** Whether the target is PostgreSQL -- gates the SKIP LOCKED claim. Set during migrate(). */
-    private volatile boolean postgres;
+    private final Dialect dialect;
+    private final HikariDataSource ds;
 
+    /** Explicit-dialect constructor used by the per-database modules. */
+    public JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect) {
+        this.dialect = Objects.requireNonNull(dialect, "dialect");
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(url);
+        if (user != null) cfg.setUsername(user);
+        if (password != null) cfg.setPassword(password);
+        cfg.setMaximumPoolSize(Math.max(1, poolSize));
+        // The engine drives its own transaction boundaries via inTx(); every borrowed connection
+        // stays in manual-commit, read-committed mode.
+        cfg.setAutoCommit(false);
+        cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
+        cfg.setPoolName("wiggle-" + dialect.id());
+        this.ds = new HikariDataSource(cfg);
+    }
+
+    /**
+     * URL-detecting constructor for the built-in dialects (PostgreSQL and H2). The MySQL and Oracle
+     * modules pass their dialect explicitly through the five-argument constructor.
+     */
     public JdbcStorage(String url, String user, String password, int poolSize) {
-        this.url = url;
-        this.user = user;
-        this.password = password;
-        this.poolSize = poolSize;
-        this.pool = new ArrayBlockingQueue<>(poolSize);
+        this(url, user, password, poolSize, defaultDialect(url));
+    }
+
+    /** Resolves the built-in dialect from a JDBC URL. */
+    private static Dialect defaultDialect(String url) {
+        if (url != null && url.startsWith("jdbc:postgresql:")) return new PostgresDialect();
+        if (url != null && url.startsWith("jdbc:h2:")) return new H2Dialect();
+        throw new StorageException("no built-in dialect for JDBC URL '" + url +
+                "' -- pass a Dialect explicitly", null);
     }
 
     private Connection borrow() {
         try {
-            Connection c = pool.poll();
-            if (c == null || c.isClosed()) {
-                c = user == null ? DriverManager.getConnection(url)
-                        : DriverManager.getConnection(url, user, password);
-                c.setAutoCommit(false);
-                c.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
-            }
-            return c;
+            return ds.getConnection();
         } catch (SQLException e) {
             throw new StorageException("cannot obtain connection", e);
         }
     }
 
-    private void release(Connection c) {
+    private static void release(Connection c) {
         if (c == null) return;
-        if (!pool.offer(c)) {
-            try { c.close(); } catch (SQLException ignored) { }
-        }
+        try { c.close(); } catch (SQLException ignored) { }  // returns the connection to the pool
     }
 
     /** One forward-only schema step. {@code sql} may hold several {@code ;}-separated statements. */
-    record Migration(int version, String name, String sql) { }
+    public record Migration(int version, String name, String sql) { }
 
     /**
      * Ordered, forward-only schema history. Append new migrations; never edit or reorder an
@@ -68,7 +84,7 @@ public final class JdbcStorage implements Storage {
      * tables / new indexes) so a rolling multi-node deploy, where old and new nodes briefly
      * share the database, stays safe.
      */
-    static final List<Migration> MIGRATIONS = List.of(
+    public static final List<Migration> MIGRATIONS = List.of(
             new Migration(1, "baseline", """
             CREATE TABLE IF NOT EXISTS wf_definition (
               name           VARCHAR(200) NOT NULL,
@@ -188,9 +204,8 @@ public final class JdbcStorage implements Storage {
     @Override public void migrate() {
         Connection c = borrow();
         try {
-            this.postgres = isPostgres(c);
-            runMigrations(c, MIGRATIONS);
-            c.commit();   // also releases the advisory lock held for the duration
+            runMigrations(c, MIGRATIONS, dialect);
+            c.commit();   // also releases the migration lock held for the duration
         } catch (SQLException e) {
             rollback(c);
             throw new StorageException("migration failed", e);
@@ -201,15 +216,16 @@ public final class JdbcStorage implements Storage {
 
     /**
      * Applies every migration newer than the recorded schema version, in order, on the given
-     * connection. Serialised across nodes by a transaction-scoped advisory lock (PostgreSQL;
-     * a no-op on H2), so concurrent starters do not race on catalog creation. Runs in the
-     * caller's transaction and does <em>not</em> commit -- the caller does, which keeps the
-     * lock held until the whole batch lands atomically.
+     * connection, translating each statement through {@code dialect}. Serialised across nodes by a
+     * dialect-supplied migration lock (a transaction-scoped advisory lock on PostgreSQL; a no-op
+     * elsewhere, where run-once version tracking is relied on). Runs in the caller's transaction and
+     * does <em>not</em> commit -- the caller does, which keeps the lock held until the whole batch
+     * lands atomically.
      */
-    static void runMigrations(Connection c, List<Migration> migrations) throws SQLException {
-        acquireMigrationLock(c);
+    public static void runMigrations(Connection c, List<Migration> migrations, Dialect dialect) throws SQLException {
+        dialect.acquireMigrationLock(c);
         try (Statement st = c.createStatement()) {
-            st.execute("CREATE TABLE IF NOT EXISTS wf_schema_version (" +
+            execDdl(st, dialect, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
                     "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL)");
         }
         int current = 0;
@@ -221,7 +237,7 @@ public final class JdbcStorage implements Storage {
             if (m.version() <= current) continue;
             try (Statement st = c.createStatement()) {
                 for (String stmt : m.sql().split(";")) {
-                    if (!stmt.isBlank()) st.execute(stmt);
+                    if (!stmt.isBlank()) execDdl(st, dialect, stmt);
                 }
             }
             try (PreparedStatement ins = c.prepareStatement(
@@ -234,23 +250,24 @@ public final class JdbcStorage implements Storage {
         }
     }
 
-    /** Serialises migration across nodes on PostgreSQL; a no-op elsewhere. */
-    private static void acquireMigrationLock(Connection c) throws SQLException {
-        if (!isPostgres(c)) return;
-        try (Statement st = c.createStatement()) {
-            st.execute("SELECT pg_advisory_xact_lock(7420398115703004)");
+    /**
+     * Runs one dialect-translated DDL statement, tolerating an "already exists" error the dialect
+     * deems benign. Needed for Oracle, which has no {@code IF NOT EXISTS} on older versions and
+     * auto-commits DDL, so a restart or a partially-applied migration can re-encounter an object
+     * that is already there. Any other error propagates.
+     */
+    private static void execDdl(Statement st, Dialect dialect, String canonicalSql) throws SQLException {
+        try {
+            st.execute(dialect.ddl(canonicalSql));
+        } catch (SQLException e) {
+            if (!dialect.isBenignMigrationError(e)) throw e;
         }
-    }
-
-    private static boolean isPostgres(Connection c) throws SQLException {
-        String product = c.getMetaData().getDatabaseProductName();
-        return product != null && product.toLowerCase(Locale.ROOT).contains("postgresql");
     }
 
     @Override public <R> R inTx(Function<Tx, R> work) {
         Connection c = borrow();
         try {
-            R r = work.apply(new JdbcTx(c, postgres));
+            R r = work.apply(new JdbcTx(c, dialect));
             c.commit();
             return r;
         } catch (SQLException e) {
@@ -269,11 +286,7 @@ public final class JdbcStorage implements Storage {
     }
 
     @Override public void close() {
-        List<Connection> all = new ArrayList<>(poolSize);
-        pool.drainTo(all);
-        for (Connection c : all) {
-            try { c.close(); } catch (SQLException ignored) { }
-        }
+        ds.close();
     }
 
     public static final class StorageException extends RuntimeException {
@@ -284,9 +297,9 @@ public final class JdbcStorage implements Storage {
 
     private static final class JdbcTx implements Tx {
         private final Connection c;
-        private final boolean postgres;
+        private final Dialect dialect;
 
-        JdbcTx(Connection c, boolean postgres) { this.c = c; this.postgres = postgres; }
+        JdbcTx(Connection c, Dialect dialect) { this.c = c; this.dialect = dialect; }
 
         private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
 
@@ -323,27 +336,30 @@ public final class JdbcStorage implements Storage {
 
         @Override public void putDefinition(String name, int version, String json) {
             // The version is a content hash of the topology, so an existing (name,version) row
-            // is byte-for-byte identical and re-registration is a genuine no-op. ON CONFLICT DO
-            // NOTHING makes that idempotent atomically -- unlike a DELETE-then-INSERT, it leaves
-            // no window in which two nodes registering the same graph collide on the primary key.
-            try (PreparedStatement ins = ps("INSERT INTO wf_definition (name,version,body,registered_at) " +
-                    "VALUES (?,?,?,?) ON CONFLICT DO NOTHING")) {
+            // is byte-for-byte identical and re-registration is a genuine no-op. insertIgnore makes
+            // that idempotent atomically -- unlike a DELETE-then-INSERT, it leaves no window in which
+            // two nodes registering the same graph collide on the primary key. Oracle has no inline
+            // ignore, so a genuine concurrent duplicate surfaces as a duplicate-key error we swallow.
+            try (PreparedStatement ins = ps(dialect.insertIgnore("INSERT INTO wf_definition " +
+                    "(name,version,body,registered_at) VALUES (?,?,?,?)", "registered_at"))) {
                 ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
                 ins.setLong(4, System.currentTimeMillis());
                 ins.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            } catch (SQLException e) {
+                if (!dialect.isDuplicateKey(e)) throw wrap(e);
+            }
         }
 
         @Override public void putGraph(WorkflowDefinition def) {
-            // The (name,version) blob insert already used ON CONFLICT DO NOTHING for idempotency;
-            // guard the graph rows the same way so a re-registration of the same content hash is a
-            // clean no-op even if two nodes race.
+            // The (name,version) blob insert already ignored conflicts for idempotency; guard the
+            // graph rows the same way so a re-registration of the same content hash is a clean no-op
+            // even if two nodes race.
             if (graphExists(def.name(), def.version())) return;
-            try (PreparedStatement node = ps("INSERT INTO wf_graph_node " +
+            try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
                     "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING");
-                 PreparedStatement edge = ps("INSERT INTO wf_graph_edge " +
-                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING")) {
+                    "items_key,item_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
+                 PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
+                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)", "to_node"))) {
                 for (Node n : def.nodes().values()) {
                     node.setString(1, def.name()); node.setInt(2, def.version()); node.setString(3, n.id());
                     node.setString(4, n.kind().name()); node.setString(5, n.name()); node.setString(6, n.activity());
@@ -362,12 +378,14 @@ public final class JdbcStorage implements Storage {
                 }
                 node.executeBatch();
                 edge.executeBatch();
-            } catch (SQLException e) { throw wrap(e); }
+            } catch (SQLException e) {
+                if (!dialect.isDuplicateKey(e)) throw wrap(e);
+            }
         }
 
         private boolean graphExists(String workflow, int version) {
             try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? " +
-                    (postgres ? "LIMIT 1" : "FETCH FIRST 1 ROWS ONLY"))) {
+                    dialect.firstRow())) {
                 p.setString(1, workflow); p.setInt(2, version);
                 try (ResultSet rs = p.executeQuery()) { return rs.next(); }
             } catch (SQLException e) { throw wrap(e); }
@@ -516,7 +534,7 @@ public final class JdbcStorage implements Storage {
             if (workflow != null) sql.append(" AND workflow=?");
             if (status != null) sql.append(" AND status=?");
             sql.append(" ORDER BY created_at DESC LIMIT ?");
-            try (PreparedStatement p = ps(sql.toString())) {
+            try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
                 int idx = 1;
                 if (workflow != null) p.setString(idx++, workflow);
                 if (status != null) p.setString(idx++, status.name());
@@ -601,9 +619,13 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
-            return postgres
-                    ? claimSkipLocked(workerId, queues, max, now, leaseUntil)
-                    : claimCompareAndSet(workerId, queues, max, now, leaseUntil);
+            if (dialect.supportsSkipLocked() && dialect.supportsReturning()) {
+                return claimSkipLockedReturning(workerId, queues, max, now, leaseUntil);
+            }
+            if (dialect.supportsSkipLocked()) {
+                return claimSkipLockedSelect(workerId, queues, max, now, leaseUntil);
+            }
+            return claimCompareAndSet(workerId, queues, max, now, leaseUntil);
         }
 
         /**
@@ -613,7 +635,7 @@ public final class JdbcStorage implements Storage {
          * transaction ever waits on a row locked by another, concurrent claims across
          * many workers and nodes cannot deadlock, and none of them collide on a row.
          */
-        private List<Token> claimSkipLocked(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
             StringBuilder pick = new StringBuilder(
                     "SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
@@ -638,7 +660,46 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
+        /**
+         * Two-step claim for dialects that have SKIP LOCKED but not RETURNING (MySQL): lock the
+         * candidate rows with SELECT ... FOR UPDATE SKIP LOCKED, then flip them to RUNNING in the
+         * same transaction. The lock the SELECT took guarantees no other worker can claim the same
+         * rows before the UPDATE commits.
+         */
+        private List<Token> claimSkipLockedSelect(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+            StringBuilder sel = new StringBuilder(
+                    "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
+            if (queues != null && !queues.isEmpty()) {
+                sel.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
+            }
+            sel.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
+            List<Token> picked = new ArrayList<>();
+            try (PreparedStatement p = ps(dialect.limit(sel.toString()))) {
+                int idx = 1;
+                p.setLong(idx++, now);
+                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                p.setInt(idx, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    while (rs.next()) picked.add(readToken(rs));
+                }
+            } catch (SQLException e) { throw wrap(e); }
+            if (picked.isEmpty()) return picked;
+            try (PreparedStatement upd = ps("UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?," +
+                    "updated_at=? WHERE id=?")) {
+                for (Token t : picked) {
+                    upd.setString(1, workerId); upd.setLong(2, leaseUntil); upd.setLong(3, now); upd.setString(4, t.id);
+                    upd.addBatch();
+                    t.status = TokenStatus.RUNNING;
+                    t.leaseOwner = workerId;
+                    t.leaseExpiresAt = leaseUntil;
+                    t.updatedAt = now;
+                }
+                upd.executeBatch();
+            } catch (SQLException e) { throw wrap(e); }
+            return picked;
+        }
+
+        /** Portable fallback (H2, Oracle): over-fetch candidates, then compare-and-set each. */
         private List<Token> claimCompareAndSet(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
             StringBuilder sql = new StringBuilder(
                     "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
@@ -647,7 +708,7 @@ public final class JdbcStorage implements Storage {
             }
             sql.append(" ORDER BY available_at, id LIMIT ?");
             List<Token> candidates = new ArrayList<>();
-            try (PreparedStatement p = ps(sql.toString())) {
+            try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
                 int idx = 1;
                 p.setLong(idx++, now);
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
@@ -689,8 +750,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> pendingSignals(int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
-                    "ORDER BY created_at LIMIT ?")) {
+            try (PreparedStatement p = ps(dialect.limit("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
+                    "ORDER BY created_at LIMIT ?"))) {
                 p.setInt(1, max);
                 try (ResultSet rs = p.executeQuery()) {
                     List<Token> out = new ArrayList<>();
@@ -720,11 +781,8 @@ public final class JdbcStorage implements Storage {
         @Override public void putSchedule(Rows.Schedule s) {
             // Upsert by id: the engine reuses the existing id when a schedule for the same
             // workflow already exists, so a re-create updates the row rather than duplicating it.
-            try (PreparedStatement p = ps("INSERT INTO wf_schedule " +
-                    "(id,workflow,interval_millis,cron,context,next_fire_at,created_at) VALUES (?,?,?,?,?,?,?) " +
-                    "ON CONFLICT (id) DO UPDATE SET workflow=EXCLUDED.workflow, " +
-                    "interval_millis=EXCLUDED.interval_millis, cron=EXCLUDED.cron, " +
-                    "context=EXCLUDED.context, next_fire_at=EXCLUDED.next_fire_at")) {
+            // The seven bound parameters are identical across dialects; only the SQL text differs.
+            try (PreparedStatement p = ps(dialect.scheduleUpsert())) {
                 p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
                 p.setString(4, s.cron); p.setString(5, s.contextJson);
                 p.setLong(6, s.nextFireAt); p.setLong(7, s.createdAt);
@@ -758,8 +816,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
-                    "ORDER BY next_fire_at LIMIT ?")) {
+            try (PreparedStatement p = ps(dialect.limit("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
+                    "ORDER BY next_fire_at LIMIT ?"))) {
                 p.setLong(1, now); p.setInt(2, max);
                 try (ResultSet rs = p.executeQuery()) {
                     List<Rows.Schedule> out = new ArrayList<>();
@@ -811,7 +869,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private List<Token> query(String sql, long arg, int limit) {
-            try (PreparedStatement p = ps(sql)) {
+            try (PreparedStatement p = ps(dialect.limit(sql))) {
                 p.setLong(1, arg);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) {
@@ -872,7 +930,8 @@ public final class JdbcStorage implements Storage {
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
             List<String> ids = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE status<>'RUNNING' AND updated_at<? LIMIT ?")) {
+            try (PreparedStatement p = ps(dialect.limit(
+                    "SELECT id FROM wf_instance WHERE status<>'RUNNING' AND updated_at<? LIMIT ?"))) {
                 p.setLong(1, updatedBefore);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }
@@ -920,7 +979,10 @@ public final class JdbcStorage implements Storage {
             t.availableAt = rs.getLong("available_at");
             t.leaseOwner = rs.getString("lease_owner");
             t.leaseExpiresAt = rs.getLong("lease_expires");
-            t.joinStack = rs.getString("join_stack");
+            // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
+            // normalise it here so the engine always sees a non-null join stack.
+            String joinStack = rs.getString("join_stack");
+            t.joinStack = joinStack == null ? "" : joinStack;
             t.lastError = rs.getString("last_error");
             t.payloadJson = rs.getString("payload");
             t.createdAt = rs.getLong("created_at");
