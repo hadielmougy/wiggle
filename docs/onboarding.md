@@ -58,13 +58,20 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `core` | JSON, the compiled graph model, retry policy, execution mode, wire records | `wiggle-core` |
 | `proto` | the `WiggleControlPlane` gRPC service + generated stubs | `wiggle-proto` |
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
-| `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, dashboard, in-memory store, `StorageProvider` SPI | `wiggle-server` |
-| `postgres` | JDBC-backed store + `StorageProvider` (Postgres / H2) | `wiggle-postgres` |
+| `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, dashboard, in-memory store, injected `StorageFactory` | `wiggle-server` |
+| `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
+| `postgres` | PostgreSQL + H2 dialects | `wiggle-postgres` |
+| `mysql` | MySQL / MariaDB dialect | `wiggle-mysql` |
+| `oracle` | Oracle Database dialect | `wiggle-oracle` |
+| `sqlserver` | Microsoft SQL Server dialect | `wiggle-sqlserver` |
+| `cassandra` | partition-aware CQL store (lightweight transactions) | `wiggle-cassandra` |
+| `dist` | runnable standalone server bundling every backend (what the Docker image runs) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `io.github.hadielmougy`, version **2.1.3**. The server core is
-database-agnostic; a DB is a separate module contributed via the SPI (§7.3).
+Published under group `io.github.hadielmougy`, version **2.1.3** (the runnable `dist` module is not
+published). The server core is database-agnostic; it builds its store from an injected
+`StorageFactory` and the backend is selected from the URL scheme (§7.2).
 
 ---
 
@@ -73,14 +80,14 @@ database-agnostic; a DB is a separate module contributed via the SPI (§7.3).
 ### 4.1 Single node (in-memory) — dev default
 
 ```bash
-./gradlew :server:run                          # gRPC on :8080, in-memory store
+./gradlew :dist:run                          # gRPC on :8080, in-memory store
 ./gradlew :example:run                          # embedded server + worker + a few orders, one JVM
 ```
 
 ### 4.2 Server + workers as separate processes
 
 ```bash
-./gradlew :server:run                                  # terminal 1
+./gradlew :dist:run                                  # terminal 1
 ./gradlew :example:runWorker                            # terminal 2 (WIGGLE_URL=localhost:8080)
 ./gradlew :example:submitOrders -Pcount=20             # terminal 3
 ```
@@ -99,9 +106,9 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds a standalone server image (dashboard + PostgreSQL provider bundled); it
-reads the same env vars as the JAR (§6). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a
-mounted keystore.
+The `Dockerfile` builds a standalone server image (dashboard + **every** storage backend bundled,
+picked from the URL scheme); it reads the same env vars as the JAR (§6). TLS is set the same way —
+`WIGGLE_TLS_KEYSTORE` + a mounted keystore.
 
 ```bash
 # run the released image, in-memory, secured dashboard
@@ -134,8 +141,8 @@ The image is the control plane + dashboard only; run **workers** as separate pro
 
 | Task | Runs |
 |---|---|
-| `:server:run` | `WiggleServer` (standalone server) |
-| `:server:installDist` | server distribution (bundles `wiggle-postgres`) — used by the Docker image |
+| `:dist:run` | standalone server (`dev.wiggle.dist.Main`, every backend bundled) |
+| `:dist:installDist` | server distribution (bundles every storage backend) — used by the Docker image |
 | `:example:run` | `Demo` (embedded end-to-end) |
 | `:example:runWorker` | `WorkerMain` |
 | `:example:submitOrders -Pcount=N` | `SubmitOrders` |
@@ -347,12 +354,21 @@ any RPC; layer the dashboard's Basic auth or an external gateway on top for role
 | `WIGGLE_TLS_TRUSTSTORE` | `wiggle.tls.truststore` | *(unset)* | truststore path; server ⇒ require client certs (mTLS) |
 | `WIGGLE_TLS_TRUSTSTORE_PASSWORD` | `wiggle.tls.truststore.password` | *(unset)* | truststore password |
 
-### 7.2 Storage backends (SPI)
+### 7.2 Storage backends
 
-No JDBC URL → in-memory (single node, dev/test). With a URL, the server resolves a
-`StorageProvider` via `ServiceLoader`; `wiggle-postgres` (bundled in the server distribution)
-supports `jdbc:postgresql:` and `jdbc:h2:`. Another database is a new module implementing the SPI —
-no engine change.
+No URL → in-memory (single node, dev/test). With one, the server builds its store from an injected
+`StorageFactory` — **no `ServiceLoader`**: the distribution's `WiggleStorageFactory` maps the URL
+scheme to a backend at runtime. The JDBC backends — PostgreSQL / H2 (`wiggle-postgres`),
+MySQL / MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`), SQL Server (`wiggle-sqlserver`) — share
+one HikariCP-pooled, dialect-aware store (`wiggle-jdbc`); Cassandra (`wiggle-cassandra`) is a
+separate, partition-aware CQL store. The `dist` module (the Docker image) bundles them all, so a
+single image serves any of `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:` / `jdbc:mariadb:`,
+`jdbc:oracle:`, `jdbc:sqlserver:` or `cassandra://`. Another database is a new module — no engine
+change.
+
+Embedding the server in your own JVM? Pass the factory explicitly, e.g.
+`new WiggleServer(config, cfg -> new JdbcStorage(cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(),
+cfg.jdbcPoolSize(), new PostgresDialect()))` — you depend only on the storage module(s) you use.
 
 ### 7.3 Signals, sub-workflows and schedules
 

@@ -13,7 +13,7 @@ capacity.
 **Current version: `2.1.3`** · Java 21+ · Apache-2.0
 
 ```bash
-# Run the server (dashboard + PostgreSQL support bundled) as a container:
+# Run the server (dashboard + every storage backend bundled) as a container:
 docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.3
 ```
 
@@ -430,7 +430,7 @@ No database, no clustering — perfect for development and tests. This is the de
 no JDBC URL is set.
 
 ```bash
-./gradlew :server:run           # or run WiggleServer with ServerConfig.fromEnvironment()
+./gradlew :dist:run           # or run WiggleServer with ServerConfig.fromEnvironment()
 ```
 
 ### Docker
@@ -500,7 +500,7 @@ Set clustering on any node just by giving it a JDBC URL:
 ```bash
 WIGGLE_JDBC_URL=jdbc:postgresql://localhost:5432/wiggle \
 WIGGLE_JDBC_USER=wiggle WIGGLE_JDBC_PASSWORD=wiggle \
-  ./gradlew :server:run
+  ./gradlew :dist:run
 ```
 
 ### Configuration
@@ -558,7 +558,7 @@ default it goes to the console via `java.util.logging`. To also write to a **rot
 (5 × 10 MB), just set an env var:
 
 ```bash
-WIGGLE_LOG_FILE=/var/log/wiggle/wiggle-%g.log WIGGLE_LOG_LEVEL=DEBUG ./gradlew :server:run
+WIGGLE_LOG_FILE=/var/log/wiggle/wiggle-%g.log WIGGLE_LOG_LEVEL=DEBUG ./gradlew :dist:run
 ```
 
 For full control (formatters, per-package levels, console tuning), point the JVM at a
@@ -597,7 +597,7 @@ destructive changes a release later, once every node is upgraded.
 A single-page dashboard ships with the server — off by default. Give it a port to turn it on:
 
 ```bash
-WIGGLE_DASHBOARD_PORT=8090 ./gradlew :server:run
+WIGGLE_DASHBOARD_PORT=8090 ./gradlew :dist:run
 # → open http://localhost:8090
 ```
 
@@ -610,7 +610,7 @@ endpoint is always exempt so load balancers and probes reach it without credenti
 
 ```bash
 WIGGLE_DASHBOARD_PORT=8090 WIGGLE_DASHBOARD_PASSWORD=$(openssl rand -hex 16) \
-  ./gradlew :server:run
+  ./gradlew :dist:run
 curl -u admin:$PASS http://localhost:8090/api/instances
 ```
 
@@ -696,12 +696,12 @@ nothing set, both fall back to plaintext.
 ```bash
 # server-side TLS for gRPC + HTTPS dashboard
 WIGGLE_TLS_KEYSTORE=/etc/wiggle/server.p12 WIGGLE_TLS_KEYSTORE_PASSWORD=… \
-WIGGLE_DASHBOARD_PORT=8090 ./gradlew :server:run
+WIGGLE_DASHBOARD_PORT=8090 ./gradlew :dist:run
 
 # mutual TLS: also verify client certs against a truststore
 WIGGLE_TLS_KEYSTORE=/etc/wiggle/server.p12   WIGGLE_TLS_KEYSTORE_PASSWORD=… \
 WIGGLE_TLS_TRUSTSTORE=/etc/wiggle/trust.p12  WIGGLE_TLS_TRUSTSTORE_PASSWORD=… \
-  ./gradlew :server:run
+  ./gradlew :dist:run
 ```
 
 Workers and clients read the same variables: `WIGGLE_TLS_TRUSTSTORE` verifies the server, and
