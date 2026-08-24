@@ -263,8 +263,8 @@
         <p>Register blueprints, long-poll for steps, run them with configurable concurrency &amp; leases. Add processes to scale — they share load automatically.</p>
       </div>
       <div class="card">
-        <span class="k">Storage SPI</span><h3>Pluggable</h3>
-        <p>The core knows no database. A JDBC module plugs in via <span style="font-family:var(--mono);color:var(--teal)">StorageProvider</span>; another DB is a new module, not an engine change.</p>
+        <span class="k">Storage</span><h3>Pluggable</h3>
+        <p>The core knows no database. It builds a store from an injected <span style="font-family:var(--mono);color:var(--teal)">StorageFactory</span> picked from the URL scheme — PostgreSQL/H2, MySQL, Oracle, SQL Server, Cassandra. Another DB is a new module, not an engine change.</p>
       </div>
     </div>
   </section>
@@ -397,11 +397,11 @@ client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approva
       <div class="stat"><b>≥1×</b><span>at-least-once execution</span></div>
     </div>
     <pre class="rise" style="margin-top:36px"><code><span class="c-com"># single node, in-memory — dev &amp; tests</span>
-./gradlew :server:run
+./gradlew :dist:run
 
 <span class="c-com"># cluster on Postgres — just add a JDBC URL</span>
 <span class="c-key">WIGGLE_JDBC_URL</span>=jdbc:postgresql://localhost:5432/wiggle \
-<span class="c-key">WIGGLE_DASHBOARD_PORT</span>=8090 ./gradlew :server:run</code></pre>
+<span class="c-key">WIGGLE_DASHBOARD_PORT</span>=8090 ./gradlew :dist:run</code></pre>
   </section>
 
   <!-- 9 — QUICK START -->
