@@ -1,8 +1,10 @@
 package dev.wiggle.order;
 
 import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.core.InstanceView;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,13 +28,11 @@ public final class SubmitOrders {
             }
             System.out.println("submitted " + count + " orders");
 
-            /*
             for (String id : ids) {
                 InstanceView v = client.awaitCompletion(id, Duration.ofMinutes(2));
                 System.out.println("  " + id + "  " + v.status()
                         + (v.error() == null ? "" : "  " + v.error()));
             }
-             */
         }
     }
 }
