@@ -3,7 +3,7 @@ package dev.wiggle.tests;
 import dev.wiggle.core.Node;
 import dev.wiggle.core.RetryPolicy;
 import dev.wiggle.core.WorkflowDefinition;
-import dev.wiggle.postgres.JdbcStorage;
+import dev.wiggle.jdbc.JdbcStorage;
 import dev.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -44,11 +44,17 @@ dependencies {
     // The server core is database-agnostic; with no JDBC URL it uses the in-memory store.
     implementation("io.github.hadielmougy:wiggle-server:2.1.2")
 
-    // For a real, multi-node deployment on PostgreSQL: add the database module (it plugs in
-    // via a ServiceLoader SPI) plus the JDBC driver. The standalone server distribution
-    // already bundles both.
-    runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.1.2")
+    // For a real, multi-node deployment: add the database module for your engine (it plugs in
+    // via a ServiceLoader SPI and pools connections with HikariCP) plus the JDBC driver. The
+    // standalone server distribution already bundles the PostgreSQL module and driver.
+    runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.1.2")   // PostgreSQL + H2
     runtimeOnly("org.postgresql:postgresql:42.7.4")
+
+    // Or MySQL/MariaDB, or Oracle -- each is a drop-in module; the engine is detected from the URL:
+    //   runtimeOnly("io.github.hadielmougy:wiggle-mysql:2.1.2")
+    //   runtimeOnly("com.mysql:mysql-connector-j:9.1.0")
+    //   runtimeOnly("io.github.hadielmougy:wiggle-oracle:2.1.2")
+    //   runtimeOnly("com.oracle.database.jdbc:ojdbc11:23.5.0.24.07")
 }
 ```
 
@@ -465,9 +471,11 @@ API and hands out work, and exactly one is elected to run clock-driven duties (t
 lease recovery). Kill any node — including the leader — and the rest carry on.
 
 > **Pluggable storage.** The server core knows nothing about any database; a JDBC store is a
-> separate module (`wiggle-postgres`) that plugs in through a `StorageProvider` SPI. With no
-> JDBC URL it runs in-memory; with one it picks the provider that matches the URL. Supporting
-> another database is a new module — no changes to the engine.
+> separate module that plugs in through a `StorageProvider` SPI. PostgreSQL and H2
+> (`wiggle-postgres`), MySQL/MariaDB (`wiggle-mysql`) and Oracle (`wiggle-oracle`) all share one
+> HikariCP-pooled, dialect-aware store (`wiggle-jdbc`); the engine is **detected from the JDBC
+> URL**. With no JDBC URL it runs in-memory; with one it picks the provider that matches the URL.
+> Supporting another database is a new dialect — no changes to the engine.
 
 ```bash
 docker compose up -d postgres
@@ -494,9 +502,9 @@ Everything has a sensible default; override via environment variable or system p
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `WIGGLE_PORT` | `8080` | gRPC port (`0` picks a free one) |
-| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set it to cluster on a database |
+| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set it to cluster on a database. `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:` or `jdbc:oracle:` — the engine is detected from the URL |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | | database credentials |
-| `WIGGLE_JDBC_POOL_SIZE` | `10` | connection pool size |
+| `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP maximum pool size |
 | `WIGGLE_LEASE_MILLIS` | `30000` | default task lease before a stalled step is reclaimed |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `20000` | how long a worker's poll may block server-side |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |

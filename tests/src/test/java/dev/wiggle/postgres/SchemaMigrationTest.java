@@ -1,5 +1,7 @@
 package dev.wiggle.postgres;
 
+import dev.wiggle.jdbc.H2Dialect;
+import dev.wiggle.jdbc.JdbcStorage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -62,7 +64,7 @@ class SchemaMigrationTest {
             try (Connection c = DriverManager.getConnection(url, "sa", "")) {
                 c.setAutoCommit(false);
 
-                JdbcStorage.runMigrations(c, withNext);
+                JdbcStorage.runMigrations(c, withNext, new H2Dialect());
                 c.commit();
                 assertEquals(next, schemaVersion(c), "the new migration applied");
                 assertEquals(next, rowCount(c, "wf_schema_version"), "one row per applied migration");
@@ -71,7 +73,7 @@ class SchemaMigrationTest {
 
                 // Re-running is a no-op: every version is already recorded, so nothing re-executes
                 // (a second ALTER would fail with 'column already exists').
-                JdbcStorage.runMigrations(c, withNext);
+                JdbcStorage.runMigrations(c, withNext, new H2Dialect());
                 c.commit();
                 assertEquals(next, schemaVersion(c), "still at the same version");
                 assertEquals(next, rowCount(c, "wf_schema_version"), "no duplicate history rows");
@@ -91,7 +93,7 @@ class SchemaMigrationTest {
 
             try (Connection c = DriverManager.getConnection(url, "sa", "")) {
                 c.setAutoCommit(false);
-                assertThrows(Exception.class, () -> JdbcStorage.runMigrations(c, bad));
+                assertThrows(Exception.class, () -> JdbcStorage.runMigrations(c, bad, new H2Dialect()));
                 c.rollback();
                 assertEquals(baseline, schemaVersion(c), "failed migration was not recorded");
             }

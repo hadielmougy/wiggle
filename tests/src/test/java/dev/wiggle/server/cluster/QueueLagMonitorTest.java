@@ -32,9 +32,13 @@ class QueueLagMonitorTest {
 
     private final List<LogRecord> captured = new CopyOnWriteArrayList<>();
     private Handler handler;
+    /** Strong reference: JUL keeps loggers only weakly, so without this the logger (and our handler)
+     *  can be reclaimed under GC pressure mid-test, silently dropping the records we assert on. */
+    private Logger capturedLogger;
 
     private void captureLogsOf(Class<?> type) {
         Logger logger = Logger.getLogger(type.getName());
+        capturedLogger = logger;
         logger.setLevel(Level.ALL);
         handler = new Handler() {
             @Override public void publish(LogRecord record) { captured.add(record); }
@@ -73,7 +77,7 @@ class QueueLagMonitorTest {
 
     @Test @DisplayName("the same lag detection works against a JDBC store")
     void warnsWhenBacklogIsNotDrainingOnJdbc() throws Exception {
-        warnsWhenBacklogIsNotDraining(new dev.wiggle.postgres.JdbcStorage(
+        warnsWhenBacklogIsNotDraining(new dev.wiggle.jdbc.JdbcStorage(
                 "jdbc:h2:mem:lag-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2));
     }
 
