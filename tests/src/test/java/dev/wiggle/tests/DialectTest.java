@@ -6,6 +6,7 @@ import dev.wiggle.jdbc.JdbcStorage;
 import dev.wiggle.jdbc.PostgresDialect;
 import dev.wiggle.mysql.MySqlDialect;
 import dev.wiggle.oracle.OracleDialect;
+import dev.wiggle.sqlserver.SqlServerDialect;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -96,9 +97,39 @@ class DialectTest {
         assertFalse(d.isDuplicateKey(new SQLException("some other error", "42000", 942)));
     }
 
+    @Test @DisplayName("SQL Server: no LIMIT/FOR UPDATE, OFFSET-FETCH limiting, UPDLOCK hint, VARCHAR(MAX), MERGE upsert")
+    void sqlServer() {
+        SqlServerDialect d = new SqlServerDialect();
+        assertFalse(d.supportsSkipLocked(), "no SKIP LOCKED claim; uses compare-and-set");
+        assertFalse(d.supportsReturning());
+
+        // LIMIT -> OFFSET/FETCH, keeping the parameter.
+        assertEquals("SELECT * FROM t ORDER BY a OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY",
+                d.limit("SELECT * FROM t ORDER BY a LIMIT ?"));
+
+        // Pessimistic read is a table hint, not a trailing FOR UPDATE.
+        assertEquals("WITH (UPDLOCK, ROWLOCK)", d.forUpdateHint());
+        assertEquals("", d.forUpdateSuffix());
+
+        // DDL: no IF NOT EXISTS, no ADD COLUMN keyword, TEXT -> VARCHAR(MAX).
+        String ddl = d.ddl("CREATE TABLE IF NOT EXISTS x (a INT, b TEXT)");
+        assertFalse(ddl.contains("IF NOT EXISTS"), ddl);
+        assertTrue(ddl.contains("VARCHAR(MAX)"), ddl);
+        assertFalse(ddl.matches("(?s).*\\bTEXT\\b.*"), ddl);
+        assertEquals("ALTER TABLE x ADD c INT", d.ddl("ALTER TABLE x ADD COLUMN IF NOT EXISTS c INT"));
+
+        assertTrue(d.scheduleUpsert().startsWith("MERGE wf_schedule"));
+        assertTrue(d.scheduleUpsert().contains("WHEN NOT MATCHED THEN INSERT"));
+
+        assertTrue(d.isDuplicateKey(new SQLException("Violation of PRIMARY KEY", "23000", 2627)));
+        assertTrue(d.isBenignMigrationError(new SQLException("There is already an object named", "S0001", 2714)));
+        assertFalse(d.isBenignMigrationError(new SQLException("syntax", "S0001", 102)));
+    }
+
     @Test @DisplayName("the whole baseline schema renders for every dialect without leaving a portability hazard")
     void baselineRendersEverywhere() {
-        for (Dialect d : new Dialect[]{new PostgresDialect(), new H2Dialect(), new MySqlDialect(), new OracleDialect()}) {
+        for (Dialect d : new Dialect[]{new PostgresDialect(), new H2Dialect(), new MySqlDialect(),
+                new OracleDialect(), new SqlServerDialect()}) {
             for (JdbcStorage.Migration m : JdbcStorage.MIGRATIONS) {
                 for (String stmt : m.sql().split(";")) {
                     if (stmt.isBlank()) continue;
@@ -112,6 +143,11 @@ class DialectTest {
                     if (d instanceof MySqlDialect) {
                         assertFalse(rendered.contains("INDEX IF NOT EXISTS"), "mysql index: " + rendered);
                         assertFalse(rendered.contains("ADD COLUMN IF NOT EXISTS"), "mysql add column: " + rendered);
+                    }
+                    if (d instanceof SqlServerDialect) {
+                        assertFalse(rendered.contains("IF NOT EXISTS"), "sqlserver: " + rendered);
+                        assertFalse(rendered.contains("ADD COLUMN"), "sqlserver keeps ADD COLUMN: " + rendered);
+                        assertFalse(rendered.matches("(?s).*\\bTEXT\\b.*"), "sqlserver keeps TEXT: " + rendered);
                     }
                 }
             }

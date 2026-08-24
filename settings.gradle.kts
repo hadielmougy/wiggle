@@ -8,6 +8,7 @@ include(
     "postgres",
     "mysql",
     "oracle",
+    "sqlserver",
     "client",
     "example",
     "tests"
