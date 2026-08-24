@@ -3,6 +3,7 @@ package dev.wiggle.tests;
 import dev.wiggle.mysql.MySqlStorageProvider;
 import dev.wiggle.oracle.OracleStorageProvider;
 import dev.wiggle.postgres.JdbcStorageProvider;
+import dev.wiggle.sqlserver.SqlServerStorageProvider;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +25,7 @@ class StorageProviderTest {
         assertTrue(pg.supports("jdbc:h2:mem:test;MODE=PostgreSQL"));
         assertFalse(pg.supports("jdbc:mysql://localhost/wiggle"));
         assertFalse(pg.supports("jdbc:oracle:thin:@localhost:1521/wiggle"));
+        assertFalse(pg.supports("jdbc:sqlserver://localhost;databaseName=wiggle"));
         assertFalse(pg.supports("bogus"));
         assertFalse(pg.supports(null));
 
@@ -37,16 +39,21 @@ class StorageProviderTest {
         assertTrue(oracle.supports("jdbc:oracle:thin:@localhost:1521/wiggle"));
         assertFalse(oracle.supports("jdbc:mysql://localhost/wiggle"));
         assertFalse(oracle.supports(null));
+
+        SqlServerStorageProvider sqlserver = new SqlServerStorageProvider();
+        assertTrue(sqlserver.supports("jdbc:sqlserver://localhost:1433;databaseName=wiggle"));
+        assertFalse(sqlserver.supports("jdbc:postgresql://localhost/wiggle"));
+        assertFalse(sqlserver.supports(null));
     }
 
     @Test @DisplayName("a JDBC URL no provider claims fails fast with a clear message")
     void noProviderFailsFast() {
-        ServerConfig config = new ServerConfig(0, "sp-node", "jdbc:sqlserver://localhost/nope", null, null, 4,
+        ServerConfig config = new ServerConfig(0, "sp-node", "jdbc:db2://localhost/nope", null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> new WiggleServer(config));
         assertTrue(e.getMessage().contains("no storage provider"), e.getMessage());
-        assertTrue(e.getMessage().contains("jdbc:sqlserver://localhost/nope"), "names the offending URL");
+        assertTrue(e.getMessage().contains("jdbc:db2://localhost/nope"), "names the offending URL");
     }
 }
