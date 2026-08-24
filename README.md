@@ -50,11 +50,14 @@ dependencies {
     runtimeOnly("io.github.hadielmougy:wiggle-postgres:2.1.2")   // PostgreSQL + H2
     runtimeOnly("org.postgresql:postgresql:42.7.4")
 
-    // Or MySQL/MariaDB, or Oracle -- each is a drop-in module; the engine is detected from the URL:
+    // Or MySQL/MariaDB, Oracle, or SQL Server -- each is a drop-in module; the engine is
+    // detected from the URL:
     //   runtimeOnly("io.github.hadielmougy:wiggle-mysql:2.1.2")
     //   runtimeOnly("com.mysql:mysql-connector-j:9.1.0")
     //   runtimeOnly("io.github.hadielmougy:wiggle-oracle:2.1.2")
     //   runtimeOnly("com.oracle.database.jdbc:ojdbc11:23.5.0.24.07")
+    //   runtimeOnly("io.github.hadielmougy:wiggle-sqlserver:2.1.2")
+    //   runtimeOnly("com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11")
 }
 ```
 
@@ -472,10 +475,11 @@ lease recovery). Kill any node — including the leader — and the rest carry o
 
 > **Pluggable storage.** The server core knows nothing about any database; a JDBC store is a
 > separate module that plugs in through a `StorageProvider` SPI. PostgreSQL and H2
-> (`wiggle-postgres`), MySQL/MariaDB (`wiggle-mysql`) and Oracle (`wiggle-oracle`) all share one
-> HikariCP-pooled, dialect-aware store (`wiggle-jdbc`); the engine is **detected from the JDBC
-> URL**. With no JDBC URL it runs in-memory; with one it picks the provider that matches the URL.
-> Supporting another database is a new dialect — no changes to the engine.
+> (`wiggle-postgres`), MySQL/MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`) and SQL Server
+> (`wiggle-sqlserver`) all share one HikariCP-pooled, dialect-aware store (`wiggle-jdbc`); the
+> engine is **detected from the JDBC URL**. With no JDBC URL it runs in-memory; with one it picks
+> the provider that matches the URL. Supporting another database is a new dialect — no changes to
+> the engine.
 
 ```bash
 docker compose up -d postgres
@@ -502,7 +506,7 @@ Everything has a sensible default; override via environment variable or system p
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `WIGGLE_PORT` | `8080` | gRPC port (`0` picks a free one) |
-| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set it to cluster on a database. `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:` or `jdbc:oracle:` — the engine is detected from the URL |
+| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set it to cluster on a database. `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:`, `jdbc:oracle:` or `jdbc:sqlserver:` — the engine is detected from the URL |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | | database credentials |
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP maximum pool size |
 | `WIGGLE_LEASE_MILLIS` | `30000` | default task lease before a stalled step is reclaimed |

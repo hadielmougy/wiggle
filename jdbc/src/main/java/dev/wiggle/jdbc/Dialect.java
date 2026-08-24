@@ -35,6 +35,19 @@ public interface Dialect {
     /** The single-row limiter for existence probes: {@code "LIMIT 1"} or {@code "FETCH FIRST 1 ROWS ONLY"}. */
     default String firstRow() { return "LIMIT 1"; }
 
+    /**
+     * A locking table hint placed <em>after</em> the table name for a pessimistic row read
+     * ({@code lockInstance}). Empty for dialects that instead express it as a trailing
+     * {@link #forUpdateSuffix()} clause; SQL Server uses {@code WITH (UPDLOCK, ROWLOCK)} here.
+     */
+    default String forUpdateHint() { return ""; }
+
+    /**
+     * The trailing clause for a pessimistic row read ({@code lockInstance}). {@code FOR UPDATE} on
+     * PostgreSQL/H2/MySQL/Oracle; empty on SQL Server, which locks via {@link #forUpdateHint()}.
+     */
+    default String forUpdateSuffix() { return "FOR UPDATE"; }
+
     /** Whether {@code SELECT ... FOR UPDATE SKIP LOCKED} can drive the task claim. */
     default boolean supportsSkipLocked() { return false; }
 

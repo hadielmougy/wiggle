@@ -510,7 +510,14 @@ public final class JdbcStorage implements Storage {
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
-            String sql = "SELECT * FROM wf_instance WHERE id=?" + (forUpdate ? " FOR UPDATE" : "");
+            String sql;
+            if (forUpdate) {
+                String hint = dialect.forUpdateHint(), suffix = dialect.forUpdateSuffix();
+                sql = "SELECT * FROM wf_instance" + (hint.isEmpty() ? "" : " " + hint) + " WHERE id=?"
+                        + (suffix.isEmpty() ? "" : " " + suffix);
+            } else {
+                sql = "SELECT * FROM wf_instance WHERE id=?";
+            }
             try (PreparedStatement p = ps(sql)) {
                 p.setString(1, id);
                 try (ResultSet rs = p.executeQuery()) {
@@ -930,8 +937,10 @@ public final class JdbcStorage implements Storage {
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
             List<String> ids = new ArrayList<>();
+            // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
+            // dialect a deterministic "oldest first" deletion order at no cost.
             try (PreparedStatement p = ps(dialect.limit(
-                    "SELECT id FROM wf_instance WHERE status<>'RUNNING' AND updated_at<? LIMIT ?"))) {
+                    "SELECT id FROM wf_instance WHERE status<>'RUNNING' AND updated_at<? ORDER BY updated_at LIMIT ?"))) {
                 p.setLong(1, updatedBefore);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }
