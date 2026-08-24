@@ -15,6 +15,7 @@ dependencies {
     testImplementation(project(":postgres"))
     testImplementation(project(":mysql"))
     testImplementation(project(":oracle"))
+    testImplementation(project(":cassandra"))
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

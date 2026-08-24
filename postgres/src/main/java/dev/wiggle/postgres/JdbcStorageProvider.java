@@ -1,8 +1,6 @@
 package dev.wiggle.postgres;
 
-import dev.wiggle.jdbc.H2Dialect;
 import dev.wiggle.jdbc.JdbcStorage;
-import dev.wiggle.jdbc.PostgresDialect;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.store.Storage;
 import dev.wiggle.server.store.StorageProvider;

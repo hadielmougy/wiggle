@@ -40,7 +40,8 @@ class PostgresClaimTest {
 
     private static JdbcStorage storage() {
         JdbcStorage storage = new JdbcStorage(System.getenv("WIGGLE_TEST_PG_URL"),
-                System.getenv("WIGGLE_TEST_PG_USER"), System.getenv("WIGGLE_TEST_PG_PASSWORD"), 4);
+                System.getenv("WIGGLE_TEST_PG_USER"), System.getenv("WIGGLE_TEST_PG_PASSWORD"), 4,
+                new PostgresDialect());
         storage.migrate();
         return storage;
     }

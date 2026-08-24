@@ -1,9 +1,9 @@
 package dev.wiggle.tests;
 
 import dev.wiggle.jdbc.Dialect;
-import dev.wiggle.jdbc.H2Dialect;
+import dev.wiggle.postgres.H2Dialect;
 import dev.wiggle.jdbc.JdbcStorage;
-import dev.wiggle.jdbc.PostgresDialect;
+import dev.wiggle.postgres.PostgresDialect;
 import dev.wiggle.mysql.MySqlDialect;
 import dev.wiggle.oracle.OracleDialect;
 import org.junit.jupiter.api.DisplayName;
