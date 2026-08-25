@@ -26,6 +26,9 @@ docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me
 > Want to see every operator combined in runnable code? See the
 > **[DSL cookbook](docs/dsl-cookbook.md)** — eight workflows, run them all with
 > `./gradlew :example:runCookbook`.
+>
+> Prefer Python? There's an idiomatic **[Python client + worker](clients/python/README.md)** that
+> speaks the same control plane (Java and Python workers interoperate).
 
 ---
 
