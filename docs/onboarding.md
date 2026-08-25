@@ -68,6 +68,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `dist` | runnable standalone server bundling every backend (what the Docker image runs) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
+| `clients:python` | Python client + worker (`clients/python/`); its pytest suite runs in `check` (skips if Python absent) | *(not a JVM module)* |
 
 Published under group `io.github.hadielmougy`, version **2.1.4** (the runnable `dist` module is not
 published). The server core is database-agnostic; it builds its store from an injected
