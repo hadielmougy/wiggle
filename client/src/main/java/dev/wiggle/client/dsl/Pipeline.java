@@ -56,7 +56,7 @@ final class Pipeline<T> {
     void markCheckpoint(String nodeId) { checkpoints.add(nodeId); }
 
     /** A task node: {@code fn}'s result is diffed against the context and merged back. */
-    String addStep(String name, Activity<T> fn, RetryPolicy retry) {
+    String addStep(String name, Activity<T> fn, RetryPolicy retry, String queue) {
         return addWorkerTask(
                 name,
                 json -> {
@@ -66,11 +66,11 @@ final class Pipeline<T> {
                         ContextVersion.clear();
                     }
                 },
-                retry);
+                retry, queue);
     }
 
     /** A task node run for its side effect only; the context is left unchanged. */
-    String addEffect(String name, SideEffect<T> fn, RetryPolicy retry) {
+    String addEffect(String name, SideEffect<T> fn, RetryPolicy retry, String queue) {
         return addWorkerTask(
                 name,
                 json -> {
@@ -81,11 +81,11 @@ final class Pipeline<T> {
                         ContextVersion.clear();
                     }
                 },
-                retry);
+                retry, queue);
     }
 
     /** A predicate node evaluated on a worker; its handler returns a {@link Boolean}. */
-    String addGuard(String name, Predicate<T> test, RetryPolicy retry) {
+    String addGuard(String name, Predicate<T> test, RetryPolicy retry, String queue) {
         return addWorkerPredicate(
                 name,
                 json -> {
@@ -95,18 +95,23 @@ final class Pipeline<T> {
                         ContextVersion.clear();
                     }
                 },
-                retry);
+                retry, queue);
     }
 
-    private String addWorkerPredicate(String name, ActivityHandler handler, RetryPolicy retry) {
-        queues.add(defaultQueue);
-        NodeDraft draft = NodeDraft.predicate(name, registerActivity(name, handler), defaultQueue, retryOr(retry));
+    /** The step's own queue, or the workflow default when none is given. */
+    private String queueOr(String queue) { return queue == null || queue.isBlank() ? defaultQueue : queue; }
+
+    private String addWorkerPredicate(String name, ActivityHandler handler, RetryPolicy retry, String queue) {
+        String q = queueOr(queue);
+        queues.add(q);
+        NodeDraft draft = NodeDraft.predicate(name, registerActivity(name, handler), q, retryOr(retry));
         return add(draft);
     }
 
-    private String addWorkerTask(String name, ActivityHandler handler, RetryPolicy retry) {
-        queues.add(defaultQueue);
-        NodeDraft draft = NodeDraft.task(name, registerActivity(name, handler), defaultQueue, retryOr(retry));
+    private String addWorkerTask(String name, ActivityHandler handler, RetryPolicy retry, String queue) {
+        String q = queueOr(queue);
+        queues.add(q);
+        NodeDraft draft = NodeDraft.task(name, registerActivity(name, handler), q, retryOr(retry));
         return add(draft);
     }
 
@@ -158,12 +163,6 @@ final class Pipeline<T> {
     /** Records a fork's (or dynamic fork's) branch start nodes. */
     void setBranches(String forkId, List<String> starts) {
         nodes.put(forkId, nodes.get(forkId).withBranches(starts));
-    }
-
-    /** Re-routes an already-added step to a dedicated queue (worker specialisation). */
-    void setQueue(String nodeId, String queue) {
-        nodes.put(nodeId, nodes.get(nodeId).withQueue(queue));
-        queues.add(queue);
     }
 
     /**

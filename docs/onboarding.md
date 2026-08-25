@@ -182,7 +182,7 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `sleep(name, duration)` | server-side timer; holds no worker |
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
 | `subWorkflow(name, workflow)` | run another workflow as a child; result merges back, failure propagates |
-| `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |
+| `step(name, fn, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
 | `execution(mode)` | set the execution mode (§6.4) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
 | `build()` | produce the `Blueprint` |

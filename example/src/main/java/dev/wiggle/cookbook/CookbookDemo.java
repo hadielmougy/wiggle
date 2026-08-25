@@ -48,7 +48,7 @@ public final class CookbookDemo {
                 run(client, "2. choose + fork + retry", chooseFork,
                         Map.of("amount", 5000));
 
-                run(client, "3. forkEach + defaultQueue + onQueue", forkEachQueues,
+                run(client, "3. forkEach + per-step queue", forkEachQueues,
                         Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "B"), Map.of("sku", "C"))));
 
                 run(client, "4. doWhile + gate", pollLoop, Map.of("cancelled", false));

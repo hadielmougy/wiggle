@@ -160,9 +160,9 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | Operation | What it does |
 |---|---|
 | `step(name, fn)` / `then(name, fn)` | run `fn` on a worker; its return value becomes the new context |
-| `step(name, fn, retry)` | same, with an explicit `RetryPolicy` for that step |
-| `effect(name, fn)` | run `fn` for a side effect; context unchanged |
-| `gate(name, pred)` | continue only while `pred` is true; a false result ends the instance as `gated:<name>` |
+| `step(name, fn, retry)` / `step(name, fn, queue)` / `step(name, fn, retry, queue)` | same, with an explicit `RetryPolicy` and/or a dedicated `queue` for that step |
+| `effect(name, fn)` | run `fn` for a side effect; context unchanged (also takes optional `retry`/`queue`) |
+| `gate(name, pred)` | continue only while `pred` is true; a false result ends the instance as `gated:<name>` (also takes optional `retry`/`queue`) |
 | `choose(cases…)` | switch/case: run the branch of the **first** matching guard, then continue |
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
@@ -170,7 +170,7 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 | `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
 | `forkEach(name, itemsKey, itemKey, body)` | **runtime** fan-out: one parallel branch per element of the list at `itemsKey`, each seeing its element as `itemKey` (and `itemKey + "Index"`); empty list skips through |
 | `doWhile(name, cond, body)` | run `body`, then re-run while `cond` holds (body runs at least once) |
-| `onQueue(q)` / `defaultQueue(q)` | route steps to a dedicated worker pool |
+| `defaultQueue(q)` | set the queue for every following step (a per-step `queue` argument overrides it) |
 | `build()` | finish; produces the `Blueprint` |
 
 `step`, `effect`, and `gate` all accept an optional trailing `RetryPolicy` argument; omit it
@@ -307,9 +307,9 @@ try (WiggleClient client = new WiggleClient("localhost:8080")) {
 else is a `WorkerOptions` setting.
 
 **Worker specialization**: by default a worker serves every queue of the blueprints it
-registered. Pair `onQueue("gpu")` on a step with `WorkerOptions.defaults().withQueues("gpu")`
-on a dedicated worker pool, and only those workers execute it — a local-execution chain hands
-the step over automatically at the queue boundary.
+registered. Pair a step's queue argument — `step("render", fn, "gpu")` — with
+`WorkerOptions.defaults().withQueues("gpu")` on a dedicated worker pool, and only those workers
+execute it — a local-execution chain hands the step over automatically at the queue boundary.
 
 ---
 
@@ -581,7 +581,7 @@ time=never (no throughput), oldest queued task has waited 12595ms
 
 This is a symptom of too few workers, a stuck/misbehaving worker pool, or a step that's
 much slower than its arrival rate -- add workers, check worker logs, or split the slow step
-onto its own queue (`onQueue`) to isolate it.
+onto its own queue (the per-step `queue` argument) to isolate it.
 
 ### Logging
 

@@ -43,7 +43,7 @@ class PipelineTest {
 
     /** Builds a valid two-node graph: one task wired to a terminal end. */
     private static WorkflowDefinition linearTaskGraph(Pipeline<Map<String, Object>> p, String stepName) {
-        String task = p.addStep(stepName, ctx -> ctx, null);
+        String task = p.addStep(stepName, ctx -> ctx, null, null);
         p.startAt(task);
         p.wireNext(task, p.addEnd(null));
         return p.build().definition();
@@ -59,8 +59,8 @@ class PipelineTest {
         @DisplayName("each kind gets its own prefix, numbered by a shared counter")
         void prefixesAndCounter() {
             Pipeline<Map<String, Object>> p = pipeline();
-            assertEquals("n1", p.addStep("a", ctx -> ctx, null));
-            assertEquals("n2", p.addGuard("g", ctx -> true, null));
+            assertEquals("n1", p.addStep("a", ctx -> ctx, null, null));
+            assertEquals("n2", p.addGuard("g", ctx -> true, null, null));
             assertEquals("n3", p.addSleep("s", 10));
             assertEquals("n4", p.addSignal("sig", 0));
             assertEquals("fork5", p.addFork());
@@ -85,9 +85,9 @@ class PipelineTest {
         @DisplayName("a duplicate step name is rejected")
         void duplicateStep() {
             Pipeline<Map<String, Object>> p = pipeline();
-            p.addStep("dup", ctx -> ctx, null);
+            p.addStep("dup", ctx -> ctx, null, null);
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> p.addStep("dup", ctx -> ctx, null));
+                    () -> p.addStep("dup", ctx -> ctx, null, null));
             assertTrue(e.getMessage().contains("duplicate step name 'dup'"), e.getMessage());
         }
 
@@ -96,22 +96,22 @@ class PipelineTest {
         void uniquenessSpansKinds() {
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline<Map<String, Object>> p = pipeline();
-                p.addStep("x", ctx -> ctx, null);
-                p.addGuard("x", ctx -> true, null);        // collides with the step
+                p.addStep("x", ctx -> ctx, null, null);
+                p.addGuard("x", ctx -> true, null, null);        // collides with the step
             });
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline<Map<String, Object>> p = pipeline();
-                p.addStep("x", ctx -> ctx, null);
+                p.addStep("x", ctx -> ctx, null, null);
                 p.addSignal("x", 0);
             });
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline<Map<String, Object>> p = pipeline();
-                p.addStep("x", ctx -> ctx, null);
+                p.addStep("x", ctx -> ctx, null, null);
                 p.addSubWorkflow("x", "child");
             });
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline<Map<String, Object>> p = pipeline();
-                p.addStep("x", ctx -> ctx, null);
+                p.addStep("x", ctx -> ctx, null, null);
                 p.addDynFork("x", "items", "item");
             });
         }
@@ -120,7 +120,7 @@ class PipelineTest {
         @DisplayName("sleep names are not reserved, so they never collide")
         void sleepNamesAreNotReserved() {
             Pipeline<Map<String, Object>> p = pipeline();
-            p.addStep("s", ctx -> ctx, null);
+            p.addStep("s", ctx -> ctx, null, null);
             p.addSleep("s", 1);   // shares the name with the step -- allowed
             p.addSleep("s", 2);   // and with another sleep -- allowed
             // no exception
@@ -131,7 +131,7 @@ class PipelineTest {
         void blankName() {
             Pipeline<Map<String, Object>> p = pipeline();
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> p.addStep("  ", ctx -> ctx, null));
+                    () -> p.addStep("  ", ctx -> ctx, null, null));
             assertTrue(e.getMessage().contains("step name is required"), e.getMessage());
         }
     }
@@ -144,7 +144,7 @@ class PipelineTest {
         @DisplayName("a step's handler is keyed by 'workflow#name' and returns the context diff")
         void stepHandlerReturnsDiff() throws Exception {
             Pipeline<Map<String, Object>> p = pipeline();
-            String id = p.addStep("greet", ctx -> with(ctx, "greeting", "hi"), null);
+            String id = p.addStep("greet", ctx -> with(ctx, "greeting", "hi"), null, null);
             p.startAt(id);
             p.wireNext(id, p.addEnd(null));
             Blueprint<Map<String, Object>> bp = p.build();
@@ -157,7 +157,7 @@ class PipelineTest {
         @DisplayName("an effect's handler returns null (context unchanged)")
         void effectHandlerReturnsNull() throws Exception {
             Pipeline<Map<String, Object>> p = pipeline();
-            String id = p.addEffect("audit", ctx -> { /* observe only */ }, null);
+            String id = p.addEffect("audit", ctx -> { /* observe only */ }, null, null);
             p.startAt(id);
             p.wireNext(id, p.addEnd(null));
             Blueprint<Map<String, Object>> bp = p.build();
@@ -169,7 +169,7 @@ class PipelineTest {
         @DisplayName("a guard's handler returns a Boolean")
         void guardHandlerReturnsBoolean() throws Exception {
             Pipeline<Map<String, Object>> p = pipeline();
-            String g = p.addGuard("positive", ctx -> ((Number) ctx.get("n")).intValue() > 0, null);
+            String g = p.addGuard("positive", ctx -> ((Number) ctx.get("n")).intValue() > 0, null, null);
             p.startAt(g);
             p.wireNext(g, p.addEnd(null));
             p.wireAlt(g, p.addEnd("gated:positive"));
@@ -198,9 +198,9 @@ class PipelineTest {
         @DisplayName("defaultQueue changes the queue of subsequently added steps")
         void changingDefaultQueue() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String a = p.addStep("a", ctx -> ctx, null);   // on "wf"
+            String a = p.addStep("a", ctx -> ctx, null, null);   // on "wf"
             p.defaultQueue("batch");
-            String b = p.addStep("b", ctx -> ctx, null);   // on "batch"
+            String b = p.addStep("b", ctx -> ctx, null, null);   // on "batch"
             p.startAt(a);
             p.wireNext(a, b);
             p.wireNext(b, p.addEnd(null));
@@ -212,11 +212,10 @@ class PipelineTest {
         }
 
         @Test
-        @DisplayName("setQueue reroutes a single node and records the new queue")
-        void setQueueReroutesOneNode() {
+        @DisplayName("a per-step queue routes a single node and records the new queue")
+        void perStepQueueRoutesOneNode() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String a = p.addStep("a", ctx -> ctx, null);
-            p.setQueue(a, "gpu");
+            String a = p.addStep("a", ctx -> ctx, null, "gpu");
             p.startAt(a);
             p.wireNext(a, p.addEnd(null));
             WorkflowDefinition def = p.build().definition();
@@ -245,7 +244,7 @@ class PipelineTest {
         @DisplayName("markCheckpoint records the node id on the definition")
         void checkpoints() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String a = p.addStep("a", ctx -> ctx, null);
+            String a = p.addStep("a", ctx -> ctx, null, null);
             p.markCheckpoint(a);
             p.startAt(a);
             p.wireNext(a, p.addEnd(null));
@@ -261,7 +260,7 @@ class PipelineTest {
         @DisplayName("wireNext and wireAlt set the two outgoing edges independently")
         void nextAndAlt() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String g = p.addGuard("g", ctx -> true, null);
+            String g = p.addGuard("g", ctx -> true, null, null);
             String pass = p.addEnd(null);
             String fail = p.addEnd("gated:g");
             p.startAt(g);
@@ -279,8 +278,8 @@ class PipelineTest {
             Pipeline<Map<String, Object>> p = pipeline();
             String fork = p.addFork();
             String join = p.addJoin(2);
-            String b1 = p.addStep("b1", ctx -> ctx, null);
-            String b2 = p.addStep("b2", ctx -> ctx, null);
+            String b1 = p.addStep("b1", ctx -> ctx, null, null);
+            String b2 = p.addStep("b2", ctx -> ctx, null, null);
             p.startAt(fork);
             p.setBranches(fork, List.of(b1, b2));
             p.wireNext(b1, join);
@@ -310,7 +309,7 @@ class PipelineTest {
         @DisplayName("a task with no successor fails validation")
         void taskWithoutSuccessor() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String a = p.addStep("a", ctx -> ctx, null);
+            String a = p.addStep("a", ctx -> ctx, null, null);
             p.startAt(a);   // never wired onward
             IllegalStateException e = assertThrows(IllegalStateException.class, p::build);
             assertTrue(e.getMessage().contains("has no successor"), e.getMessage());
@@ -320,7 +319,7 @@ class PipelineTest {
         @DisplayName("a predicate with no false branch fails validation")
         void predicateWithoutFalseBranch() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String g = p.addGuard("g", ctx -> true, null);
+            String g = p.addGuard("g", ctx -> true, null, null);
             p.startAt(g);
             p.wireNext(g, p.addEnd(null));   // true edge only; altNext left null
             IllegalStateException e = assertThrows(IllegalStateException.class, p::build);
@@ -332,7 +331,7 @@ class PipelineTest {
         void forkTooFewBranches() {
             Pipeline<Map<String, Object>> p = pipeline();
             String fork = p.addFork();
-            String only = p.addStep("only", ctx -> ctx, null);
+            String only = p.addStep("only", ctx -> ctx, null, null);
             String join = p.addJoin(1);
             p.startAt(fork);
             p.setBranches(fork, List.of(only));
@@ -346,7 +345,7 @@ class PipelineTest {
         @DisplayName("an edge pointing at an unknown node fails validation")
         void danglingEdge() {
             Pipeline<Map<String, Object>> p = pipeline();
-            String a = p.addStep("a", ctx -> ctx, null);
+            String a = p.addStep("a", ctx -> ctx, null, null);
             p.startAt(a);
             p.wireNext(a, "ghost");   // no such node
             IllegalStateException e = assertThrows(IllegalStateException.class, p::build);
@@ -398,8 +397,8 @@ class PipelineTest {
     void retryDefaulting() {
         RetryPolicy custom = RetryPolicy.exponential(7, Duration.ofMillis(250));
         Pipeline<Map<String, Object>> p = new Pipeline<>("wf", ContextCodec.jsonMap(), custom);
-        String a = p.addStep("a", ctx -> ctx, null);            // inherits the default
-        String b = p.addStep("b", ctx -> ctx, RetryPolicy.none());   // explicit override
+        String a = p.addStep("a", ctx -> ctx, null, null);            // inherits the default
+        String b = p.addStep("b", ctx -> ctx, RetryPolicy.none(), null);   // explicit override
         p.startAt(a);
         p.wireNext(a, b);
         p.wireNext(b, p.addEnd(null));

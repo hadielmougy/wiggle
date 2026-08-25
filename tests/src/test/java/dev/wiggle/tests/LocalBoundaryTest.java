@@ -102,7 +102,7 @@ class LocalBoundaryTest {
         }
     }
 
-    @Test @DisplayName("onQueue routes steps to a specialized worker (SERVER mode)")
+    @Test @DisplayName("a per-step queue routes steps to a specialized worker (SERVER mode)")
     void queueRoutingServer() throws Exception {
         runQueueSplit(ExecutionMode.SERVER);
     }
@@ -148,7 +148,7 @@ class LocalBoundaryTest {
                 .execution(mode)
                 .step("a", ctx -> tag(ranOn, "a", label, ctx))
                 .step("b", ctx -> tag(ranOn, "b", label, ctx))
-                .step("c", ctx -> tag(ranOn, "c", label, ctx)).onQueue("special")
+                .step("c", ctx -> tag(ranOn, "c", label, ctx), "special")
                 .step("d", ctx -> tag(ranOn, "d", label, ctx))
                 .build();
     }

@@ -59,7 +59,7 @@ Workflow.defineJson("cb-choose-fork")
 join, since exactly one branch ever runs. Nesting a `fork` inside a `choose` case is ordinary
 composition: the case's body is just another `WorkflowStream`.
 
-## 3. `forkEach` + `defaultQueue` + `onQueue`
+## 3. `forkEach` + `defaultQueue` + a per-step queue
 
 Runtime fan-out over a list, with one step in the branch pinned to a different worker pool.
 
@@ -70,16 +70,16 @@ Workflow.defineJson("cb-foreach-queues").defaultQueue("cpu")
         // items (last write wins) -- namespace by itemIndex instead.
         .step("price", item -> with(item, "priced-" + item.get("itemIndex"), true))
         .step("render-thumbnail", item ->
-                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")))
-        .onQueue("gpu"))
+                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")),
+                "gpu"))
     .step("summarise", ctx -> with(ctx, "done", true))
     .build();
 ```
 
 One branch spawns per element of `items`; each sees its element under `item` and its position
-under `itemIndex`. `onQueue` only affects the step it directly follows — `render-thumbnail`
-moves to `gpu`, `price` stays on the workflow's `cpu` default. An empty or missing list skips
-the fan-out entirely.
+under `itemIndex`. The `queue` argument affects only that one step — `render-thumbnail` moves to
+`gpu`, `price` stays on the workflow's `cpu` default. An empty or missing list skips the fan-out
+entirely.
 
 ## 4. `doWhile` + `gate`
 
@@ -171,8 +171,8 @@ Workflow.defineJson("cb-kitchen-sink").defaultQueue("default").execution(Executi
         Case.when("is-vip", ctx -> Boolean.TRUE.equals(ctx.get("vip")), b -> b
             .fork(
                 Branch.of("priority-pack", s -> s
-                    .step("pack", ctx -> with(ctx, "packed", true), RetryPolicy.fixed(2, Duration.ofMillis(20)))
-                    .onQueue("packing")),
+                    .step("pack", ctx -> with(ctx, "packed", true),
+                            RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing")),
                 Branch.of("priority-notice", s -> s
                     .sleep("brief-hold", Duration.ofMillis(50))
                     .effect("notice", Notify::vip)))),
@@ -209,7 +209,7 @@ still merge context correctly.
 | `sleep` | 8 |
 | `awaitSignal` (+ timeout, + escalation) | 5, 8 |
 | `subWorkflow` | 6, 8 |
-| `onQueue` / `defaultQueue` | 3, 8 |
+| per-step `queue` / `defaultQueue` | 3, 8 |
 | `RetryPolicy.exponential` / `.fixed` | 2, 8 |
 | `execution(LOCAL_ASYNC)` / `execution(LOCAL_SYNC)` + `checkpoint` | 7, 8 |
 
