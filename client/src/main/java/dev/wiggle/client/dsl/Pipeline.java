@@ -59,7 +59,13 @@ final class Pipeline<T> {
     String addStep(String name, Activity<T> fn, RetryPolicy retry) {
         return addWorkerTask(
                 name,
-                json -> Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json)))),
+                json -> {
+                    try {
+                        return Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json))));
+                    } finally {
+                        ContextVersion.clear();
+                    }
+                },
                 retry);
     }
 
@@ -67,13 +73,29 @@ final class Pipeline<T> {
     String addEffect(String name, SideEffect<T> fn, RetryPolicy retry) {
         return addWorkerTask(
                 name,
-                json -> { fn.accept(codec.decode(json)); return null; },
+                json -> {
+                    try {
+                        fn.accept(codec.decode(json));
+                        return null;
+                    } finally {
+                        ContextVersion.clear();
+                    }
+                },
                 retry);
     }
 
     /** A predicate node evaluated on a worker; its handler returns a {@link Boolean}. */
     String addGuard(String name, Predicate<T> test, RetryPolicy retry) {
-        return addWorkerPredicate(name, json -> test.test(codec.decode(json)), retry);
+        return addWorkerPredicate(
+                name,
+                json -> {
+                    try {
+                        return test.test(codec.decode(json));
+                    } finally {
+                        ContextVersion.clear();
+                    }
+                },
+                retry);
     }
 
     private String addWorkerPredicate(String name, ActivityHandler handler, RetryPolicy retry) {
