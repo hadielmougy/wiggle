@@ -69,7 +69,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `io.github.hadielmougy`, version **2.1.3** (the runnable `dist` module is not
+Published under group `io.github.hadielmougy`, version **2.1.4** (the runnable `dist` module is not
 published). The server core is database-agnostic; it builds its store from an injected
 `StorageFactory` and the backend is selected from the URL scheme (§7.2).
 
@@ -112,7 +112,7 @@ picked from the URL scheme); it reads the same env vars as the JAR (§6). TLS is
 
 ```bash
 # run the released image, in-memory, secured dashboard
-docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.3
+docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.4
 
 # a complete stack: server + Postgres, dashboard login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
@@ -135,6 +135,7 @@ The image is the control plane + dashboard only; run **workers** as separate pro
 | `scripts/cluster.sh [count]` | 3 nodes + 2 workers on local Postgres |
 | `scripts/kind-up.sh [nodes]` / `kind-down.sh` | Postgres cluster on kind |
 | `scripts/run-workers.sh <workers> [submit]` | run N worker JVMs against `WIGGLE_URL` |
+| `scripts/bump-version.sh <new-version>` | rewrite the version everywhere (jars + Docker tag + docs) from the current one |
 | `scripts/docker-release.sh` | build & push the multi-arch server image |
 
 ### 4.6 Gradle tasks
@@ -189,6 +190,27 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.recor
 `step`/`effect`/`gate` take an optional trailing `RetryPolicy`. The context type is fixed for the
 whole pipeline (a `map`-like `UnaryOperator<T>`), stored as either typed records
 (`ContextCodec.records(X.class)`) or JSON maps (`Workflow.defineJson(name)`).
+
+**Evolving a record's schema.** `ContextCodec.records` stores fields directly, so adding, renaming,
+or retyping a field silently defaults/loses data — or fails to decode — for instances already
+in flight (the workflow *version* hashes only the graph topology, not the context type). Use
+`VersionedContextCodec` when a record needs to change over time: it wraps the context in a
+`{"_schema","_v","data"}` envelope and **upcasts** older data to the current shape on read, so
+steps only ever see the current record.
+
+```java
+var codec = VersionedContextCodec.builder(Order.class, /* current version */ 2)
+        .schema("order-fulfilment")
+        .upcast(1, m -> { m.putIfAbsent("currency", "USD"); return m; })   // v1 -> v2: default a new field
+        .build();
+Blueprint<Order> orders = Workflow.define("order-fulfilment", codec) …;
+```
+
+Bare, pre-envelope contexts read as version 1, so existing instances upgrade transparently; on the
+next write an instance is re-stored at the current version. Inside a step, `ContextVersion.current()`
+returns the version the context was persisted at (for a durable origin marker, stamp it into `data`
+from an upcast). The example workflow (`example/.../OrderFulfilment.java`) uses this — `Order`
+gained `currency` at v2. See the README's "Evolving the context schema" for the full walkthrough.
 
 ### 5.2 Running instances
 

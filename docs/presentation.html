@@ -346,6 +346,34 @@ client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approva
     </div>
   </section>
 
+  <!-- SCHEMA VERSIONING -->
+  <section class="slide">
+    <div class="grid2">
+      <div>
+        <div class="eyebrow rise">Evolution</div>
+        <h2 class="rise">Contexts that change shape, safely.</h2>
+        <ul class="feat rise" style="margin-top:22px">
+          <li><span class="mk">▢</span><div><b>Versioned envelope</b><p>Wrap the record in <span style="font-family:var(--mono)">{_schema, _v, data}</span> so its schema can move.</p></div></li>
+          <li><span class="mk">⤴</span><div><b>Upcast to current</b><p>Old data is migrated forward on read; every step sees one shape.</p></div></li>
+          <li><span class="mk">♻</span><div><b>No flag day</b><p>In-flight (pre-envelope) instances read as v1 and upgrade on the next write.</p></div></li>
+          <li><span class="mk">#</span><div><b>Condition on the version</b><p><span style="font-family:var(--mono)">ContextVersion.current()</span> lets a handler grandfather older instances.</p></div></li>
+        </ul>
+      </div>
+      <pre class="rise" aria-label="Versioned context example"><code><span class="c-com">// the Order record grew over time</span>
+<span class="c-key">var</span> codec = <span class="c-fn">VersionedContextCodec</span>.builder(Order.class, <span class="c-key">3</span>)
+    .<span class="c-fn">schema</span>(<span class="c-str">"order"</span>)
+    <span class="c-com">// v1 → v2: default a new field</span>
+    .<span class="c-fn">upcast</span>(<span class="c-key">1</span>, m -&gt; { m.put(<span class="c-str">"currency"</span>, <span class="c-str">"USD"</span>); <span class="c-key">return</span> m; })
+    <span class="c-com">// v2 → v3: rename amount → total</span>
+    .<span class="c-fn">upcast</span>(<span class="c-key">2</span>, m -&gt; { m.put(<span class="c-str">"total"</span>, m.remove(<span class="c-str">"amount"</span>)); <span class="c-key">return</span> m; })
+    .<span class="c-fn">build</span>();
+
+<span class="c-fn">Workflow</span>.define(<span class="c-str">"order"</span>, codec)
+    .<span class="c-fn">step</span>(<span class="c-str">"price"</span>, o -&gt; o.withTotal(...));
+<span class="c-com">// a v1 instance is upcast and finished by a v3 worker</span></code></pre>
+    </div>
+  </section>
+
   <!-- 7 — DASHBOARD -->
   <section class="slide">
     <div class="eyebrow rise">Observability</div>
