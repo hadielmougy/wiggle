@@ -33,6 +33,11 @@ public final class Worker implements AutoCloseable {
     private final List<Blueprint<?>> blueprints = new CopyOnWriteArrayList<>();
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
+    /** Handlers bound by name via {@link #handle}, reconciled against the server graph on start. */
+    private final List<Claim> claims = new CopyOnWriteArrayList<>();
+
+    /** A {@link #handle}-bound step: the graph the server holds must agree on its name and kind. */
+    private record Claim(String workflow, String step, NodeKind kind) {}
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -79,11 +84,58 @@ public final class Worker implements AutoCloseable {
         return this;
     }
 
+    /**
+     * Binds a handler to one step of an already-registered workflow, by name -- no topology
+     * re-declaration. The graph lives on the server; this worker just implements {@code step}.
+     * {@code fn} receives the context as JSON and returns the JSON object to merge back (only the
+     * changed keys are sent); the merge is idempotent, so returning the whole context is fine too.
+     * The queue the step polls is discovered from the graph on {@link #start()}, which also fails
+     * fast if {@code step} does not exist in the workflow or is not a task.
+     */
+    public Worker handle(String workflow, String step, ActivityHandler fn) {
+        return bind(workflow, step, NodeKind.TASK, ctx -> {
+            Object out = fn.invoke(ctx);
+            return out == null ? null : dev.wiggle.core.Json.shallowDiff(ctx, out);
+        });
+    }
+
+    /**
+     * Binds a predicate step (a gate / choose guard / do-while condition) by name; {@code fn} must
+     * return a {@link Boolean}. See {@link #handle}.
+     */
+    public Worker handleGate(String workflow, String step, ActivityHandler fn) {
+        return bind(workflow, step, NodeKind.PREDICATE, fn);
+    }
+
+    /**
+     * Binds a side-effect step by name; {@code fn} consumes the context and the context is left
+     * unchanged. See {@link #handle}.
+     */
+    public Worker handleEffect(String workflow, String step, java.util.function.Consumer<Object> fn) {
+        return bind(workflow, step, NodeKind.TASK, ctx -> {
+            fn.accept(ctx);
+            return null;
+        });
+    }
+
+    private Worker bind(String workflow, String step, NodeKind kind, ActivityHandler handler) {
+        if (workflow == null || workflow.isBlank() || step == null || step.isBlank()) {
+            throw new IllegalArgumentException("workflow and step are required");
+        }
+        String activity = workflow + "#" + step;
+        if (handlers.putIfAbsent(activity, handler) != null) {
+            throw new IllegalStateException("duplicate handler for activity '" + activity + "'");
+        }
+        claims.add(new Claim(workflow, step, kind));
+        return this;
+    }
+
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
         if (options.registerOnStart()) {
             for (Blueprint<?> bp : blueprints) client.register(bp);
         }
+        if (!claims.isEmpty()) reconcile();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
@@ -92,6 +144,80 @@ public final class Worker implements AutoCloseable {
         LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());
         return this;
+    }
+
+    /**
+     * Checks every {@link #handle}-bound claim against the server's registered graph and learns the
+     * queue each claimed step polls -- a name-only binding has no other way to know it. Fails fast on
+     * a mistyped step name or a kind mismatch, so a bad binding surfaces at start rather than as a
+     * silent runtime "no handler" much later.
+     */
+    private void reconcile() {
+        Map<String, List<Claim>> byWorkflow = new LinkedHashMap<>();
+        for (Claim c : claims) byWorkflow.computeIfAbsent(c.workflow(), k -> new ArrayList<>()).add(c);
+
+        for (var entry : byWorkflow.entrySet()) {
+            String wf = entry.getKey();
+            WorkflowDefinition def = fetchGraph(wf);
+            Map<String, Node> byActivity = new HashMap<>();
+            for (Node n : def.nodes().values()) {
+                if (n.isWorkerDispatched() && n.activity() != null) byActivity.put(n.activity(), n);
+            }
+            Set<String> served = new HashSet<>();
+            for (Claim c : entry.getValue()) {
+                String activity = wf + "#" + c.step();
+                Node node = byActivity.get(activity);
+                if (node == null) {
+                    throw new IllegalStateException("no step '" + c.step() + "' in registered workflow '"
+                            + wf + "' (available steps: " + availableSteps(byActivity) + ")");
+                }
+                if (node.kind() != c.kind()) {
+                    String verb = node.kind() == NodeKind.PREDICATE ? "handleGate" : "handle";
+                    throw new IllegalStateException("activity '" + activity + "' is a " + node.kind()
+                            + " in the graph but was bound as " + c.kind() + "; use " + verb + "() instead");
+                }
+                queues.add(node.queue() != null ? node.queue() : wf);
+                served.add(activity);
+            }
+            graphs.put(def.key(), def);
+            Set<String> unclaimed = new TreeSet<>();
+            for (String a : byActivity.keySet()) {
+                if (!served.contains(a)) unclaimed.add(a.substring(a.indexOf('#') + 1));
+            }
+            if (!unclaimed.isEmpty()) {   // info, not an error: this worker may intentionally serve a subset
+                LOG.log(System.Logger.Level.INFO,
+                        () -> "workflow '" + wf + "' has steps served by no handler on this worker: " + unclaimed);
+            }
+        }
+    }
+
+    /** Fetches the registered graph, waiting out a registration race up to {@code awaitRegistration}. */
+    private WorkflowDefinition fetchGraph(String workflow) {
+        long deadline = System.nanoTime() + options.awaitRegistration().toNanos();
+        while (true) {
+            try {
+                return client.getWorkflow(workflow);
+            } catch (WiggleClient.WiggleApiException e) {
+                boolean notFound = e.status() == 404;
+                if (notFound && System.nanoTime() < deadline) {
+                    sleep(250);
+                    continue;
+                }
+                if (notFound) {
+                    throw new IllegalStateException("workflow '" + workflow + "' is not registered; register "
+                            + "its graph before starting a worker that binds handlers to it (or set "
+                            + "WorkerOptions.withAwaitRegistration)", e);
+                }
+                throw e;
+            }
+        }
+    }
+
+    private static java.util.List<String> availableSteps(Map<String, Node> byActivity) {
+        java.util.List<String> steps = new ArrayList<>();
+        for (String a : byActivity.keySet()) steps.add(a.substring(a.indexOf('#') + 1));
+        Collections.sort(steps);
+        return steps;
     }
 
     private void pollLoop() {

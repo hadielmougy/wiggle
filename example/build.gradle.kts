@@ -40,6 +40,13 @@ tasks.register<JavaExec>("submitOrders") {
     args = listOf(project.findProperty("count")?.toString() ?: "5")
 }
 
+tasks.register<JavaExec>("runPolyglot") {
+    group = "application"
+    description = "Polyglot demo: Java authors + serves a flow, waits for the Python worker to serve `charge`."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.wiggle.polyglot.PolyglotDemo")
+}
+
 tasks.register<JavaExec>("runCookbook") {
     group = "application"
     description = "Runs every DSL cookbook example (embedded server + worker, one JVM)."

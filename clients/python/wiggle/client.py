@@ -71,6 +71,13 @@ class WiggleClient:
         result = self._stub.RegisterWorkflow(pb.WorkflowDefinition(definition=struct))
         return int(result.version)
 
+    def get_workflow(self, name: str) -> dict:
+        """The registered graph for ``name`` as a plain dict -- the server's source of truth for a
+        workflow's step names, kinds, and queues. Raises ``grpc.RpcError`` (NOT_FOUND) if the
+        workflow was never registered. Used by :meth:`Worker.handle` reconciliation."""
+        resp = self._stub.GetWorkflow(pb.GetWorkflowRequest(name=name))
+        return json_format.MessageToDict(resp.definition)
+
     def start(self, workflow: Union[Blueprint, str], context: Any, *,
               version: Optional[int] = None, correlation_id: Optional[str] = None) -> str:
         """Start an instance; returns its id."""
