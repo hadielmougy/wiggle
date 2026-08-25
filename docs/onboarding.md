@@ -354,6 +354,22 @@ instead. `/healthz`, `/login` and `/api/login` are always open. Unset = unauthen
 startup). Credentials are cleartext over plain HTTP, so serve over TLS for anything exposed; set the
 same credentials on every node (sessions are per-node, not shared).
 
+**Pluggable auth (SSO).** The password login is just the default `DashboardAuth` (`PasswordAuth`).
+Implement `dev.wiggle.server.http.DashboardAuth` to replace it with anything -- OIDC/SSO, a header
+trusted from a reverse proxy, mTLS-only -- typically in a separate (private) module, and inject it:
+
+```java
+new WiggleServer(config, storageFactory, myAuth).start();
+```
+
+The dashboard calls `authenticate(exchange)` on every guarded request; when it returns empty an API
+caller gets 401 (plus your `apiChallenge()`, if any) and a browser is redirected to your
+`loginLocation()`. Register your own open endpoints (login redirect, OAuth callback, logout) from
+`install(HttpServer)`, using the `DashboardHttp` helpers to read/write; expose fields to the SPA
+from `describe()` (merged into `GET /api/auth`). Only `/healthz` and `/api/auth` are dashboard-owned
+and always open. Since a browser is redirected to the IdP *before* the SPA loads, no frontend change
+is needed. See `PasswordAuth` as a worked example and `DashboardAuthTest` for the contract.
+
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | HTTP port for the dashboard |

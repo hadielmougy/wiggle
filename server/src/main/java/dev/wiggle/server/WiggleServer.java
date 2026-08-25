@@ -6,10 +6,12 @@ import dev.wiggle.server.cluster.QueueLagMonitor;
 import dev.wiggle.server.engine.DefinitionRegistry;
 import dev.wiggle.server.engine.WorkflowEngine;
 import dev.wiggle.server.grpc.GrpcApi;
+import dev.wiggle.server.http.DashboardAuth;
 import dev.wiggle.server.http.HttpDashboard;
 import dev.wiggle.server.store.InMemoryStorage;
 import dev.wiggle.server.store.Storage;
 import dev.wiggle.server.store.StorageFactory;
+import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.io.IOException;
 
@@ -44,6 +46,15 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
+        this(config, storageFactory, null);
+    }
+
+    /**
+     * @param dashboardAuth a custom dashboard authenticator (e.g. SSO), or {@code null} to use the
+     *                      built-in admin-password login from {@link ServerConfig}.
+     */
+    public WiggleServer(ServerConfig config, StorageFactory storageFactory,
+                        DashboardAuth dashboardAuth) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
@@ -56,10 +67,13 @@ public final class WiggleServer implements AutoCloseable {
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
                 config.tls(), config.memory());
-        this.dashboard = config.dashboardPort() > 0
-                ? new HttpDashboard(engine, cluster, config.dashboardPort(),
-                        config.dashboardUser(), config.dashboardPassword(), config.tls())
-                : null;
+        this.dashboard = config.dashboardPort() <= 0 ? null : getHttpDashboard(config, dashboardAuth);
+    }
+
+    private @NonNull HttpDashboard getHttpDashboard(ServerConfig config, DashboardAuth dashboardAuth) throws IOException {
+        return dashboardAuth != null
+                ? new HttpDashboard(engine, cluster, config.dashboardPort(), dashboardAuth, config.tls())
+                : new HttpDashboard(engine, cluster, config.dashboardPort(), config.dashboardUser(), config.dashboardPassword(), config.tls());
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
