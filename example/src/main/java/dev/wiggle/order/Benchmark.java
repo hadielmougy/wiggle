@@ -86,7 +86,7 @@ public final class Benchmark {
 
     /** A linear chain of {@code steps} trivial same-queue map steps; the last one counts down. */
     private static Blueprint<Map<String, Object>> linear(String name, int steps, ExecutionMode mode, CountDownLatch done) {
-        WorkflowStream<Map<String, Object>> s = Workflow.defineJson(name).execution(mode);
+        WorkflowStream<Map<String, Object>> s = Workflow.define(name).execution(mode);
         for (int i = 0; i < steps; i++) {
             boolean last = i == steps - 1;
             s = s.step("s" + i, last ? ctx -> { done.countDown(); return ctx; } : ctx -> ctx);

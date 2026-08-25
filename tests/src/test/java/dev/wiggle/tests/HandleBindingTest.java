@@ -4,6 +4,7 @@ import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.client.worker.WiggleClient;
 import dev.wiggle.client.worker.Worker;
+import dev.wiggle.core.ContextCodec;
 import dev.wiggle.core.InstanceView;
 import dev.wiggle.core.Json;
 import dev.wiggle.server.ServerConfig;
@@ -37,7 +38,7 @@ class HandleBindingTest {
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
     private Blueprint<Map<String, Object>> authoredGraph() {
-        return Workflow.defineJson("order-fulfilment")
+        return Workflow.define("order-fulfilment")
                 .step("validate", c -> put(c, "status", "VALIDATED"))
                 .gate("in-stock", c -> ((Number) c.get("qty")).intValue() > 0)
                 .step("authorise", c -> put(c, "paymentRef", "auth-" + c.get("orderId")), "payments")
@@ -117,6 +118,38 @@ class HandleBindingTest {
                 impl.handle("never-registered", "step", c -> c);
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
                 assertTrue(e.getMessage().contains("is not registered"), e.getMessage());
+            }
+        });
+    }
+
+    /** A typed context — the same JSON on the wire, so it interoperates with dict/JSON handlers. */
+    public record Item(String id, int qty, String state) {}
+
+    @Test
+    @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
+    void typedNameOnlyBinding() throws Exception {
+        withServer((client, server) -> {
+            ContextCodec<Item> codec = ContextCodec.records(Item.class);
+            client.register(Workflow.define("typed-wf", codec)
+                    .step("check")
+                    .gate("available", i -> i.qty() > 0)
+                    .effect("done")
+                    .build());
+
+            AtomicReference<String> doneState = new AtomicReference<>();
+            try (Worker impl = new Worker(client, "typed-impl")) {
+                impl.handle("typed-wf", "check", codec, i -> new Item(i.id(), i.qty(), "CHECKED"))
+                    .handleGate("typed-wf", "available", codec, i -> i.qty() > 0)
+                    .handleEffect("typed-wf", "done", codec, i -> doneState.set(i.state()));
+                impl.start();
+
+                String id = client.start("typed-wf", Map.of("id", "x1", "qty", 3));
+                InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
+
+                assertEquals("COMPLETED", v.status(), "status");
+                Item out = codec.decode(v.context());
+                assertEquals("CHECKED", out.state(), "typed handler updated the record");
+                assertEquals("CHECKED", doneState.get(), "typed effect saw the decoded record");
             }
         });
     }

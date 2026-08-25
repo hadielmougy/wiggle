@@ -122,6 +122,40 @@ def test_sleep_and_signal_nodes():
     assert "wf#nap" not in bp.handlers and "wf#go" not in bp.handlers
 
 
+def test_await_signal_escalation_branch_wiring():
+    bp = (Workflow("wf")
+          .step("request", lambda o: o)
+          .await_signal("approval", timeout_s=60,
+                        escalation=lambda b: b.step("auto-approve", lambda o: {**o, "auto": True}))
+          .step("finish", lambda o: o)
+          .build())
+    byid = _by_id(bp)
+    sig = next(n for n in byid.values() if n.get("name") == "approval")
+    auto = next(n for n in byid.values() if n.get("name") == "auto-approve")
+    finish = next(n for n in byid.values() if n.get("name") == "finish")
+    assert sig["kind"] == "SIGNAL" and sig["sleepMillis"] == 60000
+    assert sig["next"] == finish["id"]        # delivery continues to `finish`
+    assert sig["altNext"] == auto["id"]       # timeout escalates to the branch
+    assert auto["next"] == finish["id"]       # escalation rejoins the flow at `finish`
+    assert bp.handlers["wf#auto-approve"]     # the escalation step is a real worker handler
+
+
+def test_await_signal_without_escalation_has_no_alt_edge():
+    bp = Workflow("wf").step("a", lambda o: o).await_signal("s", timeout_s=5).step("b", lambda o: o).build()
+    sig = next(n for n in bp.definition["nodes"] if n.get("name") == "s")
+    assert "altNext" not in sig
+
+
+def test_await_signal_escalation_requires_a_timeout():
+    with pytest.raises(ValueError, match="positive timeout"):
+        Workflow("wf").await_signal("s", escalation=lambda b: b.step("x", lambda o: o)).build()
+
+
+def test_await_signal_empty_escalation_rejected():
+    with pytest.raises(ValueError, match="defines no steps"):
+        Workflow("wf").await_signal("s", timeout_s=5, escalation=lambda b: b).build()
+
+
 # ---------------------------------------------------------------- fork / join
 
 def test_fork_creates_fork_and_join_with_expected():

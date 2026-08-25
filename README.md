@@ -363,6 +363,23 @@ soon as the [Python payments worker](clients/python/examples/polyglot_worker.py)
 python clients/python/examples/polyglot_worker.py    # terminal 2: the Python worker for `charge`
 ```
 
+**Typed contexts too.** The Java side can work on a **record** rather than a JSON map — pass a
+`ContextCodec` to `handle` and your handler is typed:
+
+```java
+ContextCodec<Purchase> codec = ContextCodec.records(Purchase.class);
+new Worker(client, "fulfilment")
+        .handle("typed-order", "validate", codec, p -> p.withStatus("VALIDATED"))   // Purchase -> Purchase
+        .handleGate("typed-order", "in-stock", codec, p -> p.quantity() > 0)
+        .start();
+```
+
+A record and a `dict` are the **same JSON on the wire**, so a typed Java handler and an untyped
+Python handler serve different steps of the same instance without agreeing on a type — only on the
+step name. [`example:runTypedPolyglot`](example/src/main/java/dev/wiggle/polyglot/typed/TypedPolyglotDemo.java)
+is the polyglot demo with a typed `Purchase` context, completed by
+[`polyglot_typed_worker.py`](clients/python/examples/polyglot_typed_worker.py).
+
 ---
 
 ## Starting and tracking instances
@@ -750,12 +767,14 @@ copy from:
 | `WorkerMain.java` | a standalone worker process |
 | `SubmitOrders.java` | submitting and awaiting a batch of instances |
 | `polyglot/PolyglotDemo.java` | one flow, two languages — Java serves every step but `charge`, Python supplies it by name |
+| `polyglot/typed/TypedPolyglotDemo.java` | the same split with a **typed** record context on the Java side (dict on the Python side) |
 
 ```bash
 ./gradlew :example:run                       # the full demo in one JVM
 ./gradlew :example:runWorker                 # a standalone worker (needs a running server)
 ./gradlew :example:submitOrders -Pcount=20   # submit 20 orders
 ./gradlew :example:runPolyglot               # polyglot demo (then run the Python worker; see "Polyglot" above)
+./gradlew :example:runTypedPolyglot          # polyglot demo with a typed record context
 ```
 
 ---

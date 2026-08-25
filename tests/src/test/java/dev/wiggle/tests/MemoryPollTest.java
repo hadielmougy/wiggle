@@ -36,7 +36,7 @@ class MemoryPollTest {
 
     @Test @DisplayName("over the memory threshold, a rejected poll returns empty + hold-off even when work exists")
     void rejectsUnderPressure() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("mem-" + Ids.next("wf"))
+        Blueprint<Map<String, Object>> bp = Workflow.define("mem-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
         // 0.0001 is below any running JVM's live-set/max, so the guard is always under pressure;
@@ -90,7 +90,7 @@ class MemoryPollTest {
 
     @Test @DisplayName("under a normal threshold no poll is rejected and work flows")
     void noRejectUnderThreshold() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("mem-ok-" + Ids.next("wf"))
+        Blueprint<Map<String, Object>> bp = Workflow.define("mem-ok-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
         // Threshold 0.999 is effectively never crossed, so even reject-ratio 1.0 never triggers.

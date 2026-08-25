@@ -38,13 +38,12 @@ public final class PolyglotOrder {
      * without running any worker at all.
      */
     public static Blueprint<Map<String, Object>> blueprint() {
-        Activity<Map<String, Object>> id = ctx -> ctx;
-        return Workflow.defineJson(NAME)
-                .step("validate", id)
+        return Workflow.define(NAME)
+                .step("validate")
                 .gate("in-stock", ctx -> ((Number) ctx.get("quantity")).intValue() > 0)
-                .step("charge", id, PAYMENTS_QUEUE)
-                .step("ship", id)
-                .effect("notify", ctx -> { })
+                .step("charge", PAYMENTS_QUEUE)
+                .step("ship")
+                .effect("notify")
                 .build();
     }
 }

@@ -49,7 +49,7 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            Blueprint<Map<String, Object>> bp = Workflow.defineJson("lb-fork")
+            Blueprint<Map<String, Object>> bp = Workflow.define("lb-fork")
                     .execution(mode)
                     .step("seed", ctx -> counted(runs, "seed", put(ctx, "seeded", true)))
                     .step("prep", ctx -> counted(runs, "prep", put(ctx, "prepped", true)))
@@ -81,7 +81,7 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("lb-gate")
+        Blueprint<Map<String, Object>> bp = Workflow.define("lb-gate")
                 .execution(ExecutionMode.LOCAL_SYNC)
                 .step("seed", ctx -> put(ctx, "keep", false))
                 .gate("keep", ctx -> Boolean.TRUE.equals(ctx.get("keep")))
@@ -144,7 +144,7 @@ class LocalBoundaryTest {
 
     private static Blueprint<Map<String, Object>> queueSplitBlueprint(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return Workflow.defineJson("lb-queues")
+        return Workflow.define("lb-queues")
                 .execution(mode)
                 .step("a", ctx -> tag(ranOn, "a", label, ctx))
                 .step("b", ctx -> tag(ranOn, "b", label, ctx))

@@ -47,6 +47,13 @@ tasks.register<JavaExec>("runPolyglot") {
     mainClass.set("dev.wiggle.polyglot.PolyglotDemo")
 }
 
+tasks.register<JavaExec>("runTypedPolyglot") {
+    group = "application"
+    description = "Polyglot demo with a typed (record) context: Java serves typed handlers, Python serves `charge`."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.wiggle.polyglot.typed.TypedPolyglotDemo")
+}
+
 tasks.register<JavaExec>("runCookbook") {
     group = "application"
     description = "Runs every DSL cookbook example (embedded server + worker, one JVM)."

@@ -48,7 +48,7 @@ class OracleStoreTest {
     }
 
     private static Blueprint<Map<String, Object>> uniqueWorkflow() {
-        return Workflow.defineJson("oracle-claim-" + Ids.next("wf"))
+        return Workflow.define("oracle-claim-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
     }

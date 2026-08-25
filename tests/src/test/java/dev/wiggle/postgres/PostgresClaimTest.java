@@ -48,7 +48,7 @@ class PostgresClaimTest {
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
     private static Blueprint<Map<String, Object>> uniqueWorkflow() {
-        return Workflow.defineJson("pg-claim-" + Ids.next("wf"))
+        return Workflow.define("pg-claim-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
     }

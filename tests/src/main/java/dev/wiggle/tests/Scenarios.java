@@ -52,7 +52,7 @@ public final class Scenarios {
     }
 
     private static WorkflowStream<Map<String, Object>> json(String name) {
-        return Workflow.defineJson(name);
+        return Workflow.define(name);
     }
 
     private static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {

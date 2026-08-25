@@ -118,6 +118,49 @@ public final class Worker implements AutoCloseable {
         });
     }
 
+    /**
+     * Typed variant of {@link #handle(String, String, ActivityHandler)}: {@code fn} works on a
+     * decoded {@code T} (e.g. a record via {@link ContextCodec#records}) and returns the new {@code T};
+     * the codec encodes it and only the changed keys are sent back, exactly as the DSL's typed
+     * {@code step} does. The wire form is the same JSON either way, so a typed Java handler and an
+     * untyped ({@code dict}) Python handler interoperate on the same step.
+     */
+    public <T> Worker handle(String workflow, String step, ContextCodec<T> codec,
+                             dev.wiggle.client.dsl.Activity<T> fn) {
+        return bind(workflow, step, NodeKind.TASK, ctx -> {
+            try {
+                return Json.shallowDiff(ctx, codec.encode(fn.apply(codec.decode(ctx))));
+            } finally {
+                ContextVersion.clear();
+            }
+        });
+    }
+
+    /** Typed variant of {@link #handleGate}: {@code test} works on a decoded {@code T}. */
+    public <T> Worker handleGate(String workflow, String step, ContextCodec<T> codec,
+                                 dev.wiggle.client.dsl.Predicate<T> test) {
+        return bind(workflow, step, NodeKind.PREDICATE, ctx -> {
+            try {
+                return test.test(codec.decode(ctx));
+            } finally {
+                ContextVersion.clear();
+            }
+        });
+    }
+
+    /** Typed variant of {@link #handleEffect}: {@code fn} consumes a decoded {@code T}. */
+    public <T> Worker handleEffect(String workflow, String step, ContextCodec<T> codec,
+                                   dev.wiggle.client.dsl.SideEffect<T> fn) {
+        return bind(workflow, step, NodeKind.TASK, ctx -> {
+            try {
+                fn.accept(codec.decode(ctx));
+                return null;
+            } finally {
+                ContextVersion.clear();
+            }
+        });
+    }
+
     private Worker bind(String workflow, String step, NodeKind kind, ActivityHandler handler) {
         if (workflow == null || workflow.isBlank() || step == null || step.isBlank()) {
             throw new IllegalArgumentException("workflow and step are required");

@@ -64,7 +64,7 @@ PYTHONPATH=clients/python python clients/python/examples/order.py
 | `do_while(name, cond, body)` | run `body`, then repeat while `cond(ctx)` holds (body runs at least once) |
 | `sub_workflow(name, child)` | run another workflow (a `Blueprint`, `Workflow`, or name) as a child; its result merges back |
 | `sleep(name, *, seconds=, millis=)` | server-side timer; no worker is held |
-| `await_signal(name, *, timeout_s=0)` | wait for a signal delivered via `client.signal(...)` |
+| `await_signal(name, *, timeout_s=0, escalation=None)` | wait for a signal delivered via `client.signal(...)`; on timeout, fail — or run the `escalation` branch and rejoin |
 | `default_queue(q)` | queue for every step that doesn't set its own (defaults to the workflow name) |
 | `build()` | produce a `Blueprint` to register and serve |
 

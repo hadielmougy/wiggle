@@ -53,9 +53,9 @@ class HttpDashboardTest {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dash, Duration.ofSeconds(5), Duration.ofSeconds(10));
 
-        Blueprint<Map<String, Object>> done = Workflow.defineJson("dash-done")
+        Blueprint<Map<String, Object>> done = Workflow.define("dash-done")
                 .step("work", ctx -> Map.of("result", "ok")).build();
-        Blueprint<Map<String, Object>> waiting = Workflow.defineJson("dash-waiting")
+        Blueprint<Map<String, Object>> waiting = Workflow.define("dash-waiting")
                 .sleep("hold", Duration.ofSeconds(30)).step("after", ctx -> ctx).build();
 
         try (WiggleServer server = new WiggleServer(config).start();
@@ -116,7 +116,7 @@ class HttpDashboardTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dash, Duration.ofSeconds(5), Duration.ofSeconds(10));
 
         // A graph exercising several node kinds so the diagram endpoint has edges to draw.
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("dash-graph")
+        Blueprint<Map<String, Object>> bp = Workflow.define("dash-graph")
                 .step("submit", ctx -> ctx)
                 .awaitSignal("approval", Duration.ofHours(1),
                         b -> b.step("escalate", ctx -> ctx))

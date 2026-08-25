@@ -272,10 +272,33 @@ class Workflow:
         """A server-side timer; no worker is held while the instance waits."""
         return self._chain(self._graph.add_timer("SLEEP", name, int(seconds * 1000) + int(millis), reserve=False))
 
-    def await_signal(self, name: str, *, timeout_s: float = 0.0) -> "Workflow":
-        """Wait for a named external signal (delivered via :meth:`WiggleClient.signal`). With a
-        ``timeout_s`` the instance fails if the signal does not arrive in time."""
-        return self._chain(self._graph.add_timer("SIGNAL", name, int(timeout_s * 1000), reserve=True))
+    def await_signal(self, name: str, *, timeout_s: float = 0.0,
+                     escalation: Optional[BranchFn] = None) -> "Workflow":
+        """Wait for a named external signal (delivered via :meth:`WiggleClient.signal`); the payload
+        merges into the context like a step's result, and the flow continues down the next step. No
+        worker is held while it waits.
+
+        With a ``timeout_s`` the instance **fails** if the signal does not arrive in time -- unless an
+        ``escalation`` branch is given, in which case that branch runs instead on timeout and then
+        rejoins the flow after the wait (exactly one of delivery / escalation happens). ``escalation``
+        is a function that receives a nested builder and chains onto it (like a fork branch), and it
+        needs a positive ``timeout_s``."""
+        nid = self._graph.add_timer("SIGNAL", name, int(timeout_s * 1000), reserve=True)
+        self._attach(nid)
+        if escalation is None:
+            self._open = [(nid, "next")]                      # delivery path only
+            return self
+        if timeout_s <= 0:
+            raise ValueError("await_signal escalation needs a positive timeout_s")
+        # The delivery path is `next`; the escalation branch hangs off `alt` and its tail rejoins,
+        # so both continue to whatever follows -- exactly the SIGNAL next/altNext shape Java emits.
+        sub = Workflow._sub(self._graph, enclosing_join=self._enclosing_join)
+        escalation(sub)
+        if sub._start is None:
+            raise ValueError(f"escalation branch of '{name}' defines no steps")
+        self._graph.wire(nid, "alt", sub._start)
+        self._open = [(nid, "next"), *sub._open]
+        return self
 
     def sub_workflow(self, name: str, workflow: "Workflow | Blueprint | str") -> "Workflow":
         """Run another workflow as a child: it starts with this instance's context, and on completion

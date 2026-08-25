@@ -45,7 +45,7 @@ class MySqlStoreTest {
     }
 
     private static Blueprint<Map<String, Object>> uniqueWorkflow() {
-        return Workflow.defineJson("mysql-claim-" + Ids.next("wf"))
+        return Workflow.define("mysql-claim-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
     }

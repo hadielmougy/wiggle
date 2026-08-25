@@ -34,7 +34,7 @@ public final class Workflow {
     }
 
     /** Convenience for contexts that are plain JSON documents. */
-    public static WorkflowStream<Map<String, Object>> defineJson(String name) {
+    public static WorkflowStream<Map<String, Object>> define(String name) {
         return define(name, ContextCodec.jsonMap());
     }
 }

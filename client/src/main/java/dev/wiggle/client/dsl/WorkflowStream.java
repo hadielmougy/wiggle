@@ -51,6 +51,10 @@ public final class WorkflowStream<T> {
         return new WorkflowStream<>(pipeline, pipeline::startAt, null);
     }
 
+    public WorkflowStream<T> step(String name) {
+        return step(name, ctx -> ctx, (RetryPolicy) null, null);
+    }
+
     /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
     public WorkflowStream<T> step(String name, Activity<T> fn) {
         return step(name, fn, (RetryPolicy) null, null);
@@ -63,6 +67,11 @@ public final class WorkflowStream<T> {
      */
     public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry) {
         return step(name, fn, retry, null);
+    }
+
+
+    public WorkflowStream<T> step(String name, String queue) {
+        return step(name, ctx -> ctx, (RetryPolicy) null, queue);
     }
 
     /**
@@ -100,6 +109,10 @@ public final class WorkflowStream<T> {
     /** Alias for {@link #step(String, Activity, RetryPolicy, String)}. */
     public WorkflowStream<T> then(String name, Activity<T> fn, RetryPolicy retry, String queue) {
         return step(name, fn, retry, queue);
+    }
+
+    public WorkflowStream<T> effect(String name) {
+        return effect(name, ctx -> { }, (RetryPolicy) null, null);
     }
 
     /** Runs {@code fn} on a worker for its side effect only; the context is left unchanged. */

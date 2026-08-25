@@ -18,7 +18,7 @@ import java.util.Map;
  * {@code docs/dsl-cookbook.md}, which explains what each one demonstrates and why. Run them
  * all with {@code ./gradlew :example:runCookbook} ({@link CookbookDemo}).
  *
- * <p>Every blueprint uses {@link Workflow#defineJson}. A step's {@code fn} must return the
+ * <p>Every blueprint uses {@link Workflow#define}. A step's {@code fn} must return the
  * <b>whole</b> context, not just the fields it touched -- {@link #with} builds that full copy.
  * The engine then shallow-diffs the returned document against the one it was given and merges
  * only the keys that actually changed, so parallel branches that touch different fields merge
@@ -47,7 +47,7 @@ public final class Cookbook {
     // 1. step + then + effect + gate -- the smallest linear pipeline with a filter.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> linearWithGate() {
-        return Workflow.defineJson("cb-linear-gate")
+        return Workflow.define("cb-linear-gate")
 
                 .step("normalise", ctx -> with(ctx, "email", String.valueOf(ctx.get("email")).toLowerCase()))
 
@@ -65,7 +65,7 @@ public final class Cookbook {
     // 2. choose + fork + retry -- an exclusive branch whose body itself fans out in parallel.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> chooseThenFork() {
-        return Workflow.defineJson("cb-choose-fork")
+        return Workflow.define("cb-choose-fork")
 
                 .choose(
                         Case.when("is-large", ctx -> ((Number) ctx.get("amount")).doubleValue() >= 1000,
@@ -86,7 +86,7 @@ public final class Cookbook {
     // 3. forkEach + per-step queue -- dynamic fan-out with mixed worker pools.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> forkEachAcrossQueues() {
-        return Workflow.defineJson("cb-foreach-queues").defaultQueue("cpu")
+        return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
 
                 .forkEach("charge-items", "items", "item", b -> b
                         // forkEach branches share one context, so a plain "priced" key would race
@@ -106,7 +106,7 @@ public final class Cookbook {
     //    cancelled draw straight out of the loop.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> pollUntilReady() {
-        return Workflow.defineJson("cb-poll-until-ready")
+        return Workflow.define("cb-poll-until-ready")
 
                 .doWhile("still-pending", ctx -> !Boolean.TRUE.equals(ctx.get("ready")), b -> b
                         // gate() short-circuits to the loop's exit (the enclosing join/end),
@@ -125,7 +125,7 @@ public final class Cookbook {
     // 5. awaitSignal (timeout + escalation) + choose -- branch on how the wait resolved.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> approvalWithEscalation() {
-        return Workflow.defineJson("cb-approval-escalation")
+        return Workflow.define("cb-approval-escalation")
 
                 .step("submit", ctx -> with(ctx, "submitted", true))
 
@@ -145,7 +145,7 @@ public final class Cookbook {
     // 6. subWorkflow + gate + fork -- compose a registered child workflow into a bigger one.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> childCheckThenFork() {
-        return Workflow.defineJson("cb-parent")
+        return Workflow.define("cb-parent")
 
                 // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
                 .subWorkflow("run-eligibility", "cb-linear-gate")
@@ -164,7 +164,7 @@ public final class Cookbook {
     //    deliberate commit point so a crash mid-loop only replays the current iteration.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> batchedLoopWithCheckpoint() {
-        return Workflow.defineJson("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
+        return Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
 
                 .doWhile("more-batches", ctx -> ((Number) ctx.getOrDefault("batch", 0)).intValue() < 3, b -> b
                         .step("process-batch", ctx -> {
@@ -183,7 +183,7 @@ public final class Cookbook {
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> kitchenSink() {
-        return Workflow.defineJson("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
+        return Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
 
                 .step("intake", ctx -> with(ctx, "stage", "intake"))
 
