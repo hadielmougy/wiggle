@@ -262,7 +262,7 @@ step-level idempotency key, or after a `.checkpoint()`. Documented in the DSL ja
   `LOCAL_SYNC` (every step), best-effort mid-run in `LOCAL_ASYNC`. Document the weaker guarantee.
 - **Multi-node fairness:** a worker grabs a whole linear run instead of single steps — coarser but
   fine, since a linear chain is inherently sequential; fork remains the distribution point.
-- **Queues (`onQueue`):** a queue change is a boundary, so per-queue worker specialization is preserved.
+- **Queues (a step's `queue` argument):** a queue change is a boundary, so per-queue worker specialization is preserved.
 
 ## 12. Observability impact
 

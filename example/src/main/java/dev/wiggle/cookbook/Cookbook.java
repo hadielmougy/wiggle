@@ -83,7 +83,7 @@ public final class Cookbook {
     }
 
     // ---------------------------------------------------------------------------------------
-    // 3. forkEach + defaultQueue + onQueue -- dynamic fan-out with mixed worker pools.
+    // 3. forkEach + per-step queue -- dynamic fan-out with mixed worker pools.
     // ---------------------------------------------------------------------------------------
     public static Blueprint<Map<String, Object>> forkEachAcrossQueues() {
         return Workflow.defineJson("cb-foreach-queues").defaultQueue("cpu")
@@ -94,8 +94,8 @@ public final class Cookbook {
                         .step("price", item -> with(item, "priced-" + item.get("itemIndex"), true))
                         // Only this step moves to the "gpu" queue; the workflow default stays "cpu".
                         .step("render-thumbnail", item ->
-                                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")))
-                        .onQueue("gpu"))
+                                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")),
+                                "gpu"))
 
                 .step("summarise", ctx -> with(ctx, "done", true))
                 .build();
@@ -178,7 +178,7 @@ public final class Cookbook {
     }
 
     // ---------------------------------------------------------------------------------------
-    // 8. Everything at once -- step, gate, choose, fork (retry + onQueue branches), forkEach,
+    // 8. Everything at once -- step, gate, choose, fork (retry + per-step queue branches), forkEach,
     //    sleep, awaitSignal + escalation, subWorkflow, doWhile, defaultQueue, and checkpoint,
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
@@ -196,8 +196,7 @@ public final class Cookbook {
                                 .fork(
                                         Branch.of("priority-pack", s -> s
                                                 .step("pack", ctx -> with(ctx, "packed", true),
-                                                        RetryPolicy.fixed(2, Duration.ofMillis(20)))
-                                                .onQueue("packing")),
+                                                        RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing")),
                                         Branch.of("priority-notice", s -> s
                                                 .sleep("brief-hold", Duration.ofMillis(50))
                                                 .effect("notice", ctx -> System.out.println("   [cookbook] VIP order held briefly"))))),

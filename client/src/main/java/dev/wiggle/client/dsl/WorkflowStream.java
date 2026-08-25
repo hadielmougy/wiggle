@@ -53,7 +53,7 @@ public final class WorkflowStream<T> {
 
     /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
     public WorkflowStream<T> step(String name, Activity<T> fn) {
-        return step(name, fn, null);
+        return step(name, fn, (RetryPolicy) null, null);
     }
 
     /**
@@ -62,8 +62,21 @@ public final class WorkflowStream<T> {
      * policy falls back to the workflow default.
      */
     public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry) {
+        return step(name, fn, retry, null);
+    }
+
+    /**
+     * A unit of work pinned to a dedicated {@code queue}, so only workers polling that queue run it
+     * (worker specialisation). A {@code null}/blank queue uses the workflow default.
+     */
+    public WorkflowStream<T> step(String name, Activity<T> fn, String queue) {
+        return step(name, fn, (RetryPolicy) null, queue);
+    }
+
+    /** A unit of work with both an explicit retry policy and a dedicated queue. */
+    public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry, String queue) {
         Objects.requireNonNull(fn, "activity");
-        String id = pipeline.addStep(name, fn, retry);
+        String id = pipeline.addStep(name, fn, retry, queue);
         attach(id);
         lastStepId = id;
         return this;
@@ -71,7 +84,7 @@ public final class WorkflowStream<T> {
 
     /** Alias for {@link #step} that reads well when sequencing ("do this, then that"). */
     public WorkflowStream<T> then(String name, Activity<T> fn) {
-        return step(name, fn, null);
+        return step(name, fn);
     }
 
     /** Alias for {@link #step(String, Activity, RetryPolicy)}. */
@@ -79,15 +92,35 @@ public final class WorkflowStream<T> {
         return step(name, fn, retry);
     }
 
+    /** Alias for {@link #step(String, Activity, String)}. */
+    public WorkflowStream<T> then(String name, Activity<T> fn, String queue) {
+        return step(name, fn, queue);
+    }
+
+    /** Alias for {@link #step(String, Activity, RetryPolicy, String)}. */
+    public WorkflowStream<T> then(String name, Activity<T> fn, RetryPolicy retry, String queue) {
+        return step(name, fn, retry, queue);
+    }
+
     /** Runs {@code fn} on a worker for its side effect only; the context is left unchanged. */
     public WorkflowStream<T> effect(String name, SideEffect<T> fn) {
-        return effect(name, fn, null);
+        return effect(name, fn, (RetryPolicy) null, null);
     }
 
     /** {@link #effect} with an explicit retry policy; a {@code null} policy uses the workflow default. */
     public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry) {
+        return effect(name, fn, retry, null);
+    }
+
+    /** {@link #effect} pinned to a dedicated {@code queue}; a {@code null}/blank queue uses the default. */
+    public WorkflowStream<T> effect(String name, SideEffect<T> fn, String queue) {
+        return effect(name, fn, (RetryPolicy) null, queue);
+    }
+
+    /** {@link #effect} with both an explicit retry policy and a dedicated queue. */
+    public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry, String queue) {
         Objects.requireNonNull(fn, "side effect");
-        String id = pipeline.addEffect(name, fn, retry);
+        String id = pipeline.addEffect(name, fn, retry, queue);
         attach(id);
         lastStepId = id;
         return this;
@@ -95,7 +128,17 @@ public final class WorkflowStream<T> {
 
     /** {@link #gate} whose guard uses the workflow's default retry policy. */
     public WorkflowStream<T> gate(String name, Predicate<T> test) {
-        return gate(name, test, null);
+        return gate(name, test, (RetryPolicy) null, null);
+    }
+
+    /** {@link #gate} with an explicit retry policy for the guard. */
+    public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry) {
+        return gate(name, test, retry, null);
+    }
+
+    /** {@link #gate} evaluated on a dedicated {@code queue}; a {@code null}/blank queue uses the default. */
+    public WorkflowStream<T> gate(String name, Predicate<T> test, String queue) {
+        return gate(name, test, (RetryPolicy) null, queue);
     }
 
     /**
@@ -105,11 +148,11 @@ public final class WorkflowStream<T> {
      *
      * <p>Inside a fork branch the false path short-circuits to the enclosing join instead, so
      * the branch still arrives at the barrier and its siblings are not stranded. A {@code null}
-     * retry policy uses the workflow default.
+     * retry policy uses the workflow default; a {@code null}/blank queue uses the default queue.
      */
-    public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry) {
+    public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry, String queue) {
         Objects.requireNonNull(test, "predicate");
-        String id = pipeline.addGuard(name, test, retry);
+        String id = pipeline.addGuard(name, test, retry, queue);
         attach(id);
 
         if (enclosingJoinId != null) {
@@ -251,7 +294,7 @@ public final class WorkflowStream<T> {
                                      UnaryOperator<WorkflowStream<T>> body) {
         Objects.requireNonNull(condition, "condition");
         Sub<T> body0 = subStream(body, enclosingJoinId, "doWhile body");
-        String condId = pipeline.addGuard(conditionName, condition, null);
+        String condId = pipeline.addGuard(conditionName, condition, null, null);
 
         // Enter at the body; body tail feeds the condition; true loops, false continues onward.
         if (openNodes.isEmpty()) startSink.accept(body0.start()); else wireOpenEndsTo(body0.start());
@@ -283,7 +326,7 @@ public final class WorkflowStream<T> {
         String[] guardIds = new String[guards];
         for (int i = 0; i < guards; i++) {
             Case<T> c = all.get(i);
-            guardIds[i] = pipeline.addGuard(c.name(), c.guard(), null);
+            guardIds[i] = pipeline.addGuard(c.name(), c.guard(), null, null);
         }
 
         // Enter at the first guard, then take over the open-end bookkeeping ourselves.
@@ -359,16 +402,7 @@ public final class WorkflowStream<T> {
         return new Sub<>(start[0], tail);
     }
 
-    /** Routes the step that was just added to a dedicated queue (for worker specialisation). */
-    public WorkflowStream<T> onQueue(String queue) {
-        if (lastStepId == null) {
-            throw new IllegalStateException("onQueue() must directly follow step(), effect() or gate()");
-        }
-        pipeline.setQueue(lastStepId, queue);
-        return this;
-    }
-
-    /** Sets the queue used by every subsequently defined step. */
+    /** Sets the queue used by every subsequently defined step (per-step {@code queue} overrides it). */
     public WorkflowStream<T> defaultQueue(String queue) {
         pipeline.defaultQueue(queue);
         return this;
