@@ -6,7 +6,7 @@
 #
 #   docker login                       # once, needs push access to the image repo
 #   scripts/docker-release.sh          # tag = the project version (build.gradle.kts)
-#   scripts/docker-release.sh 2.1.3    # explicit tag
+#   scripts/docker-release.sh 2.1.4    # explicit tag
 #   WIGGLE_IMAGE=myrepo/wiggle scripts/docker-release.sh   # override the image name
 #
 # Set PUSH=false to build without pushing (single-arch, loaded into the local daemon) for a smoke test.
