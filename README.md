@@ -184,12 +184,44 @@ The context is your workflow's data. It's the same type from the first step to t
 
 - **Typed records** — `Workflow.define("name", ContextCodec.records(Order.class))`. Your
   steps take and return an `Order`. Records are immutable and serialize cleanly.
+- **Versioned records** — `VersionedContextCodec.builder(Order.class, 3)…`. Same as above,
+  but the context is wrapped in a `{_schema, _v, data}` envelope so the record's shape can
+  evolve safely. See [Evolving the context schema](#evolving-the-context-schema).
 - **JSON maps** — `Workflow.defineJson("name")`. Steps take and return a
   `Map<String, Object>`. Handy when you don't want a dedicated type.
 
 > **Parallel branches merge automatically.** Each step writes back only the fields it
 > *changed*, so branches that touch different fields merge cleanly. If two branches write
 > the same field, the later write wins.
+
+### Evolving the context schema
+
+A plain `ContextCodec.records(Order.class)` stores the record's fields directly. If you later
+add, remove, rename, or retype a field, **already-running instances** were written under the old
+shape — they'll be silently defaulted, lose data, or fail to decode, because nothing tracks which
+version their context was written at.
+
+`VersionedContextCodec` fixes this. It wraps the context in a small envelope
+(`{"_schema":"order","_v":3,"data":{…}}`) and migrates older data forward on read, so your steps
+only ever see the current shape:
+
+```java
+var codec = VersionedContextCodec.builder(Order.class, /* current version */ 3)
+    .schema("order")
+    .upcast(1, m -> { m.put("currency", "USD"); return m; })   // v1 → v2: add a field
+    .upcast(2, m -> { m.put("total", m.remove("amount")); return m; })  // v2 → v3: rename
+    .build();
+
+Blueprint<Order> orders = Workflow.define("order-fulfilment", codec) …;
+```
+
+- **Upcast to current.** On decode, data written at an older `_v` runs through the `upcast` chain
+  until it matches the current record; on the next write the instance is re-stored at the current
+  version. Bare, pre-envelope contexts are read as version 1, so existing instances upgrade
+  transparently — no flag day.
+- **Condition on the version.** Inside a step, `ContextVersion.current()` returns the version the
+  context was persisted at, so a handler can treat older instances specially. For an origin marker
+  that survives every step, stamp it into the data from an upcast (it then persists as a normal field).
 
 ### Branching: `choose` vs `fork`
 

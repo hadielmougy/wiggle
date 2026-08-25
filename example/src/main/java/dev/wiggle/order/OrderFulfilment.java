@@ -3,9 +3,10 @@ package dev.wiggle.order;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Branch;
 import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.core.ContextCodec;
+import dev.wiggle.core.ContextVersion;
 import dev.wiggle.core.ExecutionMode;
 import dev.wiggle.core.RetryPolicy;
+import dev.wiggle.core.VersionedContextCodec;
 
 import java.time.Duration;
 
@@ -27,8 +28,20 @@ public final class OrderFulfilment {
         return v == null || v.isBlank() ? ExecutionMode.SERVER : ExecutionMode.valueOf(v.trim());
     }
 
+    /**
+     * A versioned context so the {@link Order} record can evolve without corrupting in-flight
+     * instances. Current schema is v2 ({@code currency} was added); an instance stored under v1
+     * is upcast on read -- its data defaulted here -- so a v2 worker finishes it cleanly.
+     */
+    private static VersionedContextCodec<Order> codec() {
+        return VersionedContextCodec.builder(Order.class, 2)
+                .schema("order-fulfilment")
+                .upcast(1, m -> { m.putIfAbsent("currency", "USD"); return m; })
+                .build();
+    }
+
     public static Blueprint<Order> blueprint() {
-        return Workflow.define("order-fulfilment", ContextCodec.records(Order.class)).execution(ExecutionMode.SERVER)
+        return Workflow.define("order-fulfilment", codec()).execution(ExecutionMode.SERVER)
 
                 .step("validate", order -> {
                     if (order.customer() == null || order.customer().isBlank()) {
@@ -68,6 +81,8 @@ public final class OrderFulfilment {
 
                 .effect("audit", order -> System.out.println(
                         "   [worker] " + order.orderId() + " -> " + order.status()
+                                + " " + order.amount() + " " + order.currency()
+                                + " (context schema v" + ContextVersion.current() + ")"
                                 + " payment=" + order.paymentRef() + " tracking=" + order.trackingLabel()))
 
                 .build();
