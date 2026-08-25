@@ -93,6 +93,27 @@ pre.err { color: var(--err); }
 .legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
 
 .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 8px; padding: 10px 14px; box-shadow: 0 6px 24px #0008; max-width: 380px; }
+  border-radius: 8px; padding: 10px 14px; box-shadow: 0 6px 24px #0008; max-width: 380px; z-index: 60; }
 .toast.err { border-color: #6a2b2b; color: var(--err); }
 .toast.ok { border-color: #1f5a3a; }
+
+/* floating window (the flow-diagram / detail popup) */
+.fw-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: #0009; }
+.fw-overlay.min { background: transparent; pointer-events: none; align-items: flex-end; justify-content: flex-end; padding: 16px; }
+.fw-window { display: flex; flex-direction: column; width: min(920px, 92vw); max-height: 86vh;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: 0 16px 56px #000b; }
+.fw-window.max { width: 96vw; height: 92vh; max-height: 92vh; }
+.fw-window.min { width: 340px; }
+.fw-overlay.min .fw-window { pointer-events: auto; }
+.fw-titlebar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--line); background: var(--panel2); }
+.fw-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fw-controls { margin-left: auto; display: flex; gap: 4px; flex: none; }
+.fw-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px;
+  padding: 0; line-height: 1; font-size: 13px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; }
+.fw-btn:hover { color: var(--fg); background: var(--panel); border-color: var(--line); }
+.fw-close:hover { color: var(--err); border-color: #6a2b2b; }
+.fw-body { overflow: auto; }
+.fw-window.max .fw-body { flex: 1; }

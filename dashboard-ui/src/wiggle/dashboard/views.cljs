@@ -78,15 +78,31 @@
                         (on-send p)))}
         "deliver '" signal-name "'"]])))
 
-;; ---------------------------------------------------------------- detail
+;; ---------------------------------------------------------------- floating window
 
-(defn detail-panel []
+(defn floating-window
+  "A modal popup with minimize / maximize / close chrome. `opts` is {:title hiccup :on-close fn};
+   the remaining args are the window body. The window's mode (:normal|:max|:min) lives in app state."
+  [{:keys [title on-close]} & body]
+  (let [mode (get-in @db [:window :mode] :normal)
+        cls  (name mode)]
+    [:div.fw-overlay {:class cls}
+     [:div.fw-window {:class cls}
+      [:div.fw-titlebar
+       [:div.fw-title title]
+       [:div.fw-controls
+        [:button.fw-btn {:title "Minimize" :on-click #(st/toggle-window-mode! :min)} "—"]
+        [:button.fw-btn {:title "Maximize" :on-click #(st/toggle-window-mode! :max)} "▢"]
+        [:button.fw-btn.fw-close {:title "Close" :on-click on-close} "✕"]]]
+      (when (not= mode :min)
+        (into [:div.fw-body] body))]]))
+
+;; ---------------------------------------------------------------- instance detail
+
+(defn detail-body []
   (let [{:keys [detail selected graph graph-for]} @db
         i (:instance detail)]
-    [:section.panel
-     [:h2 "Detail" (when i [:span.muted {:style {:font-weight 400}}
-                            " · " [:code (:id i)]])]
-     (cond
+    (cond
        (not selected) [:div.empty "select an instance to trace it"]
        (not i)        [:div.empty "loading…"]
        :else
@@ -130,7 +146,7 @@
             [:div.empty "no tokens"])
 
           [:h2 {:style {:padding "10px 14px 0" :margin 0 :fontSize 12 :color "var(--muted)"}} "Context"]
-          [:pre {:style {:margin "8px 14px 14px"}} (u/pretty-json (:context i))]]))]))
+          [:pre {:style {:margin "8px 14px 14px"}} (u/pretty-json (:context i))]]))))
 
 ;; ---------------------------------------------------------------- instances tab
 
@@ -160,23 +176,28 @@
         (for [i instances]
           ^{:key (:id i)}
           [:tr {:class (when (= (:id i) selected) "sel")
-                :on-click #(act/load-detail! (:id i))}
+                :on-click #(do (act/load-detail! (:id i)) (st/open-window! :detail))}
            [:td [:code (:id i)]] [:td (:workflow i)]
            [:td [badge (:status i)]] [:td.muted (u/ago (:updatedAt i)) " ago"]])]])))
 
 (defn instances-tab []
-  [:div.cols
+  [:div
    [:section.panel
     [:h2 "Instances" [:span.count (count (:instances @db))]]
     [instances-toolbar]
     [instances-table]]
-   [detail-panel]])
+   (when (= :detail (get-in @db [:window :kind]))
+     (let [i (get-in @db [:detail :instance])]
+       [floating-window {:title [:span "Detail"
+                                 (when i [:span.muted {:style {:fontWeight 400}} " · " [:code (:id i)]])]
+                         :on-close st/close-window!}
+        [detail-body]]))])
 
 ;; ---------------------------------------------------------------- workflows tab
 
 (defn workflows-tab []
   (let [{:keys [workflows graph graph-for]} @db]
-    [:div.cols.wide-left
+    [:div
      [:section.panel
       [:h2 "Workflows" [:span.count (count workflows)]]
       (if-not (seq workflows)
@@ -185,14 +206,16 @@
                  (for [w workflows]
                    ^{:key w}
                    [:tr {:class (when (= w graph-for) "sel")
-                         :on-click #(act/load-graph! w)}
+                         :on-click #(do (act/load-graph! w) (st/open-window! :diagram))}
                     [:td w]])]])]
-     [:section.panel
-      [:h2 "Diagram" (when graph-for [:span.muted {:style {:font-weight 400}} " · " graph-for
-                                      " v" (:version graph)])]
-      (if graph
-        [diagram/diagram graph {:selected nil}]
-        [:div.empty "select a workflow to see its graph"])]]))
+     (when (= :diagram (get-in @db [:window :kind]))
+       [floating-window {:title [:span "Diagram"
+                                 (when graph-for [:span.muted {:style {:fontWeight 400}} " · " graph-for
+                                                  " v" (:version graph)])]
+                         :on-close st/close-window!}
+        (if graph
+          [diagram/diagram graph {:selected nil}]
+          [:div.empty "select a workflow to see its graph"])])]))
 
 ;; ---------------------------------------------------------------- schedules tab
 

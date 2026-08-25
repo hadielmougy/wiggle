@@ -31,7 +31,9 @@ services:
     #   - "5433:5432"
 
   wiggle:
-    image: hadielmougy/wiggle:2.1.4            # the latest release; or `build: .` to build locally
+    #image: hadielmougy/wiggle:2.1.4
+    build: .                                    # build the image from this checkout (your local code)
+    image: wiggle:local                         # tag for the local build; for the release use instead: image: hadielmougy/wiggle:2.1.4
     depends_on:
       postgres:
         condition: service_healthy             # wait for the DB before starting
