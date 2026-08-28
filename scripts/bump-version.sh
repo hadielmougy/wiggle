@@ -42,7 +42,9 @@ perl -pi -e 's/^(\s*version = ")\Q'"$CURRENT"'\E(".*)$/${1}'"$NEW"'${2}/' build.
 # Everywhere else the current version only appears as the Wiggle image tag, the Maven Central
 # coordinates, or a docs badge -- all of which move together -- so an exact-string replace is safe.
 # (Files listed explicitly rather than auto-discovered, so the blast radius is always obvious.)
-DOC_FILES=(Dockerfile docker-compose.full.yml README.md docs/onboarding.md scripts/docker-release.sh)
+DOC_FILES=(Dockerfile docker-compose.full.yml README.md docs/onboarding.md scripts/docker-release.sh
+    docs/workflow-yaml.md HomebrewFormula/wiggle.rb scripts/cli-release.sh
+    cli/src/main/java/dev/wiggle/cli/Wiggle.java)
 for f in "${DOC_FILES[@]}"; do
     [ -f "$f" ] || { echo "  (skipping missing $f)"; continue; }
     perl -pi -e 's/\Q'"$CURRENT"'\E/'"$NEW"'/g' "$f"
