@@ -18,6 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -78,16 +79,28 @@ class MySqlStoreTest {
             int workers = 6;
             ExecutorService pool = Executors.newFixedThreadPool(workers);
             CountDownLatch go = new CountDownLatch(1);
+            // Drain until empty rather than for a fixed number of rounds: under SKIP LOCKED an empty
+            // claim usually means peers momentarily hold the remaining rows, not that the queue is
+            // drained -- so workers keep claiming (backing off briefly on an empty batch) until every
+            // token is accounted for, or a generous deadline trips. This keeps the exclusivity check
+            // exact without depending on how fast the burst of contention clears.
+            AtomicInteger remaining = new AtomicInteger(tokens);
+            long deadlineNanos = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
             List<Future<List<String>>> futures = new java.util.ArrayList<>();
             for (int w = 0; w < workers; w++) {
                 String workerId = "w" + w;
                 futures.add(pool.submit(() -> {
                     go.await();
                     List<String> mine = new java.util.ArrayList<>();
-                    for (int r = 0; r < 20; r++) {
+                    while (remaining.get() > 0 && System.nanoTime() < deadlineNanos) {
                         var claimed = storage.inTx(tx -> tx.claimTasks(workerId, null, 5,
                                 System.currentTimeMillis(), System.currentTimeMillis() + 30_000));
+                        if (claimed.isEmpty()) {
+                            Thread.sleep(2);   // no rows free right now; let a peer's claim commit, then retry
+                            continue;
+                        }
                         claimed.forEach(t -> mine.add(t.id));
+                        remaining.addAndGet(-claimed.size());
                     }
                     return mine;
                 }));

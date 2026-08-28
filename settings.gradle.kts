@@ -13,6 +13,5 @@ include(
     "client",
     "dist",
     "example",
-    "tests",
-    "clients:python"
+    "tests"
 )

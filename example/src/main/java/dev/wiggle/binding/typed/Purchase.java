@@ -1,10 +1,9 @@
-package dev.wiggle.polyglot.typed;
+package dev.wiggle.binding.typed;
 
 /**
- * A typed context for the polyglot flow — a plain Java record rather than a JSON map. On the wire it
- * still travels as the same JSON object ({@code {"orderId":…, "quantity":…, …}}), which is exactly
- * why a typed Java handler and an untyped Python ({@code dict}) handler can serve different steps of
- * the same instance.
+ * A typed context for the flow — a plain Java record rather than a JSON map. On the wire it still
+ * travels as the same JSON object ({@code {"orderId":…, "quantity":…, …}}), so a typed handler and an
+ * untyped (map) handler can serve different steps of the same instance interchangeably.
  */
 public record Purchase(String orderId, int quantity, String status, String paymentRef) {
 

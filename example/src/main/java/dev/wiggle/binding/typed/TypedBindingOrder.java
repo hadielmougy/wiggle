@@ -1,21 +1,21 @@
-package dev.wiggle.polyglot.typed;
+package dev.wiggle.binding.typed;
 
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.core.ContextCodec;
 
 /**
- * The topology of the typed order flow, authored once. Same idea as {@code polyglot.PolyglotOrder},
+ * The topology of the typed order flow, authored once. Same idea as {@code binding.BindingOrder},
  * but the context is a typed {@link Purchase} record via {@link ContextCodec#records} instead of a
- * JSON map. The steps carry no implementation here — they are bound by name, typed on the Java side
- * ({@code Worker.handle(wf, step, codec, fn)}) and as a dict on the Python side.
+ * JSON map. The steps carry no implementation here — they are bound by name, with typed handlers
+ * ({@code Worker.handle(wf, step, codec, fn)}).
  */
-public final class TypedPolyglotOrder {
+public final class TypedBindingOrder {
 
     public static final String NAME = "typed-order";
     public static final String PAYMENTS_QUEUE = "payments";
 
-    private TypedPolyglotOrder() {}
+    private TypedBindingOrder() {}
 
     public static ContextCodec<Purchase> codec() {
         return ContextCodec.records(Purchase.class);
@@ -25,7 +25,7 @@ public final class TypedPolyglotOrder {
         return Workflow.define(NAME, codec())
                 .step("validate")                                    // implemented by name, elsewhere
                 .gate("in-stock", p -> p.quantity() > 0)             // predicate node; a worker supplies it
-                .step("charge", PAYMENTS_QUEUE)                      // routed to the payments queue (Python)
+                .step("charge", PAYMENTS_QUEUE)                      // routed to the payments queue
                 .effect("notify")
                 .build();
     }
