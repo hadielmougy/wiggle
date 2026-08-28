@@ -6,10 +6,18 @@ import dev.wiggle.client.worker.Worker;
 import dev.wiggle.core.NodeKind;
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.*;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
 import io.grpc.ChannelCredentials;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ForwardingClientCall;
+import io.grpc.ForwardingClientCallListener;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.TlsChannelCredentials;
@@ -19,8 +27,17 @@ import java.util.concurrent.TimeUnit;
 
 public final class WiggleClient implements AutoCloseable {
 
+    private static final System.Logger LOG = System.getLogger(WiggleClient.class.getName());
+
     private final ManagedChannel channel;
     private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
+    /**
+     * A wait-for-ready variant for the worker-critical RPCs (register, get-workflow, poll, complete,
+     * fail, heartbeat): these wait for the server to become reachable instead of failing fast with
+     * UNAVAILABLE, so a worker rides out a cold start / rolling restart / reschedule without crashing.
+     * Query calls use the plain {@link #stub} and stay fail-fast.
+     */
+    private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub readyStub;
 
     /** Connects with TLS if {@code WIGGLE_TLS_*} is configured, otherwise plaintext. */
     public WiggleClient(String target) {
@@ -43,8 +60,11 @@ public final class WiggleClient implements AutoCloseable {
      * still overrides the default trust and adds a client certificate for mTLS.
      */
     public WiggleClient(String target, Tls.Options tls, boolean requireTls) {
-        this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls, requireTls)).build();
+        this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls, requireTls))
+                .intercept(new ErrorLogInterceptor())
+                .build();
         this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
+        this.readyStub = stub.withWaitForReady();
     }
 
     private static ChannelCredentials channelCredentials(Tls.Options tls, boolean requireTls) {
@@ -61,7 +81,7 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public void register(Blueprint<?> blueprint) {
-        call(() -> stub.registerWorkflow(WorkflowDefinition.newBuilder()
+        call(() -> readyStub.registerWorkflow(WorkflowDefinition.newBuilder()
                 .setDefinition(ProtoJson.toStruct(blueprint.definition().toJson()))
                 .build()));
     }
@@ -72,7 +92,7 @@ public final class WiggleClient implements AutoCloseable {
      * never registered. Used by {@link Worker#handle} reconciliation.
      */
     public dev.wiggle.core.WorkflowDefinition getWorkflow(String name) {
-        WorkflowDefinition def = call(() -> stub.getWorkflow(
+        WorkflowDefinition def = call(() -> readyStub.getWorkflow(
                 GetWorkflowRequest.newBuilder().setName(name).build()));
         return dev.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(def.getDefinition()));
     }
@@ -150,7 +170,7 @@ public final class WiggleClient implements AutoCloseable {
                 .setLeaseMillis(leaseMillis)
                 .setWaitMillis(waitMillis)
                 .build();
-        TaskList res = call(() -> stub.pollTasks(req));
+        TaskList res = call(() -> readyStub.pollTasks(req));
         List<dev.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
         for (dev.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(toTaskActivation(t));
         return new PollResult(out, res.getRetryAfterMillis());
@@ -161,11 +181,11 @@ public final class WiggleClient implements AutoCloseable {
                 .setTaskId(taskId)
                 .setLeaseOwner(leaseOwner);
         if (result != null) req.setResult(ProtoJson.toValue(result));
-        call(() -> stub.completeTask(req.build()));
+        call(() -> readyStub.completeTask(req.build()));
     }
 
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
-        call(() -> stub.failTask(TaskFailureRequest.newBuilder()
+        call(() -> readyStub.failTask(TaskFailureRequest.newBuilder()
                 .setTaskId(taskId)
                 .setLeaseOwner(leaseOwner)
                 .setMessage(message)
@@ -212,7 +232,7 @@ public final class WiggleClient implements AutoCloseable {
                                long nextFireAt, long createdAt) {}
 
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {
-        call(() -> stub.heartbeatTask(HeartbeatRequest.newBuilder()
+        call(() -> readyStub.heartbeatTask(HeartbeatRequest.newBuilder()
                 .setTaskId(taskId)
                 .setLeaseOwner(leaseOwner)
                 .setExtendMillis(extendMillis)
@@ -301,6 +321,38 @@ public final class WiggleClient implements AutoCloseable {
             channel.awaitTermination(1, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Logs every failed unary RPC (method, status code, description) in one place, so a caller sees
+     * control-plane errors even when it swallows the exception. CANCELLED (worker shutdown) is never
+     * logged; NOT_FOUND/UNAVAILABLE -- expected while reconcile waits for a workflow to register, or a
+     * server is not yet up -- log at DEBUG; everything else at WARNING.
+     */
+    private static final class ErrorLogInterceptor implements ClientInterceptor {
+        @Override
+        public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(
+                MethodDescriptor<ReqT, RespT> method, CallOptions callOptions, Channel next) {
+            return new ForwardingClientCall.SimpleForwardingClientCall<>(next.newCall(method, callOptions)) {
+                @Override
+                public void start(ClientCall.Listener<RespT> responseListener, Metadata headers) {
+                    super.start(new ForwardingClientCallListener.SimpleForwardingClientCallListener<>(responseListener) {
+                        @Override
+                        public void onClose(Status status, Metadata trailers) {
+                            Status.Code code = status.getCode();
+                            if (!status.isOk() && code != Status.Code.CANCELLED) {
+                                System.Logger.Level level =
+                                        (code == Status.Code.NOT_FOUND || code == Status.Code.UNAVAILABLE)
+                                                ? System.Logger.Level.DEBUG : System.Logger.Level.WARNING;
+                                LOG.log(level, () -> "rpc " + method.getBareMethodName() + " failed: " + code
+                                        + (status.getDescription() != null ? ": " + status.getDescription() : ""));
+                            }
+                            super.onClose(status, trailers);
+                        }
+                    }, headers);
+                }
+            };
         }
     }
 

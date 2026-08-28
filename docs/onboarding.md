@@ -68,6 +68,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `dist` | runnable standalone server bundling every backend (what the Docker image runs) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
+| `cli` | the `wiggle` command-line tool: compile a YAML workflow and register it (see [workflow-yaml.md](workflow-yaml.md)) | *(not published)* |
 
 Published under group `io.github.hadielmougy`, version **2.1.5** (the runnable `dist` module is not
 published). The server core is database-agnostic; it builds its store from an injected
