@@ -18,7 +18,7 @@ import java.util.concurrent.Callable;
  * (see {@code docs/workflow-yaml.md}): {@code validate} compiles it offline, {@code register} sends
  * it to a server. Step handlers are bound separately, by name, on workers.
  */
-@Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.4",
+@Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.5",
         subcommands = {Wiggle.Validate.class, Wiggle.Register.class},
         description = "Author and register Wiggle workflows from declarative YAML.")
 public final class Wiggle implements Runnable {

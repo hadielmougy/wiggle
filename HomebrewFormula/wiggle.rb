@@ -10,7 +10,7 @@
 class Wiggle < Formula
   desc "CLI to author and register Wiggle workflow definitions from YAML"
   homepage "https://github.com/hadielmougy/wiggle"
-  url "https://github.com/hadielmougy/wiggle/releases/download/v2.1.4/wiggle-2.1.4.tar"
+  url "https://github.com/hadielmougy/wiggle/releases/download/v2.1.5/wiggle-2.1.5.tar"
   sha256 "REPLACE_WITH_TAR_SHA256"  # from scripts/cli-release.sh
   license "Apache-2.0"
 

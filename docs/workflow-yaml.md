@@ -290,7 +290,7 @@ The CLI is a JVM application, so it needs **Java 21** on the machine. Three ways
 and put `wiggle` on your `PATH`:
 
 ```bash
-V=2.1.4
+V=2.1.5
 curl -L "https://github.com/hadielmougy/wiggle/releases/download/v$V/wiggle-$V.tar" | tar -x
 sudo ln -sf "$PWD/wiggle-$V/bin/wiggle" /usr/local/bin/wiggle
 wiggle validate order.yaml
