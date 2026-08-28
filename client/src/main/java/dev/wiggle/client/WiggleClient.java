@@ -33,15 +33,25 @@ public final class WiggleClient implements AutoCloseable {
      * With neither, the channel is plaintext.
      */
     public WiggleClient(String target, Tls.Options tls) {
-        this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls)).build();
+        this(target, tls, tls.any());
+    }
+
+    /**
+     * Connects to {@code target}, forcing TLS when {@code requireTls} is set even if {@code tls}
+     * carries no stores -- so a server whose certificate chains to a CA already in the JVM default
+     * trust store can be reached without configuring a truststore. A configured truststore/keystore
+     * still overrides the default trust and adds a client certificate for mTLS.
+     */
+    public WiggleClient(String target, Tls.Options tls, boolean requireTls) {
+        this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls, requireTls)).build();
         this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
     }
 
-    private static ChannelCredentials channelCredentials(Tls.Options tls) {
-        if (!tls.any()) return InsecureChannelCredentials.create();
+    private static ChannelCredentials channelCredentials(Tls.Options tls, boolean requireTls) {
+        if (!requireTls && !tls.any()) return InsecureChannelCredentials.create();
         TlsChannelCredentials.Builder b = TlsChannelCredentials.newBuilder();
-        if (tls.hasTrustStore()) b.trustManager(Tls.trustManagers(tls));
-        if (tls.hasKeyStore()) b.keyManager(Tls.keyManagers(tls));   // client cert for mTLS
+        if (tls.hasTrustStore()) b.trustManager(Tls.trustManagers(tls));   // else the JVM default trust store
+        if (tls.hasKeyStore()) b.keyManager(Tls.keyManagers(tls));         // client cert for mTLS
         return b.build();
     }
 

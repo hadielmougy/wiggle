@@ -26,6 +26,9 @@ docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me
 > Want to see every operator combined in runnable code? See the
 > **[DSL cookbook](docs/dsl-cookbook.md)** — eight workflows, run them all with
 > `./gradlew :example:runCookbook`.
+>
+> Prefer not to write Java to define a workflow? Author the topology as a YAML file and register it
+> with the **`wiggle` CLI** — see **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
 
 ---
 
@@ -366,6 +369,10 @@ A record and a map are the **same JSON on the wire**, so a typed handler and an 
 different steps of the same instance interchangeably — binding is by step name, not by type.
 [`example:runTypedBinding`](example/src/main/java/dev/wiggle/binding/typed/TypedBindingDemo.java)
 is the same demo with a typed `Purchase` context.
+
+Since the topology is authored once and implemented by name, it doesn't have to be authored in Java
+at all — describe it as a **[YAML file](docs/workflow-yaml.md)** and register it with the `wiggle`
+CLI, then bind handlers by name exactly as above.
 
 ---
 

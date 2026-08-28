@@ -64,3 +64,21 @@ bundle to the Central Portal.
 
 Artifacts appear on Central within ~15–30 minutes and sync to search indexes over the
 following hours.
+
+## Releasing the `wiggle` CLI
+
+The CLI ships as a self-contained archive attached to the GitHub Release (not to Maven Central).
+It's a JVM app, so users need Java 21 on their machine.
+
+1. After tagging `vx.y.z` and creating the GitHub Release, build the archives and print their
+   checksums:
+   ```sh
+   scripts/cli-release.sh                 # -> cli/build/distributions/wiggle-x.y.z.{zip,tar} + SHA-256
+   UPLOAD=true scripts/cli-release.sh     # also attaches them to release vx.y.z (needs the gh CLI)
+   ```
+2. Update the Homebrew formula in [`HomebrewFormula/wiggle.rb`](HomebrewFormula/wiggle.rb): bump the
+   `url` version and paste the **`.tar` SHA-256** printed above. Commit it (and mirror it into the
+   `homebrew-tap` repo if you keep one).
+
+Users then install per the "Installing the CLI" section of
+[docs/workflow-yaml.md](docs/workflow-yaml.md).
