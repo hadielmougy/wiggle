@@ -5,6 +5,7 @@ import dev.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -331,7 +332,7 @@ public final class WorkflowStream<T> {
     @SafeVarargs
     public final WorkflowStream<T> choose(Case<T>... cases) {
         List<Case<T>> all = new ArrayList<>(cases.length);
-        for (Case<T> c : cases) all.add(c);
+        Collections.addAll(all, cases);
         boolean hasDefault = validateChoose(all);
         int guards = hasDefault ? all.size() - 1 : all.size();
 

@@ -2,7 +2,7 @@ package dev.wiggle.tests;
 
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.core.InstanceView;
 import dev.wiggle.core.Json;

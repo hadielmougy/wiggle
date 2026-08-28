@@ -1,6 +1,8 @@
-package dev.wiggle.client.worker;
+package dev.wiggle.client;
 
 import dev.wiggle.client.dsl.Blueprint;
+import dev.wiggle.client.worker.PollResult;
+import dev.wiggle.client.worker.Worker;
 import dev.wiggle.core.NodeKind;
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.*;

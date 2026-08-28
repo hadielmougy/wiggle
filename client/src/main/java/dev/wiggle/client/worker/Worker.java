@@ -1,5 +1,6 @@
 package dev.wiggle.client.worker;
 
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.dsl.ActivityHandler;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.core.*;
@@ -289,6 +290,7 @@ public final class Worker implements AutoCloseable {
             // precedence over the normal idle backoff.
             long backoff = result.retryAfterMillis() > 0 ? result.retryAfterMillis()
                     : options.idleBackoff().toMillis();
+            LOG.log(System.Logger.Level.WARNING,"pool request is rejected by server: [backoff:" + backoff+"]");
             sleep(backoff);
             return;
         }

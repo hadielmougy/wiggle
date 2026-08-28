@@ -1,6 +1,6 @@
 package dev.wiggle.order;
 
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.core.Json;
 
 /** Prints cluster membership as JSON. Usage: ClusterStatus [target] (default localhost:8080). */
