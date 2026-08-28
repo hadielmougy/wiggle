@@ -1,4 +1,4 @@
-package dev.wiggle.polyglot;
+package dev.wiggle.binding;
 
 import dev.wiggle.client.dsl.Activity;
 import dev.wiggle.client.dsl.Blueprint;
@@ -10,21 +10,20 @@ import java.util.Map;
 
 /**
  * The topology of a small order flow, authored once. The graph is registered on the server; the
- * step <em>implementations</em> are attached separately, by name, from whatever language owns them
- * (see {@link PolyglotDemo} for the Java side and {@code clients/python/examples/polyglot_worker.py}
- * for the Python payments worker). Nothing here re-declares the flow in two places -- this is the
- * single source of truth for its shape and its version.
+ * step <em>implementations</em> are attached separately, by name, by whichever worker owns them
+ * (see {@link BindingDemo}). Nothing here re-declares the flow -- this is the single source of
+ * truth for its shape and its version.
  *
- * <p>The context is a plain JSON map so Java and Python handlers exchange it verbatim. Steps sit on
- * the default {@code polyglot-order} queue except {@code charge}, which is routed to {@code payments}
- * -- the queue the Python worker will poll once it binds {@code charge} by name.
+ * <p>The context is a plain JSON map. Steps sit on the default {@code binding-order} queue except
+ * {@code charge}, which is routed to {@code payments} -- the queue a dedicated payments worker polls
+ * once it binds {@code charge} by name.
  */
-public final class PolyglotOrder {
+public final class BindingOrder {
 
-    public static final String NAME = "polyglot-order";
+    public static final String NAME = "binding-order";
     public static final String PAYMENTS_QUEUE = "payments";
 
-    private PolyglotOrder() {}
+    private BindingOrder() {}
 
     static Map<String, Object> put(Object ctx, String key, Object value) {
         Map<String, Object> next = new LinkedHashMap<>(Json.asObject(ctx));

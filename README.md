@@ -26,9 +26,6 @@ docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me
 > Want to see every operator combined in runnable code? See the
 > **[DSL cookbook](docs/dsl-cookbook.md)** — eight workflows, run them all with
 > `./gradlew :example:runCookbook`.
->
-> Prefer Python? There's an idiomatic **[Python client + worker](clients/python/README.md)** that
-> speaks the same control plane (Java and Python workers interoperate).
 
 ---
 
@@ -316,55 +313,46 @@ execute it — a local-execution chain hands the step over automatically at the 
 
 ---
 
-## Polyglot: define the flow once, implement steps in any language
+## Name-only binding: define the flow once, implement steps by name
 
 The server drives the graph, and workers dispatch by activity name (`"<workflow>#<step>"`) — so
-the topology only needs to live in **one** place. Register the workflow once (in any client), then
-attach step implementations **by name** from wherever each step belongs. A Java team and a Python
-team can own different steps of the same flow without either re-declaring it.
+the topology only needs to live in **one** place. Register the workflow once, then attach step
+implementations **by name** from wherever each step belongs. Independent workers (different teams,
+different deploys) can own different steps of the same flow without any of them re-declaring it.
 
 ```java
 // The order team authors and registers the graph — topology only.
 client.register(OrderFulfilment.blueprint());
 
-// A worker that never saw that blueprint implements two steps, by (workflow, step) name:
+// A worker that never saw that blueprint implements some steps, by (workflow, step) name:
 new Worker(client, "fulfilment-worker")
         .handle("order-fulfilment", "validate", ctx -> put(ctx, "status", "VALIDATED"))
         .handleGate("order-fulfilment", "in-stock", ctx -> qty(ctx) > 0)
         .handleEffect("order-fulfilment", "notify", ctx -> email(ctx))
         .start();   // reconciles against the registered graph before polling
+
+// A separate worker owns just `charge` — on its own queue:
+new Worker(client, "payments-worker")
+        .handle("order-fulfilment", "charge", ctx -> put(ctx, "paymentRef", auth(ctx)))
+        .start();
 ```
 
-```python
-# The payments team implements just `charge`, in Python, on the same flow:
-Worker(client, "payments-worker").handle(
-    "order-fulfilment", "charge",
-    lambda o: {**o, "paymentRef": f"auth-{o['orderId']}"}
-).start()
-```
-
-`handle` (task), `handleGate` / `handle_gate` (predicate), and `handleEffect` / `handle_effect`
-(side effect) bind by name. On `start()` the worker **reconciles** its bindings against the graph
-the server holds: it verifies each step exists and is the right kind (a mistyped name or a
-task-bound-as-gate fails fast with the available step names), and it **discovers which queue each
-step polls** — so a name-only worker needs no queue configuration. Steps this worker doesn't
-implement are simply served by whoever does.
+`handle` (task), `handleGate` (predicate), and `handleEffect` (side effect) bind by name. On
+`start()` the worker **reconciles** its bindings against the graph the server holds: it verifies each
+step exists and is the right kind (a mistyped name or a task-bound-as-gate fails fast with the
+available step names), and it **discovers which queue each step polls** — so a name-only worker needs
+no queue configuration. Steps a worker doesn't implement are simply served by whoever does.
 
 One constraint: the graph must be **registered before** a name-only worker starts, or it fails fast.
-Register it as a deploy step; for local/dev, `WorkerOptions.withAwaitRegistration(Duration)` (Java) or
-`Worker(..., await_registration_s=…)` (Python) rides out the startup race.
+Register it as a deploy step; for local/dev, `WorkerOptions.withAwaitRegistration(Duration)` rides out
+the startup race.
 
-See it run across two languages: [`example:runPolyglot`](example/src/main/java/dev/wiggle/polyglot/PolyglotDemo.java)
-starts a server, authors the flow, and serves every step but `charge` from Java — then completes as
-soon as the [Python payments worker](clients/python/examples/polyglot_worker.py) supplies it:
+See it run: [`example:runBinding`](example/src/main/java/dev/wiggle/binding/BindingDemo.java)
+authors the flow and serves it from two independent workers bound purely by name — a fulfilment
+worker and a payments-queue worker — then submits an order and prints the result.
 
-```bash
-./gradlew :example:runPolyglot                       # terminal 1: server + author + Java worker + an order
-python clients/python/examples/polyglot_worker.py    # terminal 2: the Python worker for `charge`
-```
-
-**Typed contexts too.** The Java side can work on a **record** rather than a JSON map — pass a
-`ContextCodec` to `handle` and your handler is typed:
+**Typed contexts too.** A handler can work on a **record** rather than a JSON map — pass a
+`ContextCodec` to `handle`:
 
 ```java
 ContextCodec<Purchase> codec = ContextCodec.records(Purchase.class);
@@ -374,11 +362,10 @@ new Worker(client, "fulfilment")
         .start();
 ```
 
-A record and a `dict` are the **same JSON on the wire**, so a typed Java handler and an untyped
-Python handler serve different steps of the same instance without agreeing on a type — only on the
-step name. [`example:runTypedPolyglot`](example/src/main/java/dev/wiggle/polyglot/typed/TypedPolyglotDemo.java)
-is the polyglot demo with a typed `Purchase` context, completed by
-[`polyglot_typed_worker.py`](clients/python/examples/polyglot_typed_worker.py).
+A record and a map are the **same JSON on the wire**, so a typed handler and an untyped one can serve
+different steps of the same instance interchangeably — binding is by step name, not by type.
+[`example:runTypedBinding`](example/src/main/java/dev/wiggle/binding/typed/TypedBindingDemo.java)
+is the same demo with a typed `Purchase` context.
 
 ---
 
@@ -766,15 +753,15 @@ copy from:
 | `Demo.java` | embedded server + worker + happy / filtered / failed instances in one JVM |
 | `WorkerMain.java` | a standalone worker process |
 | `SubmitOrders.java` | submitting and awaiting a batch of instances |
-| `polyglot/PolyglotDemo.java` | one flow, two languages — Java serves every step but `charge`, Python supplies it by name |
-| `polyglot/typed/TypedPolyglotDemo.java` | the same split with a **typed** record context on the Java side (dict on the Python side) |
+| `binding/BindingDemo.java` | name-only binding — one flow authored once, served by two independent workers by step name |
+| `binding/typed/TypedBindingDemo.java` | the same, with a **typed** record context served by typed handlers |
 
 ```bash
 ./gradlew :example:run                       # the full demo in one JVM
 ./gradlew :example:runWorker                 # a standalone worker (needs a running server)
 ./gradlew :example:submitOrders -Pcount=20   # submit 20 orders
-./gradlew :example:runPolyglot               # polyglot demo (then run the Python worker; see "Polyglot" above)
-./gradlew :example:runTypedPolyglot          # polyglot demo with a typed record context
+./gradlew :example:runBinding                # name-only binding demo (see "Name-only binding" above)
+./gradlew :example:runTypedBinding           # name-only binding demo with a typed record context
 ```
 
 ---

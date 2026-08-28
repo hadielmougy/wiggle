@@ -16,9 +16,7 @@ allprojects {
     }
 }
 
-// The `clients` tree holds non-JVM clients (e.g. the Python client), which bring their own
-// build; only the JVM modules get the Java toolchain, lint, and test wiring below.
-configure(subprojects.filter { !it.path.startsWith(":clients") }) {
+subprojects {
     apply(plugin = "java-library")
 
     extensions.configure<JavaPluginExtension> {

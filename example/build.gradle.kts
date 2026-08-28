@@ -40,18 +40,18 @@ tasks.register<JavaExec>("submitOrders") {
     args = listOf(project.findProperty("count")?.toString() ?: "5")
 }
 
-tasks.register<JavaExec>("runPolyglot") {
+tasks.register<JavaExec>("runBinding") {
     group = "application"
-    description = "Polyglot demo: Java authors + serves a flow, waits for the Python worker to serve `charge`."
+    description = "Name-only binding demo: a flow authored once, served by two independent workers by step name."
     classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("dev.wiggle.polyglot.PolyglotDemo")
+    mainClass.set("dev.wiggle.binding.BindingDemo")
 }
 
-tasks.register<JavaExec>("runTypedPolyglot") {
+tasks.register<JavaExec>("runTypedBinding") {
     group = "application"
-    description = "Polyglot demo with a typed (record) context: Java serves typed handlers, Python serves `charge`."
+    description = "Name-only binding demo with a typed (record) context served by typed handlers."
     classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("dev.wiggle.polyglot.typed.TypedPolyglotDemo")
+    mainClass.set("dev.wiggle.binding.typed.TypedBindingDemo")
 }
 
 tasks.register<JavaExec>("runCookbook") {
