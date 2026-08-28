@@ -49,7 +49,7 @@ class SqlServerStoreTest {
     }
 
     private static Blueprint<Map<String, Object>> uniqueWorkflow() {
-        return Workflow.defineJson("sqlserver-claim-" + Ids.next("wf"))
+        return Workflow.define("sqlserver-claim-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
     }

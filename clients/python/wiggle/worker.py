@@ -6,12 +6,15 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, Optional
 
-from ._convert import from_value
+import grpc
+
+from ._convert import from_value, shallow_diff
 from .client import WiggleClient
-from .workflow import Blueprint
+from .workflow import Activity, Blueprint, Predicate, SideEffect
 
 log = logging.getLogger("wiggle.worker")
 
@@ -31,7 +34,7 @@ class Worker:
                  concurrency: Optional[int] = None, lease_s: float = 30.0,
                  long_poll_wait_s: float = 10.0, idle_backoff_s: float = 0.2,
                  error_backoff_s: float = 2.0, queues: Optional[Iterable[str]] = None,
-                 register_on_start: bool = True):
+                 register_on_start: bool = True, await_registration_s: float = 0.0):
         self._client = client
         self.worker_id = worker_id
         self._concurrency = concurrency or os.cpu_count() or 4
@@ -41,10 +44,12 @@ class Worker:
         self._error_backoff = error_backoff_s
         self._explicit_queues = set(queues) if queues else None
         self._register_on_start = register_on_start
+        self._await_registration_s = await_registration_s
 
         self._handlers: dict[str, Callable] = {}
         self._queues: set[str] = set()
         self._blueprints: list[Blueprint] = []
+        self._claims: list[tuple[str, str, str]] = []   # (workflow, step, expected NodeKind)
         self._executor: Optional[ThreadPoolExecutor] = None
         self._poll_thread: Optional[threading.Thread] = None
         self._running = threading.Event()
@@ -57,6 +62,40 @@ class Worker:
         self._blueprints.append(blueprint)
         return self
 
+    def handle(self, workflow: str, step: str, fn: Activity) -> "Worker":
+        """Bind a handler to one step of an already-registered workflow, by name -- no topology
+        re-declaration. The graph lives on the server; this worker just implements ``step``. ``fn``
+        takes the context and returns the new context (only what changed is sent back), exactly like
+        :meth:`Workflow.step`. Which queue the step polls is discovered from the graph on
+        :meth:`start`, which also fails fast if ``step`` does not exist (or is the wrong kind)."""
+        def wrapper(ctx):
+            out = fn(ctx)
+            return shallow_diff(ctx, out) if out is not None else None
+        return self._bind(workflow, step, "TASK", wrapper)
+
+    def handle_gate(self, workflow: str, step: str, test: Predicate) -> "Worker":
+        """Bind a predicate (gate / choose guard / do-while condition) step by name; ``test`` returns
+        a bool. See :meth:`handle`."""
+        return self._bind(workflow, step, "PREDICATE", lambda ctx: bool(test(ctx)))
+
+    def handle_effect(self, workflow: str, step: str, fn: SideEffect) -> "Worker":
+        """Bind a side-effect step by name; ``fn``'s return is ignored and the context is unchanged.
+        See :meth:`handle`."""
+        def wrapper(ctx):
+            fn(ctx)
+            return None
+        return self._bind(workflow, step, "TASK", wrapper)
+
+    def _bind(self, workflow: str, step: str, kind: str, wrapper: Callable) -> "Worker":
+        if not workflow or not step:
+            raise ValueError("workflow and step are required")
+        activity = f"{workflow}#{step}"
+        if activity in self._handlers:
+            raise ValueError(f"duplicate handler for activity '{activity}'")
+        self._handlers[activity] = wrapper
+        self._claims.append((workflow, step, kind))
+        return self
+
     @property
     def _served_queues(self) -> set[str]:
         return self._explicit_queues if self._explicit_queues is not None else self._queues
@@ -67,6 +106,8 @@ class Worker:
         if self._register_on_start:
             for bp in self._blueprints:
                 self._client.register(bp)
+        if self._claims:
+            self._reconcile()
         self._running.set()
         self._executor = ThreadPoolExecutor(max_workers=self._concurrency,
                                             thread_name_prefix=f"wiggle-{self.worker_id}")
@@ -102,6 +143,53 @@ class Worker:
             self.stop()
 
     # ---- internals ----
+
+    def _reconcile(self) -> None:
+        """Check every :meth:`handle`-bound claim against the server's registered graph, and learn
+        the queue each claimed step polls (a name-only binding has no other way to know it). Fails
+        fast on a typo'd step name or a kind mismatch, so a bad binding is caught at start rather
+        than as a silent runtime "no handler" much later."""
+        for wf in sorted({w for w, _, _ in self._claims}):
+            graph = self._fetch_graph(wf)
+            nodes = {n["activity"]: n for n in graph.get("nodes", [])
+                     if n.get("kind") in ("TASK", "PREDICATE") and "activity" in n}
+            served: set[str] = set()
+            for w, step, kind in self._claims:
+                if w != wf:
+                    continue
+                activity = f"{w}#{step}"
+                node = nodes.get(activity)
+                if node is None:
+                    avail = sorted(a.split("#", 1)[1] for a in nodes)
+                    raise ValueError(f"no step '{step}' in registered workflow '{wf}' "
+                                     f"(available steps: {avail})")
+                if node["kind"] != kind:
+                    verb = "handle_gate" if node["kind"] == "PREDICATE" else "handle"
+                    raise ValueError(f"activity '{activity}' is a {node['kind']} in the graph but was "
+                                     f"bound as {kind}; use {verb}() instead")
+                self._queues.add(node.get("queue", wf))
+                served.add(activity)
+            unclaimed = sorted(a.split("#", 1)[1] for a in set(nodes) - served)
+            if unclaimed:   # info, not an error: a polyglot worker may intentionally serve a subset
+                log.info("workflow '%s' has steps served by no handler on this worker: %s", wf, unclaimed)
+
+    def _fetch_graph(self, workflow: str) -> dict:
+        """Fetch the registered graph, optionally waiting out a registration race (the authoring
+        client may still be starting up). Beyond the grace window, a missing graph is fatal."""
+        deadline = time.monotonic() + self._await_registration_s
+        while True:
+            try:
+                return self._client.get_workflow(workflow)
+            except grpc.RpcError as e:
+                not_found = e.code() == grpc.StatusCode.NOT_FOUND
+                if not_found and time.monotonic() < deadline:
+                    self._running.wait(0.25)
+                    continue
+                if not_found:
+                    raise ValueError(
+                        f"workflow '{workflow}' is not registered; register its graph before "
+                        f"starting a worker that binds handlers to it (or pass await_registration_s)") from e
+                raise
 
     def _poll_loop(self) -> None:
         while self._running.is_set():

@@ -45,7 +45,7 @@ class TlsTest {
     private static Path serverKs, clientKs, trust;
 
     private static final Blueprint<Map<String, Object>> BP =
-            Workflow.defineJson("tls-wf").step("work", ctx -> ctx).build();
+            Workflow.define("tls-wf").step("work", ctx -> ctx).build();
 
     @BeforeAll
     static void generateCerts() throws Exception {

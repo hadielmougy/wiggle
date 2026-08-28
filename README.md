@@ -316,6 +316,72 @@ execute it — a local-execution chain hands the step over automatically at the 
 
 ---
 
+## Polyglot: define the flow once, implement steps in any language
+
+The server drives the graph, and workers dispatch by activity name (`"<workflow>#<step>"`) — so
+the topology only needs to live in **one** place. Register the workflow once (in any client), then
+attach step implementations **by name** from wherever each step belongs. A Java team and a Python
+team can own different steps of the same flow without either re-declaring it.
+
+```java
+// The order team authors and registers the graph — topology only.
+client.register(OrderFulfilment.blueprint());
+
+// A worker that never saw that blueprint implements two steps, by (workflow, step) name:
+new Worker(client, "fulfilment-worker")
+        .handle("order-fulfilment", "validate", ctx -> put(ctx, "status", "VALIDATED"))
+        .handleGate("order-fulfilment", "in-stock", ctx -> qty(ctx) > 0)
+        .handleEffect("order-fulfilment", "notify", ctx -> email(ctx))
+        .start();   // reconciles against the registered graph before polling
+```
+
+```python
+# The payments team implements just `charge`, in Python, on the same flow:
+Worker(client, "payments-worker").handle(
+    "order-fulfilment", "charge",
+    lambda o: {**o, "paymentRef": f"auth-{o['orderId']}"}
+).start()
+```
+
+`handle` (task), `handleGate` / `handle_gate` (predicate), and `handleEffect` / `handle_effect`
+(side effect) bind by name. On `start()` the worker **reconciles** its bindings against the graph
+the server holds: it verifies each step exists and is the right kind (a mistyped name or a
+task-bound-as-gate fails fast with the available step names), and it **discovers which queue each
+step polls** — so a name-only worker needs no queue configuration. Steps this worker doesn't
+implement are simply served by whoever does.
+
+One constraint: the graph must be **registered before** a name-only worker starts, or it fails fast.
+Register it as a deploy step; for local/dev, `WorkerOptions.withAwaitRegistration(Duration)` (Java) or
+`Worker(..., await_registration_s=…)` (Python) rides out the startup race.
+
+See it run across two languages: [`example:runPolyglot`](example/src/main/java/dev/wiggle/polyglot/PolyglotDemo.java)
+starts a server, authors the flow, and serves every step but `charge` from Java — then completes as
+soon as the [Python payments worker](clients/python/examples/polyglot_worker.py) supplies it:
+
+```bash
+./gradlew :example:runPolyglot                       # terminal 1: server + author + Java worker + an order
+python clients/python/examples/polyglot_worker.py    # terminal 2: the Python worker for `charge`
+```
+
+**Typed contexts too.** The Java side can work on a **record** rather than a JSON map — pass a
+`ContextCodec` to `handle` and your handler is typed:
+
+```java
+ContextCodec<Purchase> codec = ContextCodec.records(Purchase.class);
+new Worker(client, "fulfilment")
+        .handle("typed-order", "validate", codec, p -> p.withStatus("VALIDATED"))   // Purchase -> Purchase
+        .handleGate("typed-order", "in-stock", codec, p -> p.quantity() > 0)
+        .start();
+```
+
+A record and a `dict` are the **same JSON on the wire**, so a typed Java handler and an untyped
+Python handler serve different steps of the same instance without agreeing on a type — only on the
+step name. [`example:runTypedPolyglot`](example/src/main/java/dev/wiggle/polyglot/typed/TypedPolyglotDemo.java)
+is the polyglot demo with a typed `Purchase` context, completed by
+[`polyglot_typed_worker.py`](clients/python/examples/polyglot_typed_worker.py).
+
+---
+
 ## Starting and tracking instances
 
 ```java
@@ -700,11 +766,15 @@ copy from:
 | `Demo.java` | embedded server + worker + happy / filtered / failed instances in one JVM |
 | `WorkerMain.java` | a standalone worker process |
 | `SubmitOrders.java` | submitting and awaiting a batch of instances |
+| `polyglot/PolyglotDemo.java` | one flow, two languages — Java serves every step but `charge`, Python supplies it by name |
+| `polyglot/typed/TypedPolyglotDemo.java` | the same split with a **typed** record context on the Java side (dict on the Python side) |
 
 ```bash
 ./gradlew :example:run                       # the full demo in one JVM
 ./gradlew :example:runWorker                 # a standalone worker (needs a running server)
 ./gradlew :example:submitOrders -Pcount=20   # submit 20 orders
+./gradlew :example:runPolyglot               # polyglot demo (then run the Python worker; see "Polyglot" above)
+./gradlew :example:runTypedPolyglot          # polyglot demo with a typed record context
 ```
 
 ---

@@ -38,7 +38,7 @@ class ChooseTest {
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
     private Blueprint<Map<String, Object>> withDefault() {
-        return Workflow.defineJson("choose-default")
+        return Workflow.define("choose-default")
                 .choose(
                         Case.when("is-gold", c -> "gold".equals(c.get("tier")),
                                 b -> b.step("gold", c -> { counter("gold").incrementAndGet(); return put(c, "path", "gold"); })),
@@ -52,7 +52,7 @@ class ChooseTest {
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
     private Blueprint<Map<String, Object>> withoutDefault() {
-        return Workflow.defineJson("choose-skip")
+        return Workflow.define("choose-skip")
                 .choose(
                         Case.when("is-a", c -> "a".equals(c.get("k")),
                                 b -> b.step("a", c -> put(c, "path", "a"))))

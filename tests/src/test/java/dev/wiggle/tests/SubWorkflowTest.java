@@ -38,7 +38,7 @@ class SubWorkflowTest {
     }
 
     private static Blueprint<Map<String, Object>> parent() {
-        return Workflow.defineJson("sub-parent")
+        return Workflow.define("sub-parent")
                 .step("prepare", ctx -> put(ctx, "prepared", true))
                 .subWorkflow("delegate", "sub-child")
                 .step("wrap-up", ctx -> put(ctx, "wrapped", true))
@@ -47,7 +47,7 @@ class SubWorkflowTest {
 
     @Test @DisplayName("the child runs with the parent's context and its result merges back")
     void childCompletes() throws Exception {
-        Blueprint<Map<String, Object>> child = Workflow.defineJson("sub-child")
+        Blueprint<Map<String, Object>> child = Workflow.define("sub-child")
                 .step("child-work", ctx -> put(ctx, "childSaw", ctx.get("prepared")))
                 .step("child-done", ctx -> put(ctx, "childResult", 42L))
                 .build();
@@ -69,7 +69,7 @@ class SubWorkflowTest {
 
     @Test @DisplayName("a failing child fails the parent with the child's error")
     void childFailureFailsParent() throws Exception {
-        Blueprint<Map<String, Object>> child = Workflow.defineJson("sub-child")
+        Blueprint<Map<String, Object>> child = Workflow.define("sub-child")
                 .step("child-work", ctx -> { throw new IllegalStateException("child broke"); },
                         dev.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1)))
                 .build();
@@ -99,7 +99,7 @@ class SubWorkflowTest {
 
     @Test @DisplayName("cancelling the parent cascades to the running child")
     void cancelCascades() throws Exception {
-        Blueprint<Map<String, Object>> child = Workflow.defineJson("sub-child")
+        Blueprint<Map<String, Object>> child = Workflow.define("sub-child")
                 .awaitSignal("never-arrives")   // the child parks so it is definitely still running
                 .step("child-done", ctx -> ctx)
                 .build();

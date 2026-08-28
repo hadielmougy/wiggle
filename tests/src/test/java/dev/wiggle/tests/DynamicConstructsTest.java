@@ -58,7 +58,7 @@ class DynamicConstructsTest {
     // ------------------------------------------------------------------ doWhile
 
     private static Blueprint<Map<String, Object>> counterLoop(ExecutionMode mode, AtomicInteger bodyRuns) {
-        return Workflow.defineJson("dyn-loop")
+        return Workflow.define("dyn-loop")
                 .execution(mode)
                 .step("init", ctx -> put(ctx, "i", 0L))
                 .doWhile("more", ctx -> (Long) ctx.get("i") < 5,
@@ -87,7 +87,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile runs its body at least once")
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("dyn-loop-once")
+        Blueprint<Map<String, Object>> bp = Workflow.define("dyn-loop-once")
                 .doWhile("never-again", ctx -> false,
                         b -> b.step("work", ctx -> {
                             bodyRuns.incrementAndGet();
@@ -105,7 +105,7 @@ class DynamicConstructsTest {
 
     /** Two-step branch: the second step proves the item payload survives along the branch. */
     private static Blueprint<Map<String, Object>> fanOut(ExecutionMode mode) {
-        return Workflow.defineJson("dyn-fan")
+        return Workflow.define("dyn-fan")
                 .execution(mode)
                 .forkEach("per-item", "items", "item", b -> b
                         .step("upper", ctx -> put(ctx, "out" + ctx.get("itemIndex"),

@@ -38,7 +38,7 @@ class JdbcForkJoinStressTest {
     }
 
     private static Blueprint<Map<String, Object>> blueprint() {
-        return Workflow.defineJson("order-ish")
+        return Workflow.define("order-ish")
                 .step("validate", ctx -> put(ctx, "validated", true))
                 .gate("in-stock", ctx -> true)
                 .fork(

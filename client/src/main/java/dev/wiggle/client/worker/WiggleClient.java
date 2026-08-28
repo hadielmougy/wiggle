@@ -54,6 +54,17 @@ public final class WiggleClient implements AutoCloseable {
                 .build()));
     }
 
+    /**
+     * The registered graph for {@code name} -- the server's source of truth for a workflow's step
+     * names, kinds, and queues. Throws {@link WiggleApiException} with status 404 if the workflow was
+     * never registered. Used by {@link Worker#handle} reconciliation.
+     */
+    public dev.wiggle.core.WorkflowDefinition getWorkflow(String name) {
+        WorkflowDefinition def = call(() -> stub.getWorkflow(
+                GetWorkflowRequest.newBuilder().setName(name).build()));
+        return dev.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(def.getDefinition()));
+    }
+
     public String start(String workflow, Object context) {
         return start(workflow, context, null, null);
     }

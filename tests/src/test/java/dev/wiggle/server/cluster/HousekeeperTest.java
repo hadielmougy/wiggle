@@ -32,7 +32,7 @@ class HousekeeperTest {
 
     /** A one-sleep workflow whose timer parks the instance until the housekeeper fires it. */
     private static Blueprint<Map<String, Object>> sleeper(long millis) {
-        return Workflow.defineJson("hk-sleeper")
+        return Workflow.define("hk-sleeper")
                 .sleep("nap", Duration.ofMillis(millis))
                 .step("after", ctx -> ctx)
                 .build();

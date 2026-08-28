@@ -42,7 +42,7 @@ class LocalSyncTest {
 
     /** A five-step linear pipeline; each step's value depends on the previous. */
     private static Blueprint<Map<String, Object>> linear(ExecutionMode mode, AtomicInteger runs) {
-        return Workflow.defineJson("ls-linear")
+        return Workflow.define("ls-linear")
                 .execution(mode)
                 .step("a", ctx -> { runs.incrementAndGet(); return put(ctx, "a", 1L); })
                 .step("b", ctx -> { runs.incrementAndGet(); return put(ctx, "b", (Long) ctx.get("a") + 1); })
@@ -112,7 +112,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            Blueprint<Map<String, Object>> bp = Workflow.defineJson("async-batch")
+            Blueprint<Map<String, Object>> bp = Workflow.define("async-batch")
                     .execution(ExecutionMode.LOCAL_ASYNC)
                     .step("x", ctx -> put(ctx, "x", 1L))
                     .step("y", ctx -> put(ctx, "y", 2L))

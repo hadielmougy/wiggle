@@ -26,7 +26,7 @@ class ScheduleTest {
     }
 
     private static Blueprint<Map<String, Object>> probe() {
-        return Workflow.defineJson("sched-probe").step("work", ctx -> ctx).build();
+        return Workflow.define("sched-probe").step("work", ctx -> ctx).build();
     }
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")

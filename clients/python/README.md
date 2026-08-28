@@ -64,7 +64,7 @@ PYTHONPATH=clients/python python clients/python/examples/order.py
 | `do_while(name, cond, body)` | run `body`, then repeat while `cond(ctx)` holds (body runs at least once) |
 | `sub_workflow(name, child)` | run another workflow (a `Blueprint`, `Workflow`, or name) as a child; its result merges back |
 | `sleep(name, *, seconds=, millis=)` | server-side timer; no worker is held |
-| `await_signal(name, *, timeout_s=0)` | wait for a signal delivered via `client.signal(...)` |
+| `await_signal(name, *, timeout_s=0, escalation=None)` | wait for a signal delivered via `client.signal(...)`; on timeout, fail — or run the `escalation` branch and rejoin |
 | `default_queue(q)` | queue for every step that doesn't set its own (defaults to the workflow name) |
 | `build()` | produce a `Blueprint` to register and serve |
 
@@ -109,10 +109,39 @@ worker must serve the child's handlers too (`Worker(...).register(child).registe
 handlers are keyed by activity name (`"<workflow>#<step>"`), Python and Java workers interoperate:
 either can run the other's steps.
 
+## Binding handlers by name (polyglot)
+
+You don't have to re-declare a workflow just to implement one of its steps in Python. If the graph is
+already registered (by any client, Java or Python), bind handlers **by name** — no `Workflow`, no
+`register`:
+
+```python
+# implement just `charge` on a flow whose topology was authored elsewhere (e.g. in Java)
+worker = Worker(client, "payments").handle(
+    "order-fulfilment", "charge",
+    lambda o: {**o, "paymentRef": f"auth-{o['orderId']}"})
+worker.start()
+```
+
+| Method | Binds a… |
+|---|---|
+| `handle(workflow, step, fn)` | task — `fn(ctx) -> ctx`, only the changed keys are sent back |
+| `handle_gate(workflow, step, test)` | predicate — `test(ctx) -> bool` (a gate / choose guard / do-while condition) |
+| `handle_effect(workflow, step, fn)` | side effect — `fn(ctx)` runs, the context is unchanged |
+
+On `start()` the worker **reconciles** every binding against the registered graph: it checks each
+step exists and is the right kind (a typo or a task bound as a gate fails fast, listing the real step
+names), and it **discovers which queue each step polls** — so a name-only worker needs no queue
+config. The graph must be registered *before* the worker starts; pass `await_registration_s=…` to
+ride out a startup race instead of failing fast. See
+[`examples/polyglot_worker.py`](examples/polyglot_worker.py) for a Java-authored flow served from
+Python.
+
 ## Client API
 
 ```python
 client.register(blueprint) -> int                     # version
+client.get_workflow(name) -> dict                     # the registered graph (steps, kinds, queues)
 client.start(blueprint_or_name, context, *, version=None, correlation_id=None) -> instance_id
 client.instance(id) -> InstanceView                   # .status .context .termination_reason .error
 client.await_completion(id, timeout_s=30) -> InstanceView

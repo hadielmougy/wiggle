@@ -38,16 +38,16 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        Blueprint<Map<String, Object>> plain = Workflow.defineJson("cp")
+        Blueprint<Map<String, Object>> plain = Workflow.define("cp")
                 .step("a", ctx -> ctx).step("b", ctx -> ctx).build();
-        Blueprint<Map<String, Object>> checked = Workflow.defineJson("cp")
+        Blueprint<Map<String, Object>> checked = Workflow.define("cp")
                 .step("a", ctx -> ctx).checkpoint().step("b", ctx -> ctx).build();
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
         assertEquals(1, checked.definition().checkpoints().size(), "one checkpoint recorded");
         assertNotEquals(plain.version(), checked.version(), "checkpoint is part of the content hash");
 
-        assertThrows(IllegalStateException.class, () -> Workflow.defineJson("bad").checkpoint(),
+        assertThrows(IllegalStateException.class, () -> Workflow.define("bad").checkpoint(),
                 "checkpoint() must follow a step");
     }
 
@@ -56,7 +56,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("cp-flush")
+        Blueprint<Map<String, Object>> bp = Workflow.define("cp-flush")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a", ctx -> put(ctx, "a", 1L)).checkpoint()
                 .step("b", ctx -> { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); })
@@ -90,7 +90,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint<Map<String, Object>> bp = Workflow.defineJson("cp-nobuf")
+        Blueprint<Map<String, Object>> bp = Workflow.define("cp-nobuf")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a", ctx -> put(ctx, "a", 1L))   // no checkpoint
                 .step("b", ctx -> { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); })
