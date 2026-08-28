@@ -376,6 +376,28 @@ CLI, then bind handlers by name exactly as above.
 
 ---
 
+## Command-line tool (`wiggle`)
+
+`wiggle` authors and registers workflows from a declarative **[YAML file](docs/workflow-yaml.md)** —
+no Java required. It's the deploy-time companion to name-only binding: register the topology once,
+then let workers implement steps by name.
+
+```bash
+wiggle validate order.yaml                          # compile + validate offline (no server) — great in CI
+wiggle register order.yaml --server prod:8080       # register with a running server
+```
+
+- **Which server:** `--server`/`-s`, else `$WIGGLE_URL`, else `localhost:8080`. `validate` needs no server.
+- **TLS:** reads the same `WIGGLE_TLS_*` env as workers; `--tls-truststore`/`--tls-keystore` (mTLS) or
+  `--tls` (JVM default trust store) override per invocation.
+- **Install:** `brew tap hadielmougy/wiggle https://github.com/hadielmougy/wiggle && brew install hadielmougy/wiggle/wiggle`,
+  or download the archive from the release — see [docs/workflow-yaml.md](docs/workflow-yaml.md#installing-the-cli).
+  (It's a JVM app; needs Java 21.)
+
+The full YAML schema and every subcommand detail live in **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
+
+---
+
 ## Starting and tracking instances
 
 ```java
