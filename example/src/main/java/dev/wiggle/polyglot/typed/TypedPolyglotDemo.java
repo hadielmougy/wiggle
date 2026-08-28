@@ -1,6 +1,6 @@
 package dev.wiggle.polyglot.typed;
 
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.core.ContextCodec;
 import dev.wiggle.core.InstanceView;

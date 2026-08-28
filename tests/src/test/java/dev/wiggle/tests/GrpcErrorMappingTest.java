@@ -2,8 +2,8 @@ package dev.wiggle.tests;
 
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.client.worker.WiggleClient;
-import dev.wiggle.client.worker.WiggleClient.WiggleApiException;
+import dev.wiggle.client.WiggleClient;
+import dev.wiggle.client.WiggleClient.WiggleApiException;
 import dev.wiggle.core.TaskActivation;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.WiggleServer;

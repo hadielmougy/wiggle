@@ -3,7 +3,7 @@ package dev.wiggle.order;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.client.dsl.WorkflowStream;
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.client.worker.WorkerOptions;
 import dev.wiggle.core.ExecutionMode;

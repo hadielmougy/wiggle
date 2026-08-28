@@ -1,6 +1,6 @@
 package dev.wiggle.account;
 
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 
 public class SubmitTransactions {
 

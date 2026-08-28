@@ -4,7 +4,7 @@ import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.client.dsl.Branch;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.client.worker.Step;
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.client.worker.WorkerOptions;
 import dev.wiggle.core.InstanceView;

@@ -5,7 +5,7 @@ import dev.wiggle.client.dsl.Branch;
 import dev.wiggle.client.dsl.Workflow;
 import dev.wiggle.client.dsl.WorkflowStream;
 import dev.wiggle.client.worker.PermanentActivityException;
-import dev.wiggle.client.worker.WiggleClient;
+import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.worker.Worker;
 import dev.wiggle.client.worker.WorkerOptions;
 import dev.wiggle.core.*;
