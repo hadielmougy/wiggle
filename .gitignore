@@ -12,3 +12,6 @@ out/
 /server/src/main/resources/dashboard/js/
 node_modules/
 .shadow-cljs/
+
+# local playground cluster state
+/.playground/

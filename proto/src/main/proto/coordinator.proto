@@ -22,9 +22,11 @@ service CellCoordinator {
     rpc ActiveCells (ActiveCellsRequest) returns (ActiveCellsResponse);
 
     // ---- admin (reconfiguration & definition fan-out) ----
-    rpc OpenEpoch        (OpenEpochRequest)        returns (Policy);
-    rpc SetRing          (SetRingRequest)          returns (Policy);
-    rpc RegisterWorkflow (RegisterWorkflowRequest) returns (RegisterWorkflowResponse);  // R23
+    rpc OpenEpoch          (OpenEpochRequest)          returns (Policy);
+    rpc SetRing            (SetRingRequest)            returns (Policy);
+    rpc RegisterWorkflow   (RegisterWorkflowRequest)   returns (RegisterWorkflowResponse);   // R23
+    rpc DeregisterWorkflow (DeregisterWorkflowRequest) returns (DeregisterWorkflowResponse);
+    rpc ListWorkflows      (ListWorkflowsRequest)      returns (ListWorkflowsResponse);
 }
 
 // ---------------------------------------------------------------- shared types
@@ -225,4 +227,27 @@ message RegisterWorkflowRequest {
 message RegisterWorkflowResponse {
     uint32 version = 1;
     uint32 cells_seeded = 2;
+}
+
+message DeregisterWorkflowRequest {
+    string namespace = 1;
+    string name = 2;
+}
+
+message DeregisterWorkflowResponse {
+    bool removed = 1;              // false if the workflow was not allocated to the namespace
+}
+
+message ListWorkflowsRequest {
+    string namespace = 1;
+}
+
+message ListWorkflowsResponse {
+    repeated AllocatedWorkflow workflows = 1;
+}
+
+message AllocatedWorkflow {
+    string name = 1;
+    uint32 version = 2;
+    int64 registered_at = 3;      // epoch millis
 }
