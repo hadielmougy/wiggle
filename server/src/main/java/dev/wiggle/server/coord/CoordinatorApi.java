@@ -2,10 +2,20 @@ package dev.wiggle.server.coord;
 
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.CellCoordinatorGrpc;
+import dev.wiggle.proto.CoordinatorHeartbeatRequest;
+import dev.wiggle.proto.CoordinatorHeartbeatResponse;
+import dev.wiggle.proto.DeregisterRequest;
+import dev.wiggle.proto.Empty;
 import dev.wiggle.proto.EpochRing;
 import dev.wiggle.proto.EpochStatus;
+import dev.wiggle.proto.Expected;
+import dev.wiggle.proto.FetchConfigRequest;
+import dev.wiggle.proto.NodeConfig;
 import dev.wiggle.proto.OpenEpochRequest;
 import dev.wiggle.proto.Policy;
+import dev.wiggle.proto.RegisterRequest;
+import dev.wiggle.proto.RegisterResponse;
+import dev.wiggle.proto.RegisteredNode;
 import dev.wiggle.proto.RingSlot;
 import dev.wiggle.proto.SetRingRequest;
 import io.grpc.Grpc;
@@ -23,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -38,6 +49,8 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     private static final System.Logger LOG = System.getLogger(CoordinatorApi.class.getName());
     private static final int CAS_ATTEMPTS = 5;
+    private static final int DEFAULT_TTL_S = 300;
+    private static final int NODE_HEARTBEAT_INTERVAL_S = 10;
 
     private final CoordinatorStore store;
     private final Server server;
@@ -100,6 +113,74 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     @Override public void setRing(SetRingRequest req, StreamObserver<Policy> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc SetRing namespace=" + req.getNamespace() + " epoch=" + req.getEpoch());
         run(resp, () -> doSetRing(req.getNamespace(), req.getEpoch(), req.getRingList()));
+    }
+
+    @Override public void fetchConfig(FetchConfigRequest req, StreamObserver<NodeConfig> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc FetchConfig namespace=" + req.getNamespace());
+        run(resp, () -> doFetchConfig(req.getNamespace()));
+    }
+
+    @Override public void register(RegisterRequest req, StreamObserver<RegisterResponse> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc Register namespace=" + req.getNamespace()
+                + " node=" + req.getNode().getName());
+        run(resp, () -> doRegister(req.getNamespace(), req.getNode()));
+    }
+
+    @Override public void heartbeat(CoordinatorHeartbeatRequest req, StreamObserver<CoordinatorHeartbeatResponse> resp) {
+        run(resp, () -> doHeartbeat(req.getNodeId(), req.getConfigGeneration()));
+    }
+
+    @Override public void deregister(DeregisterRequest req, StreamObserver<Empty> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc Deregister node=" + req.getNodeId());
+        run(resp, () -> {
+            store.removeNode(req.getNodeId());
+            return Empty.getDefaultInstance();
+        });
+    }
+
+    // ---- node-lifecycle logic (directly unit-testable) ----
+
+    /** The namespace's current config generation (its policy revision; 0 if none yet). */
+    public NodeConfig doFetchConfig(String namespace) {
+        long generation = store.getPolicy(namespace).map(CoordPolicy::revision).orElse(0L);
+        // Phase 1: no storage/tuning overlay yet (populated by provisioning, T13) -- the node keeps
+        // its local config. `generation` still lets a node observe namespace change (policy edits).
+        return NodeConfig.newBuilder()
+                .setNamespace(namespace)
+                .setGeneration(generation)
+                .setExpected(Expected.newBuilder().build())
+                .setTtlSeconds(DEFAULT_TTL_S)
+                .build();
+    }
+
+    /** Records a node in the roster and returns its coordinator-assigned id. */
+    public RegisterResponse doRegister(String namespace, RegisteredNode node) {
+        String nodeId = UUID.randomUUID().toString();
+        store.upsertNode(new CoordNode(nodeId, namespace, node.getEndpoint(), emptyToNull(node.getRegion()),
+                node.getEngineVersion(), 0, System.currentTimeMillis()));
+        return RegisterResponse.newBuilder()
+                .setNodeId(nodeId)
+                .setHeartbeatIntervalSeconds(NODE_HEARTBEAT_INTERVAL_S)
+                .build();
+    }
+
+    /** Touches the node's liveness; returns {@code ok=false} for an unknown node (it should re-register). */
+    public CoordinatorHeartbeatResponse doHeartbeat(String nodeId, long observedGeneration) {
+        Optional<CoordNode> node = store.touchNode(nodeId, System.currentTimeMillis(), observedGeneration);
+        if (node.isEmpty()) {
+            return CoordinatorHeartbeatResponse.newBuilder().setOk(false).build();
+        }
+        long generation = store.getPolicy(node.get().namespace()).map(CoordPolicy::revision).orElse(0L);
+        return CoordinatorHeartbeatResponse.newBuilder().setOk(true).setConfigGeneration(generation).build();
+    }
+
+    /** Removes a node from the roster. */
+    public void doDeregister(String nodeId) {
+        store.removeNode(nodeId);
+    }
+
+    private static String emptyToNull(String s) {
+        return s == null || s.isEmpty() ? null : s;
     }
 
     // ---- logic (directly unit-testable, no gRPC plumbing) ----

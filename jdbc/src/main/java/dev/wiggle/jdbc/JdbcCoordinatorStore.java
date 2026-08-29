@@ -157,6 +157,46 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         }
     }
 
+    @Override public Optional<CoordNode> node(String id) {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT namespace, endpoint, region, engine_version, config_generation, last_heartbeat " +
+                     "FROM coord_node WHERE id=?")) {
+            p.setString(1, id);
+            try (ResultSet rs = p.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(new CoordNode(id, rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getLong(5), rs.getLong(6)));
+            }
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("node failed", e);
+        }
+    }
+
+    @Override public Optional<CoordNode> touchNode(String id, long lastHeartbeat, long configGeneration) {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement(
+                     "UPDATE coord_node SET last_heartbeat=?, config_generation=? WHERE id=?")) {
+            p.setLong(1, lastHeartbeat);
+            p.setLong(2, configGeneration);
+            p.setString(3, id);
+            if (p.executeUpdate() != 1) return Optional.empty();
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("touchNode failed", e);
+        }
+        return node(id);
+    }
+
+    @Override public void removeNode(String id) {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement("DELETE FROM coord_node WHERE id=?")) {
+            p.setString(1, id);
+            p.executeUpdate();
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("removeNode failed", e);
+        }
+    }
+
     @Override public List<CoordNode> nodes(String namespace) {
         try (Connection c = borrow();
              PreparedStatement p = c.prepareStatement(

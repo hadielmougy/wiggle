@@ -36,7 +36,14 @@ public interface CoordinatorStore extends AutoCloseable {
 
     void upsertNode(CoordNode node);
 
+    Optional<CoordNode> node(String id);
+
     List<CoordNode> nodes(String namespace);
+
+    /** Updates a node's heartbeat + observed generation; returns the updated node, or empty if unknown. */
+    Optional<CoordNode> touchNode(String id, long lastHeartbeat, long configGeneration);
+
+    void removeNode(String id);
 
     /** Removes nodes whose last heartbeat is older than {@code deadlineMillis}. Returns the count removed. */
     int expireNodes(long deadlineMillis);
