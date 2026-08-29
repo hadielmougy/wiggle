@@ -4,6 +4,7 @@ import dev.wiggle.server.cluster.ClusterManager;
 import dev.wiggle.server.coord.CoordinatorApi;
 import dev.wiggle.server.coord.CoordinatorReconciler;
 import dev.wiggle.server.coord.CoordinatorStore;
+import dev.wiggle.server.coord.LiveCensus;
 import dev.wiggle.server.engine.WorkflowEngine;
 import dev.wiggle.server.store.Storage;
 
@@ -25,13 +26,15 @@ final class CoordinatorBundle implements ServerBundle {
 
     CoordinatorBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
         this.store = storage.coordinatorStore();
-        this.api = new CoordinatorApi(store, config.port(), config.tls());
+        // Heartbeats feed the census (api writes) that drives epoch retire (reconciler reads).
+        LiveCensus census = new LiveCensus();
+        this.api = new CoordinatorApi(store, config.port(), config.tls(), census);
         // A node's liveness is measured against the node->coordinator heartbeat cadence, NOT the
         // coordinator's own cluster heartbeat -- otherwise lowering the coordinator's
         // WIGGLE_HEARTBEAT_INTERVAL_MILLIS could falsely reap live nodes.
         long reconcileMillis = CoordinatorApi.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
         long nodeDeadMillis = CoordinatorApi.nodeDeadMillis(config.missedHeartbeatsBeforeDead());
-        this.reconciler = new CoordinatorReconciler(store, cluster::isLeader, reconcileMillis, nodeDeadMillis);
+        this.reconciler = new CoordinatorReconciler(store, census, cluster::isLeader, reconcileMillis, nodeDeadMillis);
     }
 
     @Override public void start() {

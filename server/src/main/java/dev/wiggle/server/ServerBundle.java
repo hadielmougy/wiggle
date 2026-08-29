@@ -25,4 +25,10 @@ interface ServerBundle {
 
     /** The workflow engine, for embedders/tests. Throws for roles that run no engine. */
     WorkflowEngine engine();
+
+    /**
+     * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
+     * cell and for the coordinator role. The coordinator link re-points it when the policy changes.
+     */
+    default CellPlacement placement() { return null; }
 }

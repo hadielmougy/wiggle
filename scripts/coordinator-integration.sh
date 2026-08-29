@@ -9,11 +9,12 @@
 # all four cell nodes pointed at the coordinator via WIGGLE_COORDINATOR_URL.
 #
 # Verifies: node registration + roster, per-cluster leader election, role/schema isolation on a
-# real DB, and coordinator-driven failover expiry (kill -9 a cell leader, watch the coordinator
+# real DB, epoch drain/retire (bump cell A's epoch, drain the old one, watch the reconciler retire
+# it -- R21), and coordinator-driven failover expiry (kill -9 a cell leader, watch the coordinator
 # reap it and the cell re-elect).
 #
-# Requires Docker. Runs in ~1 minute (failover expiry waits out the dead-node timeout). Everything
-# is torn down on exit. Exit code 0 = all checks passed.
+# Requires Docker. Runs in ~2 minutes (drain/retire and failover both wait out real timeouts).
+# Everything is torn down on exit. Exit code 0 = all checks passed.
 #
 #   scripts/coordinator-integration.sh
 #
@@ -64,7 +65,7 @@ WIGGLE_ROLE=coordinator WIGGLE_PORT=$COORD_PORT WIGGLE_NODE_NAME=coord \
 PIDS+=($!)
 sleep 5   # let the coordinator bind before cells try to register
 for p in 8081 8082; do
-    WIGGLE_PORT=$p WIGGLE_NODE_NAME=cellA-$p WIGGLE_NAMESPACE=nsA \
+    WIGGLE_PORT=$p WIGGLE_NODE_NAME=cellA-$p WIGGLE_NAMESPACE=nsA WIGGLE_CELL_ID=cellA \
         WIGGLE_COORDINATOR_URL=127.0.0.1:$COORD_PORT WIGGLE_JDBC_URL=$J/wiggle_cella \
         "$BIN" >"$LOGS/cellA-$p.log" 2>&1 &
     PIDS+=($!)
@@ -96,6 +97,91 @@ echo "== checks =="
     && pass "coordinator DB has no engine tables (wf_token)" || bad "coordinator DB leaked wf_token"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM pg_tables WHERE tablename='coord_policy';")" = "1" ] \
     && pass "coordinator DB has coord_policy" || bad "coordinator DB missing coord_policy"
+
+echo "== drain/retire: bump cell A's epoch, drain the old one, watch it retire (R21) =="
+# A small admin driver (compiled against the dist jars) drives the coordinator's OpenEpoch and the
+# cell's start/cancel -- there is no CLI for these yet. It: opens epoch 0, starts 5 instances (epoch 0),
+# opens epoch 1 (marking epoch 0 DRAINING), proves the minter shifts to epoch 1, then cancels the
+# epoch-0 instances so their live count reaches zero. The reconciler then retires epoch 0.
+# The dist bundles core/proto/server/grpc but not the client module; add its compiled classes so the
+# driver can use WiggleClient + the workflow DSL (all its runtime deps are already in the dist jars).
+./gradlew :client:classes -q 2>/dev/null
+CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)client/build/classes/java/main
+mkdir -p "$LOGS/adminout"
+cat >"$LOGS/Drain.java" <<'JAVA'
+import dev.wiggle.client.WiggleClient;
+import dev.wiggle.client.dsl.Workflow;
+import dev.wiggle.core.IdCodec;
+import dev.wiggle.proto.CellCoordinatorGrpc;
+import dev.wiggle.proto.OpenEpochRequest;
+import dev.wiggle.proto.RingSlot;
+import io.grpc.Grpc;
+import io.grpc.InsecureChannelCredentials;
+import io.grpc.ManagedChannel;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+public class Drain {
+    public static void main(String[] a) throws Exception {
+        String coordUrl = a[0], cellUrl = a[1], ns = a[2], cell = a[3];
+        ManagedChannel ch = Grpc.newChannelBuilder(coordUrl, InsecureChannelCredentials.create()).build();
+        CellCoordinatorGrpc.CellCoordinatorBlockingStub coord = CellCoordinatorGrpc.newBlockingStub(ch);
+        try (WiggleClient client = new WiggleClient(cellUrl)) {
+            client.register(Workflow.define("drainwf").step("a", c -> c).build());
+            openEpoch(coord, ns, cell);                 // epoch 0 OPEN (generation 1)
+            Thread.sleep(1000);
+            List<String> epoch0 = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                String id = client.start("drainwf", Map.of());
+                epoch0.add(id);
+                System.out.println("EPOCH0_ID " + id);
+            }
+            openEpoch(coord, ns, cell);                 // epoch 1 OPEN, epoch 0 -> DRAINING (generation 2)
+            System.out.println("OPENED_EPOCH1");
+            boolean shifted = false;
+            for (int i = 0; i < 60 && !shifted; i++) {  // wait for the node to re-fetch and shift its minter
+                String id = client.start("drainwf", Map.of());
+                long ep = IdCodec.parse(id).map(IdCodec.Placement::epoch).orElse(-1L);
+                client.cancel(id, "probe");             // keep probes from lingering as live work
+                if (ep == 1) { System.out.println("MINT_SHIFTED " + id); shifted = true; break; }
+                Thread.sleep(1000);
+            }
+            if (!shifted) System.out.println("MINT_NOT_SHIFTED");
+            for (String id : epoch0) client.cancel(id, "drain");   // epoch 0 -> zero live instances
+            System.out.println("CANCELLED_EPOCH0");
+        } finally {
+            ch.shutdownNow();
+        }
+    }
+
+    static void openEpoch(CellCoordinatorGrpc.CellCoordinatorBlockingStub coord, String ns, String cell) {
+        coord.openEpoch(OpenEpochRequest.newBuilder().setNamespace(ns)
+                .addRing(RingSlot.newBuilder().setShard(0).setCellId(cell).build()).build());
+    }
+}
+JAVA
+if javac -cp "$CP" -d "$LOGS/adminout" "$LOGS/Drain.java" 2>"$LOGS/admin-compile.log"; then
+    java -cp "$LOGS/adminout:$CP" Drain "127.0.0.1:$COORD_PORT" "127.0.0.1:8081" nsA cellA >"$LOGS/drain.log" 2>&1
+    grep -q "MINT_SHIFTED" "$LOGS/drain.log" \
+        && pass "minter shifted to the new epoch after the bump" || bad "minter did not shift to epoch 1"
+    grep -q "CANCELLED_EPOCH0" "$LOGS/drain.log" \
+        && pass "epoch-0 instances drained (cancelled)" || bad "drain driver did not finish"
+
+    status0() { scalar -d wiggle_coord -c "SELECT epochs::jsonb->'0'->>'status' FROM coord_policy WHERE namespace='nsA';"; }
+    echo "  epoch 0 is '$(status0)' right after draining; waiting for the reconciler to retire it..."
+    retired=""
+    for _ in $(seq 1 40); do
+        [ "$(status0)" = "RETIRED" ] && { retired=1; break; }
+        sleep 1
+    done
+    [ -n "$retired" ] && pass "reconciler retired the drained epoch 0 (R21)" || bad "epoch 0 not retired (status=$(status0))"
+    [ "$(status0)" = "RETIRED" ] \
+        && [ "$(scalar -d wiggle_coord -c "SELECT epochs::jsonb->'1'->>'status' FROM coord_policy WHERE namespace='nsA';")" = "OPEN" ] \
+        && pass "current epoch 1 stays OPEN while the old epoch retires" || bad "current epoch not OPEN"
+else
+    bad "admin driver failed to compile (see $LOGS/admin-compile.log)"
+fi
 
 echo "== failover: kill cell A leader (kill -9, no graceful deregister) =="
 lname=$(scalar -d wiggle_cella -c 'SELECT name FROM wf_node WHERE leader=1;')

@@ -63,7 +63,8 @@ class NodeLifecycleTest {
         try {
             String url = "127.0.0.1:" + api.port();
             try (HttpCoordinatorLink link = new HttpCoordinatorLink(url)) {
-                link.register(new CoordinatorLink.NodeInfo("node-a", "acme", "127.0.0.1:9999", "2.1.5"));
+                link.register(new CoordinatorLink.NodeInfo(
+                        "node-a", "acme", "", "127.0.0.1:9999", "2.1.5"), (CoordinatorLink.CellRuntime) null);
 
                 List<CoordNode> roster = store.nodes("acme");
                 assertEquals(1, roster.size(), "register landed in the coordinator roster");

@@ -212,6 +212,7 @@ public final class JdbcStorage implements Storage {
             CREATE TABLE IF NOT EXISTS coord_node (
               id                VARCHAR(64)  PRIMARY KEY,
               namespace         VARCHAR(200) NOT NULL,
+              cell_id           VARCHAR(200) NOT NULL,
               endpoint          VARCHAR(300) NOT NULL,
               region            VARCHAR(120),
               engine_version    VARCHAR(60),
@@ -219,6 +220,7 @@ public final class JdbcStorage implements Storage {
               last_heartbeat    BIGINT       NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_coord_node_ns ON coord_node (namespace, last_heartbeat);
+            CREATE INDEX IF NOT EXISTS ix_coord_node_cell ON coord_node (namespace, cell_id);
             CREATE TABLE IF NOT EXISTS coord_definition (
               namespace      VARCHAR(200) NOT NULL,
               name           VARCHAR(200) NOT NULL,

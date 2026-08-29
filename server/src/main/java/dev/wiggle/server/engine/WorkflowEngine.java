@@ -134,6 +134,25 @@ public final class WorkflowEngine {
         return storage.inTx(tx -> tx.tokensOf(instanceId));
     }
 
+    /** Cap on the live set scanned for the epoch census; a draining epoch shrinks, so this is ample. */
+    private static final int LIVE_CENSUS_CAP = 100_000;
+
+    /**
+     * Live (RUNNING) instance count grouped by the epoch encoded in each instance id -- this cell's
+     * contribution to the coordinator's retire census (R21). A DRAINING epoch that reaches zero here on
+     * every cell can be retired. Legacy ids (no epoch) count as the genesis epoch 0.
+     */
+    public Map<Long, Integer> liveCountByEpoch() {
+        return storage.inTx(tx -> {
+            Map<Long, Integer> out = new HashMap<>();
+            for (Instance i : tx.listInstances(null, InstanceStatus.RUNNING, LIVE_CENSUS_CAP)) {
+                long epoch = IdCodec.parse(i.id).map(IdCodec.Placement::epoch).orElse(0L);
+                out.merge(epoch, 1, Integer::sum);
+            }
+            return out;
+        });
+    }
+
     /** Snapshot of the dispatchable backlog right now: how many tasks are queued and waiting. */
     public Rows.QueueDepth queueDepth() {
         return storage.inTx(tx -> tx.queueDepth(System.currentTimeMillis()));

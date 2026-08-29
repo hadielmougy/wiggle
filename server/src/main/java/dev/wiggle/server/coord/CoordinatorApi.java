@@ -1,6 +1,8 @@
 package dev.wiggle.server.coord;
 
+import com.google.protobuf.Struct;
 import dev.wiggle.core.IdCodec;
+import dev.wiggle.core.Json;
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.ActiveCellsRequest;
 import dev.wiggle.proto.ActiveCellsResponse;
@@ -14,18 +16,27 @@ import dev.wiggle.proto.EpochRing;
 import dev.wiggle.proto.EpochStatus;
 import dev.wiggle.proto.Expected;
 import dev.wiggle.proto.FetchConfigRequest;
+import dev.wiggle.proto.GetWorkflowRequest;
 import dev.wiggle.proto.NodeConfig;
 import dev.wiggle.proto.OpenEpochRequest;
 import dev.wiggle.proto.Policy;
+import dev.wiggle.proto.ProtoJson;
 import dev.wiggle.proto.RegisterRequest;
 import dev.wiggle.proto.RegisterResponse;
+import dev.wiggle.proto.RegisterWorkflowRequest;
+import dev.wiggle.proto.RegisterWorkflowResponse;
+import dev.wiggle.proto.RegisterWorkflowResult;
 import dev.wiggle.proto.RegisteredNode;
 import dev.wiggle.proto.ResolveRequest;
 import dev.wiggle.proto.ResolveResponse;
 import dev.wiggle.proto.RingSlot;
 import dev.wiggle.proto.SetRingRequest;
+import dev.wiggle.proto.WiggleControlPlaneGrpc;
+import dev.wiggle.proto.WorkflowDefinition;
 import io.grpc.Grpc;
+import io.grpc.InsecureChannelCredentials;
 import io.grpc.InsecureServerCredentials;
+import io.grpc.ManagedChannel;
 import io.grpc.Server;
 import io.grpc.ServerCredentials;
 import io.grpc.Status;
@@ -34,12 +45,15 @@ import io.grpc.stub.StreamObserver;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -76,12 +90,22 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     }
 
     private final CoordinatorStore store;
+    private final LiveCensus census;
     private final Server server;
     private final ExecutorService pool;
     private volatile boolean started;
+    // Channels to cells, for definition fan-out / seeding (the coordinator is a client of each cell).
+    private final Map<String, ManagedChannel> cellChannels = new ConcurrentHashMap<>();
+    private final Map<String, WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub> cellStubs = new ConcurrentHashMap<>();
 
     public CoordinatorApi(CoordinatorStore store, int port, Tls.Options tls) throws IOException {
+        this(store, port, tls, new LiveCensus());
+    }
+
+    /** Shares a {@link LiveCensus} with the reconciler, so heartbeat reports drive epoch retire (R21). */
+    public CoordinatorApi(CoordinatorStore store, int port, Tls.Options tls, LiveCensus census) throws IOException {
         this.store = store;
+        this.census = census;
         this.pool = Executors.newVirtualThreadPerTaskExecutor();
         this.server = Grpc.newServerBuilderForPort(port, credentials(tls))
                 .executor(pool)
@@ -123,6 +147,9 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
                 Thread.currentThread().interrupt();
             }
         }
+        for (ManagedChannel ch : cellChannels.values()) ch.shutdownNow();
+        cellChannels.clear();
+        cellStubs.clear();
         pool.shutdownNow();
     }
 
@@ -140,7 +167,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     @Override public void fetchConfig(FetchConfigRequest req, StreamObserver<NodeConfig> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc FetchConfig namespace=" + req.getNamespace());
-        run(resp, () -> doFetchConfig(req.getNamespace()));
+        run(resp, () -> doFetchConfig(req.getNamespace(), cellOrNamespace(req.getNamespace(), req.getNode().getCellId())));
     }
 
     @Override public void register(RegisterRequest req, StreamObserver<RegisterResponse> resp) {
@@ -150,56 +177,119 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     }
 
     @Override public void heartbeat(CoordinatorHeartbeatRequest req, StreamObserver<CoordinatorHeartbeatResponse> resp) {
-        run(resp, () -> doHeartbeat(req.getNodeId(), req.getConfigGeneration()));
+        run(resp, () -> doHeartbeat(req.getNodeId(), req.getConfigGeneration(),
+                toLongMap(req.getHealth().getLiveByEpochMap())));
     }
 
     @Override public void deregister(DeregisterRequest req, StreamObserver<Empty> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc Deregister node=" + req.getNodeId());
         run(resp, () -> {
-            store.removeNode(req.getNodeId());
+            doDeregister(req.getNodeId());
             return Empty.getDefaultInstance();
         });
     }
 
+    private static Map<Long, Long> toLongMap(Map<Long, Integer> m) {
+        if (m.isEmpty()) return Map.of();
+        Map<Long, Long> out = new LinkedHashMap<>();
+        for (Map.Entry<Long, Integer> e : m.entrySet()) out.put(e.getKey(), e.getValue().longValue());
+        return out;
+    }
+
     // ---- node-lifecycle logic (directly unit-testable) ----
 
-    /** The namespace's current config generation (its policy revision; 0 if none yet). */
+    /** Convenience for the single-cell case (the cell id is the namespace). */
     public NodeConfig doFetchConfig(String namespace) {
+        return doFetchConfig(namespace, namespace);
+    }
+
+    /**
+     * The config for a node in {@code cellId} of {@code namespace}: the current config generation (the
+     * policy revision) and the node's placement -- the epoch it mints into and the shards its cell owns.
+     * No storage/tuning overlay yet (that arrives with provisioning, T13); {@code generation} lets a node
+     * observe policy change (an epoch bump or ring edit) and re-fetch its placement.
+     */
+    public NodeConfig doFetchConfig(String namespace, String cellId) {
         long generation = store.getPolicy(namespace).map(CoordPolicy::revision).orElse(0L);
-        // Phase 1: no storage/tuning overlay yet (populated by provisioning, T13) -- the node keeps
-        // its local config. `generation` still lets a node observe namespace change (policy edits).
+        Placement pl = placementFor(namespace, cellId);
         return NodeConfig.newBuilder()
                 .setNamespace(namespace)
                 .setGeneration(generation)
                 .setExpected(Expected.newBuilder().build())
                 .setTtlSeconds(DEFAULT_TTL_S)
+                .setEpoch(pl.epoch())
+                .addAllShards(pl.shards())
                 .build();
     }
 
-    /** Records a node in the roster and returns its coordinator-assigned id. */
+    /** Records a node in the roster and returns its coordinator-assigned id and initial placement. */
     public RegisterResponse doRegister(String namespace, RegisteredNode node) {
+        // Seed the namespace's definitions onto the joining node BEFORE it enters the roster, so it is
+        // never resolvable while missing a graph (R23 "seed before eligible").
+        seedNewNode(namespace, node.getEndpoint());
         String nodeId = UUID.randomUUID().toString();
-        store.upsertNode(new CoordNode(nodeId, namespace, node.getEndpoint(), emptyToNull(node.getRegion()),
+        // A node's cell defaults to the namespace itself (the single-cell case), so a node that does not
+        // yet know its cell registers into the namespace's one implicit cell.
+        String cellId = cellOrNamespace(namespace, node.getCellId());
+        store.upsertNode(new CoordNode(nodeId, namespace, cellId, node.getEndpoint(), emptyToNull(node.getRegion()),
                 node.getEngineVersion(), 0, System.currentTimeMillis()));
+        Placement pl = placementFor(namespace, cellId);
         return RegisterResponse.newBuilder()
                 .setNodeId(nodeId)
                 .setHeartbeatIntervalSeconds(NODE_HEARTBEAT_INTERVAL_SECONDS)
+                .setEpoch(pl.epoch())
+                .addAllShards(pl.shards())
                 .build();
     }
 
-    /** Touches the node's liveness; returns {@code ok=false} for an unknown node (it should re-register). */
+    private static String cellOrNamespace(String namespace, String cellId) {
+        return cellId == null || cellId.isEmpty() ? namespace : cellId;
+    }
+
+    /**
+     * The placement a node in {@code cellId} mints into: the current epoch and the shards its cell owns
+     * in that epoch's ring. With no ring configured (the single implicit cell) this is epoch 0, shard 0
+     * -- identical to pre-ring behaviour (R1). A cell that is not (yet) in the ring also gets the genesis
+     * shard so it can still mint; the ring must name it before instances there are addressable.
+     */
+    private Placement placementFor(String namespace, String cellId) {
+        CoordPolicy policy = store.getPolicy(namespace).orElse(null);
+        if (policy == null) return new Placement(0, List.of(0));
+        long epoch = policy.currentEpoch();
+        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
+        if (er == null) return new Placement(epoch, List.of(0));
+        List<Integer> shards = new ArrayList<>();
+        for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
+        return new Placement(epoch, shards.isEmpty() ? List.of(0) : shards);
+    }
+
+    private record Placement(long epoch, List<Integer> shards) {}
+
+    /** Convenience for callers/tests that report no census. */
     public CoordinatorHeartbeatResponse doHeartbeat(String nodeId, long observedGeneration) {
+        return doHeartbeat(nodeId, observedGeneration, Map.of());
+    }
+
+    /**
+     * Touches the node's liveness and records its live-by-epoch census (for retire); returns
+     * {@code ok=false} for an unknown node (it should re-register). The returned generation lets the
+     * node notice a policy change (e.g. an epoch retire) and re-fetch its placement.
+     */
+    public CoordinatorHeartbeatResponse doHeartbeat(String nodeId, long observedGeneration, Map<Long, Long> liveByEpoch) {
         Optional<CoordNode> node = store.touchNode(nodeId, System.currentTimeMillis(), observedGeneration);
         if (node.isEmpty()) {
             return CoordinatorHeartbeatResponse.newBuilder().setOk(false).build();
         }
-        long generation = store.getPolicy(node.get().namespace()).map(CoordPolicy::revision).orElse(0L);
+        CoordNode n = node.get();
+        census.record(nodeId, n.namespace(), n.cellId(), liveByEpoch, System.currentTimeMillis());
+        long generation = store.getPolicy(n.namespace()).map(CoordPolicy::revision).orElse(0L);
         return CoordinatorHeartbeatResponse.newBuilder().setOk(true).setConfigGeneration(generation).build();
     }
 
-    /** Removes a node from the roster. */
+    /** Removes a node from the roster and forgets its census report. */
     public void doDeregister(String nodeId) {
         store.removeNode(nodeId);
+        census.forget(nodeId);
     }
 
     private static String emptyToNull(String s) {
@@ -219,24 +309,33 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     /**
      * Resolves a namespace (for a new start) or a specific instance id to a cell {@link Endpoint}.
      *
-     * <p>MVP note: one cell per namespace, so the dial address comes from the namespace's live node
-     * roster (region-filtered). When a namespace spans cells (T12), this parses the id's epoch/shard,
-     * looks up {@code ring[shard]} in the policy, and maps that cell to its registered endpoints.
+     * <p>By instance id: the id carries its epoch and shard ({@link IdCodec}); the shard is looked up in
+     * that epoch's ring to find the owning cell, and the cell's live nodes give the dial address -- so an
+     * instance always resolves to the cell that holds it, even across many cells. By namespace (a new
+     * start): the current epoch's first ring slot is used. When no ring is configured for the epoch, this
+     * falls back to the namespace's whole roster (the single implicit cell), so pre-ring usage is
+     * unchanged (R1).
      */
     public ResolveResponse doResolve(ResolveRequest req) {
         String namespace;
         long epoch;
+        int shard;   // -1 => "any" (namespace resolve, no specific instance)
         if (req.getByCase() == ResolveRequest.ByCase.INSTANCE_ID) {
             IdCodec.Placement p = IdCodec.parse(req.getInstanceId()).orElseThrow(() ->
                     new IllegalArgumentException("cannot route a legacy instance id ('" + req.getInstanceId()
                             + "'); resolve by namespace instead"));
             namespace = p.namespace();
             epoch = p.epoch();
+            shard = (int) p.shard();
         } else {
             namespace = req.getNamespace();
             epoch = store.getPolicy(namespace).map(CoordPolicy::currentEpoch).orElse(0L);
+            shard = -1;
         }
-        Endpoint endpoint = endpointFor(namespace, emptyToNull(req.getCallerRegion()));
+        String cellId = cellFor(namespace, epoch, shard);
+        Endpoint endpoint = cellId == null
+                ? endpointFor(namespace, emptyToNull(req.getCallerRegion()))
+                : endpointForCell(namespace, cellId, emptyToNull(req.getCallerRegion()));
         return ResolveResponse.newBuilder()
                 .setNamespace(namespace)
                 .setEpoch(epoch)
@@ -245,27 +344,170 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
                 .build();
     }
 
-    /** The cells hosting live work for a namespace (MVP: the one cell), plus a change generation. */
+    /**
+     * The cells hosting live work for a namespace -- every cell that appears in an OPEN or DRAINING
+     * epoch ring -- plus a change generation. A worker polls all of them, so an epoch that is draining
+     * keeps being polled until its work finishes and it retires. With no ring configured, this is the
+     * single implicit cell (the whole roster), unchanged from pre-ring usage (R1).
+     */
     public ActiveCellsResponse doActiveCells(String namespace, String callerRegion) {
-        long generation = store.getPolicy(namespace).map(CoordPolicy::revision).orElse(0L);
-        return ActiveCellsResponse.newBuilder()
+        Optional<CoordPolicy> policy = store.getPolicy(namespace);
+        long generation = policy.map(CoordPolicy::revision).orElse(0L);
+        ActiveCellsResponse.Builder b = ActiveCellsResponse.newBuilder()
                 .setGeneration(generation)
-                .addCells(endpointFor(namespace, callerRegion))
-                .setTtlSeconds(RESOLVE_TTL_S)
-                .build();
+                .setTtlSeconds(RESOLVE_TTL_S);
+        List<String> activeCells = activeCellIds(policy.orElse(null));
+        if (activeCells.isEmpty()) {
+            b.addCells(endpointFor(namespace, callerRegion));   // single implicit cell (no ring)
+        } else {
+            for (String cellId : activeCells) {
+                Endpoint e = endpointForCellOrNull(namespace, cellId, callerRegion);
+                if (e != null) b.addCells(e);
+            }
+        }
+        return b.build();
+    }
+
+    /** Cell ids that appear in any OPEN or DRAINING epoch ring, de-duplicated in ring order. */
+    private static List<String> activeCellIds(CoordPolicy policy) {
+        List<String> out = new ArrayList<>();
+        if (policy == null) return out;
+        for (CoordPolicy.EpochRing er : policy.epochs().values()) {
+            if (er.status() == CoordPolicy.EpochStatus.RETIRED) continue;
+            for (CoordPolicy.RingSlot s : er.ring()) {
+                if (!out.contains(s.cellId())) out.add(s.cellId());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The cell that owns {@code shard} in {@code epoch}, or {@code null} when no ring is configured (the
+     * single-implicit-cell case). {@code shard < 0} (a namespace resolve) selects the first ring slot.
+     */
+    private String cellFor(String namespace, long epoch, int shard) {
+        CoordPolicy policy = store.getPolicy(namespace).orElse(null);
+        if (policy == null) return null;
+        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
+        if (er == null || er.ring().isEmpty()) return null;
+        List<CoordPolicy.RingSlot> ring = er.ring();
+        if (shard < 0) return ring.get(0).cellId();
+        for (CoordPolicy.RingSlot s : ring) if (s.shard() == shard) return s.cellId();
+        return ring.get(Math.floorMod(shard, ring.size())).cellId();   // ring smaller than shard space
+    }
+
+    // ---- definition fan-out (R23) ----
+
+    @Override public void registerWorkflow(RegisterWorkflowRequest req, StreamObserver<RegisterWorkflowResponse> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc RegisterWorkflow namespace=" + req.getNamespace()
+                + " name=" + req.getName());
+        run(resp, () -> doRegisterWorkflow(req.getNamespace(), req.getName(), req.getDefinition().toByteArray()));
+    }
+
+    /**
+     * Registers a workflow across every cell of a namespace and records it in the definition registry.
+     * Content-hash versioning makes this idempotent -- the same definition yields the same version on
+     * every cell, so a replay is a no-op.
+     */
+    public RegisterWorkflowResponse doRegisterWorkflow(String namespace, String name, byte[] definitionJson) {
+        List<CoordNode> nodes = store.nodes(namespace);
+        if (nodes.isEmpty()) {
+            throw new IllegalStateException("no cell for namespace '" + namespace + "' to register '" + name + "'");
+        }
+        Struct struct = ProtoJson.toStruct(Json.parseObject(new String(definitionJson, StandardCharsets.UTF_8)));
+        WorkflowDefinition wd = WorkflowDefinition.newBuilder().setDefinition(struct).build();
+        int version = 0;
+        int seeded = 0;
+        for (CoordNode n : nodes) {
+            RegisterWorkflowResult r = cellStub(n.endpoint()).registerWorkflow(wd);
+            version = Integer.parseInt(r.getVersion());
+            seeded++;
+        }
+        store.putDefinition(new CoordDefinition(namespace, name, version, sha256(definitionJson),
+                System.currentTimeMillis()));
+        int fanned = seeded;
+        int v = version;
+        LOG.log(System.Logger.Level.INFO, () -> "fanned out workflow '" + name + "' v" + v
+                + " to " + fanned + " cell node(s) of namespace '" + namespace + "'");
+        return RegisterWorkflowResponse.newBuilder().setVersion(version).setCellsSeeded(seeded).build();
+    }
+
+    /**
+     * Copies the namespace's registered definitions onto a joining node from a healthy sibling, so a
+     * new cell holds every graph before it can host instances. Best-effort per definition; a first
+     * node (no sibling) or an empty registry is a no-op.
+     */
+    private void seedNewNode(String namespace, String newEndpoint) {
+        List<CoordDefinition> defs = store.definitions(namespace);
+        if (defs.isEmpty()) return;
+        List<CoordNode> siblings = store.nodes(namespace);   // self is not in the roster yet
+        if (siblings.isEmpty()) return;
+        String sibling = siblings.get(0).endpoint();
+        for (CoordDefinition d : defs) {
+            try {
+                WorkflowDefinition wd = cellStub(sibling)
+                        .getWorkflow(GetWorkflowRequest.newBuilder().setName(d.name()).build());
+                cellStub(newEndpoint).registerWorkflow(wd);
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "seeding '" + d.name() + "' onto " + newEndpoint + " failed (best-effort): " + e);
+            }
+        }
+    }
+
+    private WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub cellStub(String endpoint) {
+        String t = strip(endpoint);
+        cellChannels.computeIfAbsent(t, e -> Grpc.newChannelBuilder(e, InsecureChannelCredentials.create()).build());
+        return cellStubs.computeIfAbsent(t, e -> WiggleControlPlaneGrpc.newBlockingStub(cellChannels.get(e)));
+    }
+
+    private static String strip(String target) {
+        int i = target.indexOf("://");
+        return i < 0 ? target : target.substring(i + 3);
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            byte[] h = MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder sb = new StringBuilder(h.length * 2);
+            for (byte b : h) sb.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(java.util.Arrays.hashCode(bytes));
+        }
     }
 
     /** Builds a cell endpoint from the namespace's live roster, preferring the caller's region. */
     private Endpoint endpointFor(String namespace, String callerRegion) {
-        List<CoordNode> nodes = store.nodes(namespace);
+        Endpoint e = buildEndpoint(store.nodes(namespace), callerRegion);
+        if (e == null) throw new IllegalStateException("no live nodes for namespace '" + namespace + "'");
+        return e;
+    }
+
+    /** Builds the endpoint for one cell of a namespace; throws if that cell has no live nodes. */
+    private Endpoint endpointForCell(String namespace, String cellId, String callerRegion) {
+        Endpoint e = endpointForCellOrNull(namespace, cellId, callerRegion);
+        if (e == null) {
+            throw new IllegalStateException("no live nodes for cell '" + cellId + "' of namespace '" + namespace + "'");
+        }
+        return e;
+    }
+
+    /** Builds the endpoint for one cell of a namespace, or {@code null} if that cell has no live nodes. */
+    private Endpoint endpointForCellOrNull(String namespace, String cellId, String callerRegion) {
+        List<CoordNode> inCell = new ArrayList<>();
+        for (CoordNode n : store.nodes(namespace)) if (cellId.equals(n.cellId())) inCell.add(n);
+        return buildEndpoint(inCell, callerRegion);
+    }
+
+    /** Region-filters a node set (R24) and renders it as an {@link Endpoint}, or {@code null} if empty. */
+    private static Endpoint buildEndpoint(List<CoordNode> nodes, String callerRegion) {
         if (callerRegion != null) {
             List<CoordNode> regional = new ArrayList<>();
             for (CoordNode n : nodes) if (callerRegion.equals(n.region())) regional.add(n);
             if (!regional.isEmpty()) nodes = regional;   // same cell, region-appropriate addresses (R24)
         }
-        if (nodes.isEmpty()) {
-            throw new IllegalStateException("no live nodes for namespace '" + namespace + "'");
-        }
+        if (nodes.isEmpty()) return null;
         Endpoint.Builder b = Endpoint.newBuilder()
                 .setTarget(nodes.get(0).endpoint())      // TODO: a stable cell DNS name once provisioning records one
                 .setTtlSeconds(RESOLVE_TTL_S);

@@ -62,12 +62,13 @@ class CoordinatorStoreTest {
         assertEquals(EpochStatus.DRAINING, got2.epochs().get(0L).status());
 
         // ---- node roster ----
-        store.upsertNode(new CoordNode("n1", "acme", "grpc://h:1", "eu-west", "2.1.5", 2, 1_000));
-        store.upsertNode(new CoordNode("n1", "acme", "grpc://h:2", "eu-west", "2.1.5", 2, 2_000)); // upsert same id
+        store.upsertNode(new CoordNode("n1", "acme", "cellA", "grpc://h:1", "eu-west", "2.1.5", 2, 1_000));
+        store.upsertNode(new CoordNode("n1", "acme", "cellA", "grpc://h:2", "eu-west", "2.1.5", 2, 2_000)); // upsert same id
         assertEquals(1, store.nodes("acme").size());
         assertEquals("grpc://h:2", store.nodes("acme").get(0).endpoint(), "upsert replaced the endpoint");
+        assertEquals("cellA", store.nodes("acme").get(0).cellId(), "cell id round-trips");
 
-        store.upsertNode(new CoordNode("n2", "acme", "grpc://h:3", "eu-west", "2.1.5", 2, 500));
+        store.upsertNode(new CoordNode("n2", "acme", "cellB", "grpc://h:3", "eu-west", "2.1.5", 2, 500));
         assertEquals(2, store.nodes("acme").size());
         assertEquals(1, store.expireNodes(900), "n2 (hb 500) is stale");
         assertEquals(1, store.nodes("acme").size());

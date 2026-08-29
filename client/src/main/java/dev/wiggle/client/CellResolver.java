@@ -1,11 +1,15 @@
 package dev.wiggle.client;
 
+import com.google.protobuf.ByteString;
+import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.core.IdCodec;
+import dev.wiggle.core.Json;
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.ActiveCellsRequest;
 import dev.wiggle.proto.ActiveCellsResponse;
 import dev.wiggle.proto.CellCoordinatorGrpc;
 import dev.wiggle.proto.Endpoint;
+import dev.wiggle.proto.RegisterWorkflowRequest;
 import dev.wiggle.proto.ResolveRequest;
 import dev.wiggle.proto.ResolveResponse;
 import io.grpc.Grpc;
@@ -77,6 +81,23 @@ public final class CellResolver implements AutoCloseable {
                         "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"))
                 .namespace();
         return clientFor(resolveNamespace(namespace).getTarget());
+    }
+
+    /**
+     * Registers a workflow for a namespace. With a coordinator, this fans the definition out to every
+     * cell of the namespace (R23); with no coordinator it registers directly on the static cell.
+     */
+    public void registerWorkflow(String namespace, Blueprint<?> blueprint) {
+        if (coordinatorUrl == null) {
+            clientFor(staticTarget).register(blueprint);
+            return;
+        }
+        String json = Json.write(blueprint.definition().toJson());
+        coord.registerWorkflow(RegisterWorkflowRequest.newBuilder()
+                .setNamespace(namespace)
+                .setName(blueprint.name())
+                .setDefinition(ByteString.copyFromUtf8(json))
+                .build());
     }
 
     /** The cells hosting live work for a namespace (a worker polls all of them). */

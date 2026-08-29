@@ -137,19 +137,19 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
     @Override public void upsertNode(CoordNode n) {
         try (Connection c = borrow()) {
             try (PreparedStatement up = c.prepareStatement(
-                    "UPDATE coord_node SET namespace=?, endpoint=?, region=?, engine_version=?, " +
+                    "UPDATE coord_node SET namespace=?, cell_id=?, endpoint=?, region=?, engine_version=?, " +
                     "config_generation=?, last_heartbeat=? WHERE id=?")) {
-                up.setString(1, n.namespace()); up.setString(2, n.endpoint()); up.setString(3, n.region());
-                up.setString(4, n.engineVersion()); up.setLong(5, n.configGeneration());
-                up.setLong(6, n.lastHeartbeat()); up.setString(7, n.id());
+                up.setString(1, n.namespace()); up.setString(2, n.cellId()); up.setString(3, n.endpoint());
+                up.setString(4, n.region()); up.setString(5, n.engineVersion()); up.setLong(6, n.configGeneration());
+                up.setLong(7, n.lastHeartbeat()); up.setString(8, n.id());
                 if (up.executeUpdate() == 1) return;
             }
             try (PreparedStatement ins = c.prepareStatement(
-                    "INSERT INTO coord_node (id, namespace, endpoint, region, engine_version, " +
-                    "config_generation, last_heartbeat) VALUES (?,?,?,?,?,?,?)")) {
-                ins.setString(1, n.id()); ins.setString(2, n.namespace()); ins.setString(3, n.endpoint());
-                ins.setString(4, n.region()); ins.setString(5, n.engineVersion());
-                ins.setLong(6, n.configGeneration()); ins.setLong(7, n.lastHeartbeat());
+                    "INSERT INTO coord_node (id, namespace, cell_id, endpoint, region, engine_version, " +
+                    "config_generation, last_heartbeat) VALUES (?,?,?,?,?,?,?,?)")) {
+                ins.setString(1, n.id()); ins.setString(2, n.namespace()); ins.setString(3, n.cellId());
+                ins.setString(4, n.endpoint()); ins.setString(5, n.region()); ins.setString(6, n.engineVersion());
+                ins.setLong(7, n.configGeneration()); ins.setLong(8, n.lastHeartbeat());
                 ins.executeUpdate();
             }
         } catch (SQLException e) {
@@ -160,13 +160,13 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
     @Override public Optional<CoordNode> node(String id) {
         try (Connection c = borrow();
              PreparedStatement p = c.prepareStatement(
-                     "SELECT namespace, endpoint, region, engine_version, config_generation, last_heartbeat " +
+                     "SELECT namespace, cell_id, endpoint, region, engine_version, config_generation, last_heartbeat " +
                      "FROM coord_node WHERE id=?")) {
             p.setString(1, id);
             try (ResultSet rs = p.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
                 return Optional.of(new CoordNode(id, rs.getString(1), rs.getString(2), rs.getString(3),
-                        rs.getString(4), rs.getLong(5), rs.getLong(6)));
+                        rs.getString(4), rs.getString(5), rs.getLong(6), rs.getLong(7)));
             }
         } catch (SQLException e) {
             throw new JdbcStorage.StorageException("node failed", e);
@@ -200,14 +200,14 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
     @Override public List<CoordNode> nodes(String namespace) {
         try (Connection c = borrow();
              PreparedStatement p = c.prepareStatement(
-                     "SELECT id, endpoint, region, engine_version, config_generation, last_heartbeat " +
+                     "SELECT id, cell_id, endpoint, region, engine_version, config_generation, last_heartbeat " +
                      "FROM coord_node WHERE namespace=?")) {
             p.setString(1, namespace);
             try (ResultSet rs = p.executeQuery()) {
                 List<CoordNode> out = new ArrayList<>();
                 while (rs.next()) {
                     out.add(new CoordNode(rs.getString(1), namespace, rs.getString(2), rs.getString(3),
-                            rs.getString(4), rs.getLong(5), rs.getLong(6)));
+                            rs.getString(4), rs.getString(5), rs.getLong(6), rs.getLong(7)));
                 }
                 return out;
             }

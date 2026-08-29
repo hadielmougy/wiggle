@@ -30,11 +30,15 @@ final class CellBundle implements ServerBundle {
     private final GrpcApi api;
     /** Null unless a dashboard port was configured. */
     private final HttpDashboard dashboard;
+    /** Null for a standalone cell; the coordinator-managed placement otherwise. */
+    private final CellPlacement placement;
 
     CellBundle(ServerConfig config, Storage storage, ClusterManager cluster,
                DashboardAuth dashboardAuth) throws IOException {
+        String ns = config.namespace();
+        this.placement = ns == null || ns.isBlank() ? null : new CellPlacement();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
-                idMinter(config));
+                idMinter(ns, placement));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch());
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
@@ -45,21 +49,24 @@ final class CellBundle implements ServerBundle {
     }
 
     /**
-     * How new instance ids are minted. With a namespace configured (a coordinator-managed cell) the
-     * id is epoch-aware ({@code ns.e0.s0.ulid}); the epoch/ring are 0/1 until the coordinator supplies
-     * a real ring (a later ticket). Without a namespace (standalone) it stays the legacy {@code wfi_}
-     * form, which the codec treats as a legacy id routed to the genesis cell.
+     * How new instance ids are minted. With a namespace configured (a coordinator-managed cell) the id
+     * is epoch-aware ({@code ns.e{epoch}.s{shard}.ulid}), with the epoch and shard taken from the live
+     * {@link CellPlacement} the coordinator supplies at registration (defaulting to epoch 0 / shard 0
+     * until then). Without a namespace (standalone) it stays the legacy {@code wfi_} form, which the
+     * codec treats as a legacy id routed to the genesis cell.
      */
-    private static Supplier<String> idMinter(ServerConfig config) {
-        String ns = config.namespace();
-        if (ns == null || ns.isBlank()) {
+    private static Supplier<String> idMinter(String ns, CellPlacement placement) {
+        if (placement == null) {
             return () -> Ids.next("wfi");
         }
         return () -> {
             String ulid = Ids.token();
-            return IdCodec.format(ns, 0, IdCodec.shardFor(ulid, 1), ulid);
+            return IdCodec.format(ns, placement.epoch(), placement.shardFor(ulid), ulid);
         };
     }
+
+    /** The coordinator-managed placement (epoch + owned shards); null for a standalone cell. */
+    @Override public CellPlacement placement() { return placement; }
 
     private static @NonNull HttpDashboard dashboard(ServerConfig config, DashboardAuth dashboardAuth,
                                                     WorkflowEngine engine, ClusterManager cluster) throws IOException {

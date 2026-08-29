@@ -31,6 +31,11 @@ class CoordinatorResolveTest {
         return RegisteredNode.newBuilder().setName(endpoint).setEndpoint(endpoint).setRegion(region).build();
     }
 
+    private static RegisteredNode node(String endpoint, String region, String cellId) {
+        return RegisteredNode.newBuilder().setName(endpoint).setEndpoint(endpoint)
+                .setRegion(region).setCellId(cellId).build();
+    }
+
     private static CoordinatorApi api(InMemoryCoordinatorStore store) throws Exception {
         return new CoordinatorApi(store, 0, Tls.Options.DISABLED);
     }
@@ -39,8 +44,8 @@ class CoordinatorResolveTest {
     void resolveByNamespace() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
-            api.doRegister("nsA", node("grpc://hb:2", "eu-west"));
+            api.doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
+            api.doRegister("nsA", node("grpc://hb:2", "eu-west", "cell-1"));
             api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build()));
 
             ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setNamespace("nsA").build());
@@ -104,7 +109,7 @@ class CoordinatorResolveTest {
     void activeCells() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
+            api.doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
             api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build())); // revision 1
 
             ActiveCellsResponse ac = api.doActiveCells("nsA", null);

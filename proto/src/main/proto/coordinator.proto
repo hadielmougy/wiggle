@@ -106,6 +106,7 @@ message NodeInfo {
     string engine_version = 2;
     string advertise_host = 3;
     string region = 4;
+    string cell_id = 5;         // the cell this node was provisioned into; "" -> the namespace
 }
 
 message FetchConfigRequest {
@@ -125,6 +126,8 @@ message NodeConfig {
     StorageSpec storage = 4;
     Tuning tuning = 5;
     uint32 ttl_seconds = 6;
+    uint64 epoch = 7;           // the epoch this node mints new instances into
+    repeated uint32 shards = 8; // the shards this node's cell owns in that epoch (ids are stamped with one of these)
 }
 
 message RegisteredNode {
@@ -133,6 +136,7 @@ message RegisteredNode {
     string engine_version = 3;
     string region = 4;
     int64 started_at = 5;       // epoch millis
+    string cell_id = 6;         // the cell this node belongs to (nodes sharing a DB); "" -> the namespace
 }
 
 message RegisterRequest {
@@ -145,6 +149,8 @@ message RegisterResponse {
     string node_id = 1;
     uint32 heartbeat_interval_seconds = 2;
     repeated Directive directives = 3;
+    uint64 epoch = 4;           // initial placement: the epoch this node mints into
+    repeated uint32 shards = 5; // initial placement: the shards this node's cell owns
 }
 
 message Health {

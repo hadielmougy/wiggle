@@ -37,6 +37,7 @@ public final class CoordinatorConfigSource implements ConfigSource {
     @Override public ServerConfig load() {
         ServerConfig local = base.load();
         String namespace = System.getenv().getOrDefault("WIGGLE_NAMESPACE", "");
+        String cellId = System.getenv().getOrDefault("WIGGLE_CELL_ID", "");
         ManagedChannel channel = Grpc.newChannelBuilder(coordinatorUrl, InsecureChannelCredentials.create()).build();
         try {
             NodeConfig cfg = CellCoordinatorGrpc.newBlockingStub(channel)
@@ -46,6 +47,7 @@ public final class CoordinatorConfigSource implements ConfigSource {
                             .setNode(NodeInfo.newBuilder()
                                     .setName(local.nodeName())
                                     .setEngineVersion(engineVersion())
+                                    .setCellId(cellId)
                                     .build())
                             .build());
             LOG.log(System.Logger.Level.INFO, () -> "fetched coordinator config for namespace '" + namespace
