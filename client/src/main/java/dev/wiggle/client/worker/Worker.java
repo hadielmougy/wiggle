@@ -86,6 +86,9 @@ public final class Worker implements AutoCloseable {
 
     public int inFlight() { return inFlight.get(); }
 
+    /** Whether the worker is currently running (started and not yet closed). */
+    public boolean isRunning() { return running.get(); }
+
     /** Adds a workflow's handlers to this worker's dispatch table. */
     public Worker register(Blueprint<?> blueprint) {
         WorkflowDefinition def = blueprint.definition();

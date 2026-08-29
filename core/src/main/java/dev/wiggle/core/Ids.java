@@ -9,11 +9,15 @@ public final class Ids {
 
     private Ids() {}
 
-    /** Lexicographically sortable, time-prefixed id (ULID-ish). */
+    /** Lexicographically sortable, time-prefixed id (ULID-ish), e.g. {@code wfi_01h8...}. */
     public static String next(String prefix) {
+        return prefix + '_' + token();
+    }
+
+    /** A bare 22-char lexicographically sortable token (10 time chars + 12 random), no prefix. */
+    public static String token() {
         long t = System.currentTimeMillis();
-        StringBuilder sb = new StringBuilder(prefix.length() + 1 + 26);
-        sb.append(prefix).append('_');
+        StringBuilder sb = new StringBuilder(22);
         for (int i = 9; i >= 0; i--) sb.append(B32[(int) ((t >>> (i * 5)) & 31)]);
         for (int i = 0; i < 12; i++) sb.append(B32[RND.nextInt(32)]);
         return sb.toString();

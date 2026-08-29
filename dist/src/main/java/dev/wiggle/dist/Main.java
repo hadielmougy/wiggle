@@ -48,7 +48,7 @@ public final class Main {
         }
 
         coordinator.register(new CoordinatorLink.NodeInfo(
-                config.nodeName(), System.getenv("WIGGLE_NAMESPACE"), server.baseUrl(), engineVersion()));
+                config.nodeName(), config.namespace(), server.baseUrl(), engineVersion()));
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {

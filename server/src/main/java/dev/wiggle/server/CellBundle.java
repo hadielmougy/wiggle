@@ -1,5 +1,7 @@
 package dev.wiggle.server;
 
+import dev.wiggle.core.IdCodec;
+import dev.wiggle.core.Ids;
 import dev.wiggle.server.cluster.ClusterManager;
 import dev.wiggle.server.cluster.Housekeeper;
 import dev.wiggle.server.cluster.QueueLagMonitor;
@@ -12,6 +14,7 @@ import dev.wiggle.server.store.Storage;
 import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 /**
  * The {@link ServerRole#CELL} subsystems: the workflow engine, the clock-driven housekeeping, the
@@ -30,7 +33,8 @@ final class CellBundle implements ServerBundle {
 
     CellBundle(ServerConfig config, Storage storage, ClusterManager cluster,
                DashboardAuth dashboardAuth) throws IOException {
-        this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis());
+        this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
+                idMinter(config));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch());
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
@@ -38,6 +42,23 @@ final class CellBundle implements ServerBundle {
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
                 config.tls(), config.memory());
         this.dashboard = config.dashboardPort() <= 0 ? null : dashboard(config, dashboardAuth, engine, cluster);
+    }
+
+    /**
+     * How new instance ids are minted. With a namespace configured (a coordinator-managed cell) the
+     * id is epoch-aware ({@code ns.e0.s0.ulid}); the epoch/ring are 0/1 until the coordinator supplies
+     * a real ring (a later ticket). Without a namespace (standalone) it stays the legacy {@code wfi_}
+     * form, which the codec treats as a legacy id routed to the genesis cell.
+     */
+    private static Supplier<String> idMinter(ServerConfig config) {
+        String ns = config.namespace();
+        if (ns == null || ns.isBlank()) {
+            return () -> Ids.next("wfi");
+        }
+        return () -> {
+            String ulid = Ids.token();
+            return IdCodec.format(ns, 0, IdCodec.shardFor(ulid, 1), ulid);
+        };
     }
 
     private static @NonNull HttpDashboard dashboard(ServerConfig config, DashboardAuth dashboardAuth,

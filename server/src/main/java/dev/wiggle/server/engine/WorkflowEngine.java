@@ -27,11 +27,20 @@ public final class WorkflowEngine {
     private final Storage storage;
     private final DefinitionRegistry definitions;
     private final long defaultLeaseMillis;
+    private final java.util.function.Supplier<String> idMinter;
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
+        this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
+    }
+
+    /** {@code idMinter} produces new instance ids: legacy {@code wfi_...} by default, or epoch-aware
+     *  ids ({@link dev.wiggle.core.IdCodec}) when the cell is placed under a coordinator. */
+    public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis,
+                          java.util.function.Supplier<String> idMinter) {
         this.storage = storage;
         this.definitions = definitions;
         this.defaultLeaseMillis = defaultLeaseMillis;
+        this.idMinter = idMinter;
     }
 
     public DefinitionRegistry definitions() { return definitions; }
@@ -68,10 +77,10 @@ public final class WorkflowEngine {
         return inst.id;
     }
 
-    private static Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId,
-                                              String parentTokenId, long now) {
+    private Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId,
+                                       String parentTokenId, long now) {
         Instance inst = new Instance();
-        inst.id = Ids.next("wfi");
+        inst.id = idMinter.get();
         inst.workflow = def.name();
         inst.version = def.version();
         inst.correlationId = correlationId;
