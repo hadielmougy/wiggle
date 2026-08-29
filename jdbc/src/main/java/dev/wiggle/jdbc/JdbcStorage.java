@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.wiggle.core.*;
 import dev.wiggle.server.ServerRole;
+import dev.wiggle.server.coord.CoordinatorStore;
 import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.*;
 import dev.wiggle.server.store.Storage;
@@ -211,6 +212,7 @@ public final class JdbcStorage implements Storage {
             CREATE TABLE IF NOT EXISTS coord_node (
               id                VARCHAR(64)  PRIMARY KEY,
               namespace         VARCHAR(200) NOT NULL,
+              cell_id           VARCHAR(200) NOT NULL,
               endpoint          VARCHAR(300) NOT NULL,
               region            VARCHAR(120),
               engine_version    VARCHAR(60),
@@ -218,6 +220,7 @@ public final class JdbcStorage implements Storage {
               last_heartbeat    BIGINT       NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_coord_node_ns ON coord_node (namespace, last_heartbeat);
+            CREATE INDEX IF NOT EXISTS ix_coord_node_cell ON coord_node (namespace, cell_id);
             CREATE TABLE IF NOT EXISTS coord_definition (
               namespace      VARCHAR(200) NOT NULL,
               name           VARCHAR(200) NOT NULL,
@@ -226,7 +229,25 @@ public final class JdbcStorage implements Storage {
               registered_at  BIGINT       NOT NULL,
               PRIMARY KEY (namespace, name)
             );
+            CREATE TABLE IF NOT EXISTS coord_namespace (
+              namespace   VARCHAR(200) PRIMARY KEY,
+              state       VARCHAR(30)  NOT NULL,
+              scheme      VARCHAR(30),
+              jdbc_url    VARCHAR(500),
+              db_user     VARCHAR(120),
+              secret_ref  VARCHAR(300),
+              pool_size   INT,
+              replicas    INT,
+              region      VARCHAR(120),
+              endpoint    VARCHAR(300),
+              error       VARCHAR(1000),
+              updated_at  BIGINT       NOT NULL
+            );
             """));
+
+    @Override public CoordinatorStore coordinatorStore() {
+        return new JdbcCoordinatorStore(ds);   // shares this store's pool; does not own/close it
+    }
 
     @Override public void migrate() {
         migrate(ServerRole.CELL);

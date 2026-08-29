@@ -77,8 +77,12 @@ class GracefulShutdownTest {
             // that step is deliberately parked on `proceed` right now.
             Thread closer = new Thread(worker::close);
             closer.start();
-            Thread.sleep(500);   // let close() flip its running flag before step "a" is allowed to return
-                                 // (generous so the precondition holds even under heavy parallel test load)
+            // Deterministically wait until close() has flipped the running flag (rather than guessing
+            // with a sleep), so step "a" only returns once the drain precondition holds -- robust under
+            // heavy parallel test load.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (worker.isRunning() && System.nanoTime() < deadline) Thread.sleep(2);
+            assertTrue(!worker.isRunning(), "close() flipped the running flag");
             proceed.countDown();
             closer.join(TimeUnit.SECONDS.toMillis(20));
             assertTrue(!closer.isAlive(), "close() returned once the drain completed");

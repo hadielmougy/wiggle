@@ -47,8 +47,12 @@ public final class Main {
             System.out.println("Dashboard at " + (tls ? "https" : "http") + "://localhost:" + server.dashboardPort());
         }
 
+        String cellId = System.getenv().getOrDefault("WIGGLE_CELL_ID", "");
+        // A coordinator-role node runs no cell (no placement, no engine) -> no runtime to report.
+        CoordinatorLink.CellRuntime runtime = server.placement() == null ? null
+                : new CoordinatorLink.CellRuntime(server.placement(), server.engine()::liveCountByEpoch);
         coordinator.register(new CoordinatorLink.NodeInfo(
-                config.nodeName(), System.getenv("WIGGLE_NAMESPACE"), server.baseUrl(), engineVersion()));
+                config.nodeName(), config.namespace(), cellId, server.baseUrl(), engineVersion()), runtime);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {

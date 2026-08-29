@@ -27,11 +27,20 @@ public final class WorkflowEngine {
     private final Storage storage;
     private final DefinitionRegistry definitions;
     private final long defaultLeaseMillis;
+    private final java.util.function.Supplier<String> idMinter;
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
+        this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
+    }
+
+    /** {@code idMinter} produces new instance ids: legacy {@code wfi_...} by default, or epoch-aware
+     *  ids ({@link dev.wiggle.core.IdCodec}) when the cell is placed under a coordinator. */
+    public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis,
+                          java.util.function.Supplier<String> idMinter) {
         this.storage = storage;
         this.definitions = definitions;
         this.defaultLeaseMillis = defaultLeaseMillis;
+        this.idMinter = idMinter;
     }
 
     public DefinitionRegistry definitions() { return definitions; }
@@ -68,10 +77,10 @@ public final class WorkflowEngine {
         return inst.id;
     }
 
-    private static Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId,
-                                              String parentTokenId, long now) {
+    private Instance insertNewInstance(Tx tx, LazyGraph def, Object context, String correlationId,
+                                       String parentTokenId, long now) {
         Instance inst = new Instance();
-        inst.id = Ids.next("wfi");
+        inst.id = idMinter.get();
         inst.workflow = def.name();
         inst.version = def.version();
         inst.correlationId = correlationId;
@@ -123,6 +132,25 @@ public final class WorkflowEngine {
 
     public List<Token> tokens(String instanceId) {
         return storage.inTx(tx -> tx.tokensOf(instanceId));
+    }
+
+    /** Cap on the live set scanned for the epoch census; a draining epoch shrinks, so this is ample. */
+    private static final int LIVE_CENSUS_CAP = 100_000;
+
+    /**
+     * Live (RUNNING) instance count grouped by the epoch encoded in each instance id -- this cell's
+     * contribution to the coordinator's retire census (R21). A DRAINING epoch that reaches zero here on
+     * every cell can be retired. Legacy ids (no epoch) count as the genesis epoch 0.
+     */
+    public Map<Long, Integer> liveCountByEpoch() {
+        return storage.inTx(tx -> {
+            Map<Long, Integer> out = new HashMap<>();
+            for (Instance i : tx.listInstances(null, InstanceStatus.RUNNING, LIVE_CENSUS_CAP)) {
+                long epoch = IdCodec.parse(i.id).map(IdCodec.Placement::epoch).orElse(0L);
+                out.merge(epoch, 1, Integer::sum);
+            }
+            return out;
+        });
     }
 
     /** Snapshot of the dispatchable backlog right now: how many tasks are queued and waiting. */

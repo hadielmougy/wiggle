@@ -1,6 +1,8 @@
 package dev.wiggle.server.store;
 
 import dev.wiggle.server.ServerRole;
+import dev.wiggle.server.coord.CoordinatorStore;
+import dev.wiggle.server.coord.InMemoryCoordinatorStore;
 
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -24,6 +26,16 @@ public interface Storage extends AutoCloseable {
      */
     default void migrate(ServerRole role) {
         migrate();
+    }
+
+    /**
+     * The coordinator's view over this database (policy / node roster / definition registry), used
+     * only by the {@code coordinator} role. The default is a non-persistent in-memory store; a JDBC
+     * store overrides this to return a {@link CoordinatorStore} sharing its connection pool over the
+     * {@code coord_*} tables.
+     */
+    default CoordinatorStore coordinatorStore() {
+        return new InMemoryCoordinatorStore();
     }
 
     <R> R inTx(Function<Tx, R> work);

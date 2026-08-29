@@ -90,6 +90,12 @@ public final class WiggleServer implements AutoCloseable {
     /** The workflow engine. Valid for the {@code cell} role; throws for {@code coordinator}. */
     public WorkflowEngine engine() { return bundle.engine(); }
 
+    /**
+     * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
+     * cell (no namespace) and for the coordinator role. The coordinator link updates it as policy moves.
+     */
+    public CellPlacement placement() { return bundle.placement(); }
+
     public ClusterManager cluster() { return cluster; }
 
     @Override public void close() {

@@ -17,7 +17,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            Duration retention, int housekeepingBatch, int dashboardPort,
                            Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                            String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory,
-                           ServerRole role) {
+                           ServerRole role, String namespace) {
 
     /**
      * Memory-pressure admission control for worker polls. When GC-accurate heap utilization crosses
@@ -97,7 +97,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
                 missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
                 queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory,
-                ServerRole.CELL);
+                ServerRole.CELL, null);
     }
 
     public ServerConfig {
@@ -111,7 +111,31 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, role);
+                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+    }
+
+    /** A copy of this config with the given placement namespace (used to mint epoch-aware ids). */
+    public ServerConfig withNamespace(String namespace) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+    }
+
+    /** A copy of this config on the given storage (null/blank url ⇒ in-memory). */
+    public ServerConfig withStorage(String jdbcUrl, String jdbcUser, String jdbcPassword, int jdbcPoolSize) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+    }
+
+    /** A copy of this config bound to a different gRPC port. */
+    public ServerConfig withPort(int port) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, role, namespace);
     }
 
     public static ServerConfig fromEnvironment() {
@@ -143,7 +167,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 // Memory-pressure load shedding; disabled unless WIGGLE_MEMORY_SHEDDING_ENABLED=true.
                 Memory.fromEnvironment(),
                 // cell (default) or coordinator; see docs/cell-coordinator-tickets.md.
-                ServerRole.fromString(strProp("wiggle.role", "WIGGLE_ROLE", "cell")));
+                ServerRole.fromString(strProp("wiggle.role", "WIGGLE_ROLE", "cell")),
+                // placement namespace (WIGGLE_NAMESPACE); when set, the cell mints epoch-aware ids.
+                strProp("wiggle.namespace", "WIGGLE_NAMESPACE", null));
     }
 
     public boolean isInMemory() {

@@ -1,0 +1,228 @@
+syntax = "proto3";
+
+package dev.wiggle.proto;
+
+option java_package = "dev.wiggle.proto";
+option java_multiple_files = true;
+
+import "wiggle.proto";   // reuse Empty
+
+// The optional cell coordinator's control plane. It shards a workflow's instances across isolated
+// cells; it is never on the data path (poll/complete go straight to a cell). See
+// docs/cell-coordinator-tickets.md and the design reference for the full model.
+service CellCoordinator {
+    // ---- node lifecycle (a server node <-> coordinator) ----
+    rpc FetchConfig (FetchConfigRequest)          returns (NodeConfig);
+    rpc Register    (RegisterRequest)             returns (RegisterResponse);
+    rpc Heartbeat   (CoordinatorHeartbeatRequest) returns (CoordinatorHeartbeatResponse);
+    rpc Deregister  (DeregisterRequest)           returns (Empty);
+
+    // ---- resolution (clients & workers; cached, region-aware) ----
+    rpc Resolve     (ResolveRequest)     returns (ResolveResponse);
+    rpc ActiveCells (ActiveCellsRequest) returns (ActiveCellsResponse);
+
+    // ---- admin (reconfiguration & definition fan-out) ----
+    rpc OpenEpoch        (OpenEpochRequest)        returns (Policy);
+    rpc SetRing          (SetRingRequest)          returns (Policy);
+    rpc RegisterWorkflow (RegisterWorkflowRequest) returns (RegisterWorkflowResponse);  // R23
+}
+
+// ---------------------------------------------------------------- shared types
+
+message Tls {
+    string server_name = 1;
+    string ca_ref = 2;
+}
+
+// What Resolve / ActiveCells hand back: a gRPC target + TLS, not a bare host:port.
+message Endpoint {
+    string target = 1;              // e.g. "grpcs://acme-e7.us-east.cells.example.net:8443"
+    string region = 2;              // where this cell's data lives
+    Tls tls = 3;
+    repeated string addresses = 4;  // optional explicit node list for client-side LB
+    uint32 ttl_seconds = 5;
+}
+
+// A node's storage config (maps to ServerConfig's jdbc* fields).
+message StorageSpec {
+    string scheme = 1;
+    string jdbc_url = 2;
+    string user = 3;
+    string secret_ref = 4;   // resolved by the node, never stored by the coordinator
+    uint32 pool_size = 5;
+}
+
+// A sparse tuning overlay: an unset field means "keep the node's default".
+message Tuning {
+    optional uint32 poll_interval_millis = 1;
+    optional uint32 lease_millis = 2;
+    optional uint32 long_poll_max_millis = 3;
+    optional uint64 retention_millis = 4;
+
+    message Memory {
+        optional bool shedding_enabled = 1;
+        optional double threshold = 2;
+    }
+    Memory memory = 5;
+}
+
+// One slot of a placement ring: shard -> cell, region-tagged (R24).
+message RingSlot {
+    uint32 shard = 1;
+    string cell_id = 2;
+    string region = 3;
+}
+
+enum EpochStatus {
+    EPOCH_STATUS_UNSPECIFIED = 0;
+    OPEN = 1;
+    DRAINING = 2;
+    RETIRED = 3;
+}
+
+message EpochRing {
+    repeated RingSlot ring = 1;
+    EpochStatus status = 2;
+}
+
+// The coordinator's per-namespace policy -- O(namespaces x epochs x cells), never per-instance.
+message Policy {
+    string namespace = 1;
+    uint64 current_epoch = 2;
+    map<uint64, EpochRing> epochs = 3;
+    uint64 revision = 4;   // CAS token for reconfiguration writes
+}
+
+enum Directive {
+    DIRECTIVE_UNSPECIFIED = 0;
+    RECONFIGURE = 1;
+    DRAIN = 2;
+}
+
+// ---------------------------------------------------------------- node lifecycle
+
+message NodeInfo {
+    string name = 1;
+    string engine_version = 2;
+    string advertise_host = 3;
+    string region = 4;
+    string cell_id = 5;         // the cell this node was provisioned into; "" -> the namespace
+}
+
+message FetchConfigRequest {
+    string namespace = 1;
+    NodeInfo node = 2;
+}
+
+message Expected {
+    string engine_version = 1;
+    uint32 schema_version = 2;
+}
+
+message NodeConfig {
+    string namespace = 1;
+    uint64 generation = 2;      // newer than the node's => re-fetch (push-free)
+    Expected expected = 3;      // version / schema guardrail
+    StorageSpec storage = 4;
+    Tuning tuning = 5;
+    uint32 ttl_seconds = 6;
+    uint64 epoch = 7;           // the epoch this node mints new instances into
+    repeated uint32 shards = 8; // the shards this node's cell owns in that epoch (ids are stamped with one of these)
+}
+
+message RegisteredNode {
+    string name = 1;
+    string endpoint = 2;
+    string engine_version = 3;
+    string region = 4;
+    int64 started_at = 5;       // epoch millis
+    string cell_id = 6;         // the cell this node belongs to (nodes sharing a DB); "" -> the namespace
+}
+
+message RegisterRequest {
+    string namespace = 1;
+    RegisteredNode node = 2;
+    uint64 config_generation = 3;
+}
+
+message RegisterResponse {
+    string node_id = 1;
+    uint32 heartbeat_interval_seconds = 2;
+    repeated Directive directives = 3;
+    uint64 epoch = 4;           // initial placement: the epoch this node mints into
+    repeated uint32 shards = 5; // initial placement: the shards this node's cell owns
+}
+
+message Health {
+    uint32 in_flight = 1;
+    bool leader = 2;
+    map<uint64, uint32> live_by_epoch = 3;   // epoch -> live instance count; drives cell retire (R21)
+}
+
+message CoordinatorHeartbeatRequest {
+    string node_id = 1;
+    uint64 config_generation = 2;
+    Health health = 3;
+}
+
+message CoordinatorHeartbeatResponse {
+    bool ok = 1;
+    uint64 config_generation = 2;   // newer => node re-fetches
+    repeated Directive directives = 3;
+}
+
+message DeregisterRequest {
+    string node_id = 1;
+}
+
+// ---------------------------------------------------------------- resolution
+
+message ResolveRequest {
+    oneof by {
+        string instance_id = 1;   // route a specific instance (parsed ns.epoch.shard)
+        string namespace = 2;     // resolve the CURRENT epoch for a new start
+    }
+    string caller_region = 3;     // region-appropriate address, never a different cell (R24)
+}
+
+message ResolveResponse {
+    string namespace = 1;
+    uint64 epoch = 2;
+    Endpoint endpoint = 3;
+    uint32 ttl_seconds = 4;
+}
+
+message ActiveCellsRequest {
+    string namespace = 1;
+    string caller_region = 2;
+}
+
+message ActiveCellsResponse {
+    uint64 generation = 1;         // bump => re-fetch (worker reconciles its poll set)
+    repeated Endpoint cells = 2;   // region-local cells with live work
+    uint32 ttl_seconds = 3;
+}
+
+// ---------------------------------------------------------------- admin
+
+message OpenEpochRequest {
+    string namespace = 1;
+    repeated RingSlot ring = 2;    // scale out -> gen++
+}
+
+message SetRingRequest {
+    string namespace = 1;
+    uint64 epoch = 2;
+    repeated RingSlot ring = 3;
+}
+
+message RegisterWorkflowRequest {
+    string namespace = 1;
+    string name = 2;
+    bytes definition = 3;          // compiled graph JSON; content-hash => same version on every cell
+}
+
+message RegisterWorkflowResponse {
+    uint32 version = 1;
+    uint32 cells_seeded = 2;
+}
