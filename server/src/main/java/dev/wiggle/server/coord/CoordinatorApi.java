@@ -1,11 +1,15 @@
 package dev.wiggle.server.coord;
 
+import dev.wiggle.core.IdCodec;
 import dev.wiggle.core.Tls;
+import dev.wiggle.proto.ActiveCellsRequest;
+import dev.wiggle.proto.ActiveCellsResponse;
 import dev.wiggle.proto.CellCoordinatorGrpc;
 import dev.wiggle.proto.CoordinatorHeartbeatRequest;
 import dev.wiggle.proto.CoordinatorHeartbeatResponse;
 import dev.wiggle.proto.DeregisterRequest;
 import dev.wiggle.proto.Empty;
+import dev.wiggle.proto.Endpoint;
 import dev.wiggle.proto.EpochRing;
 import dev.wiggle.proto.EpochStatus;
 import dev.wiggle.proto.Expected;
@@ -16,6 +20,8 @@ import dev.wiggle.proto.Policy;
 import dev.wiggle.proto.RegisterRequest;
 import dev.wiggle.proto.RegisterResponse;
 import dev.wiggle.proto.RegisteredNode;
+import dev.wiggle.proto.ResolveRequest;
+import dev.wiggle.proto.ResolveResponse;
 import dev.wiggle.proto.RingSlot;
 import dev.wiggle.proto.SetRingRequest;
 import io.grpc.Grpc;
@@ -50,6 +56,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     private static final System.Logger LOG = System.getLogger(CoordinatorApi.class.getName());
     private static final int CAS_ATTEMPTS = 5;
     private static final int DEFAULT_TTL_S = 300;
+    private static final int RESOLVE_TTL_S = 30;   // endpoints move; keep resolution caches short-lived
 
     /**
      * How often a node heartbeats the coordinator (dictated to nodes in {@code RegisterResponse}).
@@ -197,6 +204,75 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     private static String emptyToNull(String s) {
         return s == null || s.isEmpty() ? null : s;
+    }
+
+    // ---- resolution (clients & workers) ----
+
+    @Override public void resolve(ResolveRequest req, StreamObserver<ResolveResponse> resp) {
+        run(resp, () -> doResolve(req));
+    }
+
+    @Override public void activeCells(ActiveCellsRequest req, StreamObserver<ActiveCellsResponse> resp) {
+        run(resp, () -> doActiveCells(req.getNamespace(), emptyToNull(req.getCallerRegion())));
+    }
+
+    /**
+     * Resolves a namespace (for a new start) or a specific instance id to a cell {@link Endpoint}.
+     *
+     * <p>MVP note: one cell per namespace, so the dial address comes from the namespace's live node
+     * roster (region-filtered). When a namespace spans cells (T12), this parses the id's epoch/shard,
+     * looks up {@code ring[shard]} in the policy, and maps that cell to its registered endpoints.
+     */
+    public ResolveResponse doResolve(ResolveRequest req) {
+        String namespace;
+        long epoch;
+        if (req.getByCase() == ResolveRequest.ByCase.INSTANCE_ID) {
+            IdCodec.Placement p = IdCodec.parse(req.getInstanceId()).orElseThrow(() ->
+                    new IllegalArgumentException("cannot route a legacy instance id ('" + req.getInstanceId()
+                            + "'); resolve by namespace instead"));
+            namespace = p.namespace();
+            epoch = p.epoch();
+        } else {
+            namespace = req.getNamespace();
+            epoch = store.getPolicy(namespace).map(CoordPolicy::currentEpoch).orElse(0L);
+        }
+        Endpoint endpoint = endpointFor(namespace, emptyToNull(req.getCallerRegion()));
+        return ResolveResponse.newBuilder()
+                .setNamespace(namespace)
+                .setEpoch(epoch)
+                .setEndpoint(endpoint)
+                .setTtlSeconds(RESOLVE_TTL_S)
+                .build();
+    }
+
+    /** The cells hosting live work for a namespace (MVP: the one cell), plus a change generation. */
+    public ActiveCellsResponse doActiveCells(String namespace, String callerRegion) {
+        long generation = store.getPolicy(namespace).map(CoordPolicy::revision).orElse(0L);
+        return ActiveCellsResponse.newBuilder()
+                .setGeneration(generation)
+                .addCells(endpointFor(namespace, callerRegion))
+                .setTtlSeconds(RESOLVE_TTL_S)
+                .build();
+    }
+
+    /** Builds a cell endpoint from the namespace's live roster, preferring the caller's region. */
+    private Endpoint endpointFor(String namespace, String callerRegion) {
+        List<CoordNode> nodes = store.nodes(namespace);
+        if (callerRegion != null) {
+            List<CoordNode> regional = new ArrayList<>();
+            for (CoordNode n : nodes) if (callerRegion.equals(n.region())) regional.add(n);
+            if (!regional.isEmpty()) nodes = regional;   // same cell, region-appropriate addresses (R24)
+        }
+        if (nodes.isEmpty()) {
+            throw new IllegalStateException("no live nodes for namespace '" + namespace + "'");
+        }
+        Endpoint.Builder b = Endpoint.newBuilder()
+                .setTarget(nodes.get(0).endpoint())      // TODO: a stable cell DNS name once provisioning records one
+                .setTtlSeconds(RESOLVE_TTL_S);
+        String region = nodes.get(0).region();
+        if (region != null) b.setRegion(region);
+        for (CoordNode n : nodes) b.addAddresses(n.endpoint());
+        return b.build();
     }
 
     // ---- logic (directly unit-testable, no gRPC plumbing) ----
