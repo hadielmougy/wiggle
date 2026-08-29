@@ -5,6 +5,9 @@ import dev.wiggle.client.dsl.ActivityHandler;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.core.*;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,9 +39,17 @@ public final class Worker implements AutoCloseable {
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
     /** Handlers bound by name via {@link #handle}, reconciled against the server graph on start. */
     private final List<Claim> claims = new CopyOnWriteArrayList<>();
+    /** Method objects bound via {@link #registerHandlers}, matched to graph steps by name on start. */
+    private final List<HandlerSet> handlerSets = new CopyOnWriteArrayList<>();
 
     /** A {@link #handle}-bound step: the graph the server holds must agree on its name and kind. */
     private record Claim(String workflow, String step, NodeKind kind) {}
+
+    /** One method of a {@link #registerHandlers} object: its expected kind and the ready-to-bind handler. */
+    private record HandlerCandidate(String method, NodeKind kind, ActivityHandler handler) {}
+
+    /** A {@link #registerHandlers} object's methods, keyed by canonical (case-folded) step name. */
+    private record HandlerSet(String workflow, Map<String, HandlerCandidate> byCanonical) {}
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -174,12 +185,102 @@ public final class Worker implements AutoCloseable {
         return this;
     }
 
+    /**
+     * Binds a whole object's methods as step handlers in one call. Each public method shaped like a
+     * handler -- one {@code Map}/{@code Object} parameter (the context), returning the new context
+     * (a {@code Map}, a task), a {@code boolean} (a gate), or {@code void} (a side effect) -- is
+     * matched on {@link #start()} to a step of {@code workflow} by <b>case-insensitive name</b>
+     * ({@code inStock} matches a step named {@code in-stock}), the graph confirming the exact name and
+     * whether it is a gate. Methods of any other shape are ignored, so helpers can live on the object.
+     *
+     * <p>Two methods whose names collide under case-folding are rejected here (ambiguous); a method
+     * matching no step, or a kind that clashes with the graph, is caught on {@link #start()}.
+     */
+    public Worker registerHandlers(String workflow, Object handlers) {
+        if (workflow == null || workflow.isBlank()) {
+            throw new IllegalArgumentException("workflow is required");
+        }
+        if (handlers == null) {
+            throw new IllegalArgumentException("handlers is required");
+        }
+        Map<String, HandlerCandidate> byCanonical = new LinkedHashMap<>();
+        for (Method m : handlers.getClass().getMethods()) {
+            HandlerCandidate cand = candidateFor(handlers, m);
+            if (cand == null) continue;
+            String canon = canonicalName(m.getName());
+            if (canon.isEmpty()) continue;
+            HandlerCandidate prev = byCanonical.putIfAbsent(canon, cand);
+            if (prev != null) {
+                throw new IllegalArgumentException("methods '" + prev.method() + "' and '" + m.getName()
+                        + "' map to the same step name '" + canon + "'; names differing only in "
+                        + "case/style are ambiguous -- rename one");
+            }
+        }
+        if (byCanonical.isEmpty()) {
+            throw new IllegalArgumentException(handlers.getClass().getName() + " exposes no handler "
+                    + "methods (a method taking the context and returning a Map (task), boolean (gate), "
+                    + "or void (effect))");
+        }
+        handlerSets.add(new HandlerSet(workflow, byCanonical));
+        return this;
+    }
+
+    /** Wraps a handler-shaped method as an {@link ActivityHandler}, or returns null if it is not one. */
+    private static HandlerCandidate candidateFor(Object target, Method m) {
+        if (m.isSynthetic() || m.isBridge() || Modifier.isStatic(m.getModifiers())) return null;
+        if (m.getDeclaringClass() == Object.class) return null;
+        if (m.getParameterCount() != 1) return null;
+        // the context arrives as a Map (JSON object); accept a parameter a Map can be passed to
+        if (!m.getParameterTypes()[0].isAssignableFrom(Map.class)) return null;
+        m.setAccessible(true);
+        Class<?> ret = m.getReturnType();
+        if (ret == boolean.class || ret == Boolean.class) {
+            return new HandlerCandidate(m.getName(), NodeKind.PREDICATE, ctx -> invoke(m, target, ctx));
+        }
+        if (ret == void.class || ret == Void.class) {
+            return new HandlerCandidate(m.getName(), NodeKind.TASK, ctx -> {
+                invoke(m, target, ctx);
+                return null;
+            });
+        }
+        return new HandlerCandidate(m.getName(), NodeKind.TASK, ctx -> {
+            Object out = invoke(m, target, ctx);
+            return out == null ? null : Json.shallowDiff(ctx, out);
+        });
+    }
+
+    /** Invokes a bound handler method, unwrapping the reflective exception to the real cause. */
+    private static Object invoke(Method m, Object target, Object ctx) throws Exception {
+        try {
+            return m.invoke(target, ctx);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception ex) throw ex;   // preserves PermanentActivityException etc.
+            if (cause instanceof Error err) throw err;
+            throw e;
+        }
+    }
+
+    /**
+     * Folds a name to a case/style-independent key: its lowercase alphanumerics, in order. So
+     * {@code in-stock}, {@code in_stock}, {@code inStock}, {@code InStock}, and {@code instock} all
+     * yield {@code instock}.
+     */
+    static String canonicalName(String s) {
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (Character.isLetterOrDigit(ch)) b.append(Character.toLowerCase(ch));
+        }
+        return b.toString();
+    }
+
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
         if (options.registerOnStart()) {
             for (Blueprint<?> bp : blueprints) client.register(bp);
         }
-        if (!claims.isEmpty()) reconcile();
+        if (!claims.isEmpty() || !handlerSets.isEmpty()) reconcile();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
@@ -232,6 +333,54 @@ public final class Worker implements AutoCloseable {
                 LOG.log(System.Logger.Level.INFO,
                         () -> "workflow '" + wf + "' has steps served by no handler on this worker: " + unclaimed);
             }
+        }
+        for (HandlerSet set : handlerSets) matchHandlerSet(set);
+    }
+
+    /**
+     * Resolves a {@link #registerHandlers} object against the registered graph: each method is matched
+     * to a step by canonical name, its kind checked against the node, and its handler bound. A method
+     * matching no step (or a kind clash) fails fast, exactly like a mistyped {@link #handle}.
+     */
+    private void matchHandlerSet(HandlerSet set) {
+        WorkflowDefinition def = fetchGraph(set.workflow());
+        Map<String, Node> nodeByCanonical = new HashMap<>();
+        Map<String, String> stepByCanonical = new HashMap<>();   // canonical -> real step name
+        for (Node n : def.nodes().values()) {
+            if (!n.isWorkerDispatched() || n.name() == null) continue;
+            String c = canonicalName(n.name());
+            nodeByCanonical.putIfAbsent(c, n);
+            stepByCanonical.putIfAbsent(c, n.name());
+        }
+        Set<String> served = new TreeSet<>();
+        for (var e : set.byCanonical().entrySet()) {
+            HandlerCandidate cand = e.getValue();
+            Node node = nodeByCanonical.get(e.getKey());
+            if (node == null) {
+                throw new IllegalStateException("handler '" + cand.method() + "' matches no step in "
+                        + "workflow '" + set.workflow() + "' (available steps: "
+                        + new TreeSet<>(stepByCanonical.values()) + ")");
+            }
+            String step = stepByCanonical.get(e.getKey());
+            String activity = set.workflow() + "#" + step;
+            if (node.kind() != cand.kind()) {
+                throw new IllegalStateException("activity '" + activity + "' is a " + node.kind()
+                        + " in the graph but handler '" + cand.method() + "' is a " + cand.kind());
+            }
+            if (handlers.putIfAbsent(activity, cand.handler()) != null) {
+                throw new IllegalStateException("duplicate handler for activity '" + activity + "'");
+            }
+            queues.add(node.queue() != null ? node.queue() : set.workflow());
+            served.add(step);
+        }
+        graphs.put(def.key(), def);
+        Set<String> unclaimed = new TreeSet<>();
+        for (String s : stepByCanonical.values()) {
+            if (!served.contains(s)) unclaimed.add(s);
+        }
+        if (!unclaimed.isEmpty()) {   // info, not an error: this worker may intentionally serve a subset
+            LOG.log(System.Logger.Level.INFO, () -> "workflow '" + set.workflow()
+                    + "' has steps served by no handler on this worker: " + unclaimed);
         }
     }
 
