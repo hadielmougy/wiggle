@@ -11,6 +11,7 @@ import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
 import dev.wiggle.server.coord.CoordPolicy.RingSlot;
 import dev.wiggle.server.coord.CoordinatorStore;
 
+import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -34,8 +35,10 @@ import java.util.Optional;
  */
 public final class JdbcCoordinatorStore implements CoordinatorStore {
 
-    private final HikariDataSource ds;
+    private final DataSource ds;
+    private final boolean ownsPool;
 
+    /** Standalone: owns a dedicated pool (used by tests). */
     public JdbcCoordinatorStore(String url, String user, String password, int poolSize, Dialect dialect) {
         Objects.requireNonNull(dialect, "dialect");
         HikariConfig cfg = new HikariConfig();
@@ -46,11 +49,22 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         cfg.setAutoCommit(true);   // each coordinator op is one atomic statement (CAS via WHERE revision=?)
         cfg.setPoolName("wiggle-coord-" + dialect.id());
         this.ds = new HikariDataSource(cfg);
+        this.ownsPool = true;
+    }
+
+    /** Shares an existing pool (e.g. the coordinator node's {@link JdbcStorage}); does not close it. */
+    public JdbcCoordinatorStore(DataSource sharedPool) {
+        this.ds = Objects.requireNonNull(sharedPool, "sharedPool");
+        this.ownsPool = false;
     }
 
     private Connection borrow() {
         try {
-            return ds.getConnection();
+            Connection c = ds.getConnection();
+            // Each coordinator op is a single atomic statement; force autocommit even when borrowing
+            // from a shared pool configured for manual commit (Hikari restores the default on return).
+            c.setAutoCommit(true);
+            return c;
         } catch (SQLException e) {
             throw new JdbcStorage.StorageException("cannot obtain connection", e);
         }
@@ -225,7 +239,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
     }
 
     @Override public void close() {
-        ds.close();
+        if (ownsPool && ds instanceof HikariDataSource h) h.close();
     }
 
     // ---- epoch JSON codec ----

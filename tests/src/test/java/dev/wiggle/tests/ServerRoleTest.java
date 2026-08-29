@@ -39,11 +39,12 @@ class ServerRoleTest {
         }
     }
 
-    @Test @DisplayName("coordinator role starts cleanly and runs no engine")
+    @Test @DisplayName("coordinator role starts cleanly, binds its gRPC port, and runs no engine")
     void coordinatorRoleRunsNoEngine() throws Exception {
         try (WiggleServer server = new WiggleServer(config().withRole(ServerRole.COORDINATOR)).start()) {
             assertThrows(IllegalStateException.class, server::engine, "no engine in coordinator role");
             assertEquals(-1, server.dashboardPort(), "coordinator serves no dashboard");
+            assertTrue(server.port() > 0, "coordinator binds its CellCoordinator gRPC port");
         }
     }
 

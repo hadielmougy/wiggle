@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.wiggle.core.*;
 import dev.wiggle.server.ServerRole;
+import dev.wiggle.server.coord.CoordinatorStore;
 import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.*;
 import dev.wiggle.server.store.Storage;
@@ -227,6 +228,10 @@ public final class JdbcStorage implements Storage {
               PRIMARY KEY (namespace, name)
             );
             """));
+
+    @Override public CoordinatorStore coordinatorStore() {
+        return new JdbcCoordinatorStore(ds);   // shares this store's pool; does not own/close it
+    }
 
     @Override public void migrate() {
         migrate(ServerRole.CELL);
