@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -67,6 +68,24 @@ class CoordinatorFanoutTest {
                 assertEquals(r.getVersion(), c.engine().latestDefinition("wf")
                         .orElseThrow(() -> new AssertionError("joining cell was not seeded")).version());
             }
+        }
+    }
+
+    @Test @DisplayName("allocate then deallocate: list reflects it, and deregister is idempotent")
+    void allocateListDeallocate() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (WiggleServer a = new WiggleServer(cell()).start();
+             CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+            coord.doRegister("orders", RegisteredNode.newBuilder()
+                    .setName(a.baseUrl()).setEndpoint(a.baseUrl()).build());
+
+            coord.doRegisterWorkflow("orders", "wf", definitionJson());
+            assertEquals(1, coord.doListWorkflows("orders").getWorkflowsCount(), "allocated -> listed");
+            assertEquals("wf", coord.doListWorkflows("orders").getWorkflows(0).getName());
+
+            assertTrue(coord.doDeregisterWorkflow("orders", "wf").getRemoved(), "deallocate removes it");
+            assertEquals(0, coord.doListWorkflows("orders").getWorkflowsCount(), "gone from the registry");
+            assertFalse(coord.doDeregisterWorkflow("orders", "wf").getRemoved(), "second deallocate is a no-op");
         }
     }
 

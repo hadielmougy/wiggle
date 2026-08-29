@@ -55,6 +55,9 @@ public interface CoordinatorStore extends AutoCloseable {
     /** Idempotent upsert keyed by (namespace, name). */
     void putDefinition(CoordDefinition def);
 
+    /** Removes a workflow's allocation from a namespace; returns whether a row was removed. */
+    boolean removeDefinition(String namespace, String name);
+
     List<CoordDefinition> definitions(String namespace);
 
     // ---- namespace registry (provisioning, T13) ----

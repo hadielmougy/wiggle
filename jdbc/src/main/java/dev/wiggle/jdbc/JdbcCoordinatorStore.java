@@ -264,6 +264,17 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         }
     }
 
+    @Override public boolean removeDefinition(String namespace, String name) {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement(
+                     "DELETE FROM coord_definition WHERE namespace=? AND name=?")) {
+            p.setString(1, namespace); p.setString(2, name);
+            return p.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("removeDefinition failed", e);
+        }
+    }
+
     @Override public List<CoordDefinition> definitions(String namespace) {
         try (Connection c = borrow();
              PreparedStatement p = c.prepareStatement(

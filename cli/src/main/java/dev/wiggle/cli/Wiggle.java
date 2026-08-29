@@ -1,8 +1,10 @@
 package dev.wiggle.cli;
 
+import dev.wiggle.client.CellResolver;
 import dev.wiggle.client.WiggleClient;
 import dev.wiggle.client.dsl.Blueprint;
 import dev.wiggle.core.Tls;
+import dev.wiggle.proto.AllocatedWorkflow;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -19,8 +21,9 @@ import java.util.concurrent.Callable;
  * it to a server. Step handlers are bound separately, by name, on workers.
  */
 @Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.5",
-        subcommands = {Wiggle.Validate.class, Wiggle.Register.class},
-        description = "Author and register Wiggle workflows from declarative YAML.")
+        subcommands = {Wiggle.Validate.class, Wiggle.Register.class,
+                Wiggle.Allocate.class, Wiggle.Deallocate.class, Wiggle.Allocations.class},
+        description = "Author and register Wiggle workflows; allocate flows to namespaces via a coordinator.")
 public final class Wiggle implements Runnable {
 
     @Override
@@ -118,6 +121,114 @@ public final class Wiggle implements Runnable {
 
         private static String orElse(String flag, String fallback) {
             return flag != null && !flag.isBlank() ? flag : fallback;
+        }
+    }
+
+    // ---- coordinator: allocate / deallocate flows to namespaces ----
+
+    /** Resolves the coordinator target: --coordinator, else $WIGGLE_COORDINATOR_URL, else localhost:8099. */
+    private static String coordinatorTarget(String flag) {
+        if (flag != null && !flag.isBlank()) return flag;
+        return System.getenv().getOrDefault("WIGGLE_COORDINATOR_URL", "localhost:8099");
+    }
+
+    private static CellResolver resolver(String coordinator) {
+        return CellResolver.coordinator(coordinator, Tls.Options.fromEnvironment(),
+                System.getenv().getOrDefault("WIGGLE_REGION", ""));
+    }
+
+    @Command(name = "allocate", mixinStandardHelpOptions = true,
+            description = "Allocate a workflow (YAML) to a namespace: fan it out to every cell of the namespace via the coordinator.")
+    static final class Allocate implements Callable<Integer> {
+        @Parameters(index = "0", paramLabel = "FILE", description = "the workflow YAML file")
+        Path file;
+
+        @Option(names = {"-n", "--namespace"}, required = true, description = "the target namespace")
+        String namespace;
+
+        @Option(names = {"-c", "--coordinator"},
+                description = "coordinator gRPC host:port (default: $WIGGLE_COORDINATOR_URL, else localhost:8099)")
+        String coordinator;
+
+        @Override
+        public Integer call() {
+            Blueprint<Map<String, Object>> bp;
+            try {
+                bp = WorkflowYaml.load(file);
+            } catch (Exception e) {
+                System.err.println("invalid: " + describe(e));
+                return 1;
+            }
+            String target = coordinatorTarget(coordinator);
+            try (CellResolver resolver = resolver(target)) {
+                resolver.registerWorkflow(namespace, bp);
+                System.out.printf("allocated  %s  v%d  ->  namespace '%s'  (via %s)%n",
+                        bp.name(), bp.version(), namespace, target);
+                return 0;
+            } catch (Exception e) {
+                System.err.println("allocate failed (" + target + "): " + describe(e));
+                return 1;
+            }
+        }
+    }
+
+    @Command(name = "deallocate", mixinStandardHelpOptions = true,
+            description = "Deallocate a workflow from a namespace (stops fan-out to cells that join later).")
+    static final class Deallocate implements Callable<Integer> {
+        @Option(names = {"-w", "--workflow"}, required = true, paramLabel = "NAME", description = "the workflow name")
+        String name;
+
+        @Option(names = {"-n", "--namespace"}, required = true, description = "the namespace")
+        String namespace;
+
+        @Option(names = {"-c", "--coordinator"},
+                description = "coordinator gRPC host:port (default: $WIGGLE_COORDINATOR_URL, else localhost:8099)")
+        String coordinator;
+
+        @Override
+        public Integer call() {
+            String target = coordinatorTarget(coordinator);
+            try (CellResolver resolver = resolver(target)) {
+                boolean removed = resolver.deregisterWorkflow(namespace, name);
+                System.out.println(removed
+                        ? "deallocated  " + name + "  from namespace '" + namespace + "'"
+                        : "not allocated: '" + name + "' is not in namespace '" + namespace + "'");
+                return removed ? 0 : 1;
+            } catch (Exception e) {
+                System.err.println("deallocate failed (" + target + "): " + describe(e));
+                return 1;
+            }
+        }
+    }
+
+    @Command(name = "allocations", mixinStandardHelpOptions = true,
+            description = "List the workflows currently allocated to a namespace.")
+    static final class Allocations implements Callable<Integer> {
+        @Option(names = {"-n", "--namespace"}, required = true, description = "the namespace")
+        String namespace;
+
+        @Option(names = {"-c", "--coordinator"},
+                description = "coordinator gRPC host:port (default: $WIGGLE_COORDINATOR_URL, else localhost:8099)")
+        String coordinator;
+
+        @Override
+        public Integer call() {
+            String target = coordinatorTarget(coordinator);
+            try (CellResolver resolver = resolver(target)) {
+                var flows = resolver.listWorkflows(namespace);
+                if (flows.isEmpty()) {
+                    System.out.println("namespace '" + namespace + "' has no allocated workflows");
+                } else {
+                    System.out.println("namespace '" + namespace + "':");
+                    for (AllocatedWorkflow w : flows) {
+                        System.out.printf("  %-30s v%d%n", w.getName(), w.getVersion());
+                    }
+                }
+                return 0;
+            } catch (Exception e) {
+                System.err.println("allocations failed (" + target + "): " + describe(e));
+                return 1;
+            }
         }
     }
 

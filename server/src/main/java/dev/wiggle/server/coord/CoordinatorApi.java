@@ -6,7 +6,12 @@ import dev.wiggle.core.Json;
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.ActiveCellsRequest;
 import dev.wiggle.proto.ActiveCellsResponse;
+import dev.wiggle.proto.AllocatedWorkflow;
 import dev.wiggle.proto.CellCoordinatorGrpc;
+import dev.wiggle.proto.DeregisterWorkflowRequest;
+import dev.wiggle.proto.DeregisterWorkflowResponse;
+import dev.wiggle.proto.ListWorkflowsRequest;
+import dev.wiggle.proto.ListWorkflowsResponse;
 import dev.wiggle.proto.CoordinatorHeartbeatRequest;
 import dev.wiggle.proto.CoordinatorHeartbeatResponse;
 import dev.wiggle.proto.DeregisterRequest;
@@ -402,6 +407,40 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc RegisterWorkflow namespace=" + req.getNamespace()
                 + " name=" + req.getName());
         run(resp, () -> doRegisterWorkflow(req.getNamespace(), req.getName(), req.getDefinition().toByteArray()));
+    }
+
+    @Override public void deregisterWorkflow(DeregisterWorkflowRequest req, StreamObserver<DeregisterWorkflowResponse> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc DeregisterWorkflow namespace=" + req.getNamespace()
+                + " name=" + req.getName());
+        run(resp, () -> doDeregisterWorkflow(req.getNamespace(), req.getName()));
+    }
+
+    @Override public void listWorkflows(ListWorkflowsRequest req, StreamObserver<ListWorkflowsResponse> resp) {
+        run(resp, () -> doListWorkflows(req.getNamespace()));
+    }
+
+    /**
+     * Deallocates a workflow from a namespace: removes its allocation from the coordinator's registry,
+     * so it is no longer fanned out to cells that join later. Definitions already compiled on running
+     * cells stay (the engine's definition history is append-only); a cell drops it on restart when it
+     * is no longer seeded. Idempotent -- {@code removed=false} if it was not allocated.
+     */
+    public DeregisterWorkflowResponse doDeregisterWorkflow(String namespace, String name) {
+        boolean removed = store.removeDefinition(namespace, name);
+        if (removed) {
+            LOG.log(System.Logger.Level.INFO, () -> "deallocated workflow '" + name + "' from namespace '" + namespace + "'");
+        }
+        return DeregisterWorkflowResponse.newBuilder().setRemoved(removed).build();
+    }
+
+    /** The workflows currently allocated to a namespace. */
+    public ListWorkflowsResponse doListWorkflows(String namespace) {
+        ListWorkflowsResponse.Builder b = ListWorkflowsResponse.newBuilder();
+        for (CoordDefinition d : store.definitions(namespace)) {
+            b.addWorkflows(AllocatedWorkflow.newBuilder()
+                    .setName(d.name()).setVersion(d.version()).setRegisteredAt(d.registeredAt()).build());
+        }
+        return b.build();
     }
 
     /**

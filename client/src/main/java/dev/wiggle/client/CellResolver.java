@@ -7,8 +7,11 @@ import dev.wiggle.core.Json;
 import dev.wiggle.core.Tls;
 import dev.wiggle.proto.ActiveCellsRequest;
 import dev.wiggle.proto.ActiveCellsResponse;
+import dev.wiggle.proto.AllocatedWorkflow;
 import dev.wiggle.proto.CellCoordinatorGrpc;
+import dev.wiggle.proto.DeregisterWorkflowRequest;
 import dev.wiggle.proto.Endpoint;
+import dev.wiggle.proto.ListWorkflowsRequest;
 import dev.wiggle.proto.RegisterWorkflowRequest;
 import dev.wiggle.proto.ResolveRequest;
 import dev.wiggle.proto.ResolveResponse;
@@ -98,6 +101,30 @@ public final class CellResolver implements AutoCloseable {
                 .setName(blueprint.name())
                 .setDefinition(ByteString.copyFromUtf8(json))
                 .build());
+    }
+
+    /**
+     * Deallocates a workflow from a namespace (coordinator only). Returns whether it was allocated.
+     * Definitions already compiled on running cells remain until they restart; this stops the flow
+     * being fanned out to cells that join later.
+     */
+    public boolean deregisterWorkflow(String namespace, String name) {
+        requireCoordinator("deregisterWorkflow");
+        return coord.deregisterWorkflow(DeregisterWorkflowRequest.newBuilder()
+                .setNamespace(namespace).setName(name).build()).getRemoved();
+    }
+
+    /** The workflows currently allocated to a namespace (coordinator only). */
+    public List<AllocatedWorkflow> listWorkflows(String namespace) {
+        requireCoordinator("listWorkflows");
+        return coord.listWorkflows(ListWorkflowsRequest.newBuilder()
+                .setNamespace(namespace).build()).getWorkflowsList();
+    }
+
+    private void requireCoordinator(String op) {
+        if (coordinatorUrl == null) {
+            throw new IllegalStateException(op + " requires a coordinator; this resolver is in direct mode");
+        }
     }
 
     /** The cells hosting live work for a namespace (a worker polls all of them). */

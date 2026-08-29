@@ -1,0 +1,7 @@
+# A tiny sample flow to allocate to a namespace while playing with the cluster.
+#   wiggle allocate scripts/playground/greet.yaml --namespace ns1
+# Step logic is bound by name on a worker ("greet#hello", "greet#world"); the file is just topology.
+workflow: greet
+steps:
+  - task: hello
+  - task: world
