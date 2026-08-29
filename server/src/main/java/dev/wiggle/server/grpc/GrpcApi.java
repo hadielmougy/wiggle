@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -428,9 +429,14 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with bad request: " + e.getMessage());
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
         } catch (Exception e) {
-            LOG.log(System.Logger.Level.ERROR, "unhandled error", e);
+            // Unexpected -- an engine bug or an infrastructure failure (e.g. a StorageException wrapping
+            // a SQLException). Log the full detail server-side, but return only a generic INTERNAL to the
+            // client: the exception class/message can leak internals (SQL text, table/constraint names,
+            // driver codes, host/schema). A short correlation id ties the client's error to this log line.
+            String errorId = UUID.randomUUID().toString().substring(0, 8);
+            LOG.log(System.Logger.Level.ERROR, "unhandled error [" + errorId + "]", e);
             resp.onError(Status.INTERNAL
-                    .withDescription(e.getClass().getSimpleName() + ": " + e.getMessage())
+                    .withDescription("internal error (ref " + errorId + ")")
                     .asRuntimeException());
         }
     }
