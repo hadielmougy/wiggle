@@ -25,34 +25,39 @@ Design ref: R11, R12, R21, R22, R23. Sequencing: T11 → T12 → T13 (T11 and T1
 
 ---
 
-## T12 — Scale-out: epochs, drain, retire
+## T12 — Scale-out: epochs, drain, retire ✅ done
 
-**Files:** `server/.../coord/CoordinatorApi.java` (`OpenEpoch`/`SetRing`), `CoordinatorStore` (epoch history, CAS on `current_epoch`), `CoordinatorReconciler` (retire logic), cell heartbeat live-count reporting, possibly a migration adding an `epoch` column to `wf_instance`.
+Built as three tested increments over an addressing prerequisite (cells had to become distinctly addressable before drain/retire could shift poll sets):
 
-**Goal:** widen a namespace across cells without moving data; drain old epochs; retire empty cells. (R11, R12, R21)
+- **Increment 1 — cellId-addressable cells + ring-aware resolution.** `cell_id` added to `RegisteredNode`, `coord_node`, and `CoordNode`; `doResolve(instanceId)` parses the id's epoch+shard, looks up `ring[shard] → cellId`, and returns that cell's live nodes; `doActiveCells` returns one endpoint per cell across OPEN/DRAINING rings (RETIRED excluded). No ring ⇒ falls back to the whole roster (single implicit cell, R1). Tests: `MultiCellResolveTest`.
+- **Increment 2 — coordinator-supplied placement.** `Register`/`FetchConfig` return the node's `(epoch, shards)` (the shards its cell owns in the current ring); the cell mints via a live, mutable `CellPlacement` (`ns.e{epoch}.s{shard}.ulid`), re-pointed when a heartbeat reports a new generation. `WIGGLE_CELL_ID` flows through the node link. Tests: `CoordinatorPlacementTest`, `CellPlacementTest`, `EpochAwareIdTest`.
+- **Increment 3 — census-driven retire (R21).** Cells report `live_by_epoch` (from `WorkflowEngine.liveCountByEpoch()`) on `Heartbeat`; `LiveCensus` aggregates (max-within-cell, sum-across-cells, staleness-guarded); `CoordinatorReconciler` marks a DRAINING epoch RETIRED once the census confirms a fresh zero, bumping the generation so nodes re-fetch and workers drop it. Tests: `LiveCensusTest`, `EpochRetireTest`.
 
-**Changes:**
-1. `OpenEpoch(namespace, ring)` / `SetRing(...)`: append a new epoch (CAS `current == N` → `N+1`), status `OPEN`; mark the prior epoch `DRAINING`. New roots use the current epoch; children inherit the parent's (T8).
-2. Cells report `live_by_epoch` on `Heartbeat` (R21). Deriving the epoch per instance: parse it from the id, or add an `epoch` column to `wf_instance` (a new forward-only migration) and index it for a cheap `COUNT ... GROUP BY epoch`. **Recommend the column** for efficiency.
-3. `CoordinatorReconciler`: when a draining epoch's cell reports `live == 0`, mark it `RETIRED` and drop it from the ring set (generation bump). Workers reconcile their poll set on the bump (T10).
+**Design note:** the epoch is **parsed from the instance id** rather than materialised as an `epoch` column on `wf_instance` — no schema migration on the hot table. The census scans the RUNNING set (capped at `LIVE_CENSUS_CAP`); a draining epoch only shrinks, so this stays cheap. Revisit the column only if a cell's live set makes the scan a bottleneck.
 
-**Acceptance:** open a wider epoch → new instances spread across cells while existing ones finish in place; old cell drains to zero and is retired; workers stop polling it after the generation bump; no instance ever runs in two cells.
+**Files:** `server/.../coord/CoordinatorApi.java` (`OpenEpoch`/`SetRing`/placement/census), `CoordNode`/`CoordinatorStore` (`cell_id`), `CoordinatorReconciler` + new `LiveCensus` (retire), new `CellPlacement` + `CellBundle` minter, `WorkflowEngine.liveCountByEpoch()`, `dist/.../coord/*` (cell_id + placement + health reporting), `proto/.../coordinator.proto` (`cell_id`, `NodeConfig`/`RegisterResponse` epoch+shards).
+
+**Live proof:** `scripts/coordinator-integration.sh` bumps cell A's epoch, shows the minter shift to the new epoch, drains the old one, and watches the reconciler retire it — against real Postgres.
+
+**Acceptance:** ✅ open a wider epoch → new instances spread across cells while existing ones finish in place; old cell drains to zero and is retired; workers stop polling it after the generation bump; no instance ever runs in two cells.
 
 **Depends on:** T8, T9, T10, T11.
 
 ---
 
-## T13 — Provisioning state machine + `CellDeployer`
+## T13 — Provisioning state machine + `CellDeployer` ✅ done
 
-**Files:** new `server/.../coord/CellDeployer.java` (interface) + `EmbeddedCellDeployer` (in-process, uses `StorageFactory.create` + `Storage.migrate` + `new WiggleServer(...)`) + `ProcessCellDeployer` (fork a JVM), `server/.../coord/NamespaceProvisioner.java` (state machine), `CoordinatorStore` as the namespace registry.
+**Files:** `server/.../coord/CellDeployer.java` (interface + `Deployment` record) + `EmbeddedCellDeployer` (in-process: `StorageFactory.create` + `Storage.migrate` + `new WiggleServer(...)`) + `ProcessCellDeployer` (forks a JVM per node from a launch command); `NamespaceProvisioner.java` (state machine); `SecretResolver` (ref→secret at deploy time, `ENV` default); domain records `NamespaceSpec`, `StorageConfig`, `CoordNamespace`, enum `ProvisionState`; `CoordinatorStore` namespace registry (`getNamespace`/`namespaces`/`putNamespace`, `coord_namespace` table); `ServerConfig.withStorage`/`withPort` withers.
 
 **Goal:** stand up a cell (DB + cluster) through a substrate-agnostic seam; no orchestrator assumed. (R22)
 
 **Changes:**
-1. `CellDeployer { void migrateSchema(spec); Deployment deploy(spec); void teardown(id); }`. `EmbeddedCellDeployer` runs the calls in-process (single box / tests / a pod entrypoint); `ProcessCellDeployer` forks a JVM per cell. A k8s deployer is a later, separate impl of the same interface.
-2. `NamespaceProvisioner.create(spec)`: `REQUESTED → MIGRATING_SCHEMA` (`create` + `migrate` once, before serving) `→ STARTING` (deploy cluster) `→ ACTIVE` (health ok, endpoint recorded). Idempotent; leaves `FAILED` on any step for retry.
-3. Storage config is captured into the namespace record; secrets are `secretRef`s resolved at deploy time, never stored.
+1. `CellDeployer { migrateSchema(spec); deploy(spec) -> Deployment; teardown(id); }`. `EmbeddedCellDeployer` runs in-process (single box / tests / a pod entrypoint) and is the **only** place the coordinator side touches `StorageFactory`/`WiggleServer`; `ProcessCellDeployer` forks a JVM per node, configured via `WIGGLE_*` env. Both `deploy` idempotently resume an existing deployment. A k8s deployer is a later impl of the same seam.
+2. `NamespaceProvisioner.create(spec)`: `REQUESTED → MIGRATING_SCHEMA` (migrate once, before serving) `→ STARTING` (deploy) `→ ACTIVE` (endpoint recorded). Persists every transition; already-ACTIVE is a no-op; any step that throws leaves a resumable `FAILED` record whose next `create` re-runs the remaining (idempotent) steps.
+3. Storage config is captured into the `coord_namespace` record; the credential is a `secretRef` resolved at deploy time by a `SecretResolver` — the coordinator never stores a password.
 
-**Acceptance:** provision a namespace end-to-end with the embedded deployer (fresh DB migrated, cluster up, endpoint resolvable, ACTIVE); a mid-way failure leaves a resumable `FAILED` record; `StorageFactory`/`WiggleServer` are only touched inside the deployer.
+**Design note:** provisioning is the machinery (deployer seam + state machine + registry); exposing it as a coordinator RPC / admin command is deferred (no `Provision` RPC yet). `EmbeddedCellDeployer` genuinely migrates a shared JDBC schema once before nodes start (idempotent with each node's own start-up migration); `ProcessCellDeployer` relies on the nodes' idempotent start migration (JDBC baseline guard), so its `migrateSchema` is a no-op.
+
+**Acceptance:** ✅ `EmbeddedCellDeployerTest` provisions an in-memory namespace end-to-end (ACTIVE, endpoint serves real register/start with epoch-aware ids, teardown stops it); `NamespaceProvisionerTest` covers happy path, idempotency, and resumable `FAILED`→retry; `ProcessCellDeployerTest` covers fork/idempotent-redeploy/prompt-teardown and bad-command failure; `CoordinatorStoreTest` covers the JDBC namespace registry (secretRef stored, not the secret). `StorageFactory`/`WiggleServer` are touched only inside the deployer.
 
 **Depends on:** T2, T5, T6.

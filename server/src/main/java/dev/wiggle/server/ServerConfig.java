@@ -122,6 +122,22 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 dashboardUser, dashboardPassword, tls, memory, role, namespace);
     }
 
+    /** A copy of this config on the given storage (null/blank url ⇒ in-memory). */
+    public ServerConfig withStorage(String jdbcUrl, String jdbcUser, String jdbcPassword, int jdbcPoolSize) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+    }
+
+    /** A copy of this config bound to a different gRPC port. */
+    public ServerConfig withPort(int port) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+    }
+
     public static ServerConfig fromEnvironment() {
         return new ServerConfig(
                 intProp("wiggle.port", "WIGGLE_PORT", 8080),

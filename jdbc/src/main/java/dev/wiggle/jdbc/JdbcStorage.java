@@ -229,6 +229,20 @@ public final class JdbcStorage implements Storage {
               registered_at  BIGINT       NOT NULL,
               PRIMARY KEY (namespace, name)
             );
+            CREATE TABLE IF NOT EXISTS coord_namespace (
+              namespace   VARCHAR(200) PRIMARY KEY,
+              state       VARCHAR(30)  NOT NULL,
+              scheme      VARCHAR(30),
+              jdbc_url    VARCHAR(500),
+              db_user     VARCHAR(120),
+              secret_ref  VARCHAR(300),
+              pool_size   INT,
+              replicas    INT,
+              region      VARCHAR(120),
+              endpoint    VARCHAR(300),
+              error       VARCHAR(1000),
+              updated_at  BIGINT       NOT NULL
+            );
             """));
 
     @Override public CoordinatorStore coordinatorStore() {

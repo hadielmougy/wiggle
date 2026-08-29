@@ -4,8 +4,12 @@ import dev.wiggle.jdbc.JdbcCoordinatorStore;
 import dev.wiggle.jdbc.JdbcStorage;
 import dev.wiggle.server.ServerRole;
 import dev.wiggle.server.coord.CoordDefinition;
+import dev.wiggle.server.coord.CoordNamespace;
 import dev.wiggle.server.coord.CoordNode;
 import dev.wiggle.server.coord.CoordPolicy;
+import dev.wiggle.server.coord.NamespaceSpec;
+import dev.wiggle.server.coord.ProvisionState;
+import dev.wiggle.server.coord.StorageConfig;
 import dev.wiggle.server.coord.CoordPolicy.EpochRing;
 import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
 import dev.wiggle.server.coord.CoordPolicy.RingSlot;
@@ -83,6 +87,21 @@ class CoordinatorStoreTest {
         store.putDefinition(new CoordDefinition("acme", "order", 43, "hashB", 222)); // update in place
         assertEquals(43, store.getDefinition("acme", "order").orElseThrow().version());
         assertEquals(1, store.definitions("acme").size());
+
+        // ---- namespace registry (provisioning, T13) ----
+        assertTrue(store.getNamespace("acme").isEmpty());
+        StorageConfig sc = StorageConfig.jdbc("jdbc:postgresql://db/acme", "app", "ACME_DB_SECRET", 8);
+        store.putNamespace(CoordNamespace.requested(new NamespaceSpec("acme", sc, 2, "eu-west", 8100), 1_000));
+        CoordNamespace ns = store.getNamespace("acme").orElseThrow();
+        assertEquals(ProvisionState.REQUESTED, ns.state());
+        assertEquals("ACME_DB_SECRET", ns.storage().secretRef(), "the ref is stored, never the secret");
+        assertEquals(2, ns.replicas());
+
+        store.putNamespace(ns.active("grpc://acme:8100", 2_000));   // upsert in place
+        CoordNamespace active = store.getNamespace("acme").orElseThrow();
+        assertEquals(ProvisionState.ACTIVE, active.state());
+        assertEquals("grpc://acme:8100", active.endpoint());
+        assertEquals(1, store.namespaces().size());
     }
 
     @Test @DisplayName("in-memory store honours the CoordinatorStore contract")

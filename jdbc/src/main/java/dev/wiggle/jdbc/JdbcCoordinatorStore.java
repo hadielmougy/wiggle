@@ -4,8 +4,11 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.wiggle.core.Json;
 import dev.wiggle.server.coord.CoordDefinition;
+import dev.wiggle.server.coord.CoordNamespace;
 import dev.wiggle.server.coord.CoordNode;
 import dev.wiggle.server.coord.CoordPolicy;
+import dev.wiggle.server.coord.ProvisionState;
+import dev.wiggle.server.coord.StorageConfig;
 import dev.wiggle.server.coord.CoordPolicy.EpochRing;
 import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
 import dev.wiggle.server.coord.CoordPolicy.RingSlot;
@@ -276,6 +279,82 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         } catch (SQLException e) {
             throw new JdbcStorage.StorageException("definitions failed", e);
         }
+    }
+
+    // ---- namespace registry (provisioning, T13) ----
+
+    @Override public Optional<CoordNamespace> getNamespace(String namespace) {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT state, scheme, jdbc_url, db_user, secret_ref, pool_size, replicas, region, " +
+                     "endpoint, error, updated_at FROM coord_namespace WHERE namespace=?")) {
+            p.setString(1, namespace);
+            try (ResultSet rs = p.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(readNamespace(namespace, rs, 0));
+            }
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("getNamespace failed", e);
+        }
+    }
+
+    @Override public List<CoordNamespace> namespaces() {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT namespace, state, scheme, jdbc_url, db_user, secret_ref, pool_size, replicas, " +
+                     "region, endpoint, error, updated_at FROM coord_namespace");
+             ResultSet rs = p.executeQuery()) {
+            List<CoordNamespace> out = new ArrayList<>();
+            while (rs.next()) out.add(readNamespace(rs.getString(1), rs, 1));
+            return out;
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("namespaces failed", e);
+        }
+    }
+
+    @Override public void putNamespace(CoordNamespace ns) {
+        StorageConfig sc = ns.storage();
+        try (Connection c = borrow()) {
+            try (PreparedStatement up = c.prepareStatement(
+                    "UPDATE coord_namespace SET state=?, scheme=?, jdbc_url=?, db_user=?, secret_ref=?, " +
+                    "pool_size=?, replicas=?, region=?, endpoint=?, error=?, updated_at=? WHERE namespace=?")) {
+                bindNamespace(up, ns, sc, 1);
+                up.setString(12, ns.namespace());
+                if (up.executeUpdate() == 1) return;
+            }
+            try (PreparedStatement ins = c.prepareStatement(
+                    "INSERT INTO coord_namespace (state, scheme, jdbc_url, db_user, secret_ref, pool_size, " +
+                    "replicas, region, endpoint, error, updated_at, namespace) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")) {
+                bindNamespace(ins, ns, sc, 1);
+                ins.setString(12, ns.namespace());
+                ins.executeUpdate();
+            }
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("putNamespace failed", e);
+        }
+    }
+
+    private static void bindNamespace(PreparedStatement p, CoordNamespace ns, StorageConfig sc, int i) throws SQLException {
+        p.setString(i, ns.state().name());
+        p.setString(i + 1, sc.scheme());
+        p.setString(i + 2, sc.jdbcUrl());
+        p.setString(i + 3, sc.user());
+        p.setString(i + 4, sc.secretRef());   // a reference, never the secret itself (R22)
+        p.setInt(i + 5, sc.poolSize());
+        p.setInt(i + 6, ns.replicas());
+        p.setString(i + 7, ns.region());
+        p.setString(i + 8, ns.endpoint());
+        p.setString(i + 9, ns.error());
+        p.setLong(i + 10, ns.updatedAt());
+    }
+
+    /** Reads a namespace row; {@code base} is the offset before the {@code state} column (0 or 1). */
+    private static CoordNamespace readNamespace(String namespace, ResultSet rs, int base) throws SQLException {
+        StorageConfig sc = new StorageConfig(rs.getString(base + 2), rs.getString(base + 3),
+                rs.getString(base + 4), rs.getString(base + 5), rs.getInt(base + 6));
+        return new CoordNamespace(namespace, ProvisionState.valueOf(rs.getString(base + 1)), sc,
+                rs.getInt(base + 7), rs.getString(base + 8), rs.getString(base + 9),
+                rs.getString(base + 10), rs.getLong(base + 11));
     }
 
     @Override public void close() {

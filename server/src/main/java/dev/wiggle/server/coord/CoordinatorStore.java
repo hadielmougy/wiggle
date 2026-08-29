@@ -57,5 +57,14 @@ public interface CoordinatorStore extends AutoCloseable {
 
     List<CoordDefinition> definitions(String namespace);
 
+    // ---- namespace registry (provisioning, T13) ----
+
+    Optional<CoordNamespace> getNamespace(String namespace);
+
+    List<CoordNamespace> namespaces();
+
+    /** Idempotent upsert keyed by namespace; drives the provisioning state machine's persistence. */
+    void putNamespace(CoordNamespace ns);
+
     @Override default void close() { }
 }
