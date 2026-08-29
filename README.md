@@ -838,6 +838,42 @@ copy from:
 
 ---
 
+## Performance
+
+Capacity scales by **cells**: because a cell is its own database + cluster, adding a cell adds a whole
+independent stack rather than contending on one. A repeatable harness — `scripts/loadtest.sh` — ramps
+the submit rate against any target and reports per-step throughput and end-to-end latency percentiles
+(client `start()` → step executed on a worker):
+
+```bash
+scripts/playground.sh up                                              # coordinator + cells on Postgres
+scripts/loadtest.sh --coordinator 127.0.0.1:8099 --namespace ns1      # single-cell (1 DB)
+scripts/loadtest.sh --coordinator 127.0.0.1:8099 --namespace orders   # two-cell   (2 DBs)
+```
+
+An illustrative run (trivial one-step flow, Postgres in Docker on a laptop, `--concurrency 8`) — the
+same offered rate through a single-cell namespace vs a two-cell one:
+
+| offered | **1 cell** done/s · p99 | **2 cells** done/s · p99 |
+|--:|:--|:--|
+| 50/s  | 49 · 116 ms | 50 · 117 ms |
+| 100/s | 38 · **13.6 s** (saturated) | 100 · 115 ms |
+| 150/s | overloaded | 74 · 8.2 s (saturating) |
+
+Adding a cell **roughly doubled** the ceiling (single-cell saturates ~100/s; two-cell is still healthy
+at 100/s and saturates ~150/s). The comparison is directional, not a spec sheet:
+
+- The **ratio** is the signal; absolute numbers depend entirely on your hardware, database, and flow. A
+  laptop Docker Postgres and a one-step flow flatter nobody — measure your own with the harness.
+- A cell scales the **whole unit** (its own DB *and* its own per-cell workers), which is the point.
+- There's a latency **floor** of ~100 ms at low rates from the worker poll/dispatch cadence, independent
+  of load — comfortably below typical needs, but the number to beat if you chase tail latency.
+
+Correctness under steady load holds well below the ceiling: a single node has run sustained real-world
+traffic with flat latency and no backlog.
+
+---
+
 ## Good to know
 
 - **Execution is at-least-once.** A worker crash can cause a step to run again on recovery,
