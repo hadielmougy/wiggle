@@ -284,7 +284,7 @@ secret on the command line.
 
 ### Installing the CLI
 
-The CLI is a JVM application, so it needs **Java 21** on the machine. Three ways to get it:
+The CLI is a JVM application, so it needs a **recent JDK** on the machine. Three ways to get it:
 
 **Release archive** (recommended). Download the archive attached to the GitHub Release, unpack it,
 and put `wiggle` on your `PATH`:
