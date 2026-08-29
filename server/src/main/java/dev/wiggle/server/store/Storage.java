@@ -1,5 +1,7 @@
 package dev.wiggle.server.store;
 
+import dev.wiggle.server.ServerRole;
+
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -10,7 +12,19 @@ import java.util.function.Function;
  */
 public interface Storage extends AutoCloseable {
 
+    /** Applies the cell schema. Equivalent to {@link #migrate(ServerRole) migrate(ServerRole.CELL)}. */
     void migrate();
+
+    /**
+     * Applies the schema for {@code role}: cell tables ({@code wf_*}) or coordinator tables
+     * ({@code coord_*}). The default ignores the role and applies the cell schema, so stores that do
+     * not host a coordinator (in-memory, and backends not yet coordinator-aware) keep working; a
+     * JDBC store overrides this to select the right migration set (and to refuse a database whose
+     * baseline belongs to the other role).
+     */
+    default void migrate(ServerRole role) {
+        migrate();
+    }
 
     <R> R inTx(Function<Tx, R> work);
 

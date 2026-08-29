@@ -1,17 +1,11 @@
 package dev.wiggle.server;
 
 import dev.wiggle.server.cluster.ClusterManager;
-import dev.wiggle.server.cluster.Housekeeper;
-import dev.wiggle.server.cluster.QueueLagMonitor;
-import dev.wiggle.server.engine.DefinitionRegistry;
 import dev.wiggle.server.engine.WorkflowEngine;
-import dev.wiggle.server.grpc.GrpcApi;
 import dev.wiggle.server.http.DashboardAuth;
-import dev.wiggle.server.http.HttpDashboard;
 import dev.wiggle.server.store.InMemoryStorage;
 import dev.wiggle.server.store.Storage;
 import dev.wiggle.server.store.StorageFactory;
-import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.io.IOException;
 
@@ -19,6 +13,12 @@ import java.io.IOException;
  * Wires one server node together. Multiple nodes pointed at the same JDBC URL form a
  * cluster: they all serve the API and hand out work, and exactly one of them holds the
  * leader role and runs the clock-driven housekeeping.
+ *
+ * <p>A node runs in a {@link ServerRole}. The shared pieces -- storage and the
+ * {@link ClusterManager} (membership + leader election) -- are the same for every role; the
+ * role-specific subsystems live in a {@link ServerBundle} (a {@link CellBundle} for the engine +
+ * control plane, a {@link CoordinatorBundle} for the coordinator surface). The default role is
+ * {@code cell}, so a server started without {@code WIGGLE_ROLE} behaves exactly as it always has.
  *
  * <p>The server core is storage-agnostic. With no URL configured it uses the in-memory store; to
  * run on a database, pass a {@link StorageFactory} that knows how to build the store for the URL
@@ -32,13 +32,8 @@ public final class WiggleServer implements AutoCloseable {
 
     private final ServerConfig config;
     private final Storage storage;
-    private final WorkflowEngine engine;
     private final ClusterManager cluster;
-    private final Housekeeper housekeeper;
-    private final QueueLagMonitor queueLagMonitor;
-    private final GrpcApi api;
-    /** Null unless a dashboard port was configured. */
-    private final HttpDashboard dashboard;
+    private final ServerBundle bundle;
 
     /** In-memory only. To run on a database, use {@link #WiggleServer(ServerConfig, StorageFactory)}. */
     public WiggleServer(ServerConfig config) throws IOException {
@@ -51,29 +46,20 @@ public final class WiggleServer implements AutoCloseable {
 
     /**
      * @param dashboardAuth a custom dashboard authenticator (e.g. SSO), or {@code null} to use the
-     *                      built-in admin-password login from {@link ServerConfig}.
+     *                      built-in admin-password login from {@link ServerConfig}. Ignored by the
+     *                      coordinator role, which serves no dashboard.
      */
     public WiggleServer(ServerConfig config, StorageFactory storageFactory,
                         DashboardAuth dashboardAuth) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
-        this.storage.migrate();
-        this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis());
+        this.storage.migrate(config.role());
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
-        this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
-                config.retention(), config.housekeepingBatch());
-        this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
-                config.queueLagCheckInterval(), config.queueLagWarnThreshold());
-        this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
-                config.tls(), config.memory());
-        this.dashboard = config.dashboardPort() <= 0 ? null : getHttpDashboard(config, dashboardAuth);
-    }
-
-    private @NonNull HttpDashboard getHttpDashboard(ServerConfig config, DashboardAuth dashboardAuth) throws IOException {
-        return dashboardAuth != null
-                ? new HttpDashboard(engine, cluster, config.dashboardPort(), dashboardAuth, config.tls())
-                : new HttpDashboard(engine, cluster, config.dashboardPort(), config.dashboardUser(), config.dashboardPassword(), config.tls());
+        this.bundle = switch (config.role()) {
+            case COORDINATOR -> new CoordinatorBundle(config, storage, cluster);
+            case CELL -> new CellBundle(config, storage, cluster, dashboardAuth);
+        };
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
@@ -86,33 +72,29 @@ public final class WiggleServer implements AutoCloseable {
 
     public WiggleServer start() {
         cluster.start();
-        housekeeper.start();
-        queueLagMonitor.start();
-        api.start();
-        if (dashboard != null) dashboard.start();
-        LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' started on port " + port()
+        bundle.start();
+        LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' (" + config.role()
+                + ") started on port " + port()
                 + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc")
-                + (dashboard != null ? ", dashboard: " + dashboard.port() : "") + ")");
+                + (dashboardPort() > 0 ? ", dashboard: " + dashboardPort() : "") + ")");
         return this;
     }
 
-    public int port() { return api.port(); }
+    public int port() { return bundle.port(); }
 
     /** The dashboard's port, or {@code -1} if it is not enabled. */
-    public int dashboardPort() { return dashboard == null ? -1 : dashboard.port(); }
+    public int dashboardPort() { return bundle.dashboardPort(); }
 
     public String baseUrl() { return "127.0.0.1:" + port(); }
 
-    public WorkflowEngine engine() { return engine; }
+    /** The workflow engine. Valid for the {@code cell} role; throws for {@code coordinator}. */
+    public WorkflowEngine engine() { return bundle.engine(); }
 
     public ClusterManager cluster() { return cluster; }
 
     @Override public void close() {
         LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' stopping");
-        if (dashboard != null) dashboard.close();
-        api.close();
-        queueLagMonitor.close();
-        housekeeper.close();
+        bundle.close();
         cluster.close();
         storage.close();
     }

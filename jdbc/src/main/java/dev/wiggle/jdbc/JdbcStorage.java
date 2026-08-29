@@ -3,6 +3,7 @@ package dev.wiggle.jdbc;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.wiggle.core.*;
+import dev.wiggle.server.ServerRole;
 import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.*;
 import dev.wiggle.server.store.Storage;
@@ -185,10 +186,58 @@ public final class JdbcStorage implements Storage {
             CREATE UNIQUE INDEX IF NOT EXISTS ux_schedule_workflow ON wf_schedule (workflow);
             """));
 
+    /**
+     * Coordinator schema. A coordinator runs on its <em>own</em> database (separate from any cell), so
+     * this is a distinct baseline lineage -- it shares no {@code wf_schema_version} table with the cell
+     * set. It still needs {@code wf_node} because the coordinator reuses {@code ClusterManager}
+     * (leader election) over its own database.
+     */
+    public static final List<Migration> COORDINATOR_MIGRATIONS = List.of(
+            new Migration(1, "coordinator-baseline", """
+            CREATE TABLE IF NOT EXISTS wf_node (
+              id             VARCHAR(64)  PRIMARY KEY,
+              name           VARCHAR(200) NOT NULL,
+              first_heartbeat BIGINT      NOT NULL,
+              last_heartbeat BIGINT       NOT NULL,
+              workers        INT          NOT NULL,
+              leader         INT          NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS coord_policy (
+              namespace      VARCHAR(200) PRIMARY KEY,
+              current_epoch  BIGINT       NOT NULL,
+              epochs         TEXT         NOT NULL,
+              revision       BIGINT       NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS coord_node (
+              id                VARCHAR(64)  PRIMARY KEY,
+              namespace         VARCHAR(200) NOT NULL,
+              endpoint          VARCHAR(300) NOT NULL,
+              region            VARCHAR(120),
+              engine_version    VARCHAR(60),
+              config_generation BIGINT       NOT NULL,
+              last_heartbeat    BIGINT       NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_coord_node_ns ON coord_node (namespace, last_heartbeat);
+            CREATE TABLE IF NOT EXISTS coord_definition (
+              namespace      VARCHAR(200) NOT NULL,
+              name           VARCHAR(200) NOT NULL,
+              version        INT          NOT NULL,
+              hash           VARCHAR(64)  NOT NULL,
+              registered_at  BIGINT       NOT NULL,
+              PRIMARY KEY (namespace, name)
+            );
+            """));
+
     @Override public void migrate() {
+        migrate(ServerRole.CELL);
+    }
+
+    @Override public void migrate(ServerRole role) {
+        List<Migration> migrations = role == ServerRole.COORDINATOR ? COORDINATOR_MIGRATIONS : MIGRATIONS;
+        String baseline = role == ServerRole.COORDINATOR ? "coordinator-baseline" : "baseline";
         Connection c = borrow();
         try {
-            runMigrations(c, MIGRATIONS, dialect);
+            runMigrations(c, migrations, dialect, baseline);
             c.commit();   // also releases the migration lock held for the duration
         } catch (SQLException e) {
             rollback(c);
@@ -207,10 +256,34 @@ public final class JdbcStorage implements Storage {
      * lands atomically.
      */
     public static void runMigrations(Connection c, List<Migration> migrations, Dialect dialect) throws SQLException {
+        runMigrations(c, migrations, dialect, null);
+    }
+
+    /**
+     * As {@link #runMigrations(Connection, List, Dialect)}, but if {@code expectedBaseline} is
+     * non-null it first verifies the recorded V1 name matches -- so migrating a database whose
+     * baseline belongs to the other role (a coordinator pointed at a cell's DB, or vice versa) fails
+     * fast instead of silently skipping every migration because the version counter is already ahead.
+     */
+    public static void runMigrations(Connection c, List<Migration> migrations, Dialect dialect,
+                                     String expectedBaseline) throws SQLException {
         dialect.acquireMigrationLock(c);
         try (Statement st = c.createStatement()) {
             execDdl(st, dialect, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
                     "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL)");
+        }
+        if (expectedBaseline != null) {
+            try (Statement st = c.createStatement();
+                 ResultSet rs = st.executeQuery("SELECT name FROM wf_schema_version WHERE version=1")) {
+                if (rs.next()) {
+                    String existing = rs.getString(1);
+                    if (existing != null && !existing.equals(expectedBaseline)) {
+                        throw new SQLException("schema baseline mismatch: this database was initialised as '"
+                                + existing + "' but is being migrated as '" + expectedBaseline
+                                + "'. A coordinator must use its own database, separate from any cell.");
+                    }
+                }
+            }
         }
         int current = 0;
         try (Statement st = c.createStatement();
