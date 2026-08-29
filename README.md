@@ -29,6 +29,11 @@ docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me
 >
 > Prefer not to write Java to define a workflow? Author the topology as a YAML file and register it
 > with the **`wiggle` CLI** — see **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
+>
+> Not on the JVM? There are idiomatic **[Python](https://github.com/hadielmougy/wiggle-python)** and
+> **[Go](https://github.com/hadielmougy/wiggle-go)** clients that speak the same gRPC control plane, so
+> their workers interoperate with Java (and each other) on one server — dispatch is by activity name,
+> not by language.
 
 ---
 
@@ -354,6 +359,27 @@ See it run: [`example:runBinding`](example/src/main/java/dev/wiggle/binding/Bind
 authors the flow and serves it from two independent workers bound purely by name — a fulfilment
 worker and a payments-queue worker — then submits an order and prints the result.
 
+**A whole object of handlers.** Instead of one `handle(...)` per step, hand the worker an object whose
+methods *are* the steps — matched by name, with the **method signature picking the kind**:
+
+```java
+class OrderHandlers {
+    Map<String,Object> validate(Map<String,Object> c) { return put(c, "status", "VALIDATED"); } // task
+    boolean inStock(Map<String,Object> c)             { return qty(c) > 0; }                     // gate; matches "in-stock"
+    void notify(Map<String,Object> c)                 { email(c); }                              // side effect
+}
+
+new Worker(client, "fulfilment-worker")
+        .registerHandlers("order-fulfilment", new OrderHandlers())
+        .start();
+```
+
+Each method that takes the context and returns a `Map` (task), `boolean` (gate), or `void` (effect) is
+matched to a step **by case-insensitive name** (`inStock` ↔ `in-stock`) on `start()`, the graph
+confirming the exact name and gate-vs-task. Methods of any other shape are ignored, so helpers can live
+on the object. Two method names that collide under case-folding are rejected at `registerHandlers`; a
+method matching no step, or a signature that clashes with the graph's kind, fails fast on `start()`.
+
 **Typed contexts too.** A handler can work on a **record** rather than a JSON map — pass a
 `ContextCodec` to `handle`:
 
@@ -373,6 +399,20 @@ is the same demo with a typed `Purchase` context.
 Since the topology is authored once and implemented by name, it doesn't have to be authored in Java
 at all — describe it as a **[YAML file](docs/workflow-yaml.md)** and register it with the `wiggle`
 CLI, then bind handlers by name exactly as above.
+
+### Other language clients
+
+Steps can be implemented in any language too. Two idiomatic clients speak the same gRPC control plane,
+so their workers interoperate with Java workers (and each other) on one server — a single instance can
+have its steps served by a mix of languages, dispatched by activity name:
+
+- **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** (`pip install wiggle-client`) — a
+  declarative `Graph` topology plus a worker that binds handlers by name (`handle` / `register_handlers`).
+- **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** (`go get github.com/hadielmougy/wiggle-go`) —
+  declarative `Graph` structs plus a worker that binds handlers by name (`Handle` / `RegisterHandlers`).
+
+Both register topology and bind handlers the same way this section describes; the content-hash version
+is per-language and need not match, because interop is by activity name.
 
 ---
 
