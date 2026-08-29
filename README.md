@@ -1,14 +1,15 @@
 # Wiggle
 
-A lightweight, embeddable **workflow engine for Java 21**. You describe a workflow with a
-small `java.util.stream`-style DSL, run it on a server (embedded in your JVM or as a
-standalone cluster), and process the steps with *workers* that pull work when they have
-capacity.
+A **durable state-machine platform for Java 21** — and the control plane to shard it. You describe a
+process as a graph with a small `java.util.stream`-style DSL; Wiggle runs it as a durable state
+machine (tokens over the graph) that survives crashes, resumes exactly where it left off, and drives
+its steps with pull-based *workers*. When one cluster isn't enough, a coordinator shards work across
+isolated **cells** — each its own database and cluster — with no data migration.
 
-- **Fluent DSL** — build a workflow as a chain of steps: `step`, `gate`, `choose`, `fork`, `sleep`.
-- **Durable** — instances survive restarts; run in-memory for dev, or on Postgres for real.
-- **Pull-based workers** — workers ask for work; the server never pushes. Backpressure is built in, and workers need no inbound connectivity.
-- **Automatic retries, timers, and parallel fork/join**, with at-least-once execution and lease-based recovery when a worker dies.
+- **Durable by default** — every instance is DB-backed: it survives restarts, retries, and worker death (lease-based recovery). Exactly-once dispatch, at-least-once execution.
+- **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals, timers, sub-workflows — a compiled graph, versioned by content hash.
+- **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name.
+- **Scales by cells (optional)** — a coordinator maps namespaces to cells with per-cell DB isolation and directory-free routing (an instance id carries its own placement). Grow by adding cells; drain and retire old ones with zero migration. One cluster runs unchanged without a coordinator.
 
 **Current version: `2.1.5`** · Java 21+ · Apache-2.0
 

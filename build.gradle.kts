@@ -50,10 +50,10 @@ subprojects {
 val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "mysql", "oracle", "sqlserver", "cassandra")
 
 val moduleDescriptions = mapOf(
-    "core" to "Wiggle shared model: JSON, the compiled workflow graph, retry policy, wire records.",
+    "core" to "Wiggle shared model: JSON, the compiled state-machine graph, retry policy, wire records.",
     "proto" to "Wiggle gRPC/protobuf stubs for the control-plane wire protocol.",
-    "client" to "Wiggle client: the workflow authoring DSL, imperative builder, and worker runtime.",
-    "server" to "Wiggle server: the workflow engine, cluster manager, and control-plane API.",
+    "client" to "Wiggle client: the flow-authoring DSL, imperative builder, worker runtime, and cell resolver.",
+    "server" to "Wiggle server: the durable state-machine engine, cluster manager, cell coordinator, and control-plane API.",
     "jdbc" to "Wiggle JDBC storage core: the dialect-aware, HikariCP-pooled store shared by every database module.",
     "postgres" to "Wiggle PostgreSQL storage: PostgreSQL and H2 dialects for multi-node clustering.",
     "mysql" to "Wiggle MySQL storage: the MySQL/MariaDB dialect for multi-node clustering.",
