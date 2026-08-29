@@ -53,7 +53,7 @@ public final class WiggleServer implements AutoCloseable {
                         DashboardAuth dashboardAuth) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
-        this.storage.migrate();
+        this.storage.migrate(config.role());
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
         this.bundle = switch (config.role()) {
