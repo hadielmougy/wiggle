@@ -44,6 +44,12 @@ Design ref: R9, R13, R16, R17, R18, R19, §6 (id & endpoint formats). Sequencing
 
 ## T10 — SDK resolver (Java · Go · Python)
 
+Split per client, since each is its own codebase with its own tests:
+
+- **T10a — Java** (`client/.../CellResolver.java`): ✅ done. The reference implementation + `CellRoutingTest` (real coordinator + cell).
+- **T10b — Go** (`wiggle-go`: vendor `coordinator.proto`, new `resolver.go` + id parse): mirrors T10a.
+- **T10c — Python** (`wiggle-python`: vendor `coordinator.proto`, new resolver + id parse): mirrors T10a.
+
 **Files:** `client/src/main/java/dev/wiggle/client/WiggleClient.java` (+ a resolver), `wiggle-go` (`client.go`/new `resolver.go`), `wiggle-python` (`client.py`/new resolver). Each needs the coordinator stub (vendor `coordinator.proto` into the Go/Python repos as they already vendor `wiggle.proto`).
 
 **Goal:** clients dial the right cell without the app knowing cells exist. (R9, R18, R19)
