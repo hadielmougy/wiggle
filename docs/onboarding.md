@@ -11,14 +11,17 @@ author workflows, and **every configuration option** in one place.
 
 ## 1. What Wiggle is
 
-A lightweight, embeddable **workflow engine for Java 21**. You describe a workflow as a chain of
-steps with a `java.util.stream`-style DSL; a **server** owns the durable state machine; **workers**
-pull work when they have capacity and run the step logic. See `README.md` for the elevator pitch
-and `docs/local-execution.md` for the execution-mode deep dive.
+A **durable state-machine platform for Java 21**. You describe a process as a graph with a
+`java.util.stream`-style DSL; a **server** runs it as a durable state machine (tokens over the graph)
+that survives crashes and resumes where it left off; **workers** pull work when they have capacity and
+run the step logic. When one cluster isn't enough, an optional **coordinator** shards work across
+isolated **cells** — each its own database and cluster — with no data migration. See `README.md` for
+the elevator pitch and `docs/local-execution.md` for the execution-mode deep dive.
 
-Core properties: durable (survives restarts), at-least-once execution, pull-based workers (no
-inbound connectivity), content-addressed immutable definitions, and multi-node clustering over a
-shared database.
+Core properties: durable (survives restarts), exactly-once dispatch and at-least-once execution,
+pull-based workers (no inbound connectivity), content-addressed immutable definitions, multi-node
+clustering over a shared database, and optional cell-based sharding (a single cluster runs unchanged
+without a coordinator).
 
 ---
 
