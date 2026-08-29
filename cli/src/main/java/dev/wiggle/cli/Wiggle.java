@@ -21,7 +21,7 @@ import java.util.concurrent.Callable;
  * it to a server. Step handlers are bound separately, by name, on workers.
  */
 @Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.5",
-        subcommands = {Wiggle.Validate.class, Wiggle.Register.class,
+        subcommands = {Wiggle.Use.class, Wiggle.Validate.class, Wiggle.Register.class,
                 Wiggle.Allocate.class, Wiggle.Deallocate.class, Wiggle.Allocations.class},
         description = "Author and register Wiggle workflows; allocate flows to namespaces via a coordinator.")
 public final class Wiggle implements Runnable {
@@ -33,6 +33,52 @@ public final class Wiggle implements Runnable {
 
     public static void main(String[] args) {
         System.exit(new CommandLine(new Wiggle()).setCaseInsensitiveEnumValuesAllowed(true).execute(args));
+    }
+
+    @Command(name = "use", mixinStandardHelpOptions = true,
+            description = "Set (or show) which server the CLI talks to: a coordinator or a single cell, and its address. "
+                    + "Saved to ~/.wiggle and used by every command unless overridden by a flag or env var.")
+    static final class Use implements Callable<Integer> {
+        @Parameters(index = "0", arity = "0..1", paramLabel = "KIND",
+                description = "coordinator | cell (omit KIND and ADDRESS to show the current target)")
+        String kind;
+
+        @Parameters(index = "1", arity = "0..1", paramLabel = "ADDRESS", description = "host:port")
+        String address;
+
+        @Option(names = "--clear", description = "clear the saved target")
+        boolean clear;
+
+        @Override
+        public Integer call() {
+            if (clear) {
+                Target.clear();
+                System.out.println("target cleared (" + Target.configFile() + ")");
+                return 0;
+            }
+            if (kind == null) {   // show
+                Target.load().ifPresentOrElse(
+                        t -> System.out.println("current target: " + t + "  (" + Target.configFile() + ")"),
+                        () -> System.out.println("no target set; commands default to a coordinator on "
+                                + Target.Kind.COORDINATOR.fallback + " / a cell on " + Target.Kind.CELL.fallback));
+                return 0;
+            }
+            Target.Kind k;
+            try {
+                k = Target.Kind.valueOf(kind.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                System.err.println("KIND must be 'coordinator' or 'cell', not '" + kind + "'");
+                return 2;
+            }
+            if (address == null || address.isBlank()) {
+                System.err.println("ADDRESS (host:port) is required when setting a target");
+                return 2;
+            }
+            Target t = new Target(k, address.trim());
+            t.save();
+            System.out.println("target set: " + t);
+            return 0;
+        }
     }
 
     @Command(name = "validate", mixinStandardHelpOptions = true,
@@ -94,8 +140,13 @@ public final class Wiggle implements Runnable {
                 System.err.println("invalid: " + describe(e));
                 return 1;
             }
-            String target = server != null ? server
-                    : System.getenv().getOrDefault("WIGGLE_URL", "localhost:8080");
+            String target;
+            try {
+                target = Target.resolve(Target.Kind.CELL, server);   // flag > env > saved cell > default
+            } catch (IllegalStateException e) {
+                System.err.println(e.getMessage());
+                return 2;
+            }
 
             // Explicit flags override the WIGGLE_TLS_* environment per field; --tls (or any store)
             // forces TLS. With nothing set, the channel stays plaintext.
@@ -126,12 +177,6 @@ public final class Wiggle implements Runnable {
 
     // ---- coordinator: allocate / deallocate flows to namespaces ----
 
-    /** Resolves the coordinator target: --coordinator, else $WIGGLE_COORDINATOR_URL, else localhost:8099. */
-    private static String coordinatorTarget(String flag) {
-        if (flag != null && !flag.isBlank()) return flag;
-        return System.getenv().getOrDefault("WIGGLE_COORDINATOR_URL", "localhost:8099");
-    }
-
     private static CellResolver resolver(String coordinator) {
         return CellResolver.coordinator(coordinator, Tls.Options.fromEnvironment(),
                 System.getenv().getOrDefault("WIGGLE_REGION", ""));
@@ -159,7 +204,13 @@ public final class Wiggle implements Runnable {
                 System.err.println("invalid: " + describe(e));
                 return 1;
             }
-            String target = coordinatorTarget(coordinator);
+            final String target;
+            try {
+                target = Target.resolve(Target.Kind.COORDINATOR, coordinator);   // flag > env > saved coordinator > default
+            } catch (IllegalStateException e) {
+                System.err.println(e.getMessage());
+                return 2;
+            }
             try (CellResolver resolver = resolver(target)) {
                 resolver.registerWorkflow(namespace, bp);
                 System.out.printf("allocated  %s  v%d  ->  namespace '%s'  (via %s)%n",
@@ -187,7 +238,13 @@ public final class Wiggle implements Runnable {
 
         @Override
         public Integer call() {
-            String target = coordinatorTarget(coordinator);
+            final String target;
+            try {
+                target = Target.resolve(Target.Kind.COORDINATOR, coordinator);   // flag > env > saved coordinator > default
+            } catch (IllegalStateException e) {
+                System.err.println(e.getMessage());
+                return 2;
+            }
             try (CellResolver resolver = resolver(target)) {
                 boolean removed = resolver.deregisterWorkflow(namespace, name);
                 System.out.println(removed
@@ -213,7 +270,13 @@ public final class Wiggle implements Runnable {
 
         @Override
         public Integer call() {
-            String target = coordinatorTarget(coordinator);
+            final String target;
+            try {
+                target = Target.resolve(Target.Kind.COORDINATOR, coordinator);   // flag > env > saved coordinator > default
+            } catch (IllegalStateException e) {
+                System.err.println(e.getMessage());
+                return 2;
+            }
             try (CellResolver resolver = resolver(target)) {
                 var flows = resolver.listWorkflows(namespace);
                 if (flows.isEmpty()) {

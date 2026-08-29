@@ -106,8 +106,15 @@ Allocate / deallocate flows to namespaces (the CLI dials the coordinator by defa
 
   scripts/playground.sh status         # roster + allocations across all namespaces
 
-The CLI is '$CLI_BIN'; it defaults --coordinator to \$WIGGLE_COORDINATOR_URL else localhost:8099,
-so 'export WIGGLE_COORDINATOR_URL=$COORD_URL' lets you call it directly too.
+Point the CLI at a server once and it sticks (saved in ~/.wiggle), then switch anytime:
+
+  $CLI_BIN use coordinator $COORD_URL     # talk to the coordinator
+  $CLI_BIN use cell 127.0.0.1:8081          # talk to one cell directly (e.g. for 'register')
+  $CLI_BIN use                              # show the current target
+  $CLI_BIN allocations -n ns1               # uses the saved target; --coordinator/--server override it
+
+The CLI is '$CLI_BIN'. Precedence per command: explicit flag > env (WIGGLE_COORDINATOR_URL /
+WIGGLE_URL) > saved target (wiggle use) > default.
 EOF
 }
 
