@@ -1,17 +1,19 @@
 # Wiggle
 
-A **durable state-machine platform for Java 21** — and the control plane to shard it. You describe a
+A **durable, cellular state-machine platform** — and the control plane to shard it. You describe a
 process as a graph with a small `java.util.stream`-style DSL; Wiggle runs it as a durable state
 machine (tokens over the graph) that survives crashes, resumes exactly where it left off, and drives
-its steps with pull-based *workers*. When one cluster isn't enough, a coordinator shards work across
-isolated **cells** — each its own database and cluster — with no data migration.
+its steps with pull-based *workers*. Its distinctive move is **cellular**: a namespace becomes a
+*cell* — its own database and its own cluster — and a coordinator shards work across cells with
+directory-free routing and zero-migration rebalancing. Blast-radius isolation and scale-out, built in.
 
-- **Durable by default** — every instance is DB-backed: it survives restarts, retries, and worker death (lease-based recovery). Exactly-once dispatch, at-least-once execution.
-- **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals, timers, sub-workflows — a compiled graph, versioned by content hash.
-- **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name.
-- **Scales by cells (optional)** — a coordinator maps namespaces to cells with per-cell DB isolation and directory-free routing (an instance id carries its own placement). Grow by adding cells; drain and retire old ones with zero migration. One cluster runs unchanged without a coordinator.
+- **Cellular by design** — a namespace is a cell with its **own database and cluster**. A coordinator places instances across cells by consistent hashing over epochs; an instance id **carries its own routing**, so there's no lookup directory and an instance never moves. Grow by adding cells; **drain and retire** old ones with zero data migration. Physical per-tenant isolation, not just logical.
+- **Durable** — every instance is DB-backed: it survives restarts, retries, and worker death (lease-based recovery). Exactly-once dispatch, at-least-once execution.
+- **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals, timers, sub-workflows — a compiled graph, versioned by content hash. No workflow-code determinism to get wrong.
+- **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name. A coordinator-aware worker fans polling out across a namespace's active cells and shifts as they rebalance.
+- **Optional & lightweight** — the cell coordinator is opt-in: a single cluster runs unchanged without one, and the whole thing is a JAR plus a database (Postgres/MySQL/Oracle/SQL Server/Cassandra) — embeddable in your process, no Elasticsearch, no server mesh.
 
-**Current version: `2.1.5`** · Java 21+ · Apache-2.0
+**Current version: `2.1.5`** · Apache-2.0
 
 ```bash
 # Run the server (dashboard + every storage backend bundled) as a container:
@@ -433,7 +435,7 @@ wiggle register order.yaml --server prod:8080       # register with a running se
   `--tls` (JVM default trust store) override per invocation.
 - **Install:** `brew tap hadielmougy/wiggle https://github.com/hadielmougy/wiggle && brew install hadielmougy/wiggle/wiggle`,
   or download the archive from the release — see [docs/workflow-yaml.md](docs/workflow-yaml.md#installing-the-cli).
-  (It's a JVM app; needs Java 21.)
+  (It's a JVM app; needs a recent JDK.)
 
 The full YAML schema and every subcommand detail live in **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
 

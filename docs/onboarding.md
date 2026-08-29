@@ -11,17 +11,19 @@ author workflows, and **every configuration option** in one place.
 
 ## 1. What Wiggle is
 
-A **durable state-machine platform for Java 21**. You describe a process as a graph with a
+A **durable, cellular state-machine platform**. You describe a process as a graph with a
 `java.util.stream`-style DSL; a **server** runs it as a durable state machine (tokens over the graph)
 that survives crashes and resumes where it left off; **workers** pull work when they have capacity and
-run the step logic. When one cluster isn't enough, an optional **coordinator** shards work across
-isolated **cells** — each its own database and cluster — with no data migration. See `README.md` for
-the elevator pitch and `docs/local-execution.md` for the execution-mode deep dive.
+run the step logic. Its distinctive move is **cellular**: a namespace becomes a *cell* — its own
+database and its own cluster — and an optional **coordinator** shards work across cells with
+directory-free routing and zero-migration rebalancing. See `README.md` for the elevator pitch and
+`docs/local-execution.md` for the execution-mode deep dive.
 
 Core properties: durable (survives restarts), exactly-once dispatch and at-least-once execution,
 pull-based workers (no inbound connectivity), content-addressed immutable definitions, multi-node
-clustering over a shared database, and optional cell-based sharding (a single cluster runs unchanged
-without a coordinator).
+clustering over a shared database, and **cellular sharding** — a namespace is a cell with its own
+database and cluster, placed by consistent hashing over epochs and rebalanced by drain/retire (a single
+cluster runs unchanged without a coordinator).
 
 ---
 
