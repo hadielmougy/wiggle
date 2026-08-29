@@ -26,9 +26,12 @@ final class CoordinatorBundle implements ServerBundle {
     CoordinatorBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
         this.store = storage.coordinatorStore();
         this.api = new CoordinatorApi(store, config.port(), config.tls());
-        long nodeDeadMillis = config.missedHeartbeatsBeforeDead() * config.heartbeatInterval().toMillis();
-        this.reconciler = new CoordinatorReconciler(store, cluster::isLeader,
-                config.heartbeatInterval().toMillis(), nodeDeadMillis);
+        // A node's liveness is measured against the node->coordinator heartbeat cadence, NOT the
+        // coordinator's own cluster heartbeat -- otherwise lowering the coordinator's
+        // WIGGLE_HEARTBEAT_INTERVAL_MILLIS could falsely reap live nodes.
+        long reconcileMillis = CoordinatorApi.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
+        long nodeDeadMillis = CoordinatorApi.nodeDeadMillis(config.missedHeartbeatsBeforeDead());
+        this.reconciler = new CoordinatorReconciler(store, cluster::isLeader, reconcileMillis, nodeDeadMillis);
     }
 
     @Override public void start() {

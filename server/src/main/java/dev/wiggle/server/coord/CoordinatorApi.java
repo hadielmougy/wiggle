@@ -50,7 +50,23 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     private static final System.Logger LOG = System.getLogger(CoordinatorApi.class.getName());
     private static final int CAS_ATTEMPTS = 5;
     private static final int DEFAULT_TTL_S = 300;
-    private static final int NODE_HEARTBEAT_INTERVAL_S = 10;
+
+    /**
+     * How often a node heartbeats the coordinator (dictated to nodes in {@code RegisterResponse}).
+     * The reaper's dead timeout is derived from this ({@link #nodeDeadMillis}), so node liveness never
+     * depends on the coordinator's own cluster-heartbeat config -- a node is only reaped after it
+     * genuinely misses several of *these* beats.
+     */
+    public static final int NODE_HEARTBEAT_INTERVAL_SECONDS = 5;
+
+    /**
+     * The reaper's dead timeout: a node is dead after it misses {@code missedHeartbeats} node beats.
+     * Floored at two beats so the timeout always exceeds one heartbeat interval, even if
+     * {@code missedHeartbeats} is misconfigured to 0 or 1.
+     */
+    public static long nodeDeadMillis(int missedHeartbeats) {
+        return Math.max(2, missedHeartbeats) * (long) NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
+    }
 
     private final CoordinatorStore store;
     private final Server server;
@@ -160,7 +176,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
                 node.getEngineVersion(), 0, System.currentTimeMillis()));
         return RegisterResponse.newBuilder()
                 .setNodeId(nodeId)
-                .setHeartbeatIntervalSeconds(NODE_HEARTBEAT_INTERVAL_S)
+                .setHeartbeatIntervalSeconds(NODE_HEARTBEAT_INTERVAL_SECONDS)
                 .build();
     }
 

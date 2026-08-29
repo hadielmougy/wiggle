@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Phase 1 / T6: the coordinator's admin policy writes. OpenEpoch creates then appends epochs and
@@ -40,6 +41,19 @@ class CoordinatorApiTest {
             assertEquals(EpochStatus.OPEN, p1.getEpochsOrThrow(1).getStatus());
             assertEquals("cell-5", p1.getEpochsOrThrow(1).getRing(0).getCellId());
         }
+    }
+
+    @Test @DisplayName("reaper dead-timeout is derived from the node heartbeat interval, always exceeding it")
+    void reaperTimeoutTracksNodeHeartbeat() {
+        long beatMillis = CoordinatorApi.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
+        // Whatever the missed-count (even a misconfigured 0/1), the dead timeout must exceed one beat,
+        // so a live node that heartbeats on schedule is never reaped.
+        for (int missed : new int[]{0, 1, 2, 3, 5}) {
+            assertTrue(CoordinatorApi.nodeDeadMillis(missed) > beatMillis,
+                    "dead timeout must exceed the node heartbeat interval for missed=" + missed);
+        }
+        assertEquals(3 * beatMillis, CoordinatorApi.nodeDeadMillis(3));
+        assertEquals(2 * beatMillis, CoordinatorApi.nodeDeadMillis(1), "floored at two beats");
     }
 
     @Test @DisplayName("setRing replaces an epoch's ring and bumps the revision")

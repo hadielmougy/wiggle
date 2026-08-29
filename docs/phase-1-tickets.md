@@ -4,6 +4,8 @@
 
 Design ref: R8, R10, R14, R25, wire schemas §8. Sequencing: T4 → T5 → T6 → T7.
 
+**Live-DB integration test:** `scripts/coordinator-integration.sh` (requires Docker) stands up a coordinator plus two 2-node cell clusters, each on its own Postgres database, and asserts node registration/roster, per-cluster leader election, role/schema isolation, and coordinator-driven failover expiry.
+
 ---
 
 ## T4 — `coordinator.proto` + generated stubs
