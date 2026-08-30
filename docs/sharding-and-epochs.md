@@ -217,11 +217,20 @@ The discriminator is the **fingerprint**: a stable identity of the cell's shared
 which can't be shared across processes). It travels node → coordinator on register
 (`RegisteredNode.cell_fingerprint`) and is persisted per node (`CoordNode.cellFingerprint`).
 
-`CoordinatorApi.rejectCellIdCollision` then enforces: same `cellId` + **same** fingerprint → replicas
-→ allow; same `cellId` + **different** fingerprint → two cells → reject. Null fingerprints are exempt.
-The binding is implicit in the live roster, so it clears once a cell fully drains and the id becomes
-reusable.
-Tests: `CoordinatorPlacementTest.rejectsDuplicateCellId`, `…noFingerprintSkipsGuard`.
+`doRegister` enforces it via `CoordinatorStore.bindCell(namespace, cellId, fingerprint)` — an **atomic
+single-key claim** on a `(namespace, cellId) → fingerprint` binding: same `cellId` + **same** fingerprint
+→ replica → allow; same `cellId` + **different** fingerprint → two cells → reject; null fingerprint →
+exempt. It is a single-key operation on every backend (JDBC unique PK / Cassandra single-partition
+`IF NOT EXISTS` LWT / etcd version-fenced txn / in-memory `computeIfAbsent`), so it is race-free — unlike
+the earlier check-then-insert over the node roster, which could let two different fingerprints both pass
+under a concurrent register, and which could not be made atomic on Cassandra at all.
+
+The binding is reclaimed when a cell fully drains: the leader's reconcile loop calls
+`pruneOrphanCellBindings`, deleting any binding no live node references, so a decommissioned cell id
+becomes reusable (a bounded delay after the last node leaves; the safe direction — it only ever
+over-rejects, never mis-routes).
+Tests: `CoordinatorStoreTest.cellBindingScenario` / `bindCellConcurrent` (InMemory + JDBC/H2),
+`CoordinatorPlacementTest.rejectsDuplicateCellId`, `…noFingerprintSkipsGuard`.
 
 ---
 

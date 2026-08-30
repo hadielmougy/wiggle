@@ -61,6 +61,8 @@ public final class CoordinatorReconciler implements AutoCloseable {
             int expired = store.expireNodes(System.currentTimeMillis() - nodeDeadMillis);
             if (expired > 0) LOG.log(System.Logger.Level.INFO, () -> "coord reconcile: expired " + expired + " dead node(s)");
             census.prune(System.currentTimeMillis() - nodeDeadMillis);
+            int unbound = store.pruneOrphanCellBindings();   // free cell ids of fully-drained cells for reuse
+            if (unbound > 0) LOG.log(System.Logger.Level.INFO, () -> "coord reconcile: pruned " + unbound + " orphan cell binding(s)");
             for (CoordPolicy p : store.listPolicies()) retireDrained(p.namespace());
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "coord reconcile failed: " + e);

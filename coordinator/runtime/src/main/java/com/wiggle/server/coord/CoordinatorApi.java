@@ -237,7 +237,12 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
         // yet know its cell registers into the namespace's one implicit cell.
         String cellId = cellOrNamespace(namespace, node.getCellId());
         String fingerprint = emptyToNull(node.getCellFingerprint());
-        rejectCellIdCollision(namespace, cellId, fingerprint);
+        // Atomically claim the cell-id -> fingerprint binding. A different cell (distinct storage) reusing
+        // this id in the namespace is rejected without a check-then-write race (see CoordinatorStore#bindCell).
+        if (!store.bindCell(namespace, cellId, fingerprint)) {
+            throw new IllegalArgumentException("cell id '" + cellId + "' in namespace '" + namespace
+                    + "' is already bound to a different cell; a node from another cell must use a distinct WIGGLE_CELL_ID");
+        }
         store.upsertNode(new CoordNode(nodeId, namespace, cellId, node.getEndpoint(), emptyToNull(node.getRegion()),
                 node.getEngineVersion(), fingerprint, 0, System.currentTimeMillis()));
         Placement pl = placementFor(namespace, cellId);
@@ -251,26 +256,6 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     private static String cellOrNamespace(String namespace, String cellId) {
         return cellId == null || cellId.isEmpty() ? namespace : cellId;
-    }
-
-    /**
-     * Rejects a node whose {@code cellId} is already bound to a <em>different</em> cell (a distinct
-     * shared storage) in this namespace: nodes of the same cell share a fingerprint and pass, so only a
-     * genuine collision -- two independent cells reusing an id -- is refused. Guarded only when both the
-     * joining node and an existing one carry a fingerprint, so an in-memory/legacy node (null print)
-     * never trips it. The binding is implicit in the live roster, so it clears once a cell fully drains
-     * and the id becomes reusable.
-     */
-    private void rejectCellIdCollision(String namespace, String cellId, String fingerprint) {
-        if (fingerprint == null) return;
-        for (CoordNode existing : store.nodes(namespace)) {
-            if (cellId.equals(existing.cellId()) && existing.cellFingerprint() != null
-                    && !fingerprint.equals(existing.cellFingerprint())) {
-                throw new IllegalArgumentException("cell id '" + cellId + "' in namespace '" + namespace
-                        + "' is already bound to a different cell (fingerprint " + existing.cellFingerprint()
-                        + "); a node from another cell must use a distinct WIGGLE_CELL_ID");
-            }
-        }
     }
 
     /**
