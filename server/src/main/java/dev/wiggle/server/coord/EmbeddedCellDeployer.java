@@ -60,7 +60,7 @@ public final class EmbeddedCellDeployer implements CellDeployer {
     @Override public Deployment deploy(NamespaceSpec spec) {
         List<WiggleServer> existing = deployments.get(spec.namespace());
         if (existing != null && !existing.isEmpty()) {
-            return new Deployment(spec.namespace(), existing.get(0).baseUrl());   // idempotent resume
+            return new Deployment(spec.namespace(), existing.getFirst().baseUrl());   // idempotent resume
         }
         int replicas = spec.replicas();
         if (replicas > 1 && spec.storage().isInMemory()) {
@@ -78,7 +78,7 @@ public final class EmbeddedCellDeployer implements CellDeployer {
             throw new UncheckedIOException("deploy of cell '" + spec.namespace() + "' failed", e);
         }
         deployments.put(spec.namespace(), started);
-        return new Deployment(spec.namespace(), started.get(0).baseUrl());
+        return new Deployment(spec.namespace(), started.getFirst().baseUrl());
     }
 
     @Override public void teardown(String deploymentId) {

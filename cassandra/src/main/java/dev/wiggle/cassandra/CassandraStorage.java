@@ -106,6 +106,35 @@ public final class CassandraStorage implements Storage {
         for (String ddl : SCHEMA) session.execute(ddl);
     }
 
+    @Override public void migrate(dev.wiggle.server.ServerRole role) {
+        List<String> ddls = role == dev.wiggle.server.ServerRole.COORDINATOR ? COORD_SCHEMA : SCHEMA;
+        for (String ddl : ddls) session.execute(ddl);
+    }
+
+    /** A CQL-backed coordinator store over this session (policy CAS via LWT). Shares the session. */
+    @Override public dev.wiggle.server.coord.CoordinatorStore coordinatorStore() {
+        return new CassandraCoordinatorStore(session);
+    }
+
+    /** Coordinator control-plane tables (bounded state): policy, node roster, definition + namespace registries. */
+    private static final List<String> COORD_SCHEMA = List.of(
+            """
+            CREATE TABLE IF NOT EXISTS coord_policy (
+              namespace text PRIMARY KEY, current_epoch bigint, epochs text, revision bigint)""",
+            """
+            CREATE TABLE IF NOT EXISTS coord_node (
+              id text PRIMARY KEY, namespace text, cell_id text, endpoint text, region text,
+              engine_version text, config_generation bigint, last_heartbeat bigint)""",
+            """
+            CREATE TABLE IF NOT EXISTS coord_definition (
+              namespace text, name text, version int, hash text, registered_at bigint,
+              PRIMARY KEY ((namespace), name))""",
+            """
+            CREATE TABLE IF NOT EXISTS coord_namespace (
+              namespace text PRIMARY KEY, state text, scheme text, jdbc_url text, db_user text,
+              secret_ref text, pool_size int, replicas int, region text, endpoint text, error text,
+              updated_at bigint)""");
+
     private static final List<String> SCHEMA = List.of(
             """
             CREATE TABLE IF NOT EXISTS instance_state (
