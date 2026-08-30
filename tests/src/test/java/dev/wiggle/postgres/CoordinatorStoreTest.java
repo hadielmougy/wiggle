@@ -1,8 +1,6 @@
 package dev.wiggle.postgres;
 
-import dev.wiggle.jdbc.JdbcCoordinatorStore;
 import dev.wiggle.jdbc.JdbcStorage;
-import dev.wiggle.server.ServerRole;
 import dev.wiggle.server.coord.CoordDefinition;
 import dev.wiggle.server.coord.CoordNamespace;
 import dev.wiggle.server.coord.CoordNode;
@@ -114,11 +112,8 @@ class CoordinatorStoreTest {
     @Test @DisplayName("JDBC (H2) store honours the CoordinatorStore contract")
     void jdbcH2() throws Exception {
         String url = "jdbc:h2:mem:coordstore-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        try (JdbcStorage mig = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
-            mig.migrate(ServerRole.COORDINATOR);   // create the coord_* tables
-            try (CoordinatorStore store = new JdbcCoordinatorStore(url, "sa", "", 2, new H2Dialect())) {
-                scenario(store);
-            }
+        try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
+            scenario(storage.coordinatorStore());   // migrates the coord_* schema, then a store over the pool
         }
     }
 }

@@ -9,6 +9,9 @@ import dev.wiggle.dist.coord.NoopCoordinatorLink;
 import dev.wiggle.server.Logging;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.WiggleServer;
+import dev.wiggle.server.coord.CoordinatorServer;
+import dev.wiggle.server.coord.CoordinatorStore;
+import dev.wiggle.server.store.Storage;
 
 /**
  * Entry point for the standalone server distribution. Reads configuration from the environment,
@@ -31,11 +34,20 @@ public final class Main {
         ConfigSource configSource = coordinated
                 ? new CoordinatorConfigSource(new EnvConfigSource(), coordinatorUrl)
                 : new EnvConfigSource();
+
+        ServerConfig config = configSource.load();
+
+        // Cell vs coordinator is an app-layer choice (WIGGLE_ROLE), not an engine concept: the engine
+        // and the coordinator are decoupled libraries composed here.
+        if ("coordinator".equalsIgnoreCase(System.getenv().getOrDefault("WIGGLE_ROLE", "cell").trim())) {
+            runCoordinator(config);   // a separate, engine-free control plane; never a WiggleServer
+            return;
+        }
+
         CoordinatorLink coordinator = coordinated
                 ? new HttpCoordinatorLink(coordinatorUrl)
                 : new NoopCoordinatorLink();
 
-        ServerConfig config = configSource.load();
         WiggleServer server = new WiggleServer(config, new WiggleStorageFactory()).start();
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle server '" + config.nodeName() + "' on " + server.baseUrl()
@@ -60,6 +72,29 @@ public final class Main {
             } finally {
                 server.close();
             }
+        }));
+        Thread.currentThread().join();
+    }
+
+    /**
+     * Runs the coordinator control plane: build its store from config (migrating the coord schema),
+     * then a self-hosted {@link CoordinatorServer}. No engine, no cell. Leader election is a durable lease
+     * over the coordinator store, keyed on the node name — a multi-node coordinator elects a single writer.
+     */
+    private static void runCoordinator(ServerConfig config) throws Exception {
+        WiggleStorageFactory factory = new WiggleStorageFactory();
+        Storage storage = factory.create(config);
+        CoordinatorStore store = factory.coordinatorStore(config, storage);
+        CoordinatorServer coordinator = new CoordinatorServer(store, config.port(), config.tls(),
+                config.missedHeartbeatsBeforeDead(), config.nodeName()).start();
+        boolean tls = config.tls().hasKeyStore();
+        System.out.println("Wiggle coordinator '" + config.nodeName() + "' on 127.0.0.1:" + coordinator.port()
+                + " (gRPC: " + (tls ? "TLS" : "plaintext")
+                + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            coordinator.close();
+            try { storage.close(); } catch (Exception ignored) { }
         }));
         Thread.currentThread().join();
     }

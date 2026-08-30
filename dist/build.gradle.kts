@@ -10,6 +10,9 @@ plugins {
 // assembled distribution carries them all.
 dependencies {
     implementation(project(":server"))
+    // The composition layer: it runs a cell (WiggleServer) OR a coordinator (CoordinatorServer), and
+    // owns the one bridge that needs both -- EmbeddedCellDeployer (starts in-process cells).
+    implementation(project(":coordinator:runtime"))
     implementation(project(":jdbc"))
     implementation(project(":postgres"))
     implementation(project(":mysql"))

@@ -363,6 +363,45 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 rs.getString(base + 10), rs.getLong(base + 11));
     }
 
+    // ---- leader election (a single-row lease; take over only when absent/expired, else CAS-renew) ----
+
+    @Override public boolean acquireLeadership(String nodeId, long nowMillis, long leaseMillis) {
+        long expiry = nowMillis + leaseMillis;
+        try (Connection c = borrow()) {
+            // Renew (holder==me) or take over an expired lease, atomically.
+            try (PreparedStatement up = c.prepareStatement(
+                    "UPDATE coord_leader SET holder=?, expires_at=? WHERE id='coordinator' AND (holder=? OR expires_at<=?)")) {
+                up.setString(1, nodeId); up.setLong(2, expiry); up.setString(3, nodeId); up.setLong(4, nowMillis);
+                if (up.executeUpdate() == 1) return true;
+            }
+            // No takeover: either the row is missing (claim it) or another valid holder (lose).
+            try (PreparedStatement ex = c.prepareStatement("SELECT 1 FROM coord_leader WHERE id='coordinator'");
+                 ResultSet rs = ex.executeQuery()) {
+                if (rs.next()) return false;   // a valid other holder exists
+            }
+            try (PreparedStatement ins = c.prepareStatement(
+                    "INSERT INTO coord_leader (id, holder, expires_at) VALUES ('coordinator', ?, ?)")) {
+                ins.setString(1, nodeId); ins.setLong(2, expiry);
+                ins.executeUpdate();
+                return true;
+            } catch (SQLException raceLost) {
+                return false;   // another node inserted first
+            }
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("acquireLeadership failed", e);
+        }
+    }
+
+    @Override public void releaseLeadership(String nodeId) {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement("DELETE FROM coord_leader WHERE id='coordinator' AND holder=?")) {
+            p.setString(1, nodeId);
+            p.executeUpdate();
+        } catch (SQLException ignored) {
+            // best-effort on shutdown; the lease expires on its own if this fails
+        }
+    }
+
     @Override public void close() {
         if (ownsPool && ds instanceof HikariDataSource h) h.close();
     }

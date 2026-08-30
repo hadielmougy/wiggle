@@ -69,5 +69,19 @@ public interface CoordinatorStore extends AutoCloseable {
     /** Idempotent upsert keyed by namespace; drives the provisioning state machine's persistence. */
     void putNamespace(CoordNamespace ns);
 
+    // ---- leader election (coordinator HA -- option A: a durable lease over this store) ----
+
+    /**
+     * Atomically become or renew the single coordinator leader: succeeds when there is no valid holder
+     * (absent or expired) or when {@code nodeId} already holds it, extending the lease to
+     * {@code nowMillis + leaseMillis}. Returns whether {@code nodeId} holds leadership afterwards. The
+     * leader-only duties (the reconcile/retire loop) run only while this returns true — so a durable,
+     * atomic implementation (JDBC CAS / Cassandra LWT) is what keeps a multi-node coordinator single-writer.
+     */
+    boolean acquireLeadership(String nodeId, long nowMillis, long leaseMillis);
+
+    /** Relinquish leadership if held by {@code nodeId} (best-effort, on graceful shutdown). */
+    default void releaseLeadership(String nodeId) { }
+
     @Override default void close() { }
 }

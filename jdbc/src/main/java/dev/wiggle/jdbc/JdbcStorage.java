@@ -3,8 +3,8 @@ package dev.wiggle.jdbc;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import dev.wiggle.core.*;
-import dev.wiggle.server.ServerRole;
 import dev.wiggle.server.coord.CoordinatorStore;
+import dev.wiggle.server.coord.CoordinatorStoreProvider;
 import dev.wiggle.server.store.Rows;
 import dev.wiggle.server.store.Rows.*;
 import dev.wiggle.server.store.Storage;
@@ -25,7 +25,7 @@ import java.util.function.Function;
  * and H2 (via {@code wiggle-postgres}), MySQL/MariaDB (via {@code wiggle-mysql}) and Oracle
  * (via {@code wiggle-oracle}). Connection pooling is provided by HikariCP.
  */
-public final class JdbcStorage implements Storage {
+public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
 
     private final Dialect dialect;
     private final HikariDataSource ds;
@@ -190,18 +190,15 @@ public final class JdbcStorage implements Storage {
     /**
      * Coordinator schema. A coordinator runs on its <em>own</em> database (separate from any cell), so
      * this is a distinct baseline lineage -- it shares no {@code wf_schema_version} table with the cell
-     * set. It still needs {@code wf_node} because the coordinator reuses {@code ClusterManager}
-     * (leader election) over its own database.
+     * set. It carries its own {@code coord_leader} lease table: the coordinator is engine-free and does
+     * its own leader election over this database, not via the cell {@code ClusterManager}.
      */
     public static final List<Migration> COORDINATOR_MIGRATIONS = List.of(
             new Migration(1, "coordinator-baseline", """
-            CREATE TABLE IF NOT EXISTS wf_node (
-              id             VARCHAR(64)  PRIMARY KEY,
-              name           VARCHAR(200) NOT NULL,
-              first_heartbeat BIGINT      NOT NULL,
-              last_heartbeat BIGINT       NOT NULL,
-              workers        INT          NOT NULL,
-              leader         INT          NOT NULL
+            CREATE TABLE IF NOT EXISTS coord_leader (
+              id         VARCHAR(40)  PRIMARY KEY,
+              holder     VARCHAR(200),
+              expires_at BIGINT
             );
             CREATE TABLE IF NOT EXISTS coord_policy (
               namespace      VARCHAR(200) PRIMARY KEY,
@@ -245,17 +242,20 @@ public final class JdbcStorage implements Storage {
             );
             """));
 
+    /** The coordinator store over this database: migrate the {@code coord_*} schema (idempotent, its own
+     *  baseline lineage), then a store sharing this pool. This is the coordinator's business, not the
+     *  engine's -- it is reached via {@link CoordinatorStoreProvider}, never via {@code Storage}. */
     @Override public CoordinatorStore coordinatorStore() {
+        applyMigrations(COORDINATOR_MIGRATIONS, "coordinator-baseline");
         return new JdbcCoordinatorStore(ds);   // shares this store's pool; does not own/close it
     }
 
+    /** Applies the cell schema. */
     @Override public void migrate() {
-        migrate(ServerRole.CELL);
+        applyMigrations(MIGRATIONS, "baseline");
     }
 
-    @Override public void migrate(ServerRole role) {
-        List<Migration> migrations = role == ServerRole.COORDINATOR ? COORDINATOR_MIGRATIONS : MIGRATIONS;
-        String baseline = role == ServerRole.COORDINATOR ? "coordinator-baseline" : "baseline";
+    private void applyMigrations(List<Migration> migrations, String baseline) {
         Connection c = borrow();
         try {
             runMigrations(c, migrations, dialect, baseline);

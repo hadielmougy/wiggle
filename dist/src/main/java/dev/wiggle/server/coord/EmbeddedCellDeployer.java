@@ -1,7 +1,6 @@
 package dev.wiggle.server.coord;
 
 import dev.wiggle.server.ServerConfig;
-import dev.wiggle.server.ServerRole;
 import dev.wiggle.server.WiggleServer;
 import dev.wiggle.server.store.InMemoryStorage;
 import dev.wiggle.server.store.Storage;
@@ -51,7 +50,7 @@ public final class EmbeddedCellDeployer implements CellDeployer {
         // no-op, and each node's own start migrates idempotently too.
         Storage storage = factory.create(cellConfig(spec, spec.basePort()));
         try {
-            storage.migrate(ServerRole.CELL);
+            storage.migrate();
         } finally {
             storage.close();
         }
@@ -94,7 +93,6 @@ public final class EmbeddedCellDeployer implements CellDeployer {
     private ServerConfig cellConfig(NamespaceSpec spec, int port) {
         StorageConfig sc = spec.storage();
         return template
-                .withRole(ServerRole.CELL)
                 .withNamespace(spec.namespace())
                 .withStorage(sc.jdbcUrl(), sc.user(), secrets.resolve(sc.secretRef()), Math.max(1, sc.poolSize()))
                 .withPort(port);

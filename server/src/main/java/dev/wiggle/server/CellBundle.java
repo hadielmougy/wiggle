@@ -17,7 +17,7 @@ import java.io.IOException;
 import java.util.function.Supplier;
 
 /**
- * The {@link ServerRole#CELL} subsystems: the workflow engine, the clock-driven housekeeping, the
+ * The cell subsystems: the workflow engine, the clock-driven housekeeping, the
  * queue-lag monitor, the {@code WiggleControlPlane} gRPC API, and (optionally) the HTTP dashboard.
  * This is exactly the wiring {@link WiggleServer} used to hold inline; extracting it lets a
  * coordinator node skip all of it.

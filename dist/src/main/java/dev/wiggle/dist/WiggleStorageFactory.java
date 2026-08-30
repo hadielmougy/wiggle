@@ -8,6 +8,9 @@ import dev.wiggle.oracle.OracleDialect;
 import dev.wiggle.postgres.H2Dialect;
 import dev.wiggle.postgres.PostgresDialect;
 import dev.wiggle.server.ServerConfig;
+import dev.wiggle.server.coord.CoordinatorStore;
+import dev.wiggle.server.coord.CoordinatorStoreProvider;
+import dev.wiggle.server.coord.InMemoryCoordinatorStore;
 import dev.wiggle.server.store.InMemoryStorage;
 import dev.wiggle.server.store.Storage;
 import dev.wiggle.server.store.StorageFactory;
@@ -28,6 +31,17 @@ public final class WiggleStorageFactory implements StorageFactory {
             return CassandraStorage.fromUrl(url, config.jdbcUser(), config.jdbcPassword());
         }
         return new JdbcStorage(url, config.jdbcUser(), config.jdbcPassword(), config.jdbcPoolSize(), dialect(url));
+    }
+
+    /**
+     * The coordinator store over {@code config}'s database: migrate the {@code coord_*} schema, then take
+     * the store from the storage adapter's {@link CoordinatorStoreProvider} seam (or a non-durable
+     * in-memory store for the in-memory backend). This is the only place the coordinator store is bound
+     * to a concrete database — the engine's {@code Storage} interface stays coordinator-free.
+     */
+    public CoordinatorStore coordinatorStore(ServerConfig config, Storage storage) {
+        // coordinatorStore() migrates the coord schema itself; in-memory storage has no provider.
+        return storage instanceof CoordinatorStoreProvider p ? p.coordinatorStore() : new InMemoryCoordinatorStore();
     }
 
     private static Dialect dialect(String url) {

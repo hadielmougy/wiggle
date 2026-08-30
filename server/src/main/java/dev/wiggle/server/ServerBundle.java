@@ -3,11 +3,10 @@ package dev.wiggle.server;
 import dev.wiggle.server.engine.WorkflowEngine;
 
 /**
- * The role-specific subsystems of a {@link WiggleServer}. Everything a node runs <em>beyond</em> the
- * shared storage + {@link dev.wiggle.server.cluster.ClusterManager} lives in a bundle, so a node
- * composes the right subsystems for its {@link ServerRole} rather than branching behaviour: a
- * {@link CellBundle} runs the engine + control plane, a {@link CoordinatorBundle} runs the
- * coordinator surface (and no engine).
+ * The cell subsystems of a {@link WiggleServer}. Everything a node runs <em>beyond</em> the shared
+ * storage + {@link dev.wiggle.server.cluster.ClusterManager} lives in a bundle ({@link CellBundle}: the
+ * engine + control plane). (The seam predates the coordinator's extraction into its own module; it is
+ * kept for the placement/engine accessors.)
  */
 interface ServerBundle {
 

@@ -17,7 +17,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            Duration retention, int housekeepingBatch, int dashboardPort,
                            Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                            String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory,
-                           ServerRole role, String namespace) {
+                           String namespace) {
 
     /**
      * Memory-pressure admission control for worker polls. When GC-accurate heap utilization crosses
@@ -87,7 +87,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, Memory.DISABLED);
     }
 
-    /** Back-compat: the pre-role canonical signature; defaults {@code role} to {@link ServerRole#CELL}. */
+    /** Back-compat: the pre-namespace canonical signature; defaults {@code namespace} to none. */
     public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
                         int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                         int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
@@ -96,22 +96,12 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                         String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
                 missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory,
-                ServerRole.CELL, null);
+                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory, null);
     }
 
     public ServerConfig {
         if (tls == null) tls = Tls.Options.DISABLED;
         if (memory == null) memory = Memory.DISABLED;
-        if (role == null) role = ServerRole.CELL;
-    }
-
-    /** A copy of this config with a different {@link ServerRole}. */
-    public ServerConfig withRole(ServerRole role) {
-        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
-                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
-                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, role, namespace);
     }
 
     /** A copy of this config with the given placement namespace (used to mint epoch-aware ids). */
@@ -119,7 +109,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+                dashboardUser, dashboardPassword, tls, memory, namespace);
     }
 
     /** A copy of this config on the given storage (null/blank url ⇒ in-memory). */
@@ -127,7 +117,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+                dashboardUser, dashboardPassword, tls, memory, namespace);
     }
 
     /** A copy of this config bound to a different gRPC port. */
@@ -135,7 +125,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, role, namespace);
+                dashboardUser, dashboardPassword, tls, memory, namespace);
     }
 
     public static ServerConfig fromEnvironment() {
@@ -166,8 +156,6 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 Tls.Options.fromEnvironment(),
                 // Memory-pressure load shedding; disabled unless WIGGLE_MEMORY_SHEDDING_ENABLED=true.
                 Memory.fromEnvironment(),
-                // cell (default) or coordinator; see docs/cell-coordinator-tickets.md.
-                ServerRole.fromString(strProp("wiggle.role", "WIGGLE_ROLE", "cell")),
                 // placement namespace (WIGGLE_NAMESPACE); when set, the cell mints epoch-aware ids.
                 strProp("wiggle.namespace", "WIGGLE_NAMESPACE", null));
     }

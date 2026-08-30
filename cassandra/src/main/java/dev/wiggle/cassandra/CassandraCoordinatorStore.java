@@ -171,6 +171,30 @@ public final class CassandraCoordinatorStore implements CoordinatorStore {
                         sc.poolSize(), ns.replicas(), ns.region(), ns.endpoint(), ns.error(), ns.updatedAt()));
     }
 
+    // ---- leader election (single-row lease via LWT) ----
+
+    @Override public boolean acquireLeadership(String nodeId, long nowMillis, long leaseMillis) {
+        long expiry = nowMillis + leaseMillis;
+        Row r = session.execute(ps("SELECT holder, expires_at FROM coord_leader WHERE id='coordinator'").bind()).one();
+        if (r == null) {
+            return session.execute(ps(
+                    "INSERT INTO coord_leader (id, holder, expires_at) VALUES ('coordinator', ?, ?) IF NOT EXISTS")
+                    .bind(nodeId, expiry)).wasApplied();
+        }
+        String holder = r.getString("holder");
+        long curExpiry = r.getLong("expires_at");
+        if (nodeId.equals(holder) || curExpiry <= nowMillis) {
+            return session.execute(ps(
+                    "UPDATE coord_leader SET holder=?, expires_at=? WHERE id='coordinator' IF holder=? AND expires_at=?")
+                    .bind(nodeId, expiry, holder, curExpiry)).wasApplied();   // CAS on the read state
+        }
+        return false;   // a valid other holder
+    }
+
+    @Override public void releaseLeadership(String nodeId) {
+        session.execute(ps("DELETE FROM coord_leader WHERE id='coordinator' IF holder=?").bind(nodeId));
+    }
+
     private static CoordNode readNode(Row r) {
         return new CoordNode(r.getString("id"), r.getString("namespace"), r.getString("cell_id"),
                 r.getString("endpoint"), r.getString("region"), r.getString("engine_version"),

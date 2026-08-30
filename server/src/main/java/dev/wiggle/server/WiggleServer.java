@@ -14,11 +14,10 @@ import java.io.IOException;
  * cluster: they all serve the API and hand out work, and exactly one of them holds the
  * leader role and runs the clock-driven housekeeping.
  *
- * <p>A node runs in a {@link ServerRole}. The shared pieces -- storage and the
- * {@link ClusterManager} (membership + leader election) -- are the same for every role; the
- * role-specific subsystems live in a {@link ServerBundle} (a {@link CellBundle} for the engine +
- * control plane, a {@link CoordinatorBundle} for the coordinator surface). The default role is
- * {@code cell}, so a server started without {@code WIGGLE_ROLE} behaves exactly as it always has.
+ * <p>A {@code WiggleServer} is a <em>cell</em>: the engine + control plane, over shared storage and a
+ * {@link ClusterManager} (membership + leader election). The coordinator is a separate, engine-free
+ * control plane ({@code dev.wiggle.server.coord.CoordinatorServer}) that shares nothing with the engine
+ * but the gRPC contract.
  *
  * <p>The server core is storage-agnostic. With no URL configured it uses the in-memory store; to
  * run on a database, pass a {@link StorageFactory} that knows how to build the store for the URL
@@ -46,20 +45,16 @@ public final class WiggleServer implements AutoCloseable {
 
     /**
      * @param dashboardAuth a custom dashboard authenticator (e.g. SSO), or {@code null} to use the
-     *                      built-in admin-password login from {@link ServerConfig}. Ignored by the
-     *                      coordinator role, which serves no dashboard.
+     *                      built-in admin-password login from {@link ServerConfig}.
      */
     public WiggleServer(ServerConfig config, StorageFactory storageFactory,
                         DashboardAuth dashboardAuth) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
-        this.storage.migrate(config.role());
+        this.storage.migrate();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
-        this.bundle = switch (config.role()) {
-            case COORDINATOR -> new CoordinatorBundle(config, storage, cluster);
-            case CELL -> new CellBundle(config, storage, cluster, dashboardAuth);
-        };
+        this.bundle = new CellBundle(config, storage, cluster, dashboardAuth);
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
@@ -73,8 +68,8 @@ public final class WiggleServer implements AutoCloseable {
     public WiggleServer start() {
         cluster.start();
         bundle.start();
-        LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' (" + config.role()
-                + ") started on port " + port()
+        LOG.log(System.Logger.Level.INFO, () -> "cell node '" + config.nodeName()
+                + "' started on port " + port()
                 + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc")
                 + (dashboardPort() > 0 ? ", dashboard: " + dashboardPort() : "") + ")");
         return this;
@@ -87,12 +82,12 @@ public final class WiggleServer implements AutoCloseable {
 
     public String baseUrl() { return "127.0.0.1:" + port(); }
 
-    /** The workflow engine. Valid for the {@code cell} role; throws for {@code coordinator}. */
+    /** The workflow engine. */
     public WorkflowEngine engine() { return bundle.engine(); }
 
     /**
      * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
-     * cell (no namespace) and for the coordinator role. The coordinator link updates it as policy moves.
+     * cell (no namespace). The coordinator link updates it as policy moves.
      */
     public CellPlacement placement() { return bundle.placement(); }
 

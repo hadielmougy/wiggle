@@ -43,7 +43,7 @@ import java.util.function.Function;
  * token rows in one instance partition. {@code listInstances}/{@code countInstances} read a single
  * bounded index partition. See the module README.
  */
-public final class CassandraStorage implements Storage {
+public final class CassandraStorage implements Storage, dev.wiggle.server.coord.CoordinatorStoreProvider {
 
     private static final int SHARDS = 8;
 
@@ -106,18 +106,17 @@ public final class CassandraStorage implements Storage {
         for (String ddl : SCHEMA) session.execute(ddl);
     }
 
-    @Override public void migrate(dev.wiggle.server.ServerRole role) {
-        List<String> ddls = role == dev.wiggle.server.ServerRole.COORDINATOR ? COORD_SCHEMA : SCHEMA;
-        for (String ddl : ddls) session.execute(ddl);
-    }
-
-    /** A CQL-backed coordinator store over this session (policy CAS via LWT). Shares the session. */
+    /** The coordinator store over this keyspace: create the {@code coord_*} tables (idempotent), then a
+     *  CQL store (policy CAS via LWT) sharing this session. Reached via {@link CoordinatorStoreProvider},
+     *  never via {@code Storage} -- the engine and the coordinator are decoupled. */
     @Override public dev.wiggle.server.coord.CoordinatorStore coordinatorStore() {
+        for (String ddl : COORD_SCHEMA) session.execute(ddl);
         return new CassandraCoordinatorStore(session);
     }
 
     /** Coordinator control-plane tables (bounded state): policy, node roster, definition + namespace registries. */
     private static final List<String> COORD_SCHEMA = List.of(
+            "CREATE TABLE IF NOT EXISTS coord_leader (id text PRIMARY KEY, holder text, expires_at bigint)",
             """
             CREATE TABLE IF NOT EXISTS coord_policy (
               namespace text PRIMARY KEY, current_epoch bigint, epochs text, revision bigint)""",
