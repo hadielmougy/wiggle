@@ -2,16 +2,13 @@ package dev.wiggle.jdbc;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import dev.wiggle.core.Json;
 import dev.wiggle.server.coord.CoordDefinition;
 import dev.wiggle.server.coord.CoordNamespace;
 import dev.wiggle.server.coord.CoordNode;
 import dev.wiggle.server.coord.CoordPolicy;
+import dev.wiggle.server.coord.EpochCodec;
 import dev.wiggle.server.coord.ProvisionState;
 import dev.wiggle.server.coord.StorageConfig;
-import dev.wiggle.server.coord.CoordPolicy.EpochRing;
-import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
-import dev.wiggle.server.coord.CoordPolicy.RingSlot;
 import dev.wiggle.server.coord.CoordinatorStore;
 
 import javax.sql.DataSource;
@@ -20,9 +17,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -83,7 +78,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
             try (ResultSet rs = p.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
                 return Optional.of(new CoordPolicy(namespace, rs.getLong(1), rs.getLong(3),
-                        decodeEpochs(rs.getString(2))));
+                        EpochCodec.decode(rs.getString(2))));
             }
         } catch (SQLException e) {
             throw new JdbcStorage.StorageException("getPolicy failed", e);
@@ -96,7 +91,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
              ResultSet rs = p.executeQuery()) {
             List<CoordPolicy> out = new ArrayList<>();
             while (rs.next()) {
-                out.add(new CoordPolicy(rs.getString(1), rs.getLong(2), rs.getLong(4), decodeEpochs(rs.getString(3))));
+                out.add(new CoordPolicy(rs.getString(1), rs.getLong(2), rs.getLong(4), EpochCodec.decode(rs.getString(3))));
             }
             return out;
         } catch (SQLException e) {
@@ -105,7 +100,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
     }
 
     @Override public long casPolicy(String namespace, long expectedRevision, CoordPolicy desired) {
-        String epochs = encodeEpochs(desired.epochs());
+        String epochs = EpochCodec.encode(desired.epochs());
         try (Connection c = borrow()) {
             if (expectedRevision == 0) {
                 // Create only if absent. Coordinator writes are leader-gated (single writer), so a
@@ -370,45 +365,5 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
 
     @Override public void close() {
         if (ownsPool && ds instanceof HikariDataSource h) h.close();
-    }
-
-    // ---- epoch JSON codec ----
-
-    private static String encodeEpochs(Map<Long, EpochRing> epochs) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        for (Map.Entry<Long, EpochRing> e : epochs.entrySet()) {
-            EpochRing er = e.getValue();
-            List<Object> ring = new ArrayList<>();
-            for (RingSlot s : er.ring()) {
-                Map<String, Object> slot = new LinkedHashMap<>();
-                slot.put("shard", s.shard());
-                slot.put("cellId", s.cellId());
-                slot.put("region", s.region());
-                ring.add(slot);
-            }
-            Map<String, Object> ringObj = new LinkedHashMap<>();
-            ringObj.put("status", er.status().name());
-            ringObj.put("ring", ring);
-            out.put(Long.toString(e.getKey()), ringObj);
-        }
-        return Json.write(out);
-    }
-
-    private static Map<Long, EpochRing> decodeEpochs(String json) {
-        Map<Long, EpochRing> out = new LinkedHashMap<>();
-        if (json == null || json.isBlank()) return out;
-        Map<String, Object> obj = Json.parseObject(json);
-        for (Map.Entry<String, Object> e : obj.entrySet()) {
-            Map<String, Object> er = Json.asObject(e.getValue());
-            EpochStatus status = EpochStatus.valueOf(Json.reqStr(er, "status"));
-            List<RingSlot> ring = new ArrayList<>();
-            for (Object o : Json.asArray(er.get("ring"))) {
-                Map<String, Object> sm = Json.asObject(o);
-                ring.add(new RingSlot((int) Json.num(sm, "shard", 0), Json.reqStr(sm, "cellId"),
-                        Json.str(sm, "region", null)));
-            }
-            out.put(Long.parseLong(e.getKey()), new EpochRing(ring, status));
-        }
-        return out;
     }
 }
