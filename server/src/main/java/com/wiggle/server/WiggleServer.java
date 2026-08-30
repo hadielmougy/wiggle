@@ -1,0 +1,102 @@
+package com.wiggle.server;
+
+import com.wiggle.server.cluster.ClusterManager;
+import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.server.http.DashboardAuth;
+import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.server.store.Storage;
+import com.wiggle.server.store.StorageFactory;
+
+import java.io.IOException;
+
+/**
+ * Wires one server node together. Multiple nodes pointed at the same JDBC URL form a
+ * cluster: they all serve the API and hand out work, and exactly one of them holds the
+ * leader role and runs the clock-driven housekeeping.
+ *
+ * <p>A {@code WiggleServer} is a <em>cell</em>: the engine + control plane, over shared storage and a
+ * {@link ClusterManager} (membership + leader election). The coordinator is a separate, engine-free
+ * control plane ({@code com.wiggle.server.coord.CoordinatorServer}) that shares nothing with the engine
+ * but the gRPC contract.
+ *
+ * <p>The server core is storage-agnostic. With no URL configured it uses the in-memory store; to
+ * run on a database, pass a {@link StorageFactory} that knows how to build the store for the URL
+ * (the standalone {@code wiggle-dist} distribution supplies one covering every backend). The
+ * single-argument constructor is in-memory only, so an embedder that wants a database must use the
+ * two-argument form.
+ */
+public final class WiggleServer implements AutoCloseable {
+
+    private static final System.Logger LOG = System.getLogger(WiggleServer.class.getName());
+
+    private final ServerConfig config;
+    private final Storage storage;
+    private final ClusterManager cluster;
+    private final ServerBundle bundle;
+
+    /** In-memory only. To run on a database, use {@link #WiggleServer(ServerConfig, StorageFactory)}. */
+    public WiggleServer(ServerConfig config) throws IOException {
+        this(config, WiggleServer::inMemoryOnly);
+    }
+
+    public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
+        this(config, storageFactory, null);
+    }
+
+    /**
+     * @param dashboardAuth a custom dashboard authenticator (e.g. SSO), or {@code null} to use the
+     *                      built-in admin-password login from {@link ServerConfig}.
+     */
+    public WiggleServer(ServerConfig config, StorageFactory storageFactory,
+                        DashboardAuth dashboardAuth) throws IOException {
+        this.config = config;
+        this.storage = storageFactory.create(config);
+        this.storage.migrate();
+        this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
+                config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
+        this.bundle = new CellBundle(config, storage, cluster, dashboardAuth);
+    }
+
+    /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
+    private static Storage inMemoryOnly(ServerConfig config) {
+        if (config.isInMemory()) return new InMemoryStorage();
+        throw new IllegalStateException("a storage URL is set ('" + config.jdbcUrl()
+                + "') but no StorageFactory was provided -- use WiggleServer(config, factory), or run the "
+                + "standalone distribution (wiggle-dist), which wires every backend by URL scheme");
+    }
+
+    public WiggleServer start() {
+        cluster.start();
+        bundle.start();
+        LOG.log(System.Logger.Level.INFO, () -> "cell node '" + config.nodeName()
+                + "' started on port " + port()
+                + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc")
+                + (dashboardPort() > 0 ? ", dashboard: " + dashboardPort() : "") + ")");
+        return this;
+    }
+
+    public int port() { return bundle.port(); }
+
+    /** The dashboard's port, or {@code -1} if it is not enabled. */
+    public int dashboardPort() { return bundle.dashboardPort(); }
+
+    public String baseUrl() { return "127.0.0.1:" + port(); }
+
+    /** The workflow engine. */
+    public WorkflowEngine engine() { return bundle.engine(); }
+
+    /**
+     * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
+     * cell (no namespace). The coordinator link updates it as policy moves.
+     */
+    public CellPlacement placement() { return bundle.placement(); }
+
+    public ClusterManager cluster() { return cluster; }
+
+    @Override public void close() {
+        LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' stopping");
+        bundle.close();
+        cluster.close();
+        storage.close();
+    }
+}

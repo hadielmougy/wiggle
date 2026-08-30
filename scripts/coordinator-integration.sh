@@ -41,7 +41,7 @@ scalar() { psql "$@" | tr -d '[:space:]'; }
 cleanup() {
     echo "== teardown =="
     for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-    pkill -f dev.wiggle.dist.Main 2>/dev/null
+    pkill -f com.wiggle.dist.Main 2>/dev/null
     docker rm -f "$PG_CONTAINER" >/dev/null 2>&1
     rm -rf "$LOGS"
 }
@@ -89,10 +89,17 @@ echo "== checks =="
     && pass "coordinator roster nsA = 2" || bad "coordinator roster nsA"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM coord_node WHERE namespace='nsB';")" = "2" ] \
     && pass "coordinator roster nsB = 2" || bad "coordinator roster nsB"
-[ "$(scalar -d wiggle_cella -c 'SELECT count(*) FROM wf_node WHERE leader=1;')" = "1" ] \
-    && pass "cell A elected exactly one leader" || bad "cell A leader count"
-[ "$(scalar -d wiggle_cellb -c 'SELECT count(*) FROM wf_node WHERE leader=1;')" = "1" ] \
-    && pass "cell B elected exactly one leader" || bad "cell B leader count"
+# Election settles asynchronously and briefly tolerates 0/2 leaders during startup, so poll for
+# exactly-one rather than snapshotting (otherwise the check races the election).
+one_leader() {  # $1 = db
+    for _ in $(seq 1 20); do
+        [ "$(scalar -d "$1" -c 'SELECT count(*) FROM wf_node WHERE leader=1;')" = "1" ] && return 0
+        sleep 1
+    done
+    return 1
+}
+one_leader wiggle_cella && pass "cell A elected exactly one leader" || bad "cell A leader count"
+one_leader wiggle_cellb && pass "cell B elected exactly one leader" || bad "cell B leader count"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM pg_tables WHERE tablename='wf_token';")" = "0" ] \
     && pass "coordinator DB has no engine tables (wf_token)" || bad "coordinator DB leaked wf_token"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM pg_tables WHERE tablename='coord_policy';")" = "1" ] \
@@ -109,12 +116,12 @@ echo "== drain/retire: bump cell A's epoch, drain the old one, watch it retire (
 CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)client/build/classes/java/main
 mkdir -p "$LOGS/adminout"
 cat >"$LOGS/Drain.java" <<'JAVA'
-import dev.wiggle.client.WiggleClient;
-import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.core.IdCodec;
-import dev.wiggle.proto.CellCoordinatorGrpc;
-import dev.wiggle.proto.OpenEpochRequest;
-import dev.wiggle.proto.RingSlot;
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.dsl.Workflow;
+import com.wiggle.core.IdCodec;
+import com.wiggle.proto.CellCoordinatorGrpc;
+import com.wiggle.proto.OpenEpochRequest;
+import com.wiggle.proto.RingSlot;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;

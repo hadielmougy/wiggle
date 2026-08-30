@@ -39,7 +39,7 @@ trap cleanup EXIT INT TERM
 echo "==> starting $N worker(s) against $URL (concurrency $CONCURRENCY)"
 for i in $(seq 1 "$N"); do
   WIGGLE_URL="$URL" WIGGLE_WORKER_ID="worker-$i" WIGGLE_WORKER_CONCURRENCY="$CONCURRENCY" \
-    java -cp "$CP" dev.wiggle.order.WorkerMain > "out/worker-$i.log" 2>&1 &
+    java -cp "$CP" com.wiggle.order.WorkerMain > "out/worker-$i.log" 2>&1 &
   pids+=("$!")
   echo "  worker-$i (pid $!) -> out/worker-$i.log"
 done
@@ -51,7 +51,7 @@ if [ "$SUBMIT" -gt 0 ]; then
   # through a NodePort can be reset transiently, so retry a few times before giving up.
   submitted=false
   for attempt in 1 2 3; do
-    if WIGGLE_URL="$URL" java -cp "$CP" dev.wiggle.order.SubmitOrders "$SUBMIT"; then
+    if WIGGLE_URL="$URL" java -cp "$CP" com.wiggle.order.SubmitOrders "$SUBMIT"; then
       submitted=true
       break
     fi

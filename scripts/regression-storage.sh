@@ -73,7 +73,7 @@ require_docker() {
 
 store_h2() {  # embedded; the H2-backed store tests run without a container
     local t0=$SECONDS
-    if run_tests h2 dev.wiggle.postgres.SchemaMigrationTest dev.wiggle.tests.JdbcGraphTest; then
+    if run_tests h2 com.wiggle.postgres.SchemaMigrationTest com.wiggle.tests.JdbcGraphTest; then
         record h2 PASS "$t0"; else record h2 FAIL "$t0"; fi
 }
 
@@ -86,8 +86,8 @@ store_postgres() {
     STARTED+=("$name")
     wait_until "postgres" 90 docker exec "$name" pg_isready -U wiggle -d wiggle || { record postgres FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
     export WIGGLE_TEST_PG_URL="jdbc:postgresql://localhost:55432/wiggle" WIGGLE_TEST_PG_USER=wiggle WIGGLE_TEST_PG_PASSWORD=wiggle
-    log "postgres: running dev.wiggle.postgres.PostgresClaimTest"
-    if run_tests postgres dev.wiggle.postgres.PostgresClaimTest; then record postgres PASS "$t0"; else record postgres FAIL "$t0"; fi
+    log "postgres: running com.wiggle.postgres.PostgresClaimTest"
+    if run_tests postgres com.wiggle.postgres.PostgresClaimTest; then record postgres PASS "$t0"; else record postgres FAIL "$t0"; fi
     docker rm -f "$name" >/dev/null 2>&1
 }
 
@@ -100,8 +100,8 @@ store_mysql() {
     STARTED+=("$name")
     wait_until "mysql" 180 docker exec "$name" mysql -uwiggle -pwiggle -e "SELECT 1" wiggle || { record mysql FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
     export WIGGLE_TEST_MYSQL_URL="jdbc:mysql://localhost:55306/wiggle" WIGGLE_TEST_MYSQL_USER=wiggle WIGGLE_TEST_MYSQL_PASSWORD=wiggle
-    log "mysql: running dev.wiggle.mysql.MySqlStoreTest"
-    if run_tests mysql dev.wiggle.mysql.MySqlStoreTest; then record mysql PASS "$t0"; else record mysql FAIL "$t0"; fi
+    log "mysql: running com.wiggle.mysql.MySqlStoreTest"
+    if run_tests mysql com.wiggle.mysql.MySqlStoreTest; then record mysql PASS "$t0"; else record mysql FAIL "$t0"; fi
     docker rm -f "$name" >/dev/null 2>&1
 }
 
@@ -115,8 +115,8 @@ store_oracle() {
     STARTED+=("$name")
     wait_until "oracle" 420 oracle_healthy "$name" || { record oracle FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
     export WIGGLE_TEST_ORACLE_URL="jdbc:oracle:thin:@//localhost:55521/FREEPDB1" WIGGLE_TEST_ORACLE_USER=wiggle WIGGLE_TEST_ORACLE_PASSWORD=wiggle
-    log "oracle: running dev.wiggle.oracle.OracleStoreTest"
-    if run_tests oracle dev.wiggle.oracle.OracleStoreTest; then record oracle PASS "$t0"; else record oracle FAIL "$t0"; fi
+    log "oracle: running com.wiggle.oracle.OracleStoreTest"
+    if run_tests oracle com.wiggle.oracle.OracleStoreTest; then record oracle PASS "$t0"; else record oracle FAIL "$t0"; fi
     docker rm -f "$name" >/dev/null 2>&1
 }
 
@@ -132,8 +132,8 @@ store_sqlserver() {
     docker exec "$name" bash -lc "$sqlcmd -Q \"IF DB_ID('wiggle') IS NULL CREATE DATABASE wiggle\" -b" >/dev/null 2>&1
     export WIGGLE_TEST_SQLSERVER_URL="jdbc:sqlserver://localhost:51433;databaseName=wiggle;encrypt=false" \
            WIGGLE_TEST_SQLSERVER_USER=sa WIGGLE_TEST_SQLSERVER_PASSWORD="$pw"
-    log "sqlserver: running dev.wiggle.sqlserver.SqlServerStoreTest"
-    if run_tests sqlserver dev.wiggle.sqlserver.SqlServerStoreTest; then record sqlserver PASS "$t0"; else record sqlserver FAIL "$t0"; fi
+    log "sqlserver: running com.wiggle.sqlserver.SqlServerStoreTest"
+    if run_tests sqlserver com.wiggle.sqlserver.SqlServerStoreTest; then record sqlserver PASS "$t0"; else record sqlserver FAIL "$t0"; fi
     docker rm -f "$name" >/dev/null 2>&1
 }
 
@@ -146,8 +146,8 @@ store_cassandra() {
     STARTED+=("$name")
     wait_until "cassandra" 240 docker exec "$name" cqlsh -e "SELECT now() FROM system.local" || { record cassandra FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
     export WIGGLE_TEST_CASSANDRA_URL="cassandra://localhost:59042/wiggle?dc=datacenter1&rf=1"
-    log "cassandra: running dev.wiggle.cassandra.CassandraStoreTest"
-    if run_tests cassandra dev.wiggle.cassandra.CassandraStoreTest; then record cassandra PASS "$t0"; else record cassandra FAIL "$t0"; fi
+    log "cassandra: running com.wiggle.cassandra.CassandraStoreTest"
+    if run_tests cassandra com.wiggle.cassandra.CassandraStoreTest; then record cassandra PASS "$t0"; else record cassandra FAIL "$t0"; fi
     docker rm -f "$name" >/dev/null 2>&1
 }
 

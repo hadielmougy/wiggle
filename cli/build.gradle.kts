@@ -17,6 +17,6 @@ dependencies {
 }
 
 application {
-    mainClass.set("dev.wiggle.cli.Wiggle")
+    mainClass.set("com.wiggle.cli.Wiggle")
     applicationName = "wiggle"
 }

@@ -147,7 +147,7 @@ The image is the control plane + dashboard only; run **workers** as separate pro
 
 | Task | Runs |
 |---|---|
-| `:dist:run` | standalone server (`dev.wiggle.dist.Main`, every backend bundled) |
+| `:dist:run` | standalone server (`com.wiggle.dist.Main`, every backend bundled) |
 | `:dist:installDist` | server distribution (bundles every storage backend) — used by the Docker image |
 | `:example:run` | `Demo` (embedded end-to-end) |
 | `:example:runWorker` | `WorkerMain` |
@@ -360,7 +360,7 @@ startup). Credentials are cleartext over plain HTTP, so serve over TLS for anyth
 same credentials on every node (sessions are per-node, not shared).
 
 **Pluggable auth (SSO).** The password login is just the default `DashboardAuth` (`PasswordAuth`).
-Implement `dev.wiggle.server.http.DashboardAuth` to replace it with anything -- OIDC/SSO, a header
+Implement `com.wiggle.server.http.DashboardAuth` to replace it with anything -- OIDC/SSO, a header
 trusted from a reverse proxy, mTLS-only -- typically in a separate (private) module, and inject it:
 
 ```java

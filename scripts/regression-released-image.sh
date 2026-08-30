@@ -17,7 +17,7 @@ WORKER_PID=""
 
 cleanup() {
     [ -n "$WORKER_PID" ] && kill "$WORKER_PID" >/dev/null 2>&1 || true
-    pkill -f "dev.wiggle.order.WorkerMain" >/dev/null 2>&1 || true
+    pkill -f "com.wiggle.order.WorkerMain" >/dev/null 2>&1 || true
     $COMPOSE down -v >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM

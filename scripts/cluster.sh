@@ -24,22 +24,22 @@ for port in 8080 8081 8082; do
   WIGGLE_JDBC_URL="$JDBC_URL" \
   WIGGLE_JDBC_USER="$JDBC_USER" \
   WIGGLE_JDBC_PASSWORD="$JDBC_PASSWORD" \
-    java -cp "$CP" dev.wiggle.server.WiggleServer > "out/server-$port.log" 2>&1 &
+    java -cp "$CP" com.wiggle.server.WiggleServer > "out/server-$port.log" 2>&1 &
   pids+=($!)
 done
 sleep 5
 
 echo "--- cluster membership (one leader expected) ---"
-java -cp "$CP" dev.wiggle.example.ClusterStatus localhost:8080 | python3 -m json.tool || true
+java -cp "$CP" com.wiggle.example.ClusterStatus localhost:8080 | python3 -m json.tool || true
 
 for id in w1 w2; do
   WIGGLE_URL=localhost:8080 WIGGLE_WORKER_ID=$id \
-    java -cp "$CP" dev.wiggle.example.WorkerMain > "out/worker-$id.log" 2>&1 &
+    java -cp "$CP" com.wiggle.example.WorkerMain > "out/worker-$id.log" 2>&1 &
   pids+=($!)
 done
 sleep 3
 
-WIGGLE_URL=localhost:8081 java -cp "$CP" dev.wiggle.example.SubmitOrders "${1:-20}"
+WIGGLE_URL=localhost:8081 java -cp "$CP" com.wiggle.example.SubmitOrders "${1:-20}"
 
 echo
 echo "Kill the node reported as leader above and re-run ClusterStatus to watch failover."

@@ -28,19 +28,18 @@ command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)
 
 cat > "$OUT/CoordConformance.java" <<'JAVA'
-import dev.wiggle.cassandra.CassandraStorage;
-import dev.wiggle.jdbc.Dialect;
-import dev.wiggle.jdbc.JdbcCoordinatorStore;
-import dev.wiggle.jdbc.JdbcStorage;
-import dev.wiggle.mysql.MySqlDialect;
-import dev.wiggle.oracle.OracleDialect;
-import dev.wiggle.postgres.PostgresDialect;
-import dev.wiggle.sqlserver.SqlServerDialect;
-import dev.wiggle.server.ServerRole;
-import dev.wiggle.server.coord.*;
-import dev.wiggle.server.coord.CoordPolicy.EpochRing;
-import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
-import dev.wiggle.server.coord.CoordPolicy.RingSlot;
+import com.wiggle.cassandra.CassandraStorage;
+import com.wiggle.jdbc.Dialect;
+import com.wiggle.jdbc.JdbcCoordinatorStore;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.mysql.MySqlDialect;
+import com.wiggle.oracle.OracleDialect;
+import com.wiggle.postgres.PostgresDialect;
+import com.wiggle.sqlserver.SqlServerDialect;
+import com.wiggle.server.coord.*;
+import com.wiggle.server.coord.CoordPolicy.EpochRing;
+import com.wiggle.server.coord.CoordPolicy.EpochStatus;
+import com.wiggle.server.coord.CoordPolicy.RingSlot;
 import java.util.List;
 import java.util.Map;
 
@@ -51,10 +50,16 @@ public class CoordConformance {
 
     public static void main(String[] a) throws Exception {
         String backend = a[0], url = a[1], user = a[2], pass = a[3];
+        if (backend.equals("etcd")) {
+            try (CoordinatorStore s = com.wiggle.coordinator.etcd.EtcdCoordinatorStore.connect(url)) {
+                scenario(s);   // no schema migration: etcd is schemaless
+            }
+            System.out.println("  PASS  etcd  (" + checks + " checks)");
+            return;
+        }
         if (backend.equals("cassandra")) {
             try (CassandraStorage storage = CassandraStorage.fromUrl(url, user.isEmpty() ? null : user, pass)) {
-                storage.migrate(ServerRole.COORDINATOR);   // create coord_* tables in the keyspace
-                scenario(storage.coordinatorStore());      // a CQL store: policy CAS via LWT
+                scenario(storage.coordinatorStore());      // migrates coord_* then a CQL store (LWT policy CAS)
             }
             System.out.println("  PASS  cassandra  (" + checks + " checks)");
             return;
@@ -66,11 +71,8 @@ public class CoordConformance {
             case "sqlserver" -> new SqlServerDialect();
             default -> throw new IllegalArgumentException("unknown backend " + backend);
         };
-        try (JdbcStorage mig = new JdbcStorage(url, user, pass, 4, d)) {
-            mig.migrate(ServerRole.COORDINATOR);   // create coord_* via dialect-rewritten DDL
-        }
-        try (CoordinatorStore s = new JdbcCoordinatorStore(url, user, pass, 4, d)) {
-            scenario(s);
+        try (JdbcStorage storage = new JdbcStorage(url, user, pass, 4, d)) {
+            scenario(storage.coordinatorStore());   // migrates coord_* (dialect-rewritten), returns a store
         }
         System.out.println("  PASS  " + backend + "  (" + checks + " checks)");
     }
@@ -126,6 +128,15 @@ public class CoordConformance {
         CoordNamespace act = s.getNamespace("acme").orElseThrow();
         ok(act.state() == ProvisionState.ACTIVE && act.endpoint().equals("grpc://acme:8100"), "active upsert");
         ok(s.namespaces().size() == 1, "one namespace listed");
+
+        // ---- leader election lease (option A) ----
+        ok(s.acquireLeadership("a", 10_000, 5_000), "a acquires the lease (-> expires 15000)");
+        ok(s.acquireLeadership("a", 11_000, 5_000), "a renews (-> 16000)");
+        ok(!s.acquireLeadership("b", 12_000, 5_000), "b is blocked while a's lease is valid");
+        ok(s.acquireLeadership("b", 16_000, 5_000), "b takes over at/after expiry");
+        ok(!s.acquireLeadership("a", 17_000, 5_000), "a is now blocked (b holds it)");
+        s.releaseLeadership("b");
+        ok(s.acquireLeadership("a", 18_000, 5_000), "a acquires after b releases");
     }
 }
 JAVA
@@ -177,6 +188,15 @@ start_cassandra() {
     run_driver cassandra "cassandra://localhost:19042/coord?dc=datacenter1&rf=1" "" ""
 }
 
+start_etcd() {
+    local name=coord-mtx-etcd; CONTAINERS+=("$name"); docker rm -f "$name" >/dev/null 2>&1
+    docker run -d --name "$name" -p 12379:2379 quay.io/coreos/etcd:v3.5.16 \
+        etcd --advertise-client-urls http://0.0.0.0:2379 --listen-client-urls http://0.0.0.0:2379 >/dev/null
+    for _ in $(seq 1 40); do docker exec "$name" etcdctl endpoint health >/dev/null 2>&1 && break; sleep 1; done
+    docker exec "$name" etcdctl endpoint health >/dev/null 2>&1 || { echo "  FAIL etcd: not ready"; return 1; }
+    run_driver etcd "http://127.0.0.1:12379" "" ""
+}
+
 echo "== coordinator + namespace storage conformance =="
 for b in "${BACKENDS[@]}"; do
     echo "-- $b --"
@@ -186,6 +206,7 @@ for b in "${BACKENDS[@]}"; do
         oracle)    start_oracle    || fail=1 ;;
         sqlserver) start_sqlserver || fail=1 ;;
         cassandra) start_cassandra || fail=1 ;;
+        etcd)      start_etcd      || fail=1 ;;
         *) echo "  unknown backend: $b"; fail=1 ;;
     esac || fail=1
 done

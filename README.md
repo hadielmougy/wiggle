@@ -91,10 +91,10 @@ The fastest way to see it end to end — an embedded server, one worker, and a w
 instance — all in one JVM:
 
 ```java
-import dev.wiggle.client.dsl.*;
-import dev.wiggle.client.worker.*;
-import dev.wiggle.core.InstanceView;
-import dev.wiggle.server.*;
+import com.wiggle.client.dsl.*;
+import com.wiggle.client.worker.*;
+import com.wiggle.core.InstanceView;
+import com.wiggle.server.*;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -242,7 +242,7 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", codec) …;
   or straight to the next step. Exactly one branch runs.
 
 ```java
-import static dev.wiggle.client.dsl.Case.*;   // when, otherwise
+import static com.wiggle.client.dsl.Case.*;   // when, otherwise
 
 .choose(
         when("is-digital",  o -> o.type() == Type.DIGITAL,
@@ -358,7 +358,7 @@ One constraint: the graph must be **registered before** a name-only worker start
 Register it as a deploy step; for local/dev, `WorkerOptions.withAwaitRegistration(Duration)` rides out
 the startup race.
 
-See it run: [`example:runBinding`](example/src/main/java/dev/wiggle/binding/BindingDemo.java)
+See it run: [`example:runBinding`](example/src/main/java/com/wiggle/binding/BindingDemo.java)
 authors the flow and serves it from two independent workers bound purely by name — a fulfilment
 worker and a payments-queue worker — then submits an order and prints the result.
 
@@ -396,7 +396,7 @@ new Worker(client, "fulfilment")
 
 A record and a map are the **same JSON on the wire**, so a typed handler and an untyped one can serve
 different steps of the same instance interchangeably — binding is by step name, not by type.
-[`example:runTypedBinding`](example/src/main/java/dev/wiggle/binding/typed/TypedBindingDemo.java)
+[`example:runTypedBinding`](example/src/main/java/com/wiggle/binding/typed/TypedBindingDemo.java)
 is the same demo with a typed `Purchase` context.
 
 Since the topology is authored once and implemented by name, it doesn't have to be authored in Java
@@ -473,7 +473,7 @@ Need the current attempt inside a step (e.g. to behave differently after earlier
 failures)? Read it from `Step` — no change to your step's signature:
 
 ```java
-import dev.wiggle.client.worker.Step;
+import com.wiggle.client.worker.Step;
 
 .step("authorise", order -> {
     if (Step.attempt() <= 2) {                 // 1 on the first try, +1 each retry
@@ -732,7 +732,7 @@ Note the level mapping when writing `logging.properties` by hand: `System.Logger
 `DEBUG → FINE`, `TRACE → FINER`, `INFO → INFO`, `WARNING → WARNING`, `ERROR → SEVERE`. (The
 `WIGGLE_LOG_LEVEL` env var takes the `System.Logger` names and maps them for you.) The demo
 CLIs print to stdout directly, so their output isn't captured by the logging config — only
-the `dev.wiggle.*` server logs are.
+the `com.wiggle.*` server logs are.
 
 ### Schema migrations
 
