@@ -12,9 +12,12 @@ import com.wiggle.proto.CellCoordinatorGrpc;
 import com.wiggle.proto.DeregisterWorkflowRequest;
 import com.wiggle.proto.Endpoint;
 import com.wiggle.proto.ListWorkflowsRequest;
+import com.wiggle.proto.OpenEpochRequest;
+import com.wiggle.proto.Policy;
 import com.wiggle.proto.RegisterWorkflowRequest;
 import com.wiggle.proto.ResolveRequest;
 import com.wiggle.proto.ResolveResponse;
+import com.wiggle.proto.RingSlot;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
@@ -112,6 +115,16 @@ public final class CellResolver implements AutoCloseable {
         requireCoordinator("deregisterWorkflow");
         return coord.deregisterWorkflow(DeregisterWorkflowRequest.newBuilder()
                 .setNamespace(namespace).setName(name).build()).getRemoved();
+    }
+
+    /**
+     * Opens a new placement epoch for a namespace: publishes a {@code shard -> cell} ring (a reshard),
+     * marking the previous epoch draining. Coordinator only. Returns the resulting policy.
+     */
+    public Policy openEpoch(String namespace, List<RingSlot> ring) {
+        requireCoordinator("openEpoch");
+        return coord.openEpoch(OpenEpochRequest.newBuilder()
+                .setNamespace(namespace).addAllRing(ring).build());
     }
 
     /** The workflows currently allocated to a namespace (coordinator only). */
