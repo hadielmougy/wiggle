@@ -14,6 +14,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * T12 increment 2: registration and FetchConfig hand a node its placement -- the epoch it mints into
@@ -89,6 +90,33 @@ class CoordinatorPlacementTest {
             // A different cell id from the second storage is fine; and the same id in another namespace is independent.
             api.doRegister("orders", node("grpc://c:1", "cellY", "fp-DB-B"));
             api.doRegister("billing", node("grpc://c:1", "cellX", "fp-DB-B"));
+        }
+    }
+
+    @Test @DisplayName("with no ring, a stray extra cell is standby while the implicit cell mints (no hard reject)")
+    void noRingExtraCellIsStandby() throws Exception {
+        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a:1", "orders"));   // implicit cell (id == namespace)
+            api.doRegister("orders", node("grpc://b:1", "cellB"));    // extra cell, no epoch opened -- admitted, not rejected
+
+            assertEquals(List.of(0), api.doFetchConfig("orders", "orders").getShardsList(),
+                    "the implicit cell keeps minting genesis");
+            assertTrue(api.doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
+                    "the extra cell is placed on standby (no shards), so it cannot forge mis-routing ids");
+        }
+    }
+
+    @Test @DisplayName("a cell not named in the ring is placed on standby (empty shards), not genesis (guard #2)")
+    void unringedCellIsStandby() throws Exception {
+        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a:1", "cellA"));
+            api.doRegister("orders", node("grpc://b:1", "cellB"));
+            // ring names ONLY cellA; cellB is deliberately unplaced
+            api.doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build()));
+
+            assertEquals(List.of(0), api.doFetchConfig("orders", "cellA").getShardsList(), "cellA owns shard 0");
+            assertTrue(api.doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
+                    "cellB is not in the ring -> standby (no shards, so the node refuses to mint)");
         }
     }
 

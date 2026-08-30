@@ -5,12 +5,17 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.AllocatedWorkflow;
+import com.wiggle.proto.EpochRing;
+import com.wiggle.proto.Policy;
+import com.wiggle.proto.RingSlot;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
@@ -22,7 +27,7 @@ import java.util.concurrent.Callable;
  */
 @Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.5",
         subcommands = {Wiggle.Use.class, Wiggle.Validate.class, Wiggle.Register.class,
-                Wiggle.Allocate.class, Wiggle.Deallocate.class, Wiggle.Allocations.class},
+                Wiggle.Allocate.class, Wiggle.Deallocate.class, Wiggle.Allocations.class, Wiggle.OpenEpoch.class},
         description = "Author and register Wiggle workflows; allocate flows to namespaces via a coordinator.")
 public final class Wiggle implements Runnable {
 
@@ -290,6 +295,67 @@ public final class Wiggle implements Runnable {
                 return 0;
             } catch (Exception e) {
                 System.err.println("allocations failed (" + target + "): " + describe(e));
+                return 1;
+            }
+        }
+    }
+
+    @Command(name = "open-epoch", mixinStandardHelpOptions = true,
+            description = "Open a new placement epoch for a namespace: publish a shard->cell ring (a reshard). "
+                    + "Each SLOT is 'shard=cellId[@region]', e.g. 0=cellA 1=cellB.")
+    static final class OpenEpoch implements Callable<Integer> {
+        @Option(names = {"-n", "--namespace"}, required = true, description = "the target namespace")
+        String namespace;
+
+        @Option(names = {"-c", "--coordinator"},
+                description = "coordinator gRPC host:port (default: $WIGGLE_COORDINATOR_URL, else localhost:8099)")
+        String coordinator;
+
+        @Parameters(paramLabel = "SLOT", arity = "1..*", description = "ring slots as shard=cellId[@region]")
+        List<String> slots;
+
+        @Override
+        public Integer call() {
+            List<RingSlot> ring = new ArrayList<>();
+            for (String s : slots) {
+                int eq = s.indexOf('=');
+                if (eq <= 0) { System.err.println("bad slot '" + s + "'; use shard=cellId[@region]"); return 2; }
+                int shard;
+                try {
+                    shard = Integer.parseInt(s.substring(0, eq).trim());
+                } catch (NumberFormatException e) {
+                    System.err.println("bad shard in slot '" + s + "'"); return 2;
+                }
+                String rest = s.substring(eq + 1).trim();
+                String cell = rest, region = "";
+                int at = rest.indexOf('@');
+                if (at >= 0) { cell = rest.substring(0, at).trim(); region = rest.substring(at + 1).trim(); }
+                if (cell.isEmpty()) { System.err.println("missing cell id in slot '" + s + "'"); return 2; }
+                RingSlot.Builder b = RingSlot.newBuilder().setShard(shard).setCellId(cell);
+                if (!region.isEmpty()) b.setRegion(region);
+                ring.add(b.build());
+            }
+            final String target;
+            try {
+                target = Target.resolve(Target.Kind.COORDINATOR, coordinator);
+            } catch (IllegalStateException e) {
+                System.err.println(e.getMessage());
+                return 2;
+            }
+            try (CellResolver resolver = resolver(target)) {
+                Policy p = resolver.openEpoch(namespace, ring);
+                System.out.printf("opened epoch %d for namespace '%s'  (revision %d)  via %s%n",
+                        p.getCurrentEpoch(), namespace, p.getRevision(), target);
+                EpochRing er = p.getEpochsMap().get(p.getCurrentEpoch());
+                if (er != null) {
+                    for (RingSlot rs : er.getRingList()) {
+                        System.out.printf("  shard %d -> %s%s%n", rs.getShard(), rs.getCellId(),
+                                rs.getRegion().isEmpty() ? "" : " @" + rs.getRegion());
+                    }
+                }
+                return 0;
+            } catch (Exception e) {
+                System.err.println("open-epoch failed (" + target + "): " + describe(e));
                 return 1;
             }
         }

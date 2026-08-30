@@ -10,7 +10,9 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** T12 increment 2: the mutable placement a coordinator-managed cell mints into. */
@@ -64,15 +66,18 @@ class CellPlacementTest {
         assertNull(tear.get(), "a mint saw a torn (epoch, shard) pair: " + tear.get());
     }
 
-    @Test @DisplayName("set() re-points a running node; an empty shard set falls back to shard 0")
+    @Test @DisplayName("set() re-points a running node; an empty shard set is standby, not genesis")
     void repoint() {
         CellPlacement p = new CellPlacement(0, new int[]{0});
         p.set(5, List.of(9));
         assertEquals(5, p.epoch());
+        assertTrue(p.mintable());
         assertEquals(9, p.shardFor(Ids.token()));
 
-        p.set(6, new int[]{});   // empty -> genesis shard
+        p.set(6, new int[]{});   // empty -> standby (a ring exists but does not name this cell)
         assertEquals(6, p.epoch());
-        assertEquals(0, p.shardFor(Ids.token()));
+        assertFalse(p.mintable(), "empty shard set means standby");
+        assertThrows(IllegalStateException.class, () -> p.shardFor(Ids.token()), "standby cell refuses to mint");
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
     }
 }

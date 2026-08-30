@@ -53,12 +53,15 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -259,23 +262,47 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     }
 
     /**
-     * The placement a node in {@code cellId} mints into: the current epoch and the shards its cell owns
-     * in that epoch's ring. With no ring configured (the single implicit cell) this is epoch 0, shard 0
-     * -- identical to pre-ring behaviour (R1). A cell that is not (yet) in the ring also gets the genesis
-     * shard so it can still mint; the ring must name it before instances there are addressable.
+     * The placement a node in {@code cellId} mints into: the current epoch and the shards its cell owns.
+     * Only a <em>placed</em> cell mints; any other cell is put on <em>standby</em> (empty shards), so an
+     * extra/mistaken cell added to a namespace never forges ids that belong elsewhere -- it just sits idle
+     * until an epoch names it. It becomes mintable again when a ring places it.
+     *
+     * <ul>
+     *   <li>A ring exists for the epoch: the cell mints the shards the ring assigns it, or standby if the
+     *       ring does not name it.</li>
+     *   <li>No ring: the single {@link #implicitCell} mints genesis (shard 0, R1); an extra cell is standby.
+     *       When the implicit cell is ambiguous (multiple cells, none named after the namespace) every cell
+     *       stays mintable, so a legitimately custom-named single/other cell is never stranded.</li>
+     * </ul>
      */
     private Placement placementFor(String namespace, String cellId) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
-        if (policy == null) return new Placement(0, List.of(0));
-        long epoch = policy.currentEpoch();
-        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
-        if (er == null) return new Placement(epoch, List.of(0));
+        CoordPolicy.EpochRing er = policy == null ? null : policy.epochs().get(policy.currentEpoch());
+        long epoch = policy == null ? 0 : policy.currentEpoch();
+        if (er == null || er.ring().isEmpty()) {
+            String implicit = implicitCell(namespace);
+            boolean mintable = implicit == null || cellId.equals(implicit);
+            return new Placement(epoch, mintable ? List.of(0) : List.of());   // extra no-ring cell -> standby
+        }
         List<Integer> shards = new ArrayList<>();
         for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
-        return new Placement(epoch, shards.isEmpty() ? List.of(0) : shards);
+        return new Placement(epoch, shards);   // empty when the ring does not name this cell -> standby
     }
 
     private record Placement(long epoch, List<Integer> shards) {}
+
+    /**
+     * The single implicit cell of a namespace that has no ring: the cell whose id equals the namespace
+     * (the {@code WIGGLE_CELL_ID}-unset default), or the sole cell when there is exactly one. Returns
+     * {@code null} when it is ambiguous (several cells, none named after the namespace) -- callers then
+     * fall back to the whole roster rather than strand or mis-route the namespace.
+     */
+    private String implicitCell(String namespace) {
+        Set<String> cells = new HashSet<>();
+        for (CoordNode n : store.nodes(namespace)) cells.add(n.cellId());
+        if (cells.size() == 1) return cells.iterator().next();     // the sole cell (any name)
+        return cells.contains(namespace) ? namespace : null;       // the namespace-named cell, else ambiguous
+    }
 
     /** Convenience for callers/tests that report no census. */
     public CoordinatorHeartbeatResponse doHeartbeat(String nodeId, long observedGeneration) {
@@ -345,9 +372,19 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
             shard = -1;
         }
         String cellId = cellFor(namespace, epoch, shard);
-        Endpoint endpoint = cellId == null
-                ? endpointFor(namespace, emptyToNull(req.getCallerRegion()))
-                : endpointForCell(namespace, cellId, emptyToNull(req.getCallerRegion()));
+        String region = emptyToNull(req.getCallerRegion());
+        Endpoint endpoint;
+        if (cellId == null) {
+            // No ring names an owning cell: route to the single implicit cell (its id == namespace, or the
+            // sole cell), ignoring any extra standby cell. Never fail the namespace and never pool several
+            // cells (which could mis-route); an ambiguous roster falls back to the whole roster (R1).
+            String implicit = implicitCell(namespace);
+            endpoint = implicit != null
+                    ? endpointForCell(namespace, implicit, region)
+                    : endpointFor(namespace, region);
+        } else {
+            endpoint = endpointForCell(namespace, cellId, region);
+        }
         return ResolveResponse.newBuilder()
                 .setNamespace(namespace)
                 .setEpoch(epoch)
@@ -370,7 +407,13 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
                 .setTtlSeconds(RESOLVE_TTL_S);
         List<String> activeCells = activeCellIds(policy.orElse(null));
         if (activeCells.isEmpty()) {
-            b.addCells(endpointFor(namespace, callerRegion));   // single implicit cell (no ring)
+            // No ring: poll the single implicit cell only (ignoring any extra standby cell), or the whole
+            // roster when the implicit cell is ambiguous -- matching how doResolve routes.
+            String implicit = implicitCell(namespace);
+            Endpoint e = implicit != null
+                    ? endpointForCellOrNull(namespace, implicit, callerRegion)
+                    : endpointFor(namespace, callerRegion);
+            if (e != null) b.addCells(e);
         } else {
             for (String cellId : activeCells) {
                 Endpoint e = endpointForCellOrNull(namespace, cellId, callerRegion);
@@ -395,7 +438,9 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     /**
      * The cell that owns {@code shard} in {@code epoch}, or {@code null} when no ring is configured (the
-     * single-implicit-cell case). {@code shard < 0} (a namespace resolve) selects the first ring slot.
+     * single-implicit-cell case). {@code shard < 0} (a namespace resolve for a new start) spreads across
+     * the ring by picking a random slot -- so new instances distribute over all cells/shards rather than
+     * piling onto the first slot. The client resolves per new start, so this spread takes effect per start.
      */
     private String cellFor(String namespace, long epoch, int shard) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
@@ -403,7 +448,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
         CoordPolicy.EpochRing er = policy.epochs().get(epoch);
         if (er == null || er.ring().isEmpty()) return null;
         List<CoordPolicy.RingSlot> ring = er.ring();
-        if (shard < 0) return ring.get(0).cellId();
+        if (shard < 0) return ring.get(ThreadLocalRandom.current().nextInt(ring.size())).cellId();
         for (CoordPolicy.RingSlot s : ring) if (s.shard() == shard) return s.cellId();
         return ring.get(Math.floorMod(shard, ring.size())).cellId();   // ring smaller than shard space
     }

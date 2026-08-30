@@ -12,9 +12,12 @@ import com.wiggle.proto.CellCoordinatorGrpc;
 import com.wiggle.proto.DeregisterWorkflowRequest;
 import com.wiggle.proto.Endpoint;
 import com.wiggle.proto.ListWorkflowsRequest;
+import com.wiggle.proto.OpenEpochRequest;
+import com.wiggle.proto.Policy;
 import com.wiggle.proto.RegisterWorkflowRequest;
 import com.wiggle.proto.ResolveRequest;
 import com.wiggle.proto.ResolveResponse;
+import com.wiggle.proto.RingSlot;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
@@ -42,7 +45,7 @@ public final class CellResolver implements AutoCloseable {
     private final CellCoordinatorGrpc.CellCoordinatorBlockingStub coord;
     private final String callerRegion;
 
-    private final Map<String, Cached> byNamespace = new ConcurrentHashMap<>();
+    private final Map<String, Cached> byShard = new ConcurrentHashMap<>();   // (ns|epoch|shard) -> cell, for instance ops
     private final Map<String, WiggleClient> clients = new ConcurrentHashMap<>();
 
     private record Cached(Endpoint endpoint, long expiryNanos) {}
@@ -76,14 +79,11 @@ public final class CellResolver implements AutoCloseable {
         return clientFor(resolveNamespace(namespace).getTarget());
     }
 
-    /** A client for the cell that owns {@code instanceId} (routed by the namespace in its id). */
+    /** A client for the cell that owns {@code instanceId}, routed by the id's own epoch+shard
+     *  (self-routing) -- not by namespace, so an instance on any cell resolves to the cell that holds it. */
     public WiggleClient clientForInstance(String instanceId) {
         if (coordinatorUrl == null) return clientFor(staticTarget);
-        String namespace = IdCodec.parse(instanceId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"))
-                .namespace();
-        return clientFor(resolveNamespace(namespace).getTarget());
+        return clientFor(resolveInstance(instanceId).getTarget());
     }
 
     /**
@@ -114,6 +114,16 @@ public final class CellResolver implements AutoCloseable {
                 .setNamespace(namespace).setName(name).build()).getRemoved();
     }
 
+    /**
+     * Opens a new placement epoch for a namespace: publishes a {@code shard -> cell} ring (a reshard),
+     * marking the previous epoch draining. Coordinator only. Returns the resulting policy.
+     */
+    public Policy openEpoch(String namespace, List<RingSlot> ring) {
+        requireCoordinator("openEpoch");
+        return coord.openEpoch(OpenEpochRequest.newBuilder()
+                .setNamespace(namespace).addAllRing(ring).build());
+    }
+
     /** The workflows currently allocated to a namespace (coordinator only). */
     public List<AllocatedWorkflow> listWorkflows(String namespace) {
         requireCoordinator("listWorkflows");
@@ -137,22 +147,35 @@ public final class CellResolver implements AutoCloseable {
         return targets;
     }
 
-    /** Drop a cached resolution -- call after a cell RPC fails with UNAVAILABLE/NOT_FOUND. */
+    /** Drop cached instance-resolutions for a namespace -- call after a cell RPC fails with
+     *  UNAVAILABLE/NOT_FOUND so the next operate-by-id re-resolves. */
     public void invalidate(String namespace) {
-        byNamespace.remove(namespace);
+        byShard.keySet().removeIf(k -> k.startsWith(namespace + "|"));
     }
 
+    /** Resolves where a NEW instance of a namespace should start. Not cached: the coordinator spreads new
+     *  starts across the ring, so resolving per start is what distributes them across cells/shards. */
     private Endpoint resolveNamespace(String namespace) {
         if (coordinatorUrl == null) {
             return Endpoint.newBuilder().setTarget(staticTarget).build();
         }
-        Cached c = byNamespace.get(namespace);
+        return coord.resolve(ResolveRequest.newBuilder()
+                .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build()).getEndpoint();
+    }
+
+    /** Resolves the cell that owns an existing instance, by its baked-in epoch+shard. Cached by
+     *  (namespace, epoch, shard) -- bounded, since every instance on a shard shares one cell. */
+    private Endpoint resolveInstance(String instanceId) {
+        IdCodec.Placement p = IdCodec.parse(instanceId).orElseThrow(() -> new IllegalArgumentException(
+                "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"));
+        String key = p.namespace() + "|e" + p.epoch() + "|s" + p.shard();
+        Cached c = byShard.get(key);
         if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();
         ResolveResponse r = coord.resolve(ResolveRequest.newBuilder()
-                .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build());
+                .setInstanceId(instanceId).setCallerRegion(nz(callerRegion)).build());
         Endpoint e = r.getEndpoint();
         long ttlNanos = Math.max(1, e.getTtlSeconds()) * 1_000_000_000L;
-        byNamespace.put(namespace, new Cached(e, System.nanoTime() + ttlNanos));
+        byShard.put(key, new Cached(e, System.nanoTime() + ttlNanos));
         return e;
     }
 

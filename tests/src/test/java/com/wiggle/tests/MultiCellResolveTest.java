@@ -139,6 +139,34 @@ class MultiCellResolveTest {
         }
     }
 
+    @Test @DisplayName("new starts spread across the ring's cells (not all to the first slot)")
+    void newStartsSpreadAcrossCells() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+            twoCellNamespace(api);   // ring: shard 0 -> cellA, shard 1 -> cellB
+            java.util.Set<String> targets = new java.util.HashSet<>();
+            for (int i = 0; i < 100; i++) {
+                targets.add(api.doResolve(ResolveRequest.newBuilder().setNamespace("orders").build())
+                        .getEndpoint().getTarget());
+            }
+            assertTrue(targets.contains("grpc://b1:1"),
+                    "new starts reach cellB, not just the first slot cellA -- saw " + targets);
+        }
+    }
+
+    @Test @DisplayName("no-ring resolve routes to the implicit cell and ignores a stray extra cell (no outage)")
+    void noRingRoutesToImplicitCell() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a1:1", "orders"));   // the implicit cell (id == namespace)
+            api.doRegister("orders", node("grpc://b1:1", "cellB"));     // a stray extra cell; no epoch opened
+
+            ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setNamespace("orders").build());
+            assertEquals(List.of("grpc://a1:1"), r.getEndpoint().getAddressesList(),
+                    "routes to the implicit cell 'orders', ignoring the stray cellB -- no outage, no pooling");
+        }
+    }
+
     @Test @DisplayName("removing a shard IN PLACE silently mis-routes an existing instance on it (unsafe)")
     void removeShardInPlaceMisroutes() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
