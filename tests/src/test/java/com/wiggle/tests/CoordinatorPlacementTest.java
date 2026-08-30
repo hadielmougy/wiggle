@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * T12 increment 2: registration and FetchConfig hand a node its placement -- the epoch it mints into
@@ -23,6 +24,11 @@ class CoordinatorPlacementTest {
 
     private static RegisteredNode node(String endpoint, String cellId) {
         return RegisteredNode.newBuilder().setName(endpoint).setEndpoint(endpoint).setCellId(cellId).build();
+    }
+
+    private static RegisteredNode node(String endpoint, String cellId, String fingerprint) {
+        return RegisteredNode.newBuilder().setName(endpoint).setEndpoint(endpoint)
+                .setCellId(cellId).setCellFingerprint(fingerprint).build();
     }
 
     @Test @DisplayName("with no ring, a node is placed at epoch 0 shard 0 (single implicit cell)")
@@ -67,6 +73,30 @@ class CoordinatorPlacementTest {
             RegisterResponse r = api.doRegister("orders", node("grpc://a:1", "cellA"));
             assertEquals(1, r.getEpoch(), "new nodes mint into the current epoch, not the draining one");
             assertEquals(List.of(0), r.getShardsList());
+        }
+    }
+
+    @Test @DisplayName("a second cell reusing a cell id in the same namespace is rejected")
+    void rejectsDuplicateCellId() throws Exception {
+        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a:1", "cellX", "fp-DB-A"));   // establishes the binding
+            api.doRegister("orders", node("grpc://b:1", "cellX", "fp-DB-A"));   // same cell replica -> ok
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> api.doRegister("orders", node("grpc://c:1", "cellX", "fp-DB-B")),
+                    "a node from a different cell (distinct fingerprint) may not reuse the cell id");
+
+            // A different cell id from the second storage is fine; and the same id in another namespace is independent.
+            api.doRegister("orders", node("grpc://c:1", "cellY", "fp-DB-B"));
+            api.doRegister("billing", node("grpc://c:1", "cellX", "fp-DB-B"));
+        }
+    }
+
+    @Test @DisplayName("a node without a fingerprint never trips the guard (in-memory / legacy)")
+    void noFingerprintSkipsGuard() throws Exception {
+        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a:1", "cellX"));   // no fingerprint
+            api.doRegister("orders", node("grpc://b:1", "cellX"));   // still no fingerprint -> allowed
         }
     }
 }

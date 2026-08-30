@@ -18,8 +18,8 @@ class CoordinatorReconcilerTest {
     void leaderGatedExpiry() {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         long now = System.currentTimeMillis();
-        store.upsertNode(new CoordNode("stale", "ns", "ns", "grpc://h:1", "eu", "v", 1, 0));      // ancient heartbeat
-        store.upsertNode(new CoordNode("fresh", "ns", "ns", "grpc://h:2", "eu", "v", 1, now));     // just now
+        store.upsertNode(new CoordNode("stale", "ns", "ns", "grpc://h:1", "eu", "v", null, 1, 0));      // ancient heartbeat
+        store.upsertNode(new CoordNode("fresh", "ns", "ns", "grpc://h:2", "eu", "v", null, 1, now));     // just now
 
         AtomicBoolean leader = new AtomicBoolean(false);
         CoordinatorReconciler r = new CoordinatorReconciler(store, new LiveCensus(), leader::get, 60_000, 30_000);

@@ -20,5 +20,14 @@ public interface Storage extends AutoCloseable {
         inTx(tx -> { work.accept(tx); return null; });
     }
 
+    /**
+     * A stable identity of the underlying store, shared by every node of the same cell (they point at
+     * the same database) and distinct across cells (different databases). The coordinator uses it to
+     * reject two distinct cells that accidentally reuse a {@code cell_id}. Returns {@code null} when the
+     * backend has no cross-node identity (e.g. in-memory, which cannot be shared between processes); the
+     * coordinator then skips the guard for that node.
+     */
+    default String fingerprint() { return null; }
+
     @Override void close();
 }

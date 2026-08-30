@@ -139,6 +139,7 @@ message RegisteredNode {
     string region = 4;
     int64 started_at = 5;       // epoch millis
     string cell_id = 6;         // the cell this node belongs to (nodes sharing a DB); "" -> the namespace
+    string cell_fingerprint = 7; // stable identity of the cell's shared storage; distinguishes two cells that reuse a cell_id
 }
 
 message RegisterRequest {

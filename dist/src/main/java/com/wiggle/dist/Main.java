@@ -65,7 +65,8 @@ public final class Main {
         CoordinatorLink.CellRuntime runtime = server.placement() == null ? null
                 : new CoordinatorLink.CellRuntime(server.placement(), server.engine()::liveCountByEpoch);
         coordinator.register(new CoordinatorLink.NodeInfo(
-                config.nodeName(), config.namespace(), cellId, server.baseUrl(), engineVersion()), runtime);
+                config.nodeName(), config.namespace(), cellId, server.baseUrl(), engineVersion(),
+                server.cellFingerprint()), runtime);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
