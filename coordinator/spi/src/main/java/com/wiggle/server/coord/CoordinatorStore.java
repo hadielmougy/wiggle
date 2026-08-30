@@ -48,6 +48,29 @@ public interface CoordinatorStore extends AutoCloseable {
     /** Removes nodes whose last heartbeat is older than {@code deadlineMillis}. Returns the count removed. */
     int expireNodes(long deadlineMillis);
 
+    // ---- cell-identity binding (guards a reused cell id, atomically) ----
+
+    /**
+     * Atomically claim the binding {@code (namespace, cellId) -> fingerprint}, so two distinct cells cannot
+     * register under one cell id even under a concurrent race. Returns {@code true} if the binding is held
+     * by {@code fingerprint} afterwards -- newly claimed, or already equal (a replica of the same cell) --
+     * and {@code false} if a <em>different</em> non-null fingerprint already holds it. A {@code null}
+     * fingerprint is a no-op that returns {@code true} (the guard is skipped for a backend/node with no
+     * storage identity).
+     *
+     * <p>This is the race-free replacement for a check-then-insert over the node roster: it is a
+     * single-key claim (JDBC unique PK / Cassandra single-partition LWT / etcd txn / in-memory compute),
+     * so it is atomic on every backend -- a roster scan cannot be.
+     */
+    boolean bindCell(String namespace, String cellId, String fingerprint);
+
+    /**
+     * Deletes cell bindings that no live node references any more (a cell that fully drained), so a
+     * decommissioned cell id can later be reused by a genuinely new cell. Best-effort housekeeping run by
+     * the leader's reconcile loop. Returns the count pruned.
+     */
+    int pruneOrphanCellBindings();
+
     // ---- definition registry (R23) ----
 
     Optional<CoordDefinition> getDefinition(String namespace, String name);

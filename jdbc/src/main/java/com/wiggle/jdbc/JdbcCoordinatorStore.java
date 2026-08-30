@@ -224,6 +224,41 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         }
     }
 
+    @Override public boolean bindCell(String namespace, String cellId, String fingerprint) {
+        if (fingerprint == null) return true;
+        try (Connection c = borrow()) {
+            try (PreparedStatement ins = c.prepareStatement(
+                    "INSERT INTO coord_cell (namespace, cell_id, fingerprint) VALUES (?,?,?)")) {
+                ins.setString(1, namespace); ins.setString(2, cellId); ins.setString(3, fingerprint);
+                ins.executeUpdate();
+                return true;   // claimed -- the PK made this the atomic winner
+            } catch (SQLException insertFailed) {
+                // A PK conflict means someone already bound it: read and compare. A real error re-throws.
+                try (PreparedStatement sel = c.prepareStatement(
+                        "SELECT fingerprint FROM coord_cell WHERE namespace=? AND cell_id=?")) {
+                    sel.setString(1, namespace); sel.setString(2, cellId);
+                    try (ResultSet rs = sel.executeQuery()) {
+                        if (rs.next()) return fingerprint.equals(rs.getString(1));
+                    }
+                }
+                throw new JdbcStorage.StorageException("bindCell failed", insertFailed);
+            }
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("bindCell failed", e);
+        }
+    }
+
+    @Override public int pruneOrphanCellBindings() {
+        try (Connection c = borrow();
+             PreparedStatement p = c.prepareStatement(
+                     "DELETE FROM coord_cell WHERE NOT EXISTS (SELECT 1 FROM coord_node n " +
+                     "WHERE n.namespace=coord_cell.namespace AND n.cell_id=coord_cell.cell_id)")) {
+            return p.executeUpdate();
+        } catch (SQLException e) {
+            throw new JdbcStorage.StorageException("pruneOrphanCellBindings failed", e);
+        }
+    }
+
     // ---- definitions ----
 
     @Override public Optional<CoordDefinition> getDefinition(String namespace, String name) {

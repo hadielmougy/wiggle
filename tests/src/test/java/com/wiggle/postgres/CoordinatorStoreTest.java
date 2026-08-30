@@ -16,10 +16,16 @@ import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -103,10 +109,31 @@ class CoordinatorStoreTest {
         assertEquals(1, store.namespaces().size());
     }
 
+    /** The atomic cell-identity binding: claim / replica / conflict, and orphan pruning. */
+    private void cellBindingScenario(CoordinatorStore store) {
+        assertTrue(store.bindCell("orders", "cellA", "fp-A"), "first cell claims the id");
+        assertTrue(store.bindCell("orders", "cellA", "fp-A"), "a replica of the same cell matches");
+        assertFalse(store.bindCell("orders", "cellA", "fp-B"), "a different cell may not reuse the id");
+        assertTrue(store.bindCell("orders", "cellB", "fp-B"), "a different cell id is free");
+        assertTrue(store.bindCell("other", "cellA", "fp-B"), "the same id in another namespace is independent");
+        assertTrue(store.bindCell("orders", "cellA", null), "a null fingerprint skips the guard");
+
+        // No node references any binding yet -> all three are orphans and prune reclaims them.
+        assertEquals(3, store.pruneOrphanCellBindings(), "orphan bindings pruned");
+        assertTrue(store.bindCell("orders", "cellA", "fp-C"), "a pruned id is reusable by a new cell");
+
+        // A live node keeps its cell's binding.
+        store.upsertNode(new CoordNode("bn1", "orders", "cellA", "grpc://h:1", "eu", "v", "fp-C", 0, 1_000));
+        assertEquals(0, store.pruneOrphanCellBindings(), "a binding with a live node is kept");
+    }
+
     @Test @DisplayName("in-memory store honours the CoordinatorStore contract")
     void inMemory() {
         try (CoordinatorStore store = new InMemoryCoordinatorStore()) {
             scenario(store);
+        }
+        try (CoordinatorStore store = new InMemoryCoordinatorStore()) {
+            cellBindingScenario(store);
         }
     }
 
@@ -115,6 +142,26 @@ class CoordinatorStoreTest {
         String url = "jdbc:h2:mem:coordstore-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
             scenario(storage.coordinatorStore());   // migrates the coord_* schema, then a store over the pool
+            cellBindingScenario(storage.coordinatorStore());
+        }
+    }
+
+    @Test @DisplayName("bindCell is atomic under concurrent claims: exactly one fingerprint's cohort wins")
+    void bindCellConcurrent() throws Exception {
+        try (CoordinatorStore store = new InMemoryCoordinatorStore()) {
+            int threads = 32;
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<Boolean>> fs = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                String fp = (i % 2 == 0) ? "fp-A" : "fp-B";   // 16 each
+                fs.add(pool.submit(() -> { go.await(); return store.bindCell("ns", "cell", fp); }));
+            }
+            go.countDown();
+            int wins = 0;
+            for (Future<Boolean> f : fs) if (f.get()) wins++;
+            pool.shutdownNow();
+            assertEquals(16, wins, "exactly the winning fingerprint's 16 threads succeeded; the other 16 were rejected");
         }
     }
 }

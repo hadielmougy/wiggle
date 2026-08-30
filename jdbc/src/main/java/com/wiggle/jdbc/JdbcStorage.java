@@ -257,6 +257,16 @@ public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
               error       VARCHAR(1000),
               updated_at  BIGINT       NOT NULL
             );
+            """),
+            // Cell-identity binding: one fingerprint per (namespace, cell_id). The PRIMARY KEY makes the
+            // duplicate-cell-id guard an atomic single-row claim (insert-or-compare), not a roster scan.
+            new Migration(2, "coord-cell-binding", """
+            CREATE TABLE IF NOT EXISTS coord_cell (
+              namespace    VARCHAR(200) NOT NULL,
+              cell_id      VARCHAR(200) NOT NULL,
+              fingerprint  VARCHAR(200) NOT NULL,
+              PRIMARY KEY (namespace, cell_id)
+            );
             """));
 
     /** The coordinator store over this database: migrate the {@code coord_*} schema (idempotent, its own

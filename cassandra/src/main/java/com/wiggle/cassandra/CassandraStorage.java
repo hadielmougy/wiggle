@@ -129,6 +129,11 @@ public final class CassandraStorage implements Storage, com.wiggle.server.coord.
             CREATE TABLE IF NOT EXISTS coord_node (
               id text PRIMARY KEY, namespace text, cell_id text, endpoint text, region text,
               engine_version text, cell_fingerprint text, config_generation bigint, last_heartbeat bigint)""",
+            // Cell-identity binding: one partition per (namespace, cell_id), so the duplicate-cell-id guard
+            // is a single-partition LWT (INSERT ... IF NOT EXISTS), atomic without a roster scan.
+            """
+            CREATE TABLE IF NOT EXISTS coord_cell (
+              namespace text, cell_id text, fingerprint text, PRIMARY KEY ((namespace, cell_id)))""",
             """
             CREATE TABLE IF NOT EXISTS coord_definition (
               namespace text, name text, version int, hash text, registered_at bigint,

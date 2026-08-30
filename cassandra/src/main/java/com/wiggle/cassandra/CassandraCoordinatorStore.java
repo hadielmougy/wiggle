@@ -120,6 +120,31 @@ public final class CassandraCoordinatorStore implements CoordinatorStore {
         return dead.size();
     }
 
+    @Override public boolean bindCell(String namespace, String cellId, String fingerprint) {
+        if (fingerprint == null) return true;
+        com.datastax.oss.driver.api.core.cql.ResultSet rs = session.execute(ps(
+                "INSERT INTO coord_cell (namespace, cell_id, fingerprint) VALUES (?,?,?) IF NOT EXISTS")
+                .bind(namespace, cellId, fingerprint));
+        if (rs.wasApplied()) return true;   // claimed -- single-partition LWT made this the atomic winner
+        Row existing = rs.one();            // not applied: LWT returns the current row; compare its fingerprint
+        return existing != null && fingerprint.equals(existing.getString("fingerprint"));
+    }
+
+    @Override public int pruneOrphanCellBindings() {
+        int pruned = 0;
+        for (Row r : session.execute("SELECT namespace, cell_id FROM coord_cell")) {
+            String ns = r.getString("namespace"), cell = r.getString("cell_id");
+            boolean hasNode = session.execute(ps(
+                    "SELECT id FROM coord_node WHERE namespace=? AND cell_id=? LIMIT 1 ALLOW FILTERING")
+                    .bind(ns, cell)).one() != null;
+            if (!hasNode) {
+                session.execute(ps("DELETE FROM coord_cell WHERE namespace=? AND cell_id=?").bind(ns, cell));
+                pruned++;
+            }
+        }
+        return pruned;
+    }
+
     // ---- definition registry ----
 
     @Override public Optional<CoordDefinition> getDefinition(String namespace, String name) {

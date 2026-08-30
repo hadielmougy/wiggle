@@ -48,6 +48,7 @@ public final class EtcdCoordinatorStore implements CoordinatorStore {
     private static final String NODE = PREFIX + "node/";
     private static final String DEF = PREFIX + "def/";
     private static final String NS = PREFIX + "ns/";
+    private static final String CELL = PREFIX + "cell/";
     private static final String LEADER = PREFIX + "leader";
 
     private final Client client;
@@ -133,6 +134,35 @@ public final class EtcdCoordinatorStore implements CoordinatorStore {
             if (n.lastHeartbeat() < deadlineMillis) { await(kv.delete(e.getKey())); removed++; }
         }
         return removed;
+    }
+
+    @Override public boolean bindCell(String namespace, String cellId, String fingerprint) {
+        if (fingerprint == null) return true;
+        String key = CELL + cellKey(namespace, cellId);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (putIfVersion(key, fingerprint, 0)) return true;   // claimed atomically (key was absent)
+            Optional<String> held = get(key);
+            if (held.isPresent()) return fingerprint.equals(held.get());
+            // Raced with a delete (prune) between the failed claim and the read -- retry the claim.
+        }
+        return false;
+    }
+
+    @Override public int pruneOrphanCellBindings() {
+        java.util.Set<String> liveCells = new java.util.HashSet<>();
+        for (KeyValue e : prefix(NODE)) {
+            CoordNode n = decodeNode(e.getValue().toString(StandardCharsets.UTF_8));
+            liveCells.add(cellKey(n.namespace(), n.cellId()));
+        }
+        int pruned = 0;
+        for (KeyValue e : prefix(CELL)) {
+            if (!liveCells.contains(suffix(e, CELL))) { await(kv.delete(e.getKey())); pruned++; }
+        }
+        return pruned;
+    }
+
+    private static String cellKey(String namespace, String cellId) {
+        return namespace + "/" + cellId;
     }
 
     // ---- definition registry ----
