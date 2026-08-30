@@ -438,12 +438,16 @@ public final class Worker implements AutoCloseable {
                 options.lease().toMillis(), options.longPollWait().toMillis());
         List<TaskActivation> tasks = result.tasks();
         if (tasks.isEmpty()) {
-            // The server's hold-off hint (set when it is shedding under memory pressure) takes
-            // precedence over the normal idle backoff.
-            long backoff = result.retryAfterMillis() > 0 ? result.retryAfterMillis()
-                    : options.idleBackoff().toMillis();
-            LOG.log(System.Logger.Level.WARNING,"pool request is rejected by server: [backoff:" + backoff+"]");
-            sleep(backoff);
+            long shedFor = result.retryAfterMillis();
+            if (shedFor > 0) {
+                // The server is shedding under load (memory pressure); honour its hold-off hint.
+                LOG.log(System.Logger.Level.WARNING, "poll shed by server under load; backing off " + shedFor + "ms");
+                sleep(shedFor);
+            } else {
+                // Normal empty poll -- no work available right now. Not an error; just idle.
+                LOG.log(System.Logger.Level.DEBUG, () -> "poll returned no work; idle backoff");
+                sleep(options.idleBackoff().toMillis());
+            }
             return;
         }
         for (TaskActivation task : tasks) {
