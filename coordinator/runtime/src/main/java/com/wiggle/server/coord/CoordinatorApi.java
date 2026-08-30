@@ -61,6 +61,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -437,7 +438,9 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     /**
      * The cell that owns {@code shard} in {@code epoch}, or {@code null} when no ring is configured (the
-     * single-implicit-cell case). {@code shard < 0} (a namespace resolve) selects the first ring slot.
+     * single-implicit-cell case). {@code shard < 0} (a namespace resolve for a new start) spreads across
+     * the ring by picking a random slot -- so new instances distribute over all cells/shards rather than
+     * piling onto the first slot. The client resolves per new start, so this spread takes effect per start.
      */
     private String cellFor(String namespace, long epoch, int shard) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
@@ -445,7 +448,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
         CoordPolicy.EpochRing er = policy.epochs().get(epoch);
         if (er == null || er.ring().isEmpty()) return null;
         List<CoordPolicy.RingSlot> ring = er.ring();
-        if (shard < 0) return ring.get(0).cellId();
+        if (shard < 0) return ring.get(ThreadLocalRandom.current().nextInt(ring.size())).cellId();
         for (CoordPolicy.RingSlot s : ring) if (s.shard() == shard) return s.cellId();
         return ring.get(Math.floorMod(shard, ring.size())).cellId();   // ring smaller than shard space
     }

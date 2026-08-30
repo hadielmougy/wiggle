@@ -139,6 +139,21 @@ class MultiCellResolveTest {
         }
     }
 
+    @Test @DisplayName("new starts spread across the ring's cells (not all to the first slot)")
+    void newStartsSpreadAcrossCells() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+            twoCellNamespace(api);   // ring: shard 0 -> cellA, shard 1 -> cellB
+            java.util.Set<String> targets = new java.util.HashSet<>();
+            for (int i = 0; i < 100; i++) {
+                targets.add(api.doResolve(ResolveRequest.newBuilder().setNamespace("orders").build())
+                        .getEndpoint().getTarget());
+            }
+            assertTrue(targets.contains("grpc://b1:1"),
+                    "new starts reach cellB, not just the first slot cellA -- saw " + targets);
+        }
+    }
+
     @Test @DisplayName("no-ring resolve routes to the implicit cell and ignores a stray extra cell (no outage)")
     void noRingRoutesToImplicitCell() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
