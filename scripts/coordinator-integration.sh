@@ -41,7 +41,7 @@ scalar() { psql "$@" | tr -d '[:space:]'; }
 cleanup() {
     echo "== teardown =="
     for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-    pkill -f dev.wiggle.dist.Main 2>/dev/null
+    pkill -f com.wiggle.dist.Main 2>/dev/null
     docker rm -f "$PG_CONTAINER" >/dev/null 2>&1
     rm -rf "$LOGS"
 }
@@ -116,12 +116,12 @@ echo "== drain/retire: bump cell A's epoch, drain the old one, watch it retire (
 CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)client/build/classes/java/main
 mkdir -p "$LOGS/adminout"
 cat >"$LOGS/Drain.java" <<'JAVA'
-import dev.wiggle.client.WiggleClient;
-import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.core.IdCodec;
-import dev.wiggle.proto.CellCoordinatorGrpc;
-import dev.wiggle.proto.OpenEpochRequest;
-import dev.wiggle.proto.RingSlot;
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.dsl.Workflow;
+import com.wiggle.core.IdCodec;
+import com.wiggle.proto.CellCoordinatorGrpc;
+import com.wiggle.proto.OpenEpochRequest;
+import com.wiggle.proto.RingSlot;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;

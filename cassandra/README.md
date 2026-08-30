@@ -59,5 +59,5 @@ Every hot-path query targets a single partition by its full partition key — th
 
 Against Cassandra 5.0 (`cassandra:5.0`): end-to-end linear, fork/join, sleep-timer and sub-workflow
 runs (real server + worker), and a concurrent 40-token / 5-worker exactly-once claim. See
-`tests/src/test/java/dev/wiggle/cassandra/CassandraStoreTest.java` (opt-in via
+`tests/src/test/java/com/wiggle/cassandra/CassandraStoreTest.java` (opt-in via
 `WIGGLE_TEST_CASSANDRA_URL`).

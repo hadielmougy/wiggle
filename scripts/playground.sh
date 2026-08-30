@@ -186,13 +186,13 @@ compile_app() {
     [ -d cli/build/install/wiggle/lib ] || { echo "run 'scripts/playground.sh up' first" >&2; exit 1; }
     mkdir -p "$APP_OUT"
     cat > "$STATE/PlaygroundWorker.java" <<'JAVA'
-import dev.wiggle.client.CellResolver;
-import dev.wiggle.client.WiggleClient;
-import dev.wiggle.client.worker.NamespaceWorker;
-import dev.wiggle.core.Tls;
-import dev.wiggle.proto.CellCoordinatorGrpc;
-import dev.wiggle.proto.OpenEpochRequest;
-import dev.wiggle.proto.RingSlot;
+import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.NamespaceWorker;
+import com.wiggle.core.Tls;
+import com.wiggle.proto.CellCoordinatorGrpc;
+import com.wiggle.proto.OpenEpochRequest;
+import com.wiggle.proto.RingSlot;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
@@ -283,7 +283,7 @@ down() {
     if [ -f "$PIDS_FILE" ]; then
         while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$PIDS_FILE"
     fi
-    pkill -f dev.wiggle.dist.Main 2>/dev/null
+    pkill -f com.wiggle.dist.Main 2>/dev/null
     docker rm -f "$PG_CONTAINER" >/dev/null 2>&1
     rm -rf "$STATE"
     echo "  done"

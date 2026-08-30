@@ -29,5 +29,5 @@ dependencies {
 application {
     // The same scenarios can be run without JUnit, or any network access at all:
     //   ./gradlew :wf-tests:run
-    mainClass.set("dev.wiggle.tests.Scenarios")
+    mainClass.set("com.wiggle.tests.Scenarios")
 }

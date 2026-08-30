@@ -2,7 +2,7 @@
 
 Eight small workflows, each pairing operators that don't otherwise appear together in the
 `order-fulfilment` example. Read the source at
-[`example/src/main/java/dev/wiggle/cookbook/Cookbook.java`](../example/src/main/java/dev/wiggle/cookbook/Cookbook.java)
+[`example/src/main/java/com/wiggle/cookbook/Cookbook.java`](../example/src/main/java/com/wiggle/cookbook/Cookbook.java)
 alongside this page; run all eight end to end with:
 
 ```bash

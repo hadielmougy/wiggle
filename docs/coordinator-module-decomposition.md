@@ -23,12 +23,12 @@ today; etcd or Raft later) — without changing behavior or the wire protocol.
 ## As-is (the coupling to remove)
 
 ```
-server/  dev.wiggle.server.coord.*   CoordinatorStore, CoordPolicy/CoordNode/CoordDefinition/
+server/  com.wiggle.server.coord.*   CoordinatorStore, CoordPolicy/CoordNode/CoordDefinition/
                                      CoordNamespace/StorageConfig/ProvisionState/NamespaceSpec,
                                      EpochCodec, InMemoryCoordinatorStore, LiveCensus,
                                      CoordinatorApi, CoordinatorReconciler, CellDeployer(+Embedded/Process),
                                      NamespaceProvisioner, SecretResolver
-server/  dev.wiggle.server          CoordinatorBundle, ServerRole, WiggleServer (switch role -> bundle)
+server/  com.wiggle.server          CoordinatorBundle, ServerRole, WiggleServer (switch role -> bundle)
 jdbc/                               JdbcCoordinatorStore      -> imports server.coord   (jdbc -> server)
 cassandra/                         CassandraCoordinatorStore -> imports server.coord   (cassandra -> server)
 ```
@@ -103,10 +103,10 @@ children. (Optional: make `:coordinator:runtime` re-export a sensible default so
 | `jdbc` / `cassandra` | stay put | `JdbcCoordinatorStore` / `CassandraCoordinatorStore` — repoint imports to `:coordinator:spi` |
 | `client` | stays put | `CellResolver`, `NamespaceWorker` |
 
-**Package naming:** move the SPI to `dev.wiggle.coordinator.spi` and the runtime to
-`dev.wiggle.coordinator` (rename from `dev.wiggle.server.coord`). This touches imports in `jdbc`,
+**Package naming:** move the SPI to `com.wiggle.coordinator.spi` and the runtime to
+`com.wiggle.coordinator` (rename from `com.wiggle.server.coord`). This touches imports in `jdbc`,
 `cassandra`, `tests`, and the matrix driver — mechanical but wide. (Cheaper alternative: keep the
-`dev.wiggle.server.coord` package name even though the files live under `coordinator/` — Java packages
+`com.wiggle.server.coord` package name even though the files live under `coordinator/` — Java packages
 are independent of Gradle modules — and rename packages in a later pass. Recommend the rename for
 coherence, but it's optional.)
 

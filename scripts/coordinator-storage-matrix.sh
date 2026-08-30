@@ -28,18 +28,18 @@ command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)
 
 cat > "$OUT/CoordConformance.java" <<'JAVA'
-import dev.wiggle.cassandra.CassandraStorage;
-import dev.wiggle.jdbc.Dialect;
-import dev.wiggle.jdbc.JdbcCoordinatorStore;
-import dev.wiggle.jdbc.JdbcStorage;
-import dev.wiggle.mysql.MySqlDialect;
-import dev.wiggle.oracle.OracleDialect;
-import dev.wiggle.postgres.PostgresDialect;
-import dev.wiggle.sqlserver.SqlServerDialect;
-import dev.wiggle.server.coord.*;
-import dev.wiggle.server.coord.CoordPolicy.EpochRing;
-import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
-import dev.wiggle.server.coord.CoordPolicy.RingSlot;
+import com.wiggle.cassandra.CassandraStorage;
+import com.wiggle.jdbc.Dialect;
+import com.wiggle.jdbc.JdbcCoordinatorStore;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.mysql.MySqlDialect;
+import com.wiggle.oracle.OracleDialect;
+import com.wiggle.postgres.PostgresDialect;
+import com.wiggle.sqlserver.SqlServerDialect;
+import com.wiggle.server.coord.*;
+import com.wiggle.server.coord.CoordPolicy.EpochRing;
+import com.wiggle.server.coord.CoordPolicy.EpochStatus;
+import com.wiggle.server.coord.CoordPolicy.RingSlot;
 import java.util.List;
 import java.util.Map;
 
@@ -51,7 +51,7 @@ public class CoordConformance {
     public static void main(String[] a) throws Exception {
         String backend = a[0], url = a[1], user = a[2], pass = a[3];
         if (backend.equals("etcd")) {
-            try (CoordinatorStore s = dev.wiggle.coordinator.etcd.EtcdCoordinatorStore.connect(url)) {
+            try (CoordinatorStore s = com.wiggle.coordinator.etcd.EtcdCoordinatorStore.connect(url)) {
                 scenario(s);   // no schema migration: etcd is schemaless
             }
             System.out.println("  PASS  etcd  (" + checks + " checks)");

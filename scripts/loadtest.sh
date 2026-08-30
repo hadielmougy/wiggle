@@ -25,15 +25,15 @@ fi
 CP=$(printf '%s:' cli/build/install/wiggle/lib/*.jar)
 
 cat > "$OUT/LoadTest.java" <<'JAVA'
-import dev.wiggle.client.CellResolver;
-import dev.wiggle.client.WiggleClient;
-import dev.wiggle.client.dsl.ActivityHandler;
-import dev.wiggle.client.dsl.Blueprint;
-import dev.wiggle.client.dsl.Workflow;
-import dev.wiggle.client.worker.NamespaceWorker;
-import dev.wiggle.client.worker.Worker;
-import dev.wiggle.client.worker.WorkerOptions;
-import dev.wiggle.core.Tls;
+import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.dsl.ActivityHandler;
+import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.NamespaceWorker;
+import com.wiggle.client.worker.Worker;
+import com.wiggle.client.worker.WorkerOptions;
+import com.wiggle.core.Tls;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
