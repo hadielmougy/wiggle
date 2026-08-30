@@ -93,6 +93,19 @@ class CoordinatorPlacementTest {
         }
     }
 
+    @Test @DisplayName("with no ring, a stray extra cell is standby while the implicit cell mints (no hard reject)")
+    void noRingExtraCellIsStandby() throws Exception {
+        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a:1", "orders"));   // implicit cell (id == namespace)
+            api.doRegister("orders", node("grpc://b:1", "cellB"));    // extra cell, no epoch opened -- admitted, not rejected
+
+            assertEquals(List.of(0), api.doFetchConfig("orders", "orders").getShardsList(),
+                    "the implicit cell keeps minting genesis");
+            assertTrue(api.doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
+                    "the extra cell is placed on standby (no shards), so it cannot forge mis-routing ids");
+        }
+    }
+
     @Test @DisplayName("a cell not named in the ring is placed on standby (empty shards), not genesis (guard #2)")
     void unringedCellIsStandby() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
