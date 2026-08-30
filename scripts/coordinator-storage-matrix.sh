@@ -36,7 +36,6 @@ import dev.wiggle.mysql.MySqlDialect;
 import dev.wiggle.oracle.OracleDialect;
 import dev.wiggle.postgres.PostgresDialect;
 import dev.wiggle.sqlserver.SqlServerDialect;
-import dev.wiggle.server.ServerRole;
 import dev.wiggle.server.coord.*;
 import dev.wiggle.server.coord.CoordPolicy.EpochRing;
 import dev.wiggle.server.coord.CoordPolicy.EpochStatus;
@@ -53,8 +52,7 @@ public class CoordConformance {
         String backend = a[0], url = a[1], user = a[2], pass = a[3];
         if (backend.equals("cassandra")) {
             try (CassandraStorage storage = CassandraStorage.fromUrl(url, user.isEmpty() ? null : user, pass)) {
-                storage.migrate(ServerRole.COORDINATOR);   // create coord_* tables in the keyspace
-                scenario(storage.coordinatorStore());      // a CQL store: policy CAS via LWT
+                scenario(storage.coordinatorStore());      // migrates coord_* then a CQL store (LWT policy CAS)
             }
             System.out.println("  PASS  cassandra  (" + checks + " checks)");
             return;
@@ -66,11 +64,8 @@ public class CoordConformance {
             case "sqlserver" -> new SqlServerDialect();
             default -> throw new IllegalArgumentException("unknown backend " + backend);
         };
-        try (JdbcStorage mig = new JdbcStorage(url, user, pass, 4, d)) {
-            mig.migrate(ServerRole.COORDINATOR);   // create coord_* via dialect-rewritten DDL
-        }
-        try (CoordinatorStore s = new JdbcCoordinatorStore(url, user, pass, 4, d)) {
-            scenario(s);
+        try (JdbcStorage storage = new JdbcStorage(url, user, pass, 4, d)) {
+            scenario(storage.coordinatorStore());   // migrates coord_* (dialect-rewritten), returns a store
         }
         System.out.println("  PASS  " + backend + "  (" + checks + " checks)");
     }
@@ -126,6 +121,15 @@ public class CoordConformance {
         CoordNamespace act = s.getNamespace("acme").orElseThrow();
         ok(act.state() == ProvisionState.ACTIVE && act.endpoint().equals("grpc://acme:8100"), "active upsert");
         ok(s.namespaces().size() == 1, "one namespace listed");
+
+        // ---- leader election lease (option A) ----
+        ok(s.acquireLeadership("a", 10_000, 5_000), "a acquires the lease (-> expires 15000)");
+        ok(s.acquireLeadership("a", 11_000, 5_000), "a renews (-> 16000)");
+        ok(!s.acquireLeadership("b", 12_000, 5_000), "b is blocked while a's lease is valid");
+        ok(s.acquireLeadership("b", 16_000, 5_000), "b takes over at/after expiry");
+        ok(!s.acquireLeadership("a", 17_000, 5_000), "a is now blocked (b holds it)");
+        s.releaseLeadership("b");
+        ok(s.acquireLeadership("a", 18_000, 5_000), "a acquires after b releases");
     }
 }
 JAVA

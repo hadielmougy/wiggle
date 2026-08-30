@@ -89,10 +89,17 @@ echo "== checks =="
     && pass "coordinator roster nsA = 2" || bad "coordinator roster nsA"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM coord_node WHERE namespace='nsB';")" = "2" ] \
     && pass "coordinator roster nsB = 2" || bad "coordinator roster nsB"
-[ "$(scalar -d wiggle_cella -c 'SELECT count(*) FROM wf_node WHERE leader=1;')" = "1" ] \
-    && pass "cell A elected exactly one leader" || bad "cell A leader count"
-[ "$(scalar -d wiggle_cellb -c 'SELECT count(*) FROM wf_node WHERE leader=1;')" = "1" ] \
-    && pass "cell B elected exactly one leader" || bad "cell B leader count"
+# Election settles asynchronously and briefly tolerates 0/2 leaders during startup, so poll for
+# exactly-one rather than snapshotting (otherwise the check races the election).
+one_leader() {  # $1 = db
+    for _ in $(seq 1 20); do
+        [ "$(scalar -d "$1" -c 'SELECT count(*) FROM wf_node WHERE leader=1;')" = "1" ] && return 0
+        sleep 1
+    done
+    return 1
+}
+one_leader wiggle_cella && pass "cell A elected exactly one leader" || bad "cell A leader count"
+one_leader wiggle_cellb && pass "cell B elected exactly one leader" || bad "cell B leader count"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM pg_tables WHERE tablename='wf_token';")" = "0" ] \
     && pass "coordinator DB has no engine tables (wf_token)" || bad "coordinator DB leaked wf_token"
 [ "$(scalar -d wiggle_coord -c "SELECT count(*) FROM pg_tables WHERE tablename='coord_policy';")" = "1" ] \
