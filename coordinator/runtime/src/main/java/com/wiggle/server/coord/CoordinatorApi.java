@@ -53,10 +53,12 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -261,21 +263,33 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     /**
      * The placement a node in {@code cellId} mints into: the current epoch and the shards its cell owns
      * in that epoch's ring. With no ring configured (the single implicit cell) this is epoch 0, shard 0
-     * -- identical to pre-ring behaviour (R1). A cell that is not (yet) in the ring also gets the genesis
-     * shard so it can still mint; the ring must name it before instances there are addressable.
+     * -- identical to pre-ring behaviour (R1).
+     *
+     * <p>Guard #2: when a ring <em>exists</em> for the epoch but does not name this cell, the placement is
+     * <em>empty</em> (standby), not the genesis shard. Handing an unplaced cell shard 0 would let it mint
+     * ids that belong to another cell and mis-route; empty shards make the node refuse new instances until
+     * an epoch names it. (The no-ring case can't tell which cell owns genesis, so it stays genesis and is
+     * covered instead by guard #3 in {@link #doResolve}.)
      */
     private Placement placementFor(String namespace, String cellId) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
         if (policy == null) return new Placement(0, List.of(0));
         long epoch = policy.currentEpoch();
         CoordPolicy.EpochRing er = policy.epochs().get(epoch);
-        if (er == null) return new Placement(epoch, List.of(0));
+        if (er == null || er.ring().isEmpty()) return new Placement(epoch, List.of(0));
         List<Integer> shards = new ArrayList<>();
         for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
-        return new Placement(epoch, shards.isEmpty() ? List.of(0) : shards);
+        return new Placement(epoch, shards);   // empty when the ring does not name this cell -> standby (#2)
     }
 
     private record Placement(long epoch, List<Integer> shards) {}
+
+    /** True when the namespace's live roster spans more than one distinct cell. */
+    private boolean multiCell(String namespace) {
+        Set<String> cells = new HashSet<>();
+        for (CoordNode n : store.nodes(namespace)) cells.add(n.cellId());
+        return cells.size() > 1;
+    }
 
     /** Convenience for callers/tests that report no census. */
     public CoordinatorHeartbeatResponse doHeartbeat(String nodeId, long observedGeneration) {
@@ -345,9 +359,21 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
             shard = -1;
         }
         String cellId = cellFor(namespace, epoch, shard);
-        Endpoint endpoint = cellId == null
-                ? endpointFor(namespace, emptyToNull(req.getCallerRegion()))
-                : endpointForCell(namespace, cellId, emptyToNull(req.getCallerRegion()));
+        String region = emptyToNull(req.getCallerRegion());
+        Endpoint endpoint;
+        if (cellId == null) {
+            // Guard #3: with no ring to name an owning cell, pooling the whole roster would mis-route a
+            // multi-cell namespace (an instance could resolve to a cell whose DB does not hold it). Only
+            // the genuine single implicit cell (R1) may fall back to the roster; otherwise fail closed.
+            if (multiCell(namespace)) {
+                throw new IllegalStateException("namespace '" + namespace + "' spans multiple cells but epoch "
+                        + epoch + " has no ring to place " + (shard < 0 ? "new starts" : "shard " + shard)
+                        + "; open an epoch (refusing to guess a cell and risk mis-routing)");
+            }
+            endpoint = endpointFor(namespace, region);
+        } else {
+            endpoint = endpointForCell(namespace, cellId, region);
+        }
         return ResolveResponse.newBuilder()
                 .setNamespace(namespace)
                 .setEpoch(epoch)

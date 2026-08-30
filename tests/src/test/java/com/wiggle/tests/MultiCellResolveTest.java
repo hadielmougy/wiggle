@@ -139,6 +139,18 @@ class MultiCellResolveTest {
         }
     }
 
+    @Test @DisplayName("resolve fails closed for a multi-cell namespace with no ring (guard #3, no roster pooling)")
+    void multiCellNoRingFailsClosed() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+            api.doRegister("orders", node("grpc://a1:1", "cellA"));
+            api.doRegister("orders", node("grpc://b1:1", "cellB"));   // two cells, but no openEpoch -> no ring
+            assertThrows(IllegalStateException.class,
+                    () -> api.doResolve(ResolveRequest.newBuilder().setNamespace("orders").build()),
+                    "must not silently pool two cells when there is no ring to place them");
+        }
+    }
+
     @Test @DisplayName("removing a shard IN PLACE silently mis-routes an existing instance on it (unsafe)")
     void removeShardInPlaceMisroutes() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
