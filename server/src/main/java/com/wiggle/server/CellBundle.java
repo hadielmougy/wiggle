@@ -61,7 +61,8 @@ final class CellBundle implements ServerBundle {
         }
         return () -> {
             String ulid = Ids.token();
-            return IdCodec.format(ns, placement.epoch(), placement.shardFor(ulid), ulid);
+            CellPlacement.Stamp st = placement.stampFor(ulid);   // atomic (epoch, shard) -- see CellPlacement
+            return IdCodec.format(ns, st.epoch(), st.shard(), ulid);
         };
     }
 

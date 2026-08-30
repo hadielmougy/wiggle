@@ -29,10 +29,12 @@ public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
 
     private final Dialect dialect;
     private final HikariDataSource ds;
+    private final String fingerprint;
 
     /** Explicit-dialect constructor used by the per-database modules. */
     public JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect) {
         this.dialect = Objects.requireNonNull(dialect, "dialect");
+        this.fingerprint = fingerprintOf(dialect.id() + ':' + url);
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(url);
         if (user != null) cfg.setUsername(user);
@@ -51,6 +53,20 @@ public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
             return ds.getConnection();
         } catch (SQLException e) {
             throw new StorageException("cannot obtain connection", e);
+        }
+    }
+
+    /** Stable per-database identity: every node pointed at this JDBC URL shares it, distinct URLs differ. */
+    @Override public String fingerprint() { return fingerprint; }
+
+    private static String fingerprintOf(String s) {
+        try {
+            byte[] h = java.security.MessageDigest.getInstance("SHA-256").digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder("db-");
+            for (int i = 0; i < 8; i++) sb.append(Character.forDigit((h[i] >> 4) & 0xf, 16)).append(Character.forDigit(h[i] & 0xf, 16));
+            return sb.toString();
+        } catch (Exception e) {
+            return "db-" + Integer.toHexString(s.hashCode());   // never fails routing on a hash quirk
         }
     }
 
@@ -213,6 +229,7 @@ public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
               endpoint          VARCHAR(300) NOT NULL,
               region            VARCHAR(120),
               engine_version    VARCHAR(60),
+              cell_fingerprint  VARCHAR(200),
               config_generation BIGINT       NOT NULL,
               last_heartbeat    BIGINT       NOT NULL
             );

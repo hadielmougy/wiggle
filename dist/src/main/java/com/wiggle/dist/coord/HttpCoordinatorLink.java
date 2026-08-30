@@ -80,6 +80,7 @@ public final class HttpCoordinatorLink implements CoordinatorLink {
                             .setEndpoint(nz(n.endpoint()))
                             .setEngineVersion(nz(n.engineVersion()))
                             .setCellId(nz(n.cellId()))
+                            .setCellFingerprint(nz(n.cellFingerprint()))
                             .setStartedAt(System.currentTimeMillis())
                             .build())
                     .build());

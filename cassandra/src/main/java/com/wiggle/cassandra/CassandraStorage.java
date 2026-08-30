@@ -52,6 +52,11 @@ public final class CassandraStorage implements Storage, com.wiggle.server.coord.
 
     CassandraStorage(CqlSession session) { this.session = session; }
 
+    /** Stable per-cell identity: every node bound to this keyspace shares it, distinct keyspaces differ. */
+    @Override public String fingerprint() {
+        return session.getKeyspace().map(k -> "cql-" + k.asInternal()).orElse(null);
+    }
+
     /** Parses {@code cassandra://host[:port][,host...]/keyspace?dc=<dc>&rf=<n>} and connects. */
     public static CassandraStorage fromUrl(String url, String user, String password) {
         if (url == null || !url.startsWith("cassandra://")) {
@@ -123,7 +128,7 @@ public final class CassandraStorage implements Storage, com.wiggle.server.coord.
             """
             CREATE TABLE IF NOT EXISTS coord_node (
               id text PRIMARY KEY, namespace text, cell_id text, endpoint text, region text,
-              engine_version text, config_generation bigint, last_heartbeat bigint)""",
+              engine_version text, cell_fingerprint text, config_generation bigint, last_heartbeat bigint)""",
             """
             CREATE TABLE IF NOT EXISTS coord_definition (
               namespace text, name text, version int, hash text, registered_at bigint,

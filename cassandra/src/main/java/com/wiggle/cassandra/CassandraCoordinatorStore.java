@@ -80,9 +80,9 @@ public final class CassandraCoordinatorStore implements CoordinatorStore {
 
     @Override public void upsertNode(CoordNode n) {
         session.execute(ps("INSERT INTO coord_node (id, namespace, cell_id, endpoint, region, engine_version, " +
-                "config_generation, last_heartbeat) VALUES (?,?,?,?,?,?,?,?)")
+                "cell_fingerprint, config_generation, last_heartbeat) VALUES (?,?,?,?,?,?,?,?,?)")
                 .bind(n.id(), n.namespace(), n.cellId(), n.endpoint(), n.region(), n.engineVersion(),
-                        n.configGeneration(), n.lastHeartbeat()));
+                        n.cellFingerprint(), n.configGeneration(), n.lastHeartbeat()));
     }
 
     @Override public Optional<CoordNode> node(String id) {
@@ -198,7 +198,7 @@ public final class CassandraCoordinatorStore implements CoordinatorStore {
     private static CoordNode readNode(Row r) {
         return new CoordNode(r.getString("id"), r.getString("namespace"), r.getString("cell_id"),
                 r.getString("endpoint"), r.getString("region"), r.getString("engine_version"),
-                r.getLong("config_generation"), r.getLong("last_heartbeat"));
+                r.getString("cell_fingerprint"), r.getLong("config_generation"), r.getLong("last_heartbeat"));
     }
 
     private static CoordNamespace readNamespace(Row r) {

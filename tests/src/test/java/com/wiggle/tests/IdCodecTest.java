@@ -57,4 +57,22 @@ class IdCodecTest {
         long s = IdCodec.shardFor(Ids.token(), 4);
         assertTrue(s >= 0 && s < 4);
     }
+
+    @Test @DisplayName("shardFor is deterministic for a given ulid")
+    void shardForDeterministic() {
+        String ulid = Ids.token();
+        assertEquals(IdCodec.shardFor(ulid, 8), IdCodec.shardFor(ulid, 8));
+    }
+
+    @Test @DisplayName("shardFor spreads ULIDs roughly evenly across a ring")
+    void shardForBalance() {
+        int ring = 8, n = 100_000;
+        int[] hits = new int[ring];
+        for (int i = 0; i < n; i++) hits[(int) IdCodec.shardFor(Ids.token(), ring)]++;
+        double expected = n / (double) ring;
+        for (int h : hits) {
+            assertTrue(Math.abs(h - expected) < expected * 0.1,
+                    "each shard within 10% of even, got " + java.util.Arrays.toString(hits));
+        }
+    }
 }

@@ -26,8 +26,10 @@ public interface CoordinatorLink extends AutoCloseable {
     /** Deregister on shutdown. */
     @Override void close();
 
-    /** What a node announces about itself. */
-    record NodeInfo(String nodeName, String namespace, String cellId, String endpoint, String engineVersion) {}
+    /** What a node announces about itself. {@code cellFingerprint} identifies the cell's shared storage
+     *  (null when the backend has none), letting the coordinator reject a reused cell id. */
+    record NodeInfo(String nodeName, String namespace, String cellId, String endpoint, String engineVersion,
+                    String cellFingerprint) {}
 
     /** The cell-side handles the link needs: where to apply placement, and how to read live counts. */
     record CellRuntime(CellPlacement placement, Supplier<Map<Long, Integer>> liveByEpoch) {}

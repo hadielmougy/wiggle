@@ -117,7 +117,7 @@ public final class EtcdCoordinatorStore implements CoordinatorStore {
         if (existing.isEmpty()) return Optional.empty();
         CoordNode n = existing.get();
         CoordNode updated = new CoordNode(n.id(), n.namespace(), n.cellId(), n.endpoint(), n.region(),
-                n.engineVersion(), configGeneration, lastHeartbeat);
+                n.engineVersion(), n.cellFingerprint(), configGeneration, lastHeartbeat);
         put(NODE + id, encodeNode(updated));
         return Optional.of(updated);
     }
@@ -273,6 +273,7 @@ public final class EtcdCoordinatorStore implements CoordinatorStore {
         m.put("endpoint", n.endpoint());
         m.put("region", n.region());
         m.put("engineVersion", n.engineVersion());
+        m.put("cellFingerprint", n.cellFingerprint());
         m.put("configGeneration", n.configGeneration());
         m.put("lastHeartbeat", n.lastHeartbeat());
         return Json.write(m);
@@ -282,6 +283,7 @@ public final class EtcdCoordinatorStore implements CoordinatorStore {
         Map<String, Object> m = Json.parseObject(json);
         return new CoordNode(Json.reqStr(m, "id"), Json.reqStr(m, "namespace"), Json.reqStr(m, "cellId"),
                 Json.reqStr(m, "endpoint"), Json.str(m, "region", null), Json.str(m, "engineVersion", null),
+                Json.str(m, "cellFingerprint", null),
                 (long) Json.num(m, "configGeneration", 0), (long) Json.num(m, "lastHeartbeat", 0));
     }
 

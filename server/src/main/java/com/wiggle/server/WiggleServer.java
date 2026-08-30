@@ -91,6 +91,10 @@ public final class WiggleServer implements AutoCloseable {
      */
     public CellPlacement placement() { return bundle.placement(); }
 
+    /** The stable identity of this cell's shared storage; {@code null} when the backend has none
+     *  (e.g. in-memory). The coordinator uses it to reject two cells reusing a cell id. */
+    public String cellFingerprint() { return storage.fingerprint(); }
+
     public ClusterManager cluster() { return cluster; }
 
     @Override public void close() {
