@@ -13,6 +13,8 @@ dependencies {
     // The composition layer: it runs a cell (WiggleServer) OR a coordinator (CoordinatorServer), and
     // owns the one bridge that needs both -- EmbeddedCellDeployer (starts in-process cells).
     implementation(project(":coordinator:runtime"))
+    // An optional consensus-backed coordinator store (etcd); lets a coordinator run with no engine DB.
+    implementation(project(":coordinator:etcd"))
     implementation(project(":jdbc"))
     implementation(project(":postgres"))
     implementation(project(":mysql"))

@@ -9,6 +9,7 @@ import dev.wiggle.dist.coord.NoopCoordinatorLink;
 import dev.wiggle.server.Logging;
 import dev.wiggle.server.ServerConfig;
 import dev.wiggle.server.WiggleServer;
+import dev.wiggle.coordinator.etcd.EtcdCoordinatorStore;
 import dev.wiggle.server.coord.CoordinatorServer;
 import dev.wiggle.server.coord.CoordinatorStore;
 import dev.wiggle.server.store.Storage;
@@ -77,24 +78,34 @@ public final class Main {
     }
 
     /**
-     * Runs the coordinator control plane: build its store from config (migrating the coord schema),
-     * then a self-hosted {@link CoordinatorServer}. No engine, no cell. Leader election is a durable lease
-     * over the coordinator store, keyed on the node name — a multi-node coordinator elects a single writer.
+     * Runs the coordinator control plane: build its store, then a self-hosted {@link CoordinatorServer}.
+     * No engine, no cell. The store is either etcd (consensus-backed, no engine DB — set
+     * {@code WIGGLE_ETCD_ENDPOINTS}) or the configured database (reuse-DB, coord schema self-migrated).
+     * Leader election is a durable lease over that store, keyed on the node name.
      */
     private static void runCoordinator(ServerConfig config) throws Exception {
-        WiggleStorageFactory factory = new WiggleStorageFactory();
-        Storage storage = factory.create(config);
-        CoordinatorStore store = factory.coordinatorStore(config, storage);
+        String etcd = System.getenv("WIGGLE_ETCD_ENDPOINTS");
+        CoordinatorStore store;
+        AutoCloseable backing;   // closed on shutdown; owns the store's underlying connection/session/client
+        String storageDesc;
+        if (etcd != null && !etcd.isBlank()) {
+            EtcdCoordinatorStore es = EtcdCoordinatorStore.connect(etcd);
+            store = es; backing = es; storageDesc = "etcd " + etcd;
+        } else {
+            WiggleStorageFactory factory = new WiggleStorageFactory();
+            Storage storage = factory.create(config);
+            store = factory.coordinatorStore(config, storage);   // coord schema self-migrates
+            backing = storage; storageDesc = config.isInMemory() ? "in-memory" : config.jdbcUrl();
+        }
         CoordinatorServer coordinator = new CoordinatorServer(store, config.port(), config.tls(),
                 config.missedHeartbeatsBeforeDead(), config.nodeName()).start();
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle coordinator '" + config.nodeName() + "' on 127.0.0.1:" + coordinator.port()
-                + " (gRPC: " + (tls ? "TLS" : "plaintext")
-                + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
+                + " (gRPC: " + (tls ? "TLS" : "plaintext") + ", store: " + storageDesc + ")");
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             coordinator.close();
-            try { storage.close(); } catch (Exception ignored) { }
+            try { backing.close(); } catch (Exception ignored) { }
         }));
         Thread.currentThread().join();
     }
