@@ -32,14 +32,7 @@ import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -129,10 +122,9 @@ public final class CoordinatorService implements AutoCloseable {
     }
 
     public RegisterResponse doRegister(String namespace, RegisteredNode node) {
-
         seedNewNode(namespace, node.getEndpoint());
         String nodeId = UUID.randomUUID().toString();
-        String cellId = cellOrNamespace(namespace, node.getCellId());
+        String cellId = requireNonNullOrBlank(node.getCellId(), "Cell ID is blank");
         String fingerprint = emptyToNull(node.getCellFingerprint());
         if (!store.bindCell(namespace, cellId, fingerprint)) {
             throw new IllegalArgumentException("cell id '" + cellId + "' in namespace '" + namespace
@@ -543,5 +535,13 @@ public final class CoordinatorService implements AutoCloseable {
             b.putEpochs(e.getKey(), er.build());
         }
         return b.build();
+    }
+
+    public static String requireNonNullOrBlank(String str, String message) {
+        Objects.requireNonNull(str, message);
+        if (str.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return str;
     }
 }

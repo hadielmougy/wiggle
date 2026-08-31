@@ -34,11 +34,11 @@ class CoordinatorPlacementTest {
     @Test @DisplayName("with no ring, a node is placed at epoch 0 shard 0 (single implicit cell)")
     void singleCellDefault() throws Exception {
         try (CoordinatorService api = new CoordinatorService(new InMemoryCoordinatorStore())) {
-            RegisterResponse r = api.doRegister("orders", node("grpc://h:1", ""));
+            RegisterResponse r = api.doRegister("orders", node("grpc://h:1", "CellA"));
             assertEquals(0, r.getEpoch());
             assertEquals(List.of(0), r.getShardsList());
 
-            NodeConfig cfg = api.doFetchConfig("orders");
+            NodeConfig cfg = api.doFetchConfig("orders", "CellA");
             assertEquals(0, cfg.getEpoch());
             assertEquals(List.of(0), cfg.getShardsList());
         }

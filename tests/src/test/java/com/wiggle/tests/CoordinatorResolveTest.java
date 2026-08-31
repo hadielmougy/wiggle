@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CoordinatorResolveTest {
 
     private static RegisteredNode node(String endpoint, String region) {
-        return RegisteredNode.newBuilder().setName(endpoint).setEndpoint(endpoint).setRegion(region).build();
+        return RegisteredNode.newBuilder().setCellId("CellA").setName(endpoint).setEndpoint(endpoint).setRegion(region).build();
     }
 
     private static RegisteredNode node(String endpoint, String region, String cellId) {

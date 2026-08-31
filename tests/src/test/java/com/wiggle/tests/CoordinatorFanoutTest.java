@@ -39,7 +39,7 @@ class CoordinatorFanoutTest {
     }
 
     private static void register(CoordinatorService coord, WiggleServer cell) {
-        coord.doRegister("orders", RegisteredNode.newBuilder()
+        coord.doRegister("orders", RegisteredNode.newBuilder().setCellId("CellA")
                 .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
     }
 
@@ -75,7 +75,7 @@ class CoordinatorFanoutTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer a = new WiggleServer(cell()).start();
              CoordinatorService coord = new CoordinatorService(store)) {
-            coord.doRegister("orders", RegisteredNode.newBuilder()
+            coord.doRegister("orders", RegisteredNode.newBuilder().setCellId("CellA")
                     .setName(a.baseUrl()).setEndpoint(a.baseUrl()).build());
 
             coord.doRegisterWorkflow("orders", "wf", definitionJson());

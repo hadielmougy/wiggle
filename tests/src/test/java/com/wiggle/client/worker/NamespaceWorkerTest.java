@@ -89,7 +89,7 @@ class NamespaceWorkerTest {
 
             cc.register(bp);
             svc.doRegister("orders", RegisteredNode.newBuilder()
-                    .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
+                    .setCellId("CellA").setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
 
             CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
             try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp))) {

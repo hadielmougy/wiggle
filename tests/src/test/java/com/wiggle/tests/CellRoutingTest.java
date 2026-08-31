@@ -47,7 +47,7 @@ class CellRoutingTest {
              CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED)) {
             coord.start();
             // Simulate the cell's node link registering with the coordinator (seed directly via the service).
-            svc.doRegister("acme", RegisteredNode.newBuilder()
+            svc.doRegister("acme", RegisteredNode.newBuilder().setCellId("CellA")
                     .setName("cell-node").setEndpoint(cell.baseUrl()).setRegion("eu-west").build());
 
             try (CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(),
