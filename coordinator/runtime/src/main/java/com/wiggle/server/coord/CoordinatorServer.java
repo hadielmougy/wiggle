@@ -34,8 +34,8 @@ public final class CoordinatorServer implements AutoCloseable {
         LiveCensus census = new LiveCensus();
         this.api = new CoordinatorApi(store, port, tls, census);
         // A cell's liveness is measured against the node->coordinator heartbeat cadence.
-        long reconcileMillis = CoordinatorApi.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
-        long nodeDeadMillis = CoordinatorApi.nodeDeadMillis(missedHeartbeatsBeforeDead);
+        long reconcileMillis = CoordinatorService.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
+        long nodeDeadMillis = CoordinatorService.nodeDeadMillis(missedHeartbeatsBeforeDead);
         this.reconciler = new CoordinatorReconciler(store, census, election::isLeader, reconcileMillis, nodeDeadMillis);
     }
 

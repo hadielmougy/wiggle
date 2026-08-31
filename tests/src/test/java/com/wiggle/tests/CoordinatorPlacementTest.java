@@ -35,11 +35,11 @@ class CoordinatorPlacementTest {
     @Test @DisplayName("with no ring, a node is placed at epoch 0 shard 0 (single implicit cell)")
     void singleCellDefault() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            RegisterResponse r = api.doRegister("orders", node("grpc://h:1", ""));
+            RegisterResponse r = api.service().doRegister("orders", node("grpc://h:1", ""));
             assertEquals(0, r.getEpoch());
             assertEquals(List.of(0), r.getShardsList());
 
-            NodeConfig cfg = api.doFetchConfig("orders");
+            NodeConfig cfg = api.service().doFetchConfig("orders");
             assertEquals(0, cfg.getEpoch());
             assertEquals(List.of(0), cfg.getShardsList());
         }
@@ -49,18 +49,18 @@ class CoordinatorPlacementTest {
     void ownedShardsPerCell() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
             // ring: shard 0,1 -> cellA ; shard 2 -> cellB
-            api.doRegister("orders", node("grpc://a:1", "cellA"));
-            api.doRegister("orders", node("grpc://b:1", "cellB"));
-            api.doOpenEpoch("orders", List.of(
+            api.service().doRegister("orders", node("grpc://a:1", "cellA"));
+            api.service().doRegister("orders", node("grpc://b:1", "cellB"));
+            api.service().doOpenEpoch("orders", List.of(
                     RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
                     RingSlot.newBuilder().setShard(1).setCellId("cellA").build(),
                     RingSlot.newBuilder().setShard(2).setCellId("cellB").build()));
 
-            NodeConfig a = api.doFetchConfig("orders", "cellA");
+            NodeConfig a = api.service().doFetchConfig("orders", "cellA");
             assertEquals(0, a.getEpoch());
             assertEquals(List.of(0, 1), a.getShardsList(), "cellA owns shards 0 and 1");
 
-            NodeConfig b = api.doFetchConfig("orders", "cellB");
+            NodeConfig b = api.service().doFetchConfig("orders", "cellB");
             assertEquals(List.of(2), b.getShardsList(), "cellB owns shard 2");
         }
     }
@@ -68,10 +68,10 @@ class CoordinatorPlacementTest {
     @Test @DisplayName("registration after an epoch bump places the node in the new (current) epoch")
     void placementFollowsCurrentEpoch() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build())); // epoch 0
-            api.doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build())); // epoch 1
+            api.service().doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build())); // epoch 0
+            api.service().doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build())); // epoch 1
 
-            RegisterResponse r = api.doRegister("orders", node("grpc://a:1", "cellA"));
+            RegisterResponse r = api.service().doRegister("orders", node("grpc://a:1", "cellA"));
             assertEquals(1, r.getEpoch(), "new nodes mint into the current epoch, not the draining one");
             assertEquals(List.of(0), r.getShardsList());
         }
@@ -80,28 +80,28 @@ class CoordinatorPlacementTest {
     @Test @DisplayName("a second cell reusing a cell id in the same namespace is rejected")
     void rejectsDuplicateCellId() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.doRegister("orders", node("grpc://a:1", "cellX", "fp-DB-A"));   // establishes the binding
-            api.doRegister("orders", node("grpc://b:1", "cellX", "fp-DB-A"));   // same cell replica -> ok
+            api.service().doRegister("orders", node("grpc://a:1", "cellX", "fp-DB-A"));   // establishes the binding
+            api.service().doRegister("orders", node("grpc://b:1", "cellX", "fp-DB-A"));   // same cell replica -> ok
 
             assertThrows(IllegalArgumentException.class,
-                    () -> api.doRegister("orders", node("grpc://c:1", "cellX", "fp-DB-B")),
+                    () -> api.service().doRegister("orders", node("grpc://c:1", "cellX", "fp-DB-B")),
                     "a node from a different cell (distinct fingerprint) may not reuse the cell id");
 
             // A different cell id from the second storage is fine; and the same id in another namespace is independent.
-            api.doRegister("orders", node("grpc://c:1", "cellY", "fp-DB-B"));
-            api.doRegister("billing", node("grpc://c:1", "cellX", "fp-DB-B"));
+            api.service().doRegister("orders", node("grpc://c:1", "cellY", "fp-DB-B"));
+            api.service().doRegister("billing", node("grpc://c:1", "cellX", "fp-DB-B"));
         }
     }
 
     @Test @DisplayName("with no ring, a stray extra cell is standby while the implicit cell mints (no hard reject)")
     void noRingExtraCellIsStandby() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.doRegister("orders", node("grpc://a:1", "orders"));   // implicit cell (id == namespace)
-            api.doRegister("orders", node("grpc://b:1", "cellB"));    // extra cell, no epoch opened -- admitted, not rejected
+            api.service().doRegister("orders", node("grpc://a:1", "orders"));   // implicit cell (id == namespace)
+            api.service().doRegister("orders", node("grpc://b:1", "cellB"));    // extra cell, no epoch opened -- admitted, not rejected
 
-            assertEquals(List.of(0), api.doFetchConfig("orders", "orders").getShardsList(),
+            assertEquals(List.of(0), api.service().doFetchConfig("orders", "orders").getShardsList(),
                     "the implicit cell keeps minting genesis");
-            assertTrue(api.doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
+            assertTrue(api.service().doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
                     "the extra cell is placed on standby (no shards), so it cannot forge mis-routing ids");
         }
     }
@@ -109,13 +109,13 @@ class CoordinatorPlacementTest {
     @Test @DisplayName("a cell not named in the ring is placed on standby (empty shards), not genesis (guard #2)")
     void unringedCellIsStandby() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.doRegister("orders", node("grpc://a:1", "cellA"));
-            api.doRegister("orders", node("grpc://b:1", "cellB"));
+            api.service().doRegister("orders", node("grpc://a:1", "cellA"));
+            api.service().doRegister("orders", node("grpc://b:1", "cellB"));
             // ring names ONLY cellA; cellB is deliberately unplaced
-            api.doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build()));
+            api.service().doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellA").build()));
 
-            assertEquals(List.of(0), api.doFetchConfig("orders", "cellA").getShardsList(), "cellA owns shard 0");
-            assertTrue(api.doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
+            assertEquals(List.of(0), api.service().doFetchConfig("orders", "cellA").getShardsList(), "cellA owns shard 0");
+            assertTrue(api.service().doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
                     "cellB is not in the ring -> standby (no shards, so the node refuses to mint)");
         }
     }
@@ -123,8 +123,8 @@ class CoordinatorPlacementTest {
     @Test @DisplayName("a node without a fingerprint never trips the guard (in-memory / legacy)")
     void noFingerprintSkipsGuard() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.doRegister("orders", node("grpc://a:1", "cellX"));   // no fingerprint
-            api.doRegister("orders", node("grpc://b:1", "cellX"));   // still no fingerprint -> allowed
+            api.service().doRegister("orders", node("grpc://a:1", "cellX"));   // no fingerprint
+            api.service().doRegister("orders", node("grpc://b:1", "cellX"));   // still no fingerprint -> allowed
         }
     }
 }

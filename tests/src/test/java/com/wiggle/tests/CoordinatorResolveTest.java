@@ -44,11 +44,11 @@ class CoordinatorResolveTest {
     void resolveByNamespace() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
-            api.doRegister("nsA", node("grpc://hb:2", "eu-west", "cell-1"));
-            api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build()));
+            api.service().doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
+            api.service().doRegister("nsA", node("grpc://hb:2", "eu-west", "cell-1"));
+            api.service().doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build()));
 
-            ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setNamespace("nsA").build());
+            ResolveResponse r = api.service().doResolve(ResolveRequest.newBuilder().setNamespace("nsA").build());
             assertEquals("nsA", r.getNamespace());
             assertEquals(0, r.getEpoch());
             assertFalse(r.getEndpoint().getTarget().isBlank());
@@ -61,9 +61,9 @@ class CoordinatorResolveTest {
     void resolveByInstanceId() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
+            api.service().doRegister("nsA", node("grpc://ha:1", "eu-west"));
             String id = IdCodec.format("nsA", 0, 0, Ids.token());
-            ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setInstanceId(id).build());
+            ResolveResponse r = api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(id).build());
             assertEquals("nsA", r.getNamespace());
             assertEquals(List.of("grpc://ha:1"), r.getEndpoint().getAddressesList());
         }
@@ -73,9 +73,9 @@ class CoordinatorResolveTest {
     void resolveLegacyRejected() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
+            api.service().doRegister("nsA", node("grpc://ha:1", "eu-west"));
             assertThrows(IllegalArgumentException.class,
-                    () -> api.doResolve(ResolveRequest.newBuilder().setInstanceId("wfi_01h8abcdef").build()));
+                    () -> api.service().doResolve(ResolveRequest.newBuilder().setInstanceId("wfi_01h8abcdef").build()));
         }
     }
 
@@ -84,7 +84,7 @@ class CoordinatorResolveTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
             assertThrows(IllegalStateException.class,
-                    () -> api.doResolve(ResolveRequest.newBuilder().setNamespace("empty").build()));
+                    () -> api.service().doResolve(ResolveRequest.newBuilder().setNamespace("empty").build()));
         }
     }
 
@@ -92,15 +92,15 @@ class CoordinatorResolveTest {
     void regionFiltering() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://eu1:1", "eu-west"));
-            api.doRegister("nsA", node("grpc://eu2:1", "eu-west"));
-            api.doRegister("nsA", node("grpc://us1:1", "us-east"));
+            api.service().doRegister("nsA", node("grpc://eu1:1", "eu-west"));
+            api.service().doRegister("nsA", node("grpc://eu2:1", "eu-west"));
+            api.service().doRegister("nsA", node("grpc://us1:1", "us-east"));
 
-            ResolveResponse us = api.doResolve(
+            ResolveResponse us = api.service().doResolve(
                     ResolveRequest.newBuilder().setNamespace("nsA").setCallerRegion("us-east").build());
             assertEquals(List.of("grpc://us1:1"), us.getEndpoint().getAddressesList(), "only the us-east node");
 
-            ResolveResponse all = api.doResolve(ResolveRequest.newBuilder().setNamespace("nsA").build());
+            ResolveResponse all = api.service().doResolve(ResolveRequest.newBuilder().setNamespace("nsA").build());
             assertEquals(3, all.getEndpoint().getAddressesList().size(), "no region filter -> all nodes");
         }
     }
@@ -109,10 +109,10 @@ class CoordinatorResolveTest {
     void activeCells() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
-            api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build())); // revision 1
+            api.service().doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
+            api.service().doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build())); // revision 1
 
-            ActiveCellsResponse ac = api.doActiveCells("nsA", null);
+            ActiveCellsResponse ac = api.service().doActiveCells("nsA", null);
             assertEquals(1, ac.getGeneration(), "generation follows the policy revision");
             assertEquals(1, ac.getCellsList().size());
             assertEquals(List.of("grpc://ha:1"), ac.getCells(0).getAddressesList());

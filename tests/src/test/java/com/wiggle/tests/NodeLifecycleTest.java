@@ -31,26 +31,26 @@ class NodeLifecycleTest {
     void coordinatorSideLogic() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
-            RegisterResponse reg = api.doRegister("acme", RegisteredNode.newBuilder()
+            RegisterResponse reg = api.service().doRegister("acme", RegisteredNode.newBuilder()
                     .setName("node-a").setEndpoint("grpc://h:1").setEngineVersion("2.1.5").build());
             assertFalse(reg.getNodeId().isBlank());
             assertTrue(reg.getHeartbeatIntervalSeconds() > 0);
             assertEquals(1, store.nodes("acme").size());
 
             // heartbeat touches liveness and returns the namespace's generation (policy revision)
-            api.doOpenEpoch("acme", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-3").build()));
-            CoordinatorHeartbeatResponse hb = api.doHeartbeat(reg.getNodeId(), 0);
+            api.service().doOpenEpoch("acme", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-3").build()));
+            CoordinatorHeartbeatResponse hb = api.service().doHeartbeat(reg.getNodeId(), 0);
             assertTrue(hb.getOk());
             assertEquals(1, hb.getConfigGeneration(), "generation follows the policy revision");
 
             // an unknown node is told it is not registered
-            assertFalse(api.doHeartbeat("no-such-node", 0).getOk());
+            assertFalse(api.service().doHeartbeat("no-such-node", 0).getOk());
 
             // fetchConfig reports the same generation
-            NodeConfig cfg = api.doFetchConfig("acme");
+            NodeConfig cfg = api.service().doFetchConfig("acme");
             assertEquals(1, cfg.getGeneration());
 
-            api.doDeregister(reg.getNodeId());
+            api.service().doDeregister(reg.getNodeId());
             assertEquals(0, store.nodes("acme").size());
         }
     }

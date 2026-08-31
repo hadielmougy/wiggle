@@ -86,7 +86,7 @@ class NamespaceWorkerTest {
              WiggleClient cc = new WiggleClient(cell.baseUrl())) {
 
             cc.register(bp);
-            coord.doRegister("orders", RegisteredNode.newBuilder()
+            coord.service().doRegister("orders", RegisteredNode.newBuilder()
                     .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
 
             CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");

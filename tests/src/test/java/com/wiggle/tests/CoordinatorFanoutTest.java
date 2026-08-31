@@ -40,7 +40,7 @@ class CoordinatorFanoutTest {
     }
 
     private static void register(CoordinatorApi coord, WiggleServer cell) {
-        coord.doRegister("orders", RegisteredNode.newBuilder()
+        coord.service().doRegister("orders", RegisteredNode.newBuilder()
                 .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
     }
 
@@ -54,7 +54,7 @@ class CoordinatorFanoutTest {
             register(coord, a);
             register(coord, b);
 
-            RegisterWorkflowResponse r = coord.doRegisterWorkflow("orders", "wf", definitionJson());
+            RegisterWorkflowResponse r = coord.service().doRegisterWorkflow("orders", "wf", definitionJson());
             assertEquals(2, r.getCellsSeeded(), "fanned out to both cells");
             assertTrue(r.getVersion() > 0);
 
@@ -76,16 +76,16 @@ class CoordinatorFanoutTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer a = new WiggleServer(cell()).start();
              CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
-            coord.doRegister("orders", RegisteredNode.newBuilder()
+            coord.service().doRegister("orders", RegisteredNode.newBuilder()
                     .setName(a.baseUrl()).setEndpoint(a.baseUrl()).build());
 
-            coord.doRegisterWorkflow("orders", "wf", definitionJson());
-            assertEquals(1, coord.doListWorkflows("orders").getWorkflowsCount(), "allocated -> listed");
-            assertEquals("wf", coord.doListWorkflows("orders").getWorkflows(0).getName());
+            coord.service().doRegisterWorkflow("orders", "wf", definitionJson());
+            assertEquals(1, coord.service().doListWorkflows("orders").getWorkflowsCount(), "allocated -> listed");
+            assertEquals("wf", coord.service().doListWorkflows("orders").getWorkflows(0).getName());
 
-            assertTrue(coord.doDeregisterWorkflow("orders", "wf").getRemoved(), "deallocate removes it");
-            assertEquals(0, coord.doListWorkflows("orders").getWorkflowsCount(), "gone from the registry");
-            assertFalse(coord.doDeregisterWorkflow("orders", "wf").getRemoved(), "second deallocate is a no-op");
+            assertTrue(coord.service().doDeregisterWorkflow("orders", "wf").getRemoved(), "deallocate removes it");
+            assertEquals(0, coord.service().doListWorkflows("orders").getWorkflowsCount(), "gone from the registry");
+            assertFalse(coord.service().doDeregisterWorkflow("orders", "wf").getRemoved(), "second deallocate is a no-op");
         }
     }
 
@@ -94,7 +94,7 @@ class CoordinatorFanoutTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
             try {
-                coord.doRegisterWorkflow("orders", "wf", definitionJson());
+                coord.service().doRegisterWorkflow("orders", "wf", definitionJson());
                 throw new AssertionError("expected failure with no cell");
             } catch (IllegalStateException expected) {
                 assertTrue(expected.getMessage().contains("no cell"));
