@@ -130,8 +130,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     @Override public void fetchConfig(FetchConfigRequest req, StreamObserver<NodeConfig> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc FetchConfig namespace=" + req.getNamespace());
-        run(resp, () -> service.doFetchConfig(req.getNamespace(),
-                CoordinatorService.cellOrNamespace(req.getNamespace(), req.getNode().getCellId())));
+        run(resp, () -> service.doFetchConfig(req.getNamespace(), req.getNode().getCellId()));
     }
 
     @Override public void register(RegisterRequest req, StreamObserver<RegisterResponse> resp) {
@@ -190,6 +189,8 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
             resp.onCompleted();
         } catch (IllegalArgumentException e) {
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
+        } catch (NamespaceNotReadyException e) {
+            resp.onError(Status.FAILED_PRECONDITION.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
         } catch (IllegalStateException e) {
             resp.onError(Status.ABORTED.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
         } catch (RuntimeException e) {

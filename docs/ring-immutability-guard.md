@@ -87,6 +87,10 @@ construction*: nothing in the wire contract can express "edit this ring."
 - **Draining stacks.** The honest downside: additive edits that were free now add a draining epoch, and
   draining epochs multiply worker poll targets (§6). Mitigation is unchanged — let an epoch drain before
   opening the next; the reconciler retires drained epochs promptly.
+- **Strict placement.** `OpenEpoch` being the sole ring-writer pairs with the strict placement model: a
+  coordinated namespace with no ring is *not-ready* (fail closed with `NamespaceNotReadyException`), not
+  routed to an inferred implicit cell. The ring is the one source of placement, and it only exists once
+  an epoch is opened — see [sharding-and-epochs.md](sharding-and-epochs.md) §1.
 
 ---
 

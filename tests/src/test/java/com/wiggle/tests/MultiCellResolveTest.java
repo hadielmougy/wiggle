@@ -9,6 +9,7 @@ import com.wiggle.proto.ResolveResponse;
 import com.wiggle.proto.RingSlot;
 import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
+import com.wiggle.server.coord.NamespaceNotReadyException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -145,16 +146,17 @@ class MultiCellResolveTest {
         }
     }
 
-    @Test @DisplayName("no-ring resolve routes to the implicit cell and ignores a stray extra cell (no outage)")
-    void noRingRoutesToImplicitCell() throws Exception {
+    @Test @DisplayName("no-ring resolve is not-ready -- fail closed, no implicit-cell fallback")
+    void noRingResolveIsNotReady() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorService api = new CoordinatorService(store)) {
-            api.doRegister("orders", node("grpc://a1:1", "orders"));   // the implicit cell (id == namespace)
-            api.doRegister("orders", node("grpc://b1:1", "cellB"));     // a stray extra cell; no epoch opened
+            api.doRegister("orders", node("grpc://a1:1", "cellA"));
+            api.doRegister("orders", node("grpc://b1:1", "cellB"));
 
-            ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setNamespace("orders").build());
-            assertEquals(List.of("grpc://a1:1"), r.getEndpoint().getAddressesList(),
-                    "routes to the implicit cell 'orders', ignoring the stray cellB -- no outage, no pooling");
+            // No epoch opened: the namespace has no ring, so it is not resolvable (no roster pooling, no guess).
+            assertThrows(NamespaceNotReadyException.class,
+                    () -> api.doResolve(ResolveRequest.newBuilder().setNamespace("orders").build()),
+                    "a coordinated namespace resolves only once an epoch names its cells");
         }
     }
 

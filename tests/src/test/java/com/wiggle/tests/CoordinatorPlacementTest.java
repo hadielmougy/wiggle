@@ -31,13 +31,16 @@ class CoordinatorPlacementTest {
                 .setCellId(cellId).setCellFingerprint(fingerprint).build();
     }
 
-    @Test @DisplayName("with no ring, a node is placed at epoch 0 shard 0 (single implicit cell)")
-    void singleCellDefault() throws Exception {
+    @Test @DisplayName("with no ring a node is standby; opening an epoch that names its cell hands it the shard")
+    void placementNeedsAnExplicitRing() throws Exception {
         try (CoordinatorService api = new CoordinatorService(new InMemoryCoordinatorStore())) {
+            // No ring yet: the node registers but is on standby -- it mints nothing (no implicit cell).
             RegisterResponse r = api.doRegister("orders", node("grpc://h:1", "CellA"));
             assertEquals(0, r.getEpoch());
-            assertEquals(List.of(0), r.getShardsList());
+            assertTrue(r.getShardsList().isEmpty(), "no ring -> standby, no shards to mint");
 
+            // Open an epoch naming the cell -> it now owns shard 0.
+            api.doOpenEpoch("orders", List.of(RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
             NodeConfig cfg = api.doFetchConfig("orders", "CellA");
             assertEquals(0, cfg.getEpoch());
             assertEquals(List.of(0), cfg.getShardsList());
@@ -92,16 +95,16 @@ class CoordinatorPlacementTest {
         }
     }
 
-    @Test @DisplayName("with no ring, a stray extra cell is standby while the implicit cell mints (no hard reject)")
-    void noRingExtraCellIsStandby() throws Exception {
+    @Test @DisplayName("with no ring, every registered cell is standby (no implicit minting)")
+    void noRingEveryCellStandby() throws Exception {
         try (CoordinatorService api = new CoordinatorService(new InMemoryCoordinatorStore())) {
-            api.doRegister("orders", node("grpc://a:1", "orders"));   // implicit cell (id == namespace)
-            api.doRegister("orders", node("grpc://b:1", "cellB"));    // extra cell, no epoch opened -- admitted, not rejected
+            api.doRegister("orders", node("grpc://a:1", "cellA"));   // admitted, not rejected
+            api.doRegister("orders", node("grpc://b:1", "cellB"));
 
-            assertEquals(List.of(0), api.doFetchConfig("orders", "orders").getShardsList(),
-                    "the implicit cell keeps minting genesis");
+            assertTrue(api.doFetchConfig("orders", "cellA").getShardsList().isEmpty(),
+                    "no ring -> standby even for the first cell (no implicit genesis)");
             assertTrue(api.doFetchConfig("orders", "cellB").getShardsList().isEmpty(),
-                    "the extra cell is placed on standby (no shards), so it cannot forge mis-routing ids");
+                    "and the other cell too -- neither can forge ids until an epoch places it");
         }
     }
 

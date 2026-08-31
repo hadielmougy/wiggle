@@ -3,7 +3,7 @@
 How the cell coordinator shards a namespace's instances across cells, routes them without a
 directory, and reshards (grow / split / rebalance / shrink) with **zero data migration**. This is the
 conceptual reference for the code in `core/IdCodec`, `server/CellPlacement`, and
-`coordinator/**/CoordinatorApi`.
+`coordinator/**/CoordinatorService`.
 
 > One-line model: **the instance id carries its own routing.** An instance's cell is a pure function
 > of `id + placement policy`, so there is no per-instance directory and an instance never moves.
@@ -32,6 +32,12 @@ Consequences that surprise people:
   (housekeeping, reaping) are per-cell via the intra-cell leader (`ClusterManager`).
 - **A cell is defined by its database**, not by its name. Two node groups on two different databases
   are two cells even if they share a `cellId` — see §9 (the fingerprint guard).
+- **A coordinated namespace is placed only by an explicit ring.** Every node sets its `cellId`
+  (`WIGGLE_CELL_ID`); a node with none is rejected at register. A namespace becomes resolvable only once
+  an `OpenEpoch` names its cells — before that, register succeeds but the node is on *standby* (mints
+  nothing), and `Resolve` **fails closed** with `NamespaceNotReadyException` (gRPC `FAILED_PRECONDITION`).
+  There is no implicit/inferred cell and no whole-roster fallback. To run without a coordinator at all,
+  use `CellResolver.direct` — a single static target, legacy ids, no cells or sharding.
 
 ---
 

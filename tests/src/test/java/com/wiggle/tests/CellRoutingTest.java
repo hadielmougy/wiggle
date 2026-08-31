@@ -49,6 +49,8 @@ class CellRoutingTest {
             // Simulate the cell's node link registering with the coordinator (seed directly via the service).
             svc.doRegister("acme", RegisteredNode.newBuilder().setCellId("CellA")
                     .setName("cell-node").setEndpoint(cell.baseUrl()).setRegion("eu-west").build());
+            svc.doOpenEpoch("acme", java.util.List.of(
+                    com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
             try (CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(),
                     Tls.Options.DISABLED, "eu-west")) {

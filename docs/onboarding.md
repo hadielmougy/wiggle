@@ -23,7 +23,10 @@ Core properties: durable (survives restarts), exactly-once dispatch and at-least
 pull-based workers (no inbound connectivity), content-addressed immutable definitions, multi-node
 clustering over a shared database, and **cellular sharding** — a namespace is a cell with its own
 database and cluster, placed by consistent hashing over epochs and rebalanced by drain/retire (a single
-cluster runs unchanged without a coordinator).
+cluster runs unchanged without a coordinator). Under a coordinator each node sets an explicit cell id
+(`WIGGLE_CELL_ID`), and a namespace becomes resolvable only after an epoch names its cells
+(`wiggle open-epoch`) — until then it is not-ready by design (no implicit cell). See
+`docs/sharding-and-epochs.md`.
 
 ---
 

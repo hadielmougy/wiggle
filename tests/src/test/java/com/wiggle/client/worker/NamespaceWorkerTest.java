@@ -90,6 +90,8 @@ class NamespaceWorkerTest {
             cc.register(bp);
             svc.doRegister("orders", RegisteredNode.newBuilder()
                     .setCellId("CellA").setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
+            svc.doOpenEpoch("orders", java.util.List.of(
+                    com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
             CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
             try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp))) {

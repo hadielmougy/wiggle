@@ -48,7 +48,7 @@ class NodeLifecycleTest {
             assertFalse(svc.doHeartbeat("no-such-node", 0).getOk());
 
             // fetchConfig reports the same generation
-            NodeConfig cfg = svc.doFetchConfig("acme");
+            NodeConfig cfg = svc.doFetchConfig("acme", "cell-3");
             assertEquals(1, cfg.getGeneration());
 
             svc.doDeregister(reg.getNodeId());
