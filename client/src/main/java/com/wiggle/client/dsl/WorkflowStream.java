@@ -145,6 +145,15 @@ public final class WorkflowStream<T> {
         return gate(name, test, (RetryPolicy) null, null);
     }
 
+
+    public WorkflowStream<T> gate(String name, String queue) {
+        return gate(name, x -> true, (RetryPolicy) null, null);
+    }
+
+    public WorkflowStream<T> gate(String name, RetryPolicy retry, String queue) {
+        return gate(name, x -> true, retry, null);
+    }
+
     /** {@link #gate} with an explicit retry policy for the guard. */
     public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry) {
         return gate(name, test, retry, null);
