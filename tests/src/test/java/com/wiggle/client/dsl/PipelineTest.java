@@ -408,4 +408,67 @@ class PipelineTest {
         assertEquals(1, def.node(b).retry().maxAttempts());
         assertFalse(def.node(a).id().isBlank());
     }
+
+    @Nested
+    @DisplayName("name-only overloads")
+    class NameOnlyOverloads {
+
+        private Node byActivity(WorkflowDefinition def, String activity) {
+            return def.nodes().values().stream()
+                    .filter(n -> activity.equals(n.activity()))
+                    .findFirst().orElseThrow(() -> new AssertionError("no node for activity " + activity));
+        }
+
+        @Test
+        @DisplayName("gate(name, queue) honours the queue and bakes no predicate (bound by name)")
+        void gateNameOnlyQueueAndNoHandler() {
+            Blueprint<Map<String, Object>> bp = Workflow.define("wf")
+                    .gate("check", "gpu")
+                    .step("run", ctx -> ctx)
+                    .build();
+            WorkflowDefinition def = bp.definition();
+
+            assertEquals("gpu", byActivity(def, "wf#check").queue(), "queue must be honoured, not dropped");
+            assertEquals(NodeKind.PREDICATE, byActivity(def, "wf#check").kind());
+            assertNull(bp.handlers().get("wf#check"), "name-only gate must bake no predicate (no silent x->true)");
+            assertTrue(def.queues().contains("gpu"));
+        }
+
+        @Test
+        @DisplayName("gate(name, retry, queue) honours both the retry policy and the queue")
+        void gateNameOnlyRetryAndQueue() {
+            Blueprint<Map<String, Object>> bp = Workflow.define("wf")
+                    .gate("check", RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
+                    .step("run", ctx -> ctx)
+                    .build();
+            Node gate = byActivity(bp.definition(), "wf#check");
+            assertEquals("gpu", gate.queue());
+            assertEquals(7, gate.retry().maxAttempts());
+            assertNull(bp.handlers().get("wf#check"));
+        }
+
+        @Test
+        @DisplayName("step(name, queue) / effect(name) route correctly and bake no handler")
+        void stepAndEffectNameOnly() {
+            Blueprint<Map<String, Object>> bp = Workflow.define("wf")
+                    .step("ingest", "gpu")
+                    .effect("notify")
+                    .build();
+            WorkflowDefinition def = bp.definition();
+
+            assertEquals("gpu", byActivity(def, "wf#ingest").queue());
+            assertEquals("wf", byActivity(def, "wf#notify").queue(), "no queue -> the workflow-name default");
+            assertNull(bp.handlers().get("wf#ingest"), "name-only step bakes no handler");
+            assertNull(bp.handlers().get("wf#notify"), "name-only effect bakes no handler");
+        }
+
+        @Test
+        @DisplayName("a name-only node leaves nothing for a name-bound handler to collide with")
+        void nameOnlyLeavesNoHandlerToCollide() {
+            // The DSL declares topology only; the worker binds the handler by name. Because the blueprint
+            // registers no handler for the step, Worker.bind's duplicate-handler guard never trips.
+            Blueprint<Map<String, Object>> bp = Workflow.define("wf").step("check").build();
+            assertTrue(bp.handlers().isEmpty(), "a name-only workflow bakes no handlers");
+        }
+    }
 }

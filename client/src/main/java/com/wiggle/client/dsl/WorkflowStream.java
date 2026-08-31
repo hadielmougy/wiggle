@@ -52,8 +52,13 @@ public final class WorkflowStream<T> {
         return new WorkflowStream<>(pipeline, pipeline::startAt, null);
     }
 
+    /**
+     * A name-only step: declares the topology node (default queue), with <em>no</em> inline handler.
+     * The step's logic is bound on the worker by name ({@code handle}/{@code registerHandlers}); a worker
+     * that claims it without a bound handler fails it fast (no silent no-op). See "name-only binding".
+     */
     public WorkflowStream<T> step(String name) {
-        return step(name, ctx -> ctx, (RetryPolicy) null, null);
+        return wireStep(pipeline.addTaskNameOnly(name, null, null));
     }
 
     /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
@@ -71,8 +76,12 @@ public final class WorkflowStream<T> {
     }
 
 
+    /**
+     * A name-only step pinned to a dedicated {@code queue} (worker specialisation), with no inline
+     * handler -- bound on the worker by name. A {@code null}/blank queue uses the workflow default.
+     */
     public WorkflowStream<T> step(String name, String queue) {
-        return step(name, ctx -> ctx, (RetryPolicy) null, queue);
+        return wireStep(pipeline.addTaskNameOnly(name, null, queue));
     }
 
     /**
@@ -86,7 +95,11 @@ public final class WorkflowStream<T> {
     /** A unit of work with both an explicit retry policy and a dedicated queue. */
     public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry, String queue) {
         Objects.requireNonNull(fn, "activity");
-        String id = pipeline.addStep(name, fn, retry, queue);
+        return wireStep(pipeline.addStep(name, fn, retry, queue));
+    }
+
+    /** Shared wiring for a worker step/effect node: attach it to the open edge and mark it the last step. */
+    private WorkflowStream<T> wireStep(String id) {
         attach(id);
         lastStepId = id;
         return this;
@@ -112,8 +125,12 @@ public final class WorkflowStream<T> {
         return step(name, fn, retry, queue);
     }
 
+    /**
+     * A name-only effect: declares the topology node (default queue) with no inline handler -- bound on
+     * the worker by name. A worker that claims it without a bound handler fails it fast.
+     */
     public WorkflowStream<T> effect(String name) {
-        return effect(name, ctx -> { }, (RetryPolicy) null, null);
+        return wireStep(pipeline.addTaskNameOnly(name, null, null));
     }
 
     /** Runs {@code fn} on a worker for its side effect only; the context is left unchanged. */
@@ -134,10 +151,7 @@ public final class WorkflowStream<T> {
     /** {@link #effect} with both an explicit retry policy and a dedicated queue. */
     public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry, String queue) {
         Objects.requireNonNull(fn, "side effect");
-        String id = pipeline.addEffect(name, fn, retry, queue);
-        attach(id);
-        lastStepId = id;
-        return this;
+        return wireStep(pipeline.addEffect(name, fn, retry, queue));
     }
 
     /** {@link #gate} whose guard uses the workflow's default retry policy. */
@@ -146,12 +160,18 @@ public final class WorkflowStream<T> {
     }
 
 
+    /**
+     * A name-only guard pinned to a dedicated {@code queue} (worker specialisation), with no inline
+     * predicate -- the predicate is bound on the worker by name. A worker that claims it without a bound
+     * predicate fails it fast (no silent always-true gate). A {@code null}/blank queue uses the default.
+     */
     public WorkflowStream<T> gate(String name, String queue) {
-        return gate(name, x -> true, (RetryPolicy) null, null);
+        return wireGate(pipeline.addGuardNameOnly(name, null, queue), name);
     }
 
+    /** A name-only guard with an explicit retry policy and a dedicated {@code queue}; predicate bound by name. */
     public WorkflowStream<T> gate(String name, RetryPolicy retry, String queue) {
-        return gate(name, x -> true, retry, null);
+        return wireGate(pipeline.addGuardNameOnly(name, retry, queue), name);
     }
 
     /** {@link #gate} with an explicit retry policy for the guard. */
@@ -175,15 +195,18 @@ public final class WorkflowStream<T> {
      */
     public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry, String queue) {
         Objects.requireNonNull(test, "predicate");
-        String id = pipeline.addGuard(name, test, retry, queue);
-        attach(id);
+        return wireGate(pipeline.addGuard(name, test, retry, queue), name);
+    }
 
+    /** Shared wiring for a guard node: attach it, route its false edge (to the enclosing join, else a
+     *  {@code gated:<name>} end), and open the true edge. */
+    private WorkflowStream<T> wireGate(String id, String name) {
+        attach(id);
         if (enclosingJoinId != null) {
             pipeline.wireAlt(id, enclosingJoinId);
         } else {
             pipeline.wireAlt(id, pipeline.addEnd("gated:" + name));
         }
-
         openAt(id, Edge.NEXT);
         lastStepId = id;
         return this;
