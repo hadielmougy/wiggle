@@ -22,7 +22,14 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Drives the HTTP dashboard end to end: run an instance, then read it back over the JSON API. */
+/**
+ * Drives the HTTP dashboard end to end: run an instance, then read it back over the JSON API.
+ *
+ * <p>Known flake: "serves the page and reflects live instances over JSON" occasionally fails with a
+ * {@code WiggleApiException: http2 exception} under a full parallel run -- a transient HTTP/2 connection
+ * reset from the JDK client, not a dashboard bug. It passes on retry / in isolation. If it recurs often,
+ * pin the client to HTTP/1.1 ({@code HttpClient.newBuilder().version(HTTP_1_1)}) rather than chasing it.
+ */
 class HttpDashboardTest {
 
     private static int freePort() throws Exception {
