@@ -160,9 +160,18 @@ multiply poll targets).
 `SetRing` (in-place, same epoch) is the lighter alternative — safe **only** when the edit relocates no
 live instance (§7). When in doubt, `OpenEpoch` is the safe default.
 
+> **Proposed change (not yet enforced): sealed rings.** A pending feature makes a published epoch's ring
+> immutable, so *every* reshard goes through `OpenEpoch` and in-place `SetRing` slot edits are rejected —
+> deleting the misroute footgun in §7 at the cost of a draining epoch per additive edit. Until it lands,
+> the guidance in §6–§7 is current. See [ring-immutability-guard.md](ring-immutability-guard.md).
+
 ---
 
 ## 7. Adding and removing shards
+
+> **Proposed change:** once [sealed rings](ring-immutability-guard.md) land, *neither* of the in-place
+> paths below is available — both add and remove go through `OpenEpoch`, and the unsafe remove case is
+> unreachable by construction. The description below is the **current** (pre-guard) behaviour.
 
 Both are ring edits; safety depends on whether live instances are affected.
 
