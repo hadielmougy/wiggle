@@ -6,7 +6,7 @@
 # the Homebrew formula and the release notes), and can attach them to the release for the tag.
 #
 #   scripts/cli-release.sh                 # build archives + print paths and SHA-256
-#   scripts/cli-release.sh 2.1.5           # explicit version
+#   scripts/cli-release.sh 2.1.6           # explicit version
 #   UPLOAD=true scripts/cli-release.sh     # also `gh release upload v<version> ...` (needs gh + an existing release)
 #
 set -euo pipefail
