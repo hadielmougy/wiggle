@@ -33,7 +33,7 @@ class NodeLifecycleTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorService svc = new CoordinatorService(store)) {
             RegisterResponse reg = svc.doRegister("acme", RegisteredNode.newBuilder()
-                    .setName("node-a").setEndpoint("grpc://h:1").setEngineVersion("2.1.5").build());
+                    .setName("node-a").setEndpoint("grpc://h:1").setCellId("cell-3").setEngineVersion("2.1.5").build());
             assertFalse(reg.getNodeId().isBlank());
             assertTrue(reg.getHeartbeatIntervalSeconds() > 0);
             assertEquals(1, store.nodes("acme").size());
@@ -48,7 +48,7 @@ class NodeLifecycleTest {
             assertFalse(svc.doHeartbeat("no-such-node", 0).getOk());
 
             // fetchConfig reports the same generation
-            NodeConfig cfg = svc.doFetchConfig("acme");
+            NodeConfig cfg = svc.doFetchConfig("acme", "cell-3");
             assertEquals(1, cfg.getGeneration());
 
             svc.doDeregister(reg.getNodeId());
@@ -65,7 +65,7 @@ class NodeLifecycleTest {
             String url = "127.0.0.1:" + api.port();
             try (HttpCoordinatorLink link = new HttpCoordinatorLink(url)) {
                 link.register(new CoordinatorLink.NodeInfo(
-                        "node-a", "acme", "", "127.0.0.1:9999", "2.1.5", null), (CoordinatorLink.CellRuntime) null);
+                        "node-a", "acme", "cell-a", "127.0.0.1:9999", "2.1.5", null), (CoordinatorLink.CellRuntime) null);
 
                 List<CoordNode> roster = store.nodes("acme");
                 assertEquals(1, roster.size(), "register landed in the coordinator roster");

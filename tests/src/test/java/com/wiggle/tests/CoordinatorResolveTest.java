@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CoordinatorResolveTest {
 
     private static RegisteredNode node(String endpoint, String region) {
-        return RegisteredNode.newBuilder().setName(endpoint).setEndpoint(endpoint).setRegion(region).build();
+        return RegisteredNode.newBuilder().setCellId("CellA").setName(endpoint).setEndpoint(endpoint).setRegion(region).build();
     }
 
     private static RegisteredNode node(String endpoint, String region, String cellId) {
@@ -60,7 +60,8 @@ class CoordinatorResolveTest {
     void resolveByInstanceId() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorService api = api(store)) {
-            api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
+            api.doRegister("nsA", node("grpc://ha:1", "eu-west"));   // cell "CellA"
+            api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
             String id = IdCodec.format("nsA", 0, 0, Ids.token());
             ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setInstanceId(id).build());
             assertEquals("nsA", r.getNamespace());
@@ -78,10 +79,12 @@ class CoordinatorResolveTest {
         }
     }
 
-    @Test @DisplayName("resolving a namespace with no live nodes fails")
+    @Test @DisplayName("resolving a ringed namespace with no live nodes fails")
     void resolveNoNodes() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorService api = api(store)) {
+            // A ring exists but its cell has no live nodes -> a hard failure (distinct from not-ready).
+            api.doOpenEpoch("empty", List.of(RingSlot.newBuilder().setShard(0).setCellId("cellX").build()));
             assertThrows(IllegalStateException.class,
                     () -> api.doResolve(ResolveRequest.newBuilder().setNamespace("empty").build()));
         }
@@ -91,9 +94,10 @@ class CoordinatorResolveTest {
     void regionFiltering() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorService api = api(store)) {
-            api.doRegister("nsA", node("grpc://eu1:1", "eu-west"));
+            api.doRegister("nsA", node("grpc://eu1:1", "eu-west"));   // all in cell "CellA"
             api.doRegister("nsA", node("grpc://eu2:1", "eu-west"));
             api.doRegister("nsA", node("grpc://us1:1", "us-east"));
+            api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
             ResolveResponse us = api.doResolve(
                     ResolveRequest.newBuilder().setNamespace("nsA").setCallerRegion("us-east").build());

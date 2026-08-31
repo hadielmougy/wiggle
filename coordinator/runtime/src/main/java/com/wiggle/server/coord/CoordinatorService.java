@@ -31,14 +31,7 @@ import io.grpc.ManagedChannel;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -102,11 +95,6 @@ public final class CoordinatorService implements AutoCloseable {
 
     // ---- node-lifecycle logic (directly unit-testable) ----
 
-    /** Convenience for the single-cell case (the cell id is the namespace). */
-    public NodeConfig doFetchConfig(String namespace) {
-        return doFetchConfig(namespace, namespace);
-    }
-
     /**
      * The config for a node in {@code cellId} of {@code namespace}: the current config generation (the
      * policy revision) and the node's placement -- the epoch it mints into and the shards its cell owns.
@@ -116,7 +104,7 @@ public final class CoordinatorService implements AutoCloseable {
     public NodeConfig doFetchConfig(String namespace, String cellId) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
         long generation = policy == null ? 0L : policy.revision();
-        Placement pl = placementFor(namespace, cellId, policy);
+        Placement pl = placementFor(policy, cellId);
         return NodeConfig.newBuilder()
                 .setNamespace(namespace)
                 .setGeneration(generation)
@@ -127,18 +115,11 @@ public final class CoordinatorService implements AutoCloseable {
                 .build();
     }
 
-    /** Records a node in the roster and returns its coordinator-assigned id and initial placement. */
     public RegisterResponse doRegister(String namespace, RegisteredNode node) {
-        // Seed the namespace's definitions onto the joining node BEFORE it enters the roster, so it is
-        // never resolvable while missing a graph (R23 "seed before eligible").
         seedNewNode(namespace, node.getEndpoint());
         String nodeId = UUID.randomUUID().toString();
-        // A node's cell defaults to the namespace itself (the single-cell case), so a node that does not
-        // yet know its cell registers into the namespace's one implicit cell.
-        String cellId = cellOrNamespace(namespace, node.getCellId());
+        String cellId = requireNonNullOrBlank(node.getCellId(), "a coordinated node must set WIGGLE_CELL_ID");
         String fingerprint = emptyToNull(node.getCellFingerprint());
-        // Atomically claim the cell-id -> fingerprint binding. A different cell (distinct storage) reusing
-        // this id in the namespace is rejected without a check-then-write race (see CoordinatorStore#bindCell).
         if (!store.bindCell(namespace, cellId, fingerprint)) {
             throw new IllegalArgumentException("cell id '" + cellId + "' in namespace '" + namespace
                     + "' is already bound to a different cell; a node from another cell must use a distinct WIGGLE_CELL_ID");
@@ -146,7 +127,7 @@ public final class CoordinatorService implements AutoCloseable {
         store.upsertNode(new CoordNode(nodeId, namespace, cellId, node.getEndpoint(), emptyToNull(node.getRegion()),
                 node.getEngineVersion(), fingerprint, 0, System.currentTimeMillis()));
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
-        Placement pl = placementFor(namespace, cellId, policy);
+        Placement pl = placementFor(policy, cellId);
         return RegisterResponse.newBuilder()
                 .setNodeId(nodeId)
                 .setHeartbeatIntervalSeconds(NODE_HEARTBEAT_INTERVAL_SECONDS)
@@ -155,51 +136,22 @@ public final class CoordinatorService implements AutoCloseable {
                 .build();
     }
 
-    static String cellOrNamespace(String namespace, String cellId) {
-        return cellId == null || cellId.isEmpty() ? namespace : cellId;
-    }
-
     /**
      * The placement a node in {@code cellId} mints into: the current epoch and the shards its cell owns.
-     * Only a <em>placed</em> cell mints; any other cell is put on <em>standby</em> (empty shards), so an
-     * extra/mistaken cell added to a namespace never forges ids that belong elsewhere -- it just sits idle
-     * until an epoch names it. It becomes mintable again when a ring places it.
-     *
-     * <ul>
-     *   <li>A ring exists for the epoch: the cell mints the shards the ring assigns it, or standby if the
-     *       ring does not name it.</li>
-     *   <li>No ring: the single {@link #implicitCell} mints genesis (shard 0, R1); an extra cell is standby.
-     *       When the implicit cell is ambiguous (multiple cells, none named after the namespace) every cell
-     *       stays mintable, so a legitimately custom-named single/other cell is never stranded.</li>
-     * </ul>
+     * Only a cell the current ring <em>names</em> mints; every other cell -- and a namespace with no ring
+     * yet -- is on <em>standby</em> (empty shards), so it forges no ids until an epoch places it. There is
+     * no implicit/inferred cell: a coordinated namespace is placed only by an explicit ring (OpenEpoch).
      */
-    private Placement placementFor(String namespace, String cellId, CoordPolicy policy) {
-        CoordPolicy.EpochRing er = policy == null ? null : policy.epochs().get(policy.currentEpoch());
-        long epoch = policy == null ? 0 : policy.currentEpoch();
-        if (er == null || er.ring().isEmpty()) {
-            String implicit = implicitCell(namespace);
-            boolean mintable = implicit == null || cellId.equals(implicit);
-            return new Placement(epoch, mintable ? List.of(0) : List.of());   // extra no-ring cell -> standby
-        }
+    private Placement placementFor(CoordPolicy policy, String cellId) {
+        if (policy == null) return new Placement(0, List.of());   // no ring yet -> standby
+        long epoch = policy.currentEpoch();
+        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
         List<Integer> shards = new ArrayList<>();
-        for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
+        if (er != null) for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
         return new Placement(epoch, shards);   // empty when the ring does not name this cell -> standby
     }
 
     private record Placement(long epoch, List<Integer> shards) {}
-
-    /**
-     * The single implicit cell of a namespace that has no ring: the cell whose id equals the namespace
-     * (the {@code WIGGLE_CELL_ID}-unset default), or the sole cell when there is exactly one. Returns
-     * {@code null} when it is ambiguous (several cells, none named after the namespace) -- callers then
-     * fall back to the whole roster rather than strand or mis-route the namespace.
-     */
-    private String implicitCell(String namespace) {
-        Set<String> cells = new HashSet<>();
-        for (CoordNode n : store.nodes(namespace)) cells.add(n.cellId());
-        if (cells.size() == 1) return cells.iterator().next();     // the sole cell (any name)
-        return cells.contains(namespace) ? namespace : null;       // the namespace-named cell, else ambiguous
-    }
 
     /** Convenience for callers/tests that report no census. */
     public CoordinatorHeartbeatResponse doHeartbeat(String nodeId, long observedGeneration) {
@@ -228,11 +180,9 @@ public final class CoordinatorService implements AutoCloseable {
         census.forget(nodeId);
     }
 
-    static String emptyToNull(String s) {
+    private static String emptyToNull(String s) {
         return s == null || s.isEmpty() ? null : s;
     }
-
-    // ---- resolution (clients & workers) ----
 
     /**
      * Resolves a namespace (for a new start) or a specific instance id to a cell {@link Endpoint}.
@@ -240,9 +190,8 @@ public final class CoordinatorService implements AutoCloseable {
      * <p>By instance id: the id carries its epoch and shard ({@link IdCodec}); the shard is looked up in
      * that epoch's ring to find the owning cell, and the cell's live nodes give the dial address -- so an
      * instance always resolves to the cell that holds it, even across many cells. By namespace (a new
-     * start): the current epoch's first ring slot is used. When no ring is configured for the epoch, this
-     * falls back to the namespace's whole roster (the single implicit cell), so pre-ring usage is
-     * unchanged (R1).
+     * start): a slot of the current epoch's ring is chosen. A namespace with no ring is not resolvable --
+     * it throws {@link NamespaceNotReadyException} (open an epoch first); there is no implicit-cell fallback.
      */
     public ResolveResponse doResolve(ResolveRequest req) {
         String namespace;
@@ -261,19 +210,9 @@ public final class CoordinatorService implements AutoCloseable {
             shard = -1;
         }
         String cellId = cellFor(namespace, epoch, shard);
+        if (cellId == null) throw new NamespaceNotReadyException(namespace);   // no ring -> not resolvable
         String region = emptyToNull(req.getCallerRegion());
-        Endpoint endpoint;
-        if (cellId == null) {
-            // No ring names an owning cell: route to the single implicit cell (its id == namespace, or the
-            // sole cell), ignoring any extra standby cell. Never fail the namespace and never pool several
-            // cells (which could mis-route); an ambiguous roster falls back to the whole roster (R1).
-            String implicit = implicitCell(namespace);
-            endpoint = implicit != null
-                    ? endpointForCell(namespace, implicit, region)
-                    : endpointFor(namespace, region);
-        } else {
-            endpoint = endpointForCell(namespace, cellId, region);
-        }
+        Endpoint endpoint = endpointForCell(namespace, cellId, region);
         return ResolveResponse.newBuilder()
                 .setNamespace(namespace)
                 .setEpoch(epoch)
@@ -285,8 +224,8 @@ public final class CoordinatorService implements AutoCloseable {
     /**
      * The cells hosting live work for a namespace -- every cell that appears in an OPEN or DRAINING
      * epoch ring -- plus a change generation. A worker polls all of them, so an epoch that is draining
-     * keeps being polled until its work finishes and it retires. With no ring configured, this is the
-     * single implicit cell (the whole roster), unchanged from pre-ring usage (R1).
+     * keeps being polled until its work finishes and it retires. A namespace with no ring returns an
+     * empty set (nothing to poll until an epoch is opened); there is no implicit-cell fallback.
      */
     public ActiveCellsResponse doActiveCells(String namespace, String callerRegion) {
         Optional<CoordPolicy> policy = store.getPolicy(namespace);
@@ -294,20 +233,11 @@ public final class CoordinatorService implements AutoCloseable {
         ActiveCellsResponse.Builder b = ActiveCellsResponse.newBuilder()
                 .setGeneration(generation)
                 .setTtlSeconds(RESOLVE_TTL_S);
-        List<String> activeCells = activeCellIds(policy.orElse(null));
-        if (activeCells.isEmpty()) {
-            // No ring: poll the single implicit cell only (ignoring any extra standby cell), or the whole
-            // roster when the implicit cell is ambiguous -- matching how doResolve routes.
-            String implicit = implicitCell(namespace);
-            Endpoint e = implicit != null
-                    ? endpointForCellOrNull(namespace, implicit, callerRegion)
-                    : endpointFor(namespace, callerRegion);
+        // Every cell in a non-retired epoch ring. No ring -> empty set: nothing to poll until an epoch
+        // is opened (a coordinated namespace is placed only by an explicit ring, never an inferred cell).
+        for (String cellId : activeCellIds(policy.orElse(null))) {
+            Endpoint e = endpointForCellOrNull(namespace, cellId, callerRegion);
             if (e != null) b.addCells(e);
-        } else {
-            for (String cellId : activeCells) {
-                Endpoint e = endpointForCellOrNull(namespace, cellId, callerRegion);
-                if (e != null) b.addCells(e);
-            }
         }
         return b.build();
     }
@@ -326,10 +256,11 @@ public final class CoordinatorService implements AutoCloseable {
     }
 
     /**
-     * The cell that owns {@code shard} in {@code epoch}, or {@code null} when no ring is configured (the
-     * single-implicit-cell case). {@code shard < 0} (a namespace resolve for a new start) spreads across
-     * the ring by picking a random slot -- so new instances distribute over all cells/shards rather than
-     * piling onto the first slot. The client resolves per new start, so this spread takes effect per start.
+     * The cell that owns {@code shard} in {@code epoch}, or {@code null} when the namespace has no ring for
+     * that epoch (the caller treats {@code null} as "not ready"). {@code shard < 0} (a namespace resolve for
+     * a new start) spreads across the ring by picking a random slot -- so new instances distribute over all
+     * cells/shards rather than piling onto the first slot. The client resolves per new start, so this spread
+     * takes effect per start.
      */
     private String cellFor(String namespace, long epoch, int shard) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
@@ -442,13 +373,6 @@ public final class CoordinatorService implements AutoCloseable {
         }
     }
 
-    /** Builds a cell endpoint from the namespace's live roster, preferring the caller's region. */
-    private Endpoint endpointFor(String namespace, String callerRegion) {
-        Endpoint e = buildEndpoint(store.nodes(namespace), callerRegion);
-        if (e == null) throw new IllegalStateException("no live nodes for namespace '" + namespace + "'");
-        return e;
-    }
-
     /** Builds the endpoint for one cell of a namespace; throws if that cell has no live nodes. */
     private Endpoint endpointForCell(String namespace, String cellId, String callerRegion) {
         Endpoint e = endpointForCellOrNull(namespace, cellId, callerRegion);
@@ -536,5 +460,13 @@ public final class CoordinatorService implements AutoCloseable {
             b.putEpochs(e.getKey(), er.build());
         }
         return b.build();
+    }
+
+    public static String requireNonNullOrBlank(String str, String message) {
+        Objects.requireNonNull(str, message);
+        if (str.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return str;
     }
 }

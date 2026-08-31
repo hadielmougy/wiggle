@@ -130,8 +130,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     @Override public void fetchConfig(FetchConfigRequest req, StreamObserver<NodeConfig> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc FetchConfig namespace=" + req.getNamespace());
-        run(resp, () -> service.doFetchConfig(req.getNamespace(),
-                CoordinatorService.cellOrNamespace(req.getNamespace(), req.getNode().getCellId())));
+        run(resp, () -> service.doFetchConfig(req.getNamespace(), req.getNode().getCellId()));
     }
 
     @Override public void register(RegisterRequest req, StreamObserver<RegisterResponse> resp) {
@@ -158,7 +157,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     }
 
     @Override public void activeCells(ActiveCellsRequest req, StreamObserver<ActiveCellsResponse> resp) {
-        run(resp, () -> service.doActiveCells(req.getNamespace(), CoordinatorService.emptyToNull(req.getCallerRegion())));
+        run(resp, () -> service.doActiveCells(req.getNamespace(), emptyToNull(req.getCallerRegion())));
     }
 
     @Override public void registerWorkflow(RegisterWorkflowRequest req, StreamObserver<RegisterWorkflowResponse> resp) {
@@ -190,11 +189,17 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
             resp.onCompleted();
         } catch (IllegalArgumentException e) {
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
+        } catch (NamespaceNotReadyException e) {
+            resp.onError(Status.FAILED_PRECONDITION.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
         } catch (IllegalStateException e) {
             resp.onError(Status.ABORTED.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.ERROR, "coordinator rpc failed", e);
             resp.onError(Status.INTERNAL.withDescription("internal error").asRuntimeException());
         }
+    }
+
+    private static String emptyToNull(String s) {
+        return s == null || s.isEmpty() ? null : s;
     }
 }
