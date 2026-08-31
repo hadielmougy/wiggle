@@ -15,26 +15,7 @@ directory-free routing and zero-migration rebalancing. Blast-radius isolation an
 
 In one picture — a single workflow instance whose steps run on **different services**, routed by each step's **queue**. The server keeps the durable state; each service just pulls the steps it serves (no broker, no service-to-service calls):
 
-```mermaid
-flowchart LR
-  subgraph Flow["one 'orders' instance — its steps"]
-    direction LR
-    V["validate"] --> C["charge"] --> R["render-receipt"] --> E["email"]
-  end
-
-  V -. "queue: orders" .-> S1
-  C -. "queue: payments" .-> S2
-  R -. "queue: gpu" .-> S3
-  E -. "queue: notify" .-> S4
-
-  subgraph Services["independently deployed worker services"]
-    direction TB
-    S1["order-service (serves: orders)"]
-    S2["payment-service (serves: payments)"]
-    S3["gpu-render-pool (serves: gpu)"]
-    S4["notify-service (serves: notify)"]
-  end
-```
+![One 'orders' instance: its four steps — validate, charge, render-receipt, email — each on a different queue (orders, payments, gpu, notify), each served by a separate worker service.](docs/img/queues-flow.svg)
 
 <sub>How this works, end to end → **[docs/queues.md](docs/queues.md)**</sub>
 
