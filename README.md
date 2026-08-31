@@ -103,7 +103,7 @@ import java.util.Map;
 // A step must return the whole context, not just the fields it changed -- the engine
 // diffs the return value against what it was given, so a bare Map.of("greeting", ...)
 // would tell it "name" was deliberately cleared.
-Blueprint<Map<String, Object>> greet = Workflow.defineJson("greet")
+Blueprint<Map<String, Object>> greet = Workflow.define("greet")
         .step("say-hello", ctx -> {
             Map<String, Object> next = new HashMap<>(ctx);
             next.put("greeting", "hello, " + ctx.get("name"));
