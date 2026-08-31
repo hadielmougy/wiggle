@@ -105,14 +105,8 @@ class MultiCellResolveTest {
             String s0 = IdCodec.format("orders", 0, 0, Ids.token());
             String s1 = IdCodec.format("orders", 0, 1, Ids.token());
 
-            // In-place add is rejected -- the epoch's ring is sealed (docs/ring-immutability-guard.md).
-            assertThrows(IllegalArgumentException.class, () -> api.service().doSetRing("orders", 0, List.of(
-                    RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
-                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build(),
-                    RingSlot.newBuilder().setShard(2).setCellId("cellC").build())),
-                    "adding a shard in place is forbidden");
-
-            // The additive change instead opens a new epoch that includes shard 2 -> cellC.
+            // A ring is sealed once published (docs/ring-immutability-guard.md), so the additive change
+            // opens a NEW epoch that includes shard 2 -> cellC rather than editing epoch 0 in place.
             api.service().doOpenEpoch("orders", List.of(
                     RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
                     RingSlot.newBuilder().setShard(1).setCellId("cellB").build(),
@@ -162,44 +156,6 @@ class MultiCellResolveTest {
             ResolveResponse r = api.service().doResolve(ResolveRequest.newBuilder().setNamespace("orders").build());
             assertEquals(List.of("grpc://a1:1"), r.getEndpoint().getAddressesList(),
                     "routes to the implicit cell 'orders', ignoring the stray cellB -- no outage, no pooling");
-        }
-    }
-
-    @Test @DisplayName("removing a shard IN PLACE is rejected -- the ring is sealed, so the mis-route is unreachable")
-    void removeShardInPlaceIsRejected() throws Exception {
-        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
-            threeCellNamespace(api);                                  // epoch 0: 0->cellA, 1->cellB, 2->cellC
-            String s2 = IdCodec.format("orders", 0, 2, Ids.token());
-            assertEquals(List.of("grpc://c1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
-                    .getEndpoint().getAddressesList(), "s2 starts on cellC");
-
-            // Removing shard 2 in place is forbidden -- this is the edit that used to silently mis-route.
-            assertThrows(IllegalArgumentException.class, () -> api.service().doSetRing("orders", 0, List.of(
-                    RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
-                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build())),
-                    "in-place shard removal is sealed off");
-
-            // The ring is unchanged, so s2 still resolves to the cell that holds it.
-            assertEquals(List.of("grpc://c1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
-                    .getEndpoint().getAddressesList(), "s2 still resolves to cellC -- no mis-route");
-        }
-    }
-
-    @Test @DisplayName("re-applying an epoch's exact ring is an idempotent no-op (sealed ring)")
-    void setRingIdenticalIsNoOp() throws Exception {
-        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
-            twoCellNamespace(api);                                    // epoch 0: 0->cellA, 1->cellB
-            long revBefore = store.getPolicy("orders").orElseThrow().revision();
-
-            // Same slots, re-ordered: tolerated, writes nothing.
-            api.service().doSetRing("orders", 0, List.of(
-                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build(),
-                    RingSlot.newBuilder().setShard(0).setCellId("cellA").build()));
-
-            assertEquals(revBefore, store.getPolicy("orders").orElseThrow().revision(),
-                    "a no-op setRing does not bump the revision");
         }
     }
 

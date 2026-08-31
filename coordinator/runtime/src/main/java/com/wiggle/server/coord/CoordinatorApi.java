@@ -22,7 +22,6 @@ import com.wiggle.proto.RegisterWorkflowRequest;
 import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.ResolveRequest;
 import com.wiggle.proto.ResolveResponse;
-import com.wiggle.proto.SetRingRequest;
 import io.grpc.Grpc;
 import io.grpc.InsecureServerCredentials;
 import io.grpc.Server;
@@ -116,11 +115,6 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     @Override public void openEpoch(OpenEpochRequest req, StreamObserver<Policy> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc OpenEpoch namespace=" + req.getNamespace());
         run(resp, () -> service.doOpenEpoch(req.getNamespace(), req.getRingList()));
-    }
-
-    @Override public void setRing(SetRingRequest req, StreamObserver<Policy> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SetRing namespace=" + req.getNamespace() + " epoch=" + req.getEpoch());
-        run(resp, () -> service.doSetRing(req.getNamespace(), req.getEpoch(), req.getRingList()));
     }
 
     @Override public void fetchConfig(FetchConfigRequest req, StreamObserver<NodeConfig> resp) {

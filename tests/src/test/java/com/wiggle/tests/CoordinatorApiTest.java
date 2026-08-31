@@ -13,13 +13,13 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Phase 1 / T6: the coordinator's admin policy writes. OpenEpoch creates then appends epochs and
- * SetRing updates one -- all CAS-guarded read-modify-writes over the store. Exercised via the public
- * logic methods (no gRPC plumbing needed).
+ * Phase 1 / T6: the coordinator's admin reshard. OpenEpoch creates then appends epochs -- a
+ * CAS-guarded read-modify-write over the store, and the sole ring-writing path (a published epoch's
+ * ring is sealed; see docs/ring-immutability-guard.md). Exercised via the public logic methods (no
+ * gRPC plumbing needed).
  */
 class CoordinatorApiTest {
 
@@ -56,29 +56,5 @@ class CoordinatorApiTest {
         }
         assertEquals(3 * beatMillis, CoordinatorService.nodeDeadMillis(3));
         assertEquals(2 * beatMillis, CoordinatorService.nodeDeadMillis(1), "floored at two beats");
-    }
-
-    @Test @DisplayName("setRing rejects a slot change -- a published epoch's ring is sealed")
-    void setRingRejectsSlotChange() throws Exception {
-        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));
-            assertThrows(IllegalArgumentException.class,
-                    () -> api.service().doSetRing("acme", 0, List.of(slot(0, "cell-9"))),
-                    "reshaping a sealed epoch's ring in place is forbidden");
-            // The ring is untouched by the rejected write.
-            Policy after = api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));  // read via a fresh append
-            assertEquals("cell-3", after.getEpochsOrThrow(0).getRing(0).getCellId(), "epoch 0 ring unchanged");
-        }
-    }
-
-    @Test @DisplayName("setRing with the epoch's exact ring is an idempotent no-op (no revision bump)")
-    void setRingNoOpIsIdempotent() throws Exception {
-        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            Policy opened = api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));
-            Policy p = api.service().doSetRing("acme", 0, List.of(slot(0, "cell-3")));
-            assertEquals(opened.getRevision(), p.getRevision(), "a no-op setRing does not bump the revision");
-            assertEquals("cell-3", p.getEpochsOrThrow(0).getRing(0).getCellId());
-            assertEquals(EpochStatus.OPEN, p.getEpochsOrThrow(0).getStatus(), "status preserved");
-        }
     }
 }

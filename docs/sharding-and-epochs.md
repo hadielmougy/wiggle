@@ -127,13 +127,12 @@ change; wiggle **never remaps a key**, because the key remembers which map (epoc
 |---|---|---|---|
 | A **node** joins/leaves | — | — | ✔ |
 | A **cell**'s nodes join (new cellId) | — | — | ✔ |
-| Operator **`SetRing`** (edit a ring in place) | — | ✔ | — |
 | Operator **`OpenEpoch`** (reshard) | ✔ | ✔ | — |
 | Reconciler **retires** a drained epoch | — | ✔ | — |
 
 - Adding nodes or cells does **not** bump the epoch — that's just the roster.
-- `SetRing` edits an epoch's ring **without** changing the epoch number (bumps generation only).
-- `OpenEpoch` is the **only** thing that increments the epoch, and it's for resharding.
+- `OpenEpoch` is the **only** thing that increments the epoch, and it's the **only** way to change a
+  ring at all — a published epoch's ring is sealed (§6).
 - The **generation** (policy `revision`) is what nodes watch on heartbeat to re-fetch placement.
 
 Every policy write is a **compare-and-set on `revision`** (`casPolicy`), so a stale ex-leader's write
@@ -158,9 +157,9 @@ fail), and prefer letting the previous epoch drain before opening the next (drai
 multiply poll targets).
 
 `OpenEpoch` is the **only** way to change a ring: a published epoch's `shard → cell` slots are
-**sealed** (immutable), so every reshard bumps the epoch. `SetRing` no longer reshapes a ring — it
-rejects any slot change and tolerates only an exact-ring no-op (`CoordinatorService.doSetRing`). This
-is what makes the §7 mis-route unreachable. See [ring-immutability-guard.md](ring-immutability-guard.md).
+**sealed** (immutable), so every reshard bumps the epoch. There is no in-place ring edit — the
+`SetRing` RPC was removed — which is what makes the §7 mis-route structurally unreachable. See
+[ring-immutability-guard.md](ring-immutability-guard.md).
 
 ---
 
@@ -188,10 +187,10 @@ for (RingSlot s : ring) if (s.shard() == shard) return s.cellId();
 return ring.get(Math.floorMod(shard, ring.size())).cellId();   // <-- would wrap to the WRONG cell
 ```
 
-`doSetRing` rejects the slot change before that can happen, so the mis-route is unreachable rather than
-guarded by operator discipline.
-Tests: `MultiCellResolveTest.removeShardInPlaceIsRejected`, `…setRingIdenticalIsNoOp`;
-`CoordinatorApiTest.setRingRejectsSlotChange`, `…setRingNoOpIsIdempotent`.
+Since there is no in-place ring edit at all (the `SetRing` RPC was removed), that fall-through can never
+be reached for a live epoch's shard — the mis-route is structurally impossible rather than guarded by
+operator discipline.
+Tests: `MultiCellResolveTest.addShardViaNewEpochIsSafe`, `…removeShardViaNewEpochIsSafe`.
 
 ---
 
@@ -271,7 +270,7 @@ No id is ever rewritten and no instance data is moved.
 | ring & epoch model (`RingSlot`, `EpochRing`, status) | `coordinator/spi/**/CoordPolicy.java` |
 | node's live placement + atomic `stampFor` | `server/src/main/java/com/wiggle/server/CellPlacement.java` |
 | minting (uses `stampFor`) | `server/src/main/java/com/wiggle/server/CellBundle.java` |
-| register / resolve / openEpoch / setRing / fingerprint guard | `coordinator/runtime/**/CoordinatorApi.java` |
+| register / resolve / openEpoch / fingerprint guard | `coordinator/runtime/**/CoordinatorService.java` (gRPC adapter: `CoordinatorApi.java`) |
 | drain → retire lifecycle (census-driven) | `coordinator/runtime/**/CoordinatorReconciler.java` |
 | ring persisted as JSON (backend-independent) | `coordinator/spi/**/EpochCodec.java` |
 | client-side resolution & caching of the above | `client/**/CellResolver.java` — see [client-caching-contract.md](client-caching-contract.md) |

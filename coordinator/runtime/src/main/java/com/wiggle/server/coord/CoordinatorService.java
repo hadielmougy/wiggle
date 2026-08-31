@@ -44,10 +44,11 @@ import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * The coordinator's business logic, independent of gRPC transport: node lifecycle (register /
- * heartbeat / deregister), resolution (clients & workers), admin policy writes ({@code OpenEpoch} /
- * {@code SetRing}) as compare-and-set read-modify-writes over {@link CoordinatorStore}, and workflow
- * definition fan-out (R23). {@link CoordinatorApi} is the thin gRPC adapter that unwraps requests and
- * calls these methods; every method here is directly unit-testable with no gRPC plumbing.
+ * heartbeat / deregister), resolution (clients & workers), the admin reshard ({@code OpenEpoch}) as a
+ * compare-and-set read-modify-write over {@link CoordinatorStore}, and workflow definition fan-out
+ * (R23). A published epoch's ring is immutable, so {@code OpenEpoch} is the sole ring-writing path
+ * (see docs/ring-immutability-guard.md). {@link CoordinatorApi} is the thin gRPC adapter that unwraps
+ * requests and calls these methods; every method here is directly unit-testable with no gRPC plumbing.
  *
  * <p>The coordinator is a <em>client</em> of each cell (for definition fan-out / seeding), so this
  * owns the per-cell channels and is {@link AutoCloseable} to shut them down.
@@ -476,7 +477,7 @@ public final class CoordinatorService implements AutoCloseable {
         return b.build();
     }
 
-    // ---- admin policy writes (directly unit-testable, no gRPC plumbing) ----
+    // ---- admin reshard: the sole ring-writing path (directly unit-testable, no gRPC plumbing) ----
 
     /**
      * Opens a new epoch for {@code namespace}: creates epoch 0 if none exists, else appends
@@ -506,31 +507,6 @@ public final class CoordinatorService implements AutoCloseable {
             }
         }
         throw new IllegalStateException("openEpoch: concurrent modification, retries exhausted for " + namespace);
-    }
-
-    /**
-     * Validates a ring for an existing epoch against the <em>sealed-ring</em> invariant: a published
-     * epoch's {@code shard -> cell} slots are immutable, so this rejects any slot change and forces
-     * reshards through {@link #doOpenEpoch} (which bumps the epoch). An identical ring is tolerated as
-     * an idempotent no-op (so a retry is safe); it writes nothing. Epoch <em>status</em> transitions
-     * (OPEN -> DRAINING -> RETIRED) are a separate concern and remain mutable via the reconciler --
-     * only the slots are sealed. See docs/ring-immutability-guard.md.
-     */
-    public Policy doSetRing(String namespace, long epoch, List<RingSlot> ring) {
-        CoordPolicy c = store.getPolicy(namespace)
-                .orElseThrow(() -> new IllegalArgumentException("no policy for namespace " + namespace));
-        CoordPolicy.EpochRing existing = c.epochs().get(epoch);
-        if (existing == null) throw new IllegalArgumentException("no epoch " + epoch + " in namespace " + namespace);
-        if (!sameSlots(existing.ring(), toDomainRing(ring))) {
-            throw new IllegalArgumentException("ring is sealed: epoch " + epoch + " of namespace '" + namespace
-                    + "' cannot be reshaped in place; open a new epoch instead (OpenEpoch)");
-        }
-        return toProto(c);   // identical slots -> idempotent no-op, no CAS write
-    }
-
-    /** Order-independent equality of two rings' {@code (shard, cell, region)} slots. */
-    private static boolean sameSlots(List<CoordPolicy.RingSlot> a, List<CoordPolicy.RingSlot> b) {
-        return new HashSet<>(a).equals(new HashSet<>(b));
     }
 
     // ---- mapping (domain <-> proto) ----
