@@ -13,6 +13,31 @@ directory-free routing and zero-migration rebalancing. Blast-radius isolation an
 - **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name. A coordinator-aware worker fans polling out across a namespace's active cells and shifts as they rebalance.
 - **Optional & lightweight** — the cell coordinator is opt-in: a single cluster runs unchanged without one, and the whole thing is a JAR plus a database (Postgres/MySQL/Oracle/SQL Server/Cassandra) — embeddable in your process, no Elasticsearch, no server mesh.
 
+In one picture — a single workflow instance whose steps run on **different services**, routed by each step's **queue**. The server keeps the durable state; each service just pulls the steps it serves (no broker, no service-to-service calls):
+
+```mermaid
+flowchart LR
+  subgraph Flow["one 'orders' instance — its steps"]
+    direction LR
+    V["validate"] --> C["charge"] --> R["render-receipt"] --> E["email"]
+  end
+
+  V -. "queue: orders" .-> S1
+  C -. "queue: payments" .-> S2
+  R -. "queue: gpu" .-> S3
+  E -. "queue: notify" .-> S4
+
+  subgraph Services["independently deployed worker services"]
+    direction TB
+    S1["order-service (serves: orders)"]
+    S2["payment-service (serves: payments)"]
+    S3["gpu-render-pool (serves: gpu)"]
+    S4["notify-service (serves: notify)"]
+  end
+```
+
+<sub>How this works, end to end → **[docs/queues.md](docs/queues.md)**</sub>
+
 **Current version: `2.1.5`** · Apache-2.0
 
 ```bash
