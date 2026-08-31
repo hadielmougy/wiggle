@@ -123,6 +123,30 @@ final class Pipeline<T> {
         return activity;
     }
 
+    /** Reserves the step name and returns its activity id, binding <em>no</em> handler. The topology
+     *  and queue are declared here; the handler is bound on the worker by name (handle/registerHandlers).
+     *  A worker that claims this step without a bound handler fails it fast -- there is no silent no-op. */
+    private String reserveActivity(String name) {
+        reserveName(name);
+        return this.name + "#" + name;
+    }
+
+    /** A worker task node with no baked handler (name-only). Used by {@code step(name[, queue])} and
+     *  {@code effect(name[, queue])}; the handler is bound on the worker by name. */
+    String addTaskNameOnly(String name, RetryPolicy retry, String queue) {
+        String q = queueOr(queue);
+        queues.add(q);
+        return add(NodeDraft.task(name, reserveActivity(name), q, retryOr(retry)));
+    }
+
+    /** A predicate node with no baked handler (name-only). Used by {@code gate(name[, retry], queue)};
+     *  the guard is bound on the worker by name. */
+    String addGuardNameOnly(String name, RetryPolicy retry, String queue) {
+        String q = queueOr(queue);
+        queues.add(q);
+        return add(NodeDraft.predicate(name, reserveActivity(name), q, retryOr(retry)));
+    }
+
     /** A server-side timer. Sleep names are not required to be unique (nothing addresses them). */
     String addSleep(String name, long millis) {
         return add(NodeDraft.sleep(name, millis));
