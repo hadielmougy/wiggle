@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -57,13 +58,26 @@ class CoordinatorApiTest {
         assertEquals(2 * beatMillis, CoordinatorService.nodeDeadMillis(1), "floored at two beats");
     }
 
-    @Test @DisplayName("setRing replaces an epoch's ring and bumps the revision")
-    void setRingUpdatesEpoch() throws Exception {
+    @Test @DisplayName("setRing rejects a slot change -- a published epoch's ring is sealed")
+    void setRingRejectsSlotChange() throws Exception {
         try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
             api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));
-            Policy p = api.service().doSetRing("acme", 0, List.of(slot(0, "cell-9")));
-            assertEquals("cell-9", p.getEpochsOrThrow(0).getRing(0).getCellId());
-            assertEquals(2, p.getRevision());
+            assertThrows(IllegalArgumentException.class,
+                    () -> api.service().doSetRing("acme", 0, List.of(slot(0, "cell-9"))),
+                    "reshaping a sealed epoch's ring in place is forbidden");
+            // The ring is untouched by the rejected write.
+            Policy after = api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));  // read via a fresh append
+            assertEquals("cell-3", after.getEpochsOrThrow(0).getRing(0).getCellId(), "epoch 0 ring unchanged");
+        }
+    }
+
+    @Test @DisplayName("setRing with the epoch's exact ring is an idempotent no-op (no revision bump)")
+    void setRingNoOpIsIdempotent() throws Exception {
+        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
+            Policy opened = api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));
+            Policy p = api.service().doSetRing("acme", 0, List.of(slot(0, "cell-3")));
+            assertEquals(opened.getRevision(), p.getRevision(), "a no-op setRing does not bump the revision");
+            assertEquals("cell-3", p.getEpochsOrThrow(0).getRing(0).getCellId());
             assertEquals(EpochStatus.OPEN, p.getEpochsOrThrow(0).getStatus(), "status preserved");
         }
     }

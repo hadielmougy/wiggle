@@ -508,20 +508,29 @@ public final class CoordinatorService implements AutoCloseable {
         throw new IllegalStateException("openEpoch: concurrent modification, retries exhausted for " + namespace);
     }
 
-    /** Replaces the ring of an existing epoch. CAS-guarded and retried. */
+    /**
+     * Validates a ring for an existing epoch against the <em>sealed-ring</em> invariant: a published
+     * epoch's {@code shard -> cell} slots are immutable, so this rejects any slot change and forces
+     * reshards through {@link #doOpenEpoch} (which bumps the epoch). An identical ring is tolerated as
+     * an idempotent no-op (so a retry is safe); it writes nothing. Epoch <em>status</em> transitions
+     * (OPEN -> DRAINING -> RETIRED) are a separate concern and remain mutable via the reconciler --
+     * only the slots are sealed. See docs/ring-immutability-guard.md.
+     */
     public Policy doSetRing(String namespace, long epoch, List<RingSlot> ring) {
-        for (int attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-            CoordPolicy c = store.getPolicy(namespace)
-                    .orElseThrow(() -> new IllegalArgumentException("no policy for namespace " + namespace));
-            CoordPolicy.EpochRing existing = c.epochs().get(epoch);
-            if (existing == null) throw new IllegalArgumentException("no epoch " + epoch + " in namespace " + namespace);
-            Map<Long, CoordPolicy.EpochRing> epochs = new LinkedHashMap<>(c.epochs());
-            epochs.put(epoch, new CoordPolicy.EpochRing(toDomainRing(ring), existing.status()));
-            if (store.casPolicy(namespace, c.revision(), new CoordPolicy(namespace, c.currentEpoch(), 0, epochs)) > 0) {
-                return toProto(store.getPolicy(namespace).orElseThrow());
-            }
+        CoordPolicy c = store.getPolicy(namespace)
+                .orElseThrow(() -> new IllegalArgumentException("no policy for namespace " + namespace));
+        CoordPolicy.EpochRing existing = c.epochs().get(epoch);
+        if (existing == null) throw new IllegalArgumentException("no epoch " + epoch + " in namespace " + namespace);
+        if (!sameSlots(existing.ring(), toDomainRing(ring))) {
+            throw new IllegalArgumentException("ring is sealed: epoch " + epoch + " of namespace '" + namespace
+                    + "' cannot be reshaped in place; open a new epoch instead (OpenEpoch)");
         }
-        throw new IllegalStateException("setRing: concurrent modification, retries exhausted for " + namespace);
+        return toProto(c);   // identical slots -> idempotent no-op, no CAS write
+    }
+
+    /** Order-independent equality of two rings' {@code (shard, cell, region)} slots. */
+    private static boolean sameSlots(List<CoordPolicy.RingSlot> a, List<CoordPolicy.RingSlot> b) {
+        return new HashSet<>(a).equals(new HashSet<>(b));
     }
 
     // ---- mapping (domain <-> proto) ----

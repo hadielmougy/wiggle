@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -96,8 +95,8 @@ class MultiCellResolveTest {
         }
     }
 
-    @Test @DisplayName("adding a shard to an OPEN epoch via SetRing keeps existing ids and routes the new shard")
-    void addShardInPlace() throws Exception {
+    @Test @DisplayName("adding a shard via a NEW epoch keeps existing ids and routes the new shard (sealed ring)")
+    void addShardViaNewEpochIsSafe() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
             twoCellNamespace(api);                                   // epoch 0: shard 0 -> cellA, 1 -> cellB
@@ -105,35 +104,34 @@ class MultiCellResolveTest {
 
             String s0 = IdCodec.format("orders", 0, 0, Ids.token());
             String s1 = IdCodec.format("orders", 0, 1, Ids.token());
-            String s2 = IdCodec.format("orders", 0, 2, Ids.token());
 
-            // Before: shard 2 is not in the ring, so it wraps by modulo (2 % 2 == 0 -> cellA).
-            assertEquals(2, api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
-                    .getEndpoint().getAddressesList().size(), "unmapped shard wraps to cellA");
-            var before = store.getPolicy("orders").orElseThrow();
-            assertEquals(0, before.currentEpoch());
-            assertEquals(1, before.epochs().size());
+            // In-place add is rejected -- the epoch's ring is sealed (docs/ring-immutability-guard.md).
+            assertThrows(IllegalArgumentException.class, () -> api.service().doSetRing("orders", 0, List.of(
+                    RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
+                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build(),
+                    RingSlot.newBuilder().setShard(2).setCellId("cellC").build())),
+                    "adding a shard in place is forbidden");
 
-            // Add shard 2 -> cellC IN PLACE, on the current (OPEN) epoch.
-            api.service().doSetRing("orders", 0, List.of(
+            // The additive change instead opens a new epoch that includes shard 2 -> cellC.
+            api.service().doOpenEpoch("orders", List.of(
                     RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
                     RingSlot.newBuilder().setShard(1).setCellId("cellB").build(),
                     RingSlot.newBuilder().setShard(2).setCellId("cellC").build()));
 
             var after = store.getPolicy("orders").orElseThrow();
-            assertEquals(0, after.currentEpoch(), "no new epoch -- currentEpoch unchanged");
-            assertEquals(1, after.epochs().size(), "no new epoch created");
-            assertTrue(after.revision() > before.revision(), "generation bumps so nodes re-fetch placement");
+            assertEquals(1, after.currentEpoch(), "a new epoch carries the reshard");
+            assertEquals(2, after.epochs().size(), "epoch 0 retained (draining) + epoch 1");
 
-            // Existing ids are untouched -- the additive edit moved no live instance.
+            // Existing epoch-0 ids are untouched -- they keep resolving via their own immutable ring.
             assertTrue(api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s0).build())
                     .getEndpoint().getAddressesList().containsAll(List.of("grpc://a1:1", "grpc://a2:1")), "s0 still cellA");
             assertEquals(List.of("grpc://b1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s1).build())
                     .getEndpoint().getAddressesList(), "s1 still cellB");
 
-            // The added shard now routes to its cell, and cellC is handed shard 2 to mint into.
-            assertEquals(List.of("grpc://c1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
-                    .getEndpoint().getAddressesList(), "s2 now resolves to cellC");
+            // A new (epoch-1) id on shard 2 routes to cellC, and cellC is handed shard 2 to mint into.
+            String newS2 = IdCodec.format("orders", 1, 2, Ids.token());
+            assertEquals(List.of("grpc://c1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(newS2).build())
+                    .getEndpoint().getAddressesList(), "epoch-1 shard 2 resolves to cellC");
             assertEquals(List.of(2), api.service().doFetchConfig("orders", "cellC").getShardsList(),
                     "cellC now owns shard 2 for new mints");
         }
@@ -167,8 +165,8 @@ class MultiCellResolveTest {
         }
     }
 
-    @Test @DisplayName("removing a shard IN PLACE silently mis-routes an existing instance on it (unsafe)")
-    void removeShardInPlaceMisroutes() throws Exception {
+    @Test @DisplayName("removing a shard IN PLACE is rejected -- the ring is sealed, so the mis-route is unreachable")
+    void removeShardInPlaceIsRejected() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
             threeCellNamespace(api);                                  // epoch 0: 0->cellA, 1->cellB, 2->cellC
@@ -176,18 +174,32 @@ class MultiCellResolveTest {
             assertEquals(List.of("grpc://c1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
                     .getEndpoint().getAddressesList(), "s2 starts on cellC");
 
-            // Remove shard 2 from the current epoch in place.
-            api.service().doSetRing("orders", 0, List.of(
+            // Removing shard 2 in place is forbidden -- this is the edit that used to silently mis-route.
+            assertThrows(IllegalArgumentException.class, () -> api.service().doSetRing("orders", 0, List.of(
                     RingSlot.newBuilder().setShard(0).setCellId("cellA").build(),
-                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build()));
+                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build())),
+                    "in-place shard removal is sealed off");
 
-            // s2 no longer has a slot -> cellFor wraps by modulo (2 % 2 == 0 -> cellA), NOT cellC. No error thrown.
-            List<String> where = api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
-                    .getEndpoint().getAddressesList();
-            assertTrue(where.containsAll(List.of("grpc://a1:1", "grpc://a2:1")) && where.size() == 2,
-                    "s2 wrongly wraps to cellA");
-            assertFalse(where.contains("grpc://c1:1"),
-                    "silent mis-route: s2's data is on cellC but it no longer resolves there");
+            // The ring is unchanged, so s2 still resolves to the cell that holds it.
+            assertEquals(List.of("grpc://c1:1"), api.service().doResolve(ResolveRequest.newBuilder().setInstanceId(s2).build())
+                    .getEndpoint().getAddressesList(), "s2 still resolves to cellC -- no mis-route");
+        }
+    }
+
+    @Test @DisplayName("re-applying an epoch's exact ring is an idempotent no-op (sealed ring)")
+    void setRingIdenticalIsNoOp() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+            twoCellNamespace(api);                                    // epoch 0: 0->cellA, 1->cellB
+            long revBefore = store.getPolicy("orders").orElseThrow().revision();
+
+            // Same slots, re-ordered: tolerated, writes nothing.
+            api.service().doSetRing("orders", 0, List.of(
+                    RingSlot.newBuilder().setShard(1).setCellId("cellB").build(),
+                    RingSlot.newBuilder().setShard(0).setCellId("cellA").build()));
+
+            assertEquals(revBefore, store.getPolicy("orders").orElseThrow().revision(),
+                    "a no-op setRing does not bump the revision");
         }
     }
 

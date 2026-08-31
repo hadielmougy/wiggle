@@ -1,7 +1,7 @@
 # Feature change — seal published rings: no ring change without a new epoch
 
-**Status:** proposed. **Supersedes:** the in-place `SetRing` path in
-[sharding-and-epochs.md](sharding-and-epochs.md) §6–§7 (which stays accurate until this lands).
+**Status:** implemented (option A — guarded `SetRing`). **Supersedes:** the in-place `SetRing` path in
+[sharding-and-epochs.md](sharding-and-epochs.md) §6–§7, now updated to the sealed-ring rule.
 
 Make a published epoch's `shard → cell` ring **immutable** ("ceil the ring"): once an epoch is written,
 its ring slots never change. Every reshard — add, remove, move, rebalance — goes through `OpenEpoch`,
@@ -57,39 +57,33 @@ Genesis is not an exception to police: the first `OpenEpoch` on an empty policy 
 
 ---
 
-## 3. The change
+## 3. The change (option A — shipped)
 
-**Retire `SetRing` as a mutation.** Two implementation options; pick one:
-
-- **(A) Reject slot mutation (keep the RPC).** `doSetRing` rejects any call whose ring differs from the
-  epoch's current slots, so old clients get a clear, typed error instead of a silent reshape. A no-op
-  (identical slots) is tolerated so retries stay idempotent.
-- **(B) Remove the RPC.** Delete `SetRing` from `coordinator.proto` and the API; callers use
-  `OpenEpoch`. Cleaner end state, but a wire-contract change — do it as a deprecation, not a hard break.
-
-Recommended: **(A) now, (B) later.** Ship the guard immediately (small, safe, closes the footgun);
-deprecate the RPC and remove it on the next contract bump.
-
-Guard sketch for (A):
+`SetRing` is retired as a mutation. `CoordinatorService.doSetRing` now rejects any call whose ring
+differs from the epoch's current slots (a clear, typed `IllegalArgumentException` → gRPC
+`INVALID_ARGUMENT`), and tolerates an identical ring as an idempotent no-op that writes nothing:
 
 ```java
 public Policy doSetRing(String namespace, long epoch, List<RingSlot> ring) {
-    // ... load policy, find existing epoch ...
+    CoordPolicy c = store.getPolicy(namespace)
+            .orElseThrow(() -> new IllegalArgumentException("no policy for namespace " + namespace));
+    CoordPolicy.EpochRing existing = c.epochs().get(epoch);
+    if (existing == null) throw new IllegalArgumentException("no epoch " + epoch + " in namespace " + namespace);
     if (!sameSlots(existing.ring(), toDomainRing(ring))) {
-        throw new IllegalArgumentException(
-            "ring is sealed: epoch " + epoch + " of '" + namespace + "' cannot be reshaped in place; "
-            + "open a new epoch instead (OpenEpoch)");
+        throw new IllegalArgumentException("ring is sealed: epoch " + epoch + " of namespace '" + namespace
+                + "' cannot be reshaped in place; open a new epoch instead (OpenEpoch)");
     }
-    return toProto(store.getPolicy(namespace).orElseThrow());   // no-op: nothing to CAS
+    return toProto(c);   // identical slots -> idempotent no-op, no CAS write
 }
 ```
 
-`sameSlots` compares the `(shard, cellId, region)` set order-independently. Nothing else in the
-coordinator changes: `doOpenEpoch` already appends `currentEpoch + 1`, marks the previous epoch
-`DRAINING`, and CAS-guards on `revision` — it is the sole ring-writing path after this.
+`sameSlots` compares the `(shard, cellId, region)` set order-independently (`HashSet` equality).
+Nothing else in the coordinator changed: `doOpenEpoch` already appends `currentEpoch + 1`, marks the
+previous epoch `DRAINING`, and CAS-guards on `revision` — it is now the sole ring-writing path. The
+CLI / `CellResolver.openEpoch` remain the sanctioned reshard entry point; no new operator surface.
 
-The CLI/`CellResolver.openEpoch` already exist as the sanctioned reshard entry point; no new surface is
-needed for operators.
+**Still open (option B — later).** The `SetRing` RPC stays in `coordinator.proto` for now (a guarded
+no-op/reject). Deprecate it in the proto and remove it on the next contract bump.
 
 ---
 
@@ -107,25 +101,26 @@ needed for operators.
 
 ---
 
-## 5. Tests
+## 5. Tests (shipped)
 
-- `MultiCellResolveTest.removeShardInPlaceMisroutes` — **invert**: the reshape must now be *rejected*, so
-  the misroute is unreachable. Rename to `removeShardInPlaceIsRejected`.
-- `MultiCellResolveTest.addShardInPlace` — **replace** with `addShardViaNewEpochIsSafe` (the additive
-  case now goes through `OpenEpoch`).
-- New: `setRingRejectsSlotChange` (guard fires on any slot delta) and `setRingNoOpIsIdempotent` (identical
-  slots return the current policy without a CAS).
-- Existing `…removeShardInPlaceViaNewEpochIsSafe` stays green unchanged — it already uses `OpenEpoch`.
+- `MultiCellResolveTest.removeShardInPlaceIsRejected` — the in-place removal that used to silently
+  mis-route is now rejected; the instance still resolves to its cell afterward.
+- `MultiCellResolveTest.addShardViaNewEpochIsSafe` — the additive case goes through `OpenEpoch`; the
+  in-place add is asserted to be rejected.
+- `MultiCellResolveTest.setRingIdenticalIsNoOp` — an exact-ring (re-ordered) `SetRing` bumps no revision.
+- `CoordinatorApiTest.setRingRejectsSlotChange` / `setRingNoOpIsIdempotent` — guard fires on a slot delta;
+  identical slots return the policy without a CAS.
+- `MultiCellResolveTest.removeShardViaNewEpochIsSafe` — unchanged (already uses `OpenEpoch`).
 
 ---
 
 ## 6. Migration
 
-1. Land the guard (option A) + tests; update `sharding-and-epochs.md` §6–§7 to state the sealed-ring
-   invariant and drop the "`SetRing` is the lighter alternative" guidance.
-2. Mark `SetRing` deprecated in `coordinator.proto` (comment + release note): operators move to
-   `OpenEpoch`.
-3. On the next proto contract bump, remove the `SetRing` RPC (option B).
+1. ✅ **Done.** Guard (option A) + tests landed; `sharding-and-epochs.md` §6–§7 updated to the
+   sealed-ring rule, dropping the "`SetRing` is the lighter alternative" guidance.
+2. **Todo.** Mark `SetRing` deprecated in `coordinator.proto` (comment + release note): operators move
+   to `OpenEpoch`.
+3. **Todo.** On the next proto contract bump, remove the `SetRing` RPC (option B).
 
 No stored data migrates: existing policies are already valid under the stricter rule (their published
 rings simply become read-only from here on).

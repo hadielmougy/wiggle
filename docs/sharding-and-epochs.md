@@ -157,42 +157,41 @@ Prerequisites: provision the target cell **first** (its nodes must be registered
 fail), and prefer letting the previous epoch drain before opening the next (draining epochs stack and
 multiply poll targets).
 
-`SetRing` (in-place, same epoch) is the lighter alternative — safe **only** when the edit relocates no
-live instance (§7). When in doubt, `OpenEpoch` is the safe default.
-
-> **Proposed change (not yet enforced): sealed rings.** A pending feature makes a published epoch's ring
-> immutable, so *every* reshard goes through `OpenEpoch` and in-place `SetRing` slot edits are rejected —
-> deleting the misroute footgun in §7 at the cost of a draining epoch per additive edit. Until it lands,
-> the guidance in §6–§7 is current. See [ring-immutability-guard.md](ring-immutability-guard.md).
+`OpenEpoch` is the **only** way to change a ring: a published epoch's `shard → cell` slots are
+**sealed** (immutable), so every reshard bumps the epoch. `SetRing` no longer reshapes a ring — it
+rejects any slot change and tolerates only an exact-ring no-op (`CoordinatorService.doSetRing`). This
+is what makes the §7 mis-route unreachable. See [ring-immutability-guard.md](ring-immutability-guard.md).
 
 ---
 
 ## 7. Adding and removing shards
 
-> **Proposed change:** once [sealed rings](ring-immutability-guard.md) land, *neither* of the in-place
-> paths below is available — both add and remove go through `OpenEpoch`, and the unsafe remove case is
-> unreachable by construction. The description below is the **current** (pre-guard) behaviour.
+Both add and remove are **reshards that open a new epoch** — because the ring is sealed (§6), there is
+no in-place path. The old epoch keeps its ring (its instances keep resolving) and drains; the new epoch
+carries the new shard set.
 
-Both are ring edits; safety depends on whether live instances are affected.
+**Adding a shard** — open a new epoch whose ring includes it. Existing ids keep resolving via their own
+epoch's ring; the added shard's cell is handed it for new mints in the new epoch.
+Test: `MultiCellResolveTest.addShardViaNewEpochIsSafe`.
 
-**Adding a shard — safe in place** (`SetRing` on the current epoch). It's purely additive: existing
-instances keep their shards and mappings, only *new* mints redistribute (a cell whose owned-set grew
-spreads new work over the added shard too — still correct, since every owned shard maps back to it).
-Only the one epoch's ring changes; `currentEpoch` and existing ids are untouched.
-Test: `MultiCellResolveTest.addShardInPlace`.
+**Removing a shard** — open a new epoch that omits it. The old epoch retains the shard (its live
+instances keep resolving there), then drains and retires. You drain **epochs, not shards** — there is
+no in-place "drain one shard."
+Test: `MultiCellResolveTest.removeShardViaNewEpochIsSafe`.
 
-**Removing a shard — NOT safe in place.** `cellFor` has a modulo-wrap fallback for an unknown shard:
+**Why in-place is sealed off.** If a shard could be removed from a live epoch's ring, `cellFor` would
+fall through its modulo-wrap for the now-unknown shard and silently route live instances to the wrong
+cell:
 
 ```java
 for (RingSlot s : ring) if (s.shard() == shard) return s.cellId();
-return ring.get(Math.floorMod(shard, ring.size())).cellId();   // <-- wraps to the WRONG cell
+return ring.get(Math.floorMod(shard, ring.size())).cellId();   // <-- would wrap to the WRONG cell
 ```
 
-So removing a shard that has live instances makes them **silently wrap to a cell that doesn't hold
-them** — a mis-route with no error. The safe way is a **new epoch** that omits the shard: the old
-epoch retains it (its instances keep resolving), then drains and retires. You drain **epochs, not
-shards** — there is no in-place "drain one shard."
-Tests: `MultiCellResolveTest.removeShardInPlaceMisroutes` (unsafe) and `…ViaNewEpochIsSafe` (safe).
+`doSetRing` rejects the slot change before that can happen, so the mis-route is unreachable rather than
+guarded by operator discipline.
+Tests: `MultiCellResolveTest.removeShardInPlaceIsRejected`, `…setRingIdenticalIsNoOp`;
+`CoordinatorApiTest.setRingRejectsSlotChange`, `…setRingNoOpIsIdempotent`.
 
 ---
 
