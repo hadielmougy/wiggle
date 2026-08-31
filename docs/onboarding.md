@@ -77,7 +77,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `io.github.hadielmougy`, version **2.1.5** (the runnable `dist` module is not
+Published under group `io.github.hadielmougy`, version **2.1.6** (the runnable `dist` module is not
 published). The server core is database-agnostic; it builds its store from an injected
 `StorageFactory` and the backend is selected from the URL scheme (§7.2).
 
@@ -120,7 +120,7 @@ picked from the URL scheme); it reads the same env vars as the JAR (§6). TLS is
 
 ```bash
 # run the released image, in-memory, secured dashboard
-docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.5
+docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.6
 
 # a complete stack: server + Postgres, dashboard login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)

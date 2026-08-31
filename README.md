@@ -19,11 +19,11 @@ In one picture — a single workflow instance whose steps run on **different ser
 
 <sub>How this works, end to end → **[docs/queues.md](docs/queues.md)**</sub>
 
-**Current version: `2.1.5`** · Apache-2.0
+**Current version: `2.1.6`** · Apache-2.0
 
 ```bash
 # Run the server (dashboard + every storage backend bundled) as a container:
-docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.5
+docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.6
 ```
 
 > New here, or looking for every configuration knob in one place? See
@@ -58,18 +58,18 @@ Artifacts are published to Maven Central under `io.github.hadielmougy`.
 ```kotlin
 dependencies {
     // The DSL + worker + client — this is what your application needs.
-    implementation("io.github.hadielmougy:wiggle-client:2.1.5")
+    implementation("io.github.hadielmougy:wiggle-client:2.1.6")
 
     // Only if you embed the server in your own JVM (otherwise run it standalone).
     // The server core is database-agnostic; with no JDBC URL it uses the in-memory store.
-    implementation("io.github.hadielmougy:wiggle-server:2.1.5")
+    implementation("io.github.hadielmougy:wiggle-server:2.1.6")
 
     
     //   new WiggleServer(config, cfg -> new JdbcStorage(
     //       cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), new PostgresDialect()));
     // (The standalone server image bundles EVERY backend and picks one from the URL scheme, so as a
     // container you never choose at build time -- see "Clustering" below.)
-    implementation("io.github.hadielmougy:wiggle-postgres:2.1.5")   // PostgreSQL + H2 dialects
+    implementation("io.github.hadielmougy:wiggle-postgres:2.1.6")   // PostgreSQL + H2 dialects
     runtimeOnly("org.postgresql:postgresql:42.7.4")
 
     // Other backends are drop-in modules, each contributing a dialect (or, for Cassandra, its own
@@ -87,7 +87,7 @@ dependencies {
 <dependency>
   <groupId>io.github.hadielmougy</groupId>
   <artifactId>wiggle-client</artifactId>
-  <version>2.1.5</version>
+  <version>2.1.6</version>
 </dependency>
 ```
 
@@ -612,14 +612,14 @@ bundled in. It reads the same environment variables as the JAR (see [Configurati
 # in-memory, secured dashboard — gRPC on :8080, dashboard on http://localhost:8090
 docker run --rm -p 8080:8080 -p 8090:8090 \
   -e WIGGLE_DASHBOARD_PASSWORD=change-me \
-  hadielmougy/wiggle:2.1.5
+  hadielmougy/wiggle:2.1.6
 
 # against PostgreSQL
 docker run --rm -p 8080:8080 -p 8090:8090 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
   -e WIGGLE_DASHBOARD_PASSWORD=change-me \
-  hadielmougy/wiggle:2.1.5
+  hadielmougy/wiggle:2.1.6
 ```
 
 Or bring up a **complete stack** — server + Postgres, dashboard with admin login, durable
