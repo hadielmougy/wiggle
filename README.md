@@ -13,6 +13,12 @@ directory-free routing and zero-migration rebalancing. Blast-radius isolation an
 - **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name. A coordinator-aware worker fans polling out across a namespace's active cells and shifts as they rebalance.
 - **Optional & lightweight** — the cell coordinator is opt-in: a single cluster runs unchanged without one, and the whole thing is a JAR plus a database (Postgres/MySQL/Oracle/SQL Server/Cassandra) — embeddable in your process, no Elasticsearch, no server mesh.
 
+In one picture — a single workflow instance whose steps run on **different services**, routed by each step's **queue**. The server keeps the durable state; each service just pulls the steps it serves (no broker, no service-to-service calls):
+
+![One 'orders' instance: its four steps — validate, charge, render-receipt, email — each on a different queue (orders, payments, gpu, notify), each served by a separate worker service.](docs/img/queues-flow.svg)
+
+<sub>How this works, end to end → **[docs/queues.md](docs/queues.md)**</sub>
+
 **Current version: `2.1.5`** · Apache-2.0
 
 ```bash

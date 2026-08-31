@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 320" width="880" height="320" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">One workflow instance distributed across microservices by queue</title>
+  <desc id="d">A single 'orders' instance has four steps — validate, charge, render-receipt, email — each on a different queue (orders, payments, gpu, notify), and each queue is served by a separate worker service. The server holds the durable state; each service pulls the steps it serves.</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a90a2"/>
+    </marker>
+  </defs>
+
+  <!-- group frames -->
+  <rect x="68" y="40" width="744" height="88" rx="10" fill="none" stroke="#aab0c0" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="82" y="55" font-size="11" fill="#7c8296">one 'orders' instance — its steps</text>
+
+  <rect x="68" y="236" width="744" height="76" rx="10" fill="none" stroke="#aab0c0" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="82" y="251" font-size="11" fill="#7c8296">independently deployed worker services</text>
+
+  <!-- flow step boxes -->
+  <g fill="#e7ecff" stroke="#5b6cff" stroke-width="1.5">
+    <rect x="90"  y="63" width="150" height="43" rx="8"/>
+    <rect x="272" y="63" width="150" height="43" rx="8"/>
+    <rect x="454" y="63" width="150" height="43" rx="8"/>
+    <rect x="636" y="63" width="150" height="43" rx="8"/>
+  </g>
+  <g fill="#1e2233" font-size="14" text-anchor="middle" font-weight="600">
+    <text x="165" y="89">validate</text>
+    <text x="347" y="89">charge</text>
+    <text x="529" y="89">render-receipt</text>
+    <text x="711" y="89">email</text>
+  </g>
+
+  <!-- horizontal step arrows -->
+  <g stroke="#8a90a2" stroke-width="1.6" marker-end="url(#arr)">
+    <line x1="240" y1="84" x2="270" y2="84"/>
+    <line x1="422" y1="84" x2="452" y2="84"/>
+    <line x1="604" y1="84" x2="634" y2="84"/>
+  </g>
+
+  <!-- queue routing: dotted verticals + chips -->
+  <g stroke="#8a90a2" stroke-width="1.6" stroke-dasharray="2 4" marker-end="url(#arr)">
+    <line x1="165" y1="106" x2="165" y2="247"/>
+    <line x1="347" y1="106" x2="347" y2="247"/>
+    <line x1="529" y1="106" x2="529" y2="247"/>
+    <line x1="711" y1="106" x2="711" y2="247"/>
+  </g>
+  <g fill="#fff2d6" stroke="#d9a441" stroke-width="1.2">
+    <rect x="129" y="166" width="72" height="22" rx="11"/>
+    <rect x="311" y="166" width="72" height="22" rx="11"/>
+    <rect x="493" y="166" width="72" height="22" rx="11"/>
+    <rect x="675" y="166" width="72" height="22" rx="11"/>
+  </g>
+  <g fill="#5b4611" font-size="12" text-anchor="middle" font-weight="600">
+    <text x="165" y="181.5">orders</text>
+    <text x="347" y="181.5">payments</text>
+    <text x="529" y="181.5">gpu</text>
+    <text x="711" y="181.5">notify</text>
+  </g>
+
+  <!-- service boxes -->
+  <g fill="#e3f4ec" stroke="#1f9d6b" stroke-width="1.5">
+    <rect x="90"  y="250" width="150" height="50" rx="8"/>
+    <rect x="272" y="250" width="150" height="50" rx="8"/>
+    <rect x="454" y="250" width="150" height="50" rx="8"/>
+    <rect x="636" y="250" width="150" height="50" rx="8"/>
+  </g>
+  <g text-anchor="middle">
+    <g fill="#1e2233" font-size="13" font-weight="600">
+      <text x="165" y="272">order-service</text>
+      <text x="347" y="272">payment-service</text>
+      <text x="529" y="272">gpu-render-pool</text>
+      <text x="711" y="272">notify-service</text>
+    </g>
+    <g fill="#3f7a5f" font-size="11">
+      <text x="165" y="289">serves: orders</text>
+      <text x="347" y="289">serves: payments</text>
+      <text x="529" y="289">serves: gpu</text>
+      <text x="711" y="289">serves: notify</text>
+    </g>
+  </g>
+</svg>
