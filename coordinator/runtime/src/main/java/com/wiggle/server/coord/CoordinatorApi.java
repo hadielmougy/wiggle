@@ -49,6 +49,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     private static final System.Logger LOG = System.getLogger(CoordinatorApi.class.getName());
 
     private final CoordinatorService service;
+    private final boolean ownsService;   // built here (close it) vs injected (caller owns it)
     private final Server server;
     private final ExecutorService pool;
     private volatile boolean started;
@@ -59,17 +60,27 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
 
     /** Shares a {@link LiveCensus} with the reconciler, so heartbeat reports drive epoch retire (R21). */
     public CoordinatorApi(CoordinatorStore store, int port, Tls.Options tls, LiveCensus census) throws IOException {
-        this.service = new CoordinatorService(store, census);
+        this(new CoordinatorService(store, census), port, tls, true);
+    }
+
+    /**
+     * Serves an existing {@link CoordinatorService} (dependency-injected). The caller owns the service's
+     * lifecycle, so {@link #close()} shuts the gRPC server but not the injected service. Use this to
+     * drive one service both directly and over gRPC (e.g. an integration test that seeds via the service
+     * and then exercises the wire).
+     */
+    public CoordinatorApi(CoordinatorService service, int port, Tls.Options tls) throws IOException {
+        this(service, port, tls, false);
+    }
+
+    private CoordinatorApi(CoordinatorService service, int port, Tls.Options tls, boolean ownsService) throws IOException {
+        this.service = service;
+        this.ownsService = ownsService;
         this.pool = Executors.newVirtualThreadPerTaskExecutor();
         this.server = Grpc.newServerBuilderForPort(port, credentials(tls))
                 .executor(pool)
                 .addService(this)
                 .build();
-    }
-
-    /** The business logic behind this gRPC facade (node lifecycle, resolution, admin, fan-out). */
-    public CoordinatorService service() {
-        return service;
     }
 
     private static ServerCredentials credentials(Tls.Options tls) throws IOException {
@@ -106,7 +117,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
                 Thread.currentThread().interrupt();
             }
         }
-        service.close();
+        if (ownsService) service.close();   // an injected service is the caller's to close
         pool.shutdownNow();
     }
 

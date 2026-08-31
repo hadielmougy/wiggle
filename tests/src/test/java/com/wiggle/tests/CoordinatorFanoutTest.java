@@ -3,12 +3,11 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Json;
-import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.RegisteredNode;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,8 +38,8 @@ class CoordinatorFanoutTest {
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 
-    private static void register(CoordinatorApi coord, WiggleServer cell) {
-        coord.service().doRegister("orders", RegisteredNode.newBuilder()
+    private static void register(CoordinatorService coord, WiggleServer cell) {
+        coord.doRegister("orders", RegisteredNode.newBuilder()
                 .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
     }
 
@@ -49,12 +48,12 @@ class CoordinatorFanoutTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer a = new WiggleServer(cell()).start();
              WiggleServer b = new WiggleServer(cell()).start();
-             CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+             CoordinatorService coord = new CoordinatorService(store)) {
 
             register(coord, a);
             register(coord, b);
 
-            RegisterWorkflowResponse r = coord.service().doRegisterWorkflow("orders", "wf", definitionJson());
+            RegisterWorkflowResponse r = coord.doRegisterWorkflow("orders", "wf", definitionJson());
             assertEquals(2, r.getCellsSeeded(), "fanned out to both cells");
             assertTrue(r.getVersion() > 0);
 
@@ -75,26 +74,26 @@ class CoordinatorFanoutTest {
     void allocateListDeallocate() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer a = new WiggleServer(cell()).start();
-             CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
-            coord.service().doRegister("orders", RegisteredNode.newBuilder()
+             CoordinatorService coord = new CoordinatorService(store)) {
+            coord.doRegister("orders", RegisteredNode.newBuilder()
                     .setName(a.baseUrl()).setEndpoint(a.baseUrl()).build());
 
-            coord.service().doRegisterWorkflow("orders", "wf", definitionJson());
-            assertEquals(1, coord.service().doListWorkflows("orders").getWorkflowsCount(), "allocated -> listed");
-            assertEquals("wf", coord.service().doListWorkflows("orders").getWorkflows(0).getName());
+            coord.doRegisterWorkflow("orders", "wf", definitionJson());
+            assertEquals(1, coord.doListWorkflows("orders").getWorkflowsCount(), "allocated -> listed");
+            assertEquals("wf", coord.doListWorkflows("orders").getWorkflows(0).getName());
 
-            assertTrue(coord.service().doDeregisterWorkflow("orders", "wf").getRemoved(), "deallocate removes it");
-            assertEquals(0, coord.service().doListWorkflows("orders").getWorkflowsCount(), "gone from the registry");
-            assertFalse(coord.service().doDeregisterWorkflow("orders", "wf").getRemoved(), "second deallocate is a no-op");
+            assertTrue(coord.doDeregisterWorkflow("orders", "wf").getRemoved(), "deallocate removes it");
+            assertEquals(0, coord.doListWorkflows("orders").getWorkflowsCount(), "gone from the registry");
+            assertFalse(coord.doDeregisterWorkflow("orders", "wf").getRemoved(), "second deallocate is a no-op");
         }
     }
 
     @Test @DisplayName("RegisterWorkflow with no cell for the namespace fails")
     void noCell() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+        try (CoordinatorService coord = new CoordinatorService(store)) {
             try {
-                coord.service().doRegisterWorkflow("orders", "wf", definitionJson());
+                coord.doRegisterWorkflow("orders", "wf", definitionJson());
                 throw new AssertionError("expected failure with no cell");
             } catch (IllegalStateException expected) {
                 assertTrue(expected.getMessage().contains("no cell"));

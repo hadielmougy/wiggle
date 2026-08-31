@@ -9,6 +9,7 @@ import com.wiggle.proto.RegisteredNode;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,13 +81,14 @@ class NamespaceWorkerTest {
     void coordinatorWired() throws Exception {
         Blueprint<Map<String, Object>> bp = workflow();
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED);
+        CoordinatorService svc = new CoordinatorService(store);
+        CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED);
         coord.start();
         try (WiggleServer cell = new WiggleServer(config().withNamespace("orders")).start();
              WiggleClient cc = new WiggleClient(cell.baseUrl())) {
 
             cc.register(bp);
-            coord.service().doRegister("orders", RegisteredNode.newBuilder()
+            svc.doRegister("orders", RegisteredNode.newBuilder()
                     .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
 
             CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
@@ -99,6 +101,7 @@ class NamespaceWorkerTest {
             }
         } finally {
             coord.close();
+            svc.close();
         }
     }
 }

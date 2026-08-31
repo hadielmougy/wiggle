@@ -11,6 +11,7 @@ import com.wiggle.proto.RegisteredNode;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,10 +43,11 @@ class CellRoutingTest {
     void routesThroughCoordinator() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer cell = new WiggleServer(config().withNamespace("acme")).start();
-             CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+             CoordinatorService svc = new CoordinatorService(store);
+             CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED)) {
             coord.start();
-            // Simulate the cell's node link registering with the coordinator.
-            coord.service().doRegister("acme", RegisteredNode.newBuilder()
+            // Simulate the cell's node link registering with the coordinator (seed directly via the service).
+            svc.doRegister("acme", RegisteredNode.newBuilder()
                     .setName("cell-node").setEndpoint(cell.baseUrl()).setRegion("eu-west").build());
 
             try (CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(),

@@ -1,10 +1,8 @@
 package com.wiggle.tests;
 
-import com.wiggle.core.Tls;
 import com.wiggle.proto.EpochStatus;
 import com.wiggle.proto.Policy;
 import com.wiggle.proto.RingSlot;
-import com.wiggle.server.coord.CoordinatorApi;
 import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
@@ -29,14 +27,14 @@ class CoordinatorApiTest {
 
     @Test @DisplayName("openEpoch creates epoch 0, then appends epoch 1 and drains the previous")
     void openEpochCreatesThenAppends() throws Exception {
-        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            Policy p0 = api.service().doOpenEpoch("acme", List.of(slot(0, "cell-3")));
+        try (CoordinatorService svc = new CoordinatorService(new InMemoryCoordinatorStore())) {
+            Policy p0 = svc.doOpenEpoch("acme", List.of(slot(0, "cell-3")));
             assertEquals(0, p0.getCurrentEpoch());
             assertEquals(1, p0.getRevision());
             assertEquals(EpochStatus.OPEN, p0.getEpochsOrThrow(0).getStatus());
             assertEquals("cell-3", p0.getEpochsOrThrow(0).getRing(0).getCellId());
 
-            Policy p1 = api.service().doOpenEpoch("acme", List.of(slot(0, "cell-5")));
+            Policy p1 = svc.doOpenEpoch("acme", List.of(slot(0, "cell-5")));
             assertEquals(1, p1.getCurrentEpoch());
             assertEquals(2, p1.getRevision());
             assertEquals(EpochStatus.DRAINING, p1.getEpochsOrThrow(0).getStatus(), "previous epoch drains");

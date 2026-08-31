@@ -83,6 +83,11 @@ public final class CoordinatorService implements AutoCloseable {
     private final Map<String, ManagedChannel> cellChannels = new ConcurrentHashMap<>();
     private final Map<String, WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub> cellStubs = new ConcurrentHashMap<>();
 
+    /** A service with its own private census -- for callers/tests that don't share one with a reconciler. */
+    public CoordinatorService(CoordinatorStore store) {
+        this(store, new LiveCensus());
+    }
+
     /** Shares a {@link LiveCensus} with the reconciler, so heartbeat reports drive epoch retire (R21). */
     public CoordinatorService(CoordinatorStore store, LiveCensus census) {
         this.store = store;
