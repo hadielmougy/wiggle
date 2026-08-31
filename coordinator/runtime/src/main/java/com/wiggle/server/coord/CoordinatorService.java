@@ -28,6 +28,7 @@ import com.wiggle.proto.WorkflowDefinition;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
+import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -116,7 +117,7 @@ public final class CoordinatorService implements AutoCloseable {
     public NodeConfig doFetchConfig(String namespace, String cellId) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
         long generation = policy == null ? 0L : policy.revision();
-        Placement pl = placementFor(namespace, cellId, policy);
+        Placement pl = placement(namespace, policy, cellId);
         return NodeConfig.newBuilder()
                 .setNamespace(namespace)
                 .setGeneration(generation)
@@ -127,18 +128,12 @@ public final class CoordinatorService implements AutoCloseable {
                 .build();
     }
 
-    /** Records a node in the roster and returns its coordinator-assigned id and initial placement. */
     public RegisterResponse doRegister(String namespace, RegisteredNode node) {
-        // Seed the namespace's definitions onto the joining node BEFORE it enters the roster, so it is
-        // never resolvable while missing a graph (R23 "seed before eligible").
+
         seedNewNode(namespace, node.getEndpoint());
         String nodeId = UUID.randomUUID().toString();
-        // A node's cell defaults to the namespace itself (the single-cell case), so a node that does not
-        // yet know its cell registers into the namespace's one implicit cell.
         String cellId = cellOrNamespace(namespace, node.getCellId());
         String fingerprint = emptyToNull(node.getCellFingerprint());
-        // Atomically claim the cell-id -> fingerprint binding. A different cell (distinct storage) reusing
-        // this id in the namespace is rejected without a check-then-write race (see CoordinatorStore#bindCell).
         if (!store.bindCell(namespace, cellId, fingerprint)) {
             throw new IllegalArgumentException("cell id '" + cellId + "' in namespace '" + namespace
                     + "' is already bound to a different cell; a node from another cell must use a distinct WIGGLE_CELL_ID");
@@ -146,13 +141,21 @@ public final class CoordinatorService implements AutoCloseable {
         store.upsertNode(new CoordNode(nodeId, namespace, cellId, node.getEndpoint(), emptyToNull(node.getRegion()),
                 node.getEngineVersion(), fingerprint, 0, System.currentTimeMillis()));
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
-        Placement pl = placementFor(namespace, cellId, policy);
+        Placement pl = placement(namespace, policy, cellId);
         return RegisterResponse.newBuilder()
                 .setNodeId(nodeId)
                 .setHeartbeatIntervalSeconds(NODE_HEARTBEAT_INTERVAL_SECONDS)
                 .setEpoch(pl.epoch())
                 .addAllShards(pl.shards())
                 .build();
+    }
+
+    private @NonNull Placement placement(String namespace, CoordPolicy policy, String cellId) {
+        if (policy == null) {
+           return placementFor(namespace, cellId);
+        } else {
+            return placementFor(namespace, cellId, policy);
+        }
     }
 
     static String cellOrNamespace(String namespace, String cellId) {
@@ -174,16 +177,22 @@ public final class CoordinatorService implements AutoCloseable {
      * </ul>
      */
     private Placement placementFor(String namespace, String cellId, CoordPolicy policy) {
-        CoordPolicy.EpochRing er = policy == null ? null : policy.epochs().get(policy.currentEpoch());
-        long epoch = policy == null ? 0 : policy.currentEpoch();
-        if (er == null || er.ring().isEmpty()) {
-            String implicit = implicitCell(namespace);
-            boolean mintable = implicit == null || cellId.equals(implicit);
-            return new Placement(epoch, mintable ? List.of(0) : List.of());   // extra no-ring cell -> standby
+        long epoch = policy.currentEpoch();
+        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
+        if (er.ring().isEmpty()) {
+            return placementFor(namespace, cellId);
         }
         List<Integer> shards = new ArrayList<>();
         for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
         return new Placement(epoch, shards);   // empty when the ring does not name this cell -> standby
+    }
+
+    /** No-ring placement for {@code cellId}: the implicit cell mints genesis (shard 0), any extra cell is
+     *  standby (empty shards). Used when there is no policy or the current epoch has no ring. */
+    private Placement placementFor(String namespace, String cellId) {
+        String implicit = implicitCell(namespace);
+        boolean mintable = implicit == null || cellId.equals(implicit);
+        return new Placement(0, mintable ? List.of(0) : List.of());
     }
 
     private record Placement(long epoch, List<Integer> shards) {}
@@ -228,11 +237,9 @@ public final class CoordinatorService implements AutoCloseable {
         census.forget(nodeId);
     }
 
-    static String emptyToNull(String s) {
+    private static String emptyToNull(String s) {
         return s == null || s.isEmpty() ? null : s;
     }
-
-    // ---- resolution (clients & workers) ----
 
     /**
      * Resolves a namespace (for a new start) or a specific instance id to a cell {@link Endpoint}.

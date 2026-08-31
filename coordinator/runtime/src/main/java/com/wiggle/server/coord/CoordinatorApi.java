@@ -158,7 +158,7 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
     }
 
     @Override public void activeCells(ActiveCellsRequest req, StreamObserver<ActiveCellsResponse> resp) {
-        run(resp, () -> service.doActiveCells(req.getNamespace(), CoordinatorService.emptyToNull(req.getCallerRegion())));
+        run(resp, () -> service.doActiveCells(req.getNamespace(), emptyToNull(req.getCallerRegion())));
     }
 
     @Override public void registerWorkflow(RegisterWorkflowRequest req, StreamObserver<RegisterWorkflowResponse> resp) {
@@ -196,5 +196,9 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
             LOG.log(System.Logger.Level.ERROR, "coordinator rpc failed", e);
             resp.onError(Status.INTERNAL.withDescription("internal error").asRuntimeException());
         }
+    }
+
+    private static String emptyToNull(String s) {
+        return s == null || s.isEmpty() ? null : s;
     }
 }
