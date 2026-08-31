@@ -266,5 +266,6 @@ No id is ever rewritten and no instance data is moved.
 | register / resolve / openEpoch / setRing / fingerprint guard | `coordinator/runtime/**/CoordinatorApi.java` |
 | drain → retire lifecycle (census-driven) | `coordinator/runtime/**/CoordinatorReconciler.java` |
 | ring persisted as JSON (backend-independent) | `coordinator/spi/**/EpochCodec.java` |
+| client-side resolution & caching of the above | `client/**/CellResolver.java` — see [client-caching-contract.md](client-caching-contract.md) |
 | storage fingerprint | `server/**/store/Storage.java`, `jdbc/**/JdbcStorage.java`, `cassandra/**/CassandraStorage.java` |
 | node ⇄ coordinator link (applies placement) | `dist/**/coord/HttpCoordinatorLink.java` |
