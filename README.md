@@ -7,7 +7,7 @@ its steps with pull-based *workers*. Its distinctive move is **cellular**: a nam
 *cell* — its own database and its own cluster — and a coordinator shards work across cells with
 directory-free routing and zero-migration rebalancing. Blast-radius isolation and scale-out, built in.
 
-- **Cellular by design** — a namespace is a cell with its **own database and cluster**. A coordinator places instances across cells by consistent hashing over epochs; an instance id **carries its own routing**, so there's no lookup directory and an instance never moves. Grow by adding cells; **drain and retire** old ones with zero data migration. Physical per-tenant isolation, not just logical.
+- **Cellular by design** — a namespace is a cell with its **own database and cluster**. A coordinator places instances across cells by consistent hashing over epochs; an instance id **carries its own routing**. Grow by adding cells; **drain and retire** old ones. Physical per-tenant isolation, not just logical.
 - **Durable** — every instance is DB-backed: it survives restarts, retries, and worker death (lease-based recovery). Exactly-once dispatch, at-least-once execution.
 - **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals, timers, sub-workflows — a compiled graph, versioned by content hash. No workflow-code determinism to get wrong.
 - **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name. A coordinator-aware worker fans polling out across a namespace's active cells and shifts as they rebalance.
@@ -55,8 +55,7 @@ dependencies {
     // The server core is database-agnostic; with no JDBC URL it uses the in-memory store.
     implementation("io.github.hadielmougy:wiggle-server:2.1.5")
 
-    // For a database in an embedded server, add the storage module you want (each pools with
-    // HikariCP) and build the store explicitly with a StorageFactory -- no ServiceLoader:
+    
     //   new WiggleServer(config, cfg -> new JdbcStorage(
     //       cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), new PostgresDialect()));
     // (The standalone server image bundles EVERY backend and picks one from the URL scheme, so as a
