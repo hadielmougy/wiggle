@@ -30,6 +30,9 @@ docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me
 > **[DSL cookbook](docs/dsl-cookbook.md)** — eight workflows, run them all with
 > `./gradlew :example:runCookbook`.
 >
+> Spreading one flow across many services? See **[docs/queues.md](docs/queues.md)** — how a step's
+> **queue** routes work to the microservice that serves it (with diagrams).
+>
 > Prefer not to write Java to define a workflow? Author the topology as a YAML file and register it
 > with the **`wiggle` CLI** — see **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
 >
@@ -320,6 +323,8 @@ else is a `WorkerOptions` setting.
 registered. Pair a step's queue argument — `step("render", fn, "gpu")` — with
 `WorkerOptions.defaults().withQueues("gpu")` on a dedicated worker pool, and only those workers
 execute it — a local-execution chain hands the step over automatically at the queue boundary.
+See **[docs/queues.md](docs/queues.md)** for how queues distribute one flow's steps across many
+microservices, end to end.
 
 ---
 
