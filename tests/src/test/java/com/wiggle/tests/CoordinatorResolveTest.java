@@ -2,14 +2,13 @@ package com.wiggle.tests;
 
 import com.wiggle.core.IdCodec;
 import com.wiggle.core.Ids;
-import com.wiggle.core.Tls;
 import com.wiggle.proto.ActiveCellsResponse;
 import com.wiggle.proto.Endpoint;
 import com.wiggle.proto.RegisteredNode;
 import com.wiggle.proto.ResolveRequest;
 import com.wiggle.proto.ResolveResponse;
 import com.wiggle.proto.RingSlot;
-import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,14 +35,14 @@ class CoordinatorResolveTest {
                 .setRegion(region).setCellId(cellId).build();
     }
 
-    private static CoordinatorApi api(InMemoryCoordinatorStore store) throws Exception {
-        return new CoordinatorApi(store, 0, Tls.Options.DISABLED);
+    private static CoordinatorService api(InMemoryCoordinatorStore store) throws Exception {
+        return new CoordinatorService(store);
     }
 
     @Test @DisplayName("resolve by namespace returns the live roster as a cell endpoint")
     void resolveByNamespace() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = api(store)) {
+        try (CoordinatorService api = api(store)) {
             api.doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
             api.doRegister("nsA", node("grpc://hb:2", "eu-west", "cell-1"));
             api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build()));
@@ -60,7 +59,7 @@ class CoordinatorResolveTest {
     @Test @DisplayName("resolve by instance id extracts the namespace and routes to its cell")
     void resolveByInstanceId() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = api(store)) {
+        try (CoordinatorService api = api(store)) {
             api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
             String id = IdCodec.format("nsA", 0, 0, Ids.token());
             ResolveResponse r = api.doResolve(ResolveRequest.newBuilder().setInstanceId(id).build());
@@ -72,7 +71,7 @@ class CoordinatorResolveTest {
     @Test @DisplayName("resolving a legacy instance id is rejected")
     void resolveLegacyRejected() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = api(store)) {
+        try (CoordinatorService api = api(store)) {
             api.doRegister("nsA", node("grpc://ha:1", "eu-west"));
             assertThrows(IllegalArgumentException.class,
                     () -> api.doResolve(ResolveRequest.newBuilder().setInstanceId("wfi_01h8abcdef").build()));
@@ -82,7 +81,7 @@ class CoordinatorResolveTest {
     @Test @DisplayName("resolving a namespace with no live nodes fails")
     void resolveNoNodes() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = api(store)) {
+        try (CoordinatorService api = api(store)) {
             assertThrows(IllegalStateException.class,
                     () -> api.doResolve(ResolveRequest.newBuilder().setNamespace("empty").build()));
         }
@@ -91,7 +90,7 @@ class CoordinatorResolveTest {
     @Test @DisplayName("resolution returns region-appropriate addresses (same cell, R24)")
     void regionFiltering() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = api(store)) {
+        try (CoordinatorService api = api(store)) {
             api.doRegister("nsA", node("grpc://eu1:1", "eu-west"));
             api.doRegister("nsA", node("grpc://eu2:1", "eu-west"));
             api.doRegister("nsA", node("grpc://us1:1", "us-east"));
@@ -108,7 +107,7 @@ class CoordinatorResolveTest {
     @Test @DisplayName("activeCells reports the cell set and a generation tied to the policy revision")
     void activeCells() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = api(store)) {
+        try (CoordinatorService api = api(store)) {
             api.doRegister("nsA", node("grpc://ha:1", "eu-west", "cell-1"));
             api.doOpenEpoch("nsA", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-1").build())); // revision 1
 

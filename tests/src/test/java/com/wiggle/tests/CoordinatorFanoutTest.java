@@ -3,12 +3,11 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Json;
-import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.RegisteredNode;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,7 +38,7 @@ class CoordinatorFanoutTest {
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 
-    private static void register(CoordinatorApi coord, WiggleServer cell) {
+    private static void register(CoordinatorService coord, WiggleServer cell) {
         coord.doRegister("orders", RegisteredNode.newBuilder()
                 .setName(cell.baseUrl()).setEndpoint(cell.baseUrl()).build());
     }
@@ -49,7 +48,7 @@ class CoordinatorFanoutTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer a = new WiggleServer(cell()).start();
              WiggleServer b = new WiggleServer(cell()).start();
-             CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+             CoordinatorService coord = new CoordinatorService(store)) {
 
             register(coord, a);
             register(coord, b);
@@ -75,7 +74,7 @@ class CoordinatorFanoutTest {
     void allocateListDeallocate() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer a = new WiggleServer(cell()).start();
-             CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+             CoordinatorService coord = new CoordinatorService(store)) {
             coord.doRegister("orders", RegisteredNode.newBuilder()
                     .setName(a.baseUrl()).setEndpoint(a.baseUrl()).build());
 
@@ -92,7 +91,7 @@ class CoordinatorFanoutTest {
     @Test @DisplayName("RegisterWorkflow with no cell for the namespace fails")
     void noCell() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi coord = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
+        try (CoordinatorService coord = new CoordinatorService(store)) {
             try {
                 coord.doRegisterWorkflow("orders", "wf", definitionJson());
                 throw new AssertionError("expected failure with no cell");

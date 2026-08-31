@@ -10,6 +10,7 @@ import com.wiggle.proto.RegisteredNode;
 import com.wiggle.proto.RingSlot;
 import com.wiggle.server.coord.CoordNode;
 import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,27 +31,27 @@ class NodeLifecycleTest {
     @Test @DisplayName("coordinator-side register/heartbeat/deregister/fetchConfig logic")
     void coordinatorSideLogic() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED)) {
-            RegisterResponse reg = api.doRegister("acme", RegisteredNode.newBuilder()
+        try (CoordinatorService svc = new CoordinatorService(store)) {
+            RegisterResponse reg = svc.doRegister("acme", RegisteredNode.newBuilder()
                     .setName("node-a").setEndpoint("grpc://h:1").setEngineVersion("2.1.5").build());
             assertFalse(reg.getNodeId().isBlank());
             assertTrue(reg.getHeartbeatIntervalSeconds() > 0);
             assertEquals(1, store.nodes("acme").size());
 
             // heartbeat touches liveness and returns the namespace's generation (policy revision)
-            api.doOpenEpoch("acme", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-3").build()));
-            CoordinatorHeartbeatResponse hb = api.doHeartbeat(reg.getNodeId(), 0);
+            svc.doOpenEpoch("acme", List.of(RingSlot.newBuilder().setShard(0).setCellId("cell-3").build()));
+            CoordinatorHeartbeatResponse hb = svc.doHeartbeat(reg.getNodeId(), 0);
             assertTrue(hb.getOk());
             assertEquals(1, hb.getConfigGeneration(), "generation follows the policy revision");
 
             // an unknown node is told it is not registered
-            assertFalse(api.doHeartbeat("no-such-node", 0).getOk());
+            assertFalse(svc.doHeartbeat("no-such-node", 0).getOk());
 
             // fetchConfig reports the same generation
-            NodeConfig cfg = api.doFetchConfig("acme");
+            NodeConfig cfg = svc.doFetchConfig("acme");
             assertEquals(1, cfg.getGeneration());
 
-            api.doDeregister(reg.getNodeId());
+            svc.doDeregister(reg.getNodeId());
             assertEquals(0, store.nodes("acme").size());
         }
     }

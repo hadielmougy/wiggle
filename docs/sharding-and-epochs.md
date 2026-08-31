@@ -127,13 +127,12 @@ change; wiggle **never remaps a key**, because the key remembers which map (epoc
 |---|---|---|---|
 | A **node** joins/leaves | — | — | ✔ |
 | A **cell**'s nodes join (new cellId) | — | — | ✔ |
-| Operator **`SetRing`** (edit a ring in place) | — | ✔ | — |
 | Operator **`OpenEpoch`** (reshard) | ✔ | ✔ | — |
 | Reconciler **retires** a drained epoch | — | ✔ | — |
 
 - Adding nodes or cells does **not** bump the epoch — that's just the roster.
-- `SetRing` edits an epoch's ring **without** changing the epoch number (bumps generation only).
-- `OpenEpoch` is the **only** thing that increments the epoch, and it's for resharding.
+- `OpenEpoch` is the **only** thing that increments the epoch, and it's the **only** way to change a
+  ring at all — a published epoch's ring is sealed (§6).
 - The **generation** (policy `revision`) is what nodes watch on heartbeat to re-fetch placement.
 
 Every policy write is a **compare-and-set on `revision`** (`casPolicy`), so a stale ex-leader's write
@@ -157,33 +156,41 @@ Prerequisites: provision the target cell **first** (its nodes must be registered
 fail), and prefer letting the previous epoch drain before opening the next (draining epochs stack and
 multiply poll targets).
 
-`SetRing` (in-place, same epoch) is the lighter alternative — safe **only** when the edit relocates no
-live instance (§7). When in doubt, `OpenEpoch` is the safe default.
+`OpenEpoch` is the **only** way to change a ring: a published epoch's `shard → cell` slots are
+**sealed** (immutable), so every reshard bumps the epoch. There is no in-place ring edit — the
+`SetRing` RPC was removed — which is what makes the §7 mis-route structurally unreachable. See
+[ring-immutability-guard.md](ring-immutability-guard.md).
 
 ---
 
 ## 7. Adding and removing shards
 
-Both are ring edits; safety depends on whether live instances are affected.
+Both add and remove are **reshards that open a new epoch** — because the ring is sealed (§6), there is
+no in-place path. The old epoch keeps its ring (its instances keep resolving) and drains; the new epoch
+carries the new shard set.
 
-**Adding a shard — safe in place** (`SetRing` on the current epoch). It's purely additive: existing
-instances keep their shards and mappings, only *new* mints redistribute (a cell whose owned-set grew
-spreads new work over the added shard too — still correct, since every owned shard maps back to it).
-Only the one epoch's ring changes; `currentEpoch` and existing ids are untouched.
-Test: `MultiCellResolveTest.addShardInPlace`.
+**Adding a shard** — open a new epoch whose ring includes it. Existing ids keep resolving via their own
+epoch's ring; the added shard's cell is handed it for new mints in the new epoch.
+Test: `MultiCellResolveTest.addShardViaNewEpochIsSafe`.
 
-**Removing a shard — NOT safe in place.** `cellFor` has a modulo-wrap fallback for an unknown shard:
+**Removing a shard** — open a new epoch that omits it. The old epoch retains the shard (its live
+instances keep resolving there), then drains and retires. You drain **epochs, not shards** — there is
+no in-place "drain one shard."
+Test: `MultiCellResolveTest.removeShardViaNewEpochIsSafe`.
+
+**Why in-place is sealed off.** If a shard could be removed from a live epoch's ring, `cellFor` would
+fall through its modulo-wrap for the now-unknown shard and silently route live instances to the wrong
+cell:
 
 ```java
 for (RingSlot s : ring) if (s.shard() == shard) return s.cellId();
-return ring.get(Math.floorMod(shard, ring.size())).cellId();   // <-- wraps to the WRONG cell
+return ring.get(Math.floorMod(shard, ring.size())).cellId();   // <-- would wrap to the WRONG cell
 ```
 
-So removing a shard that has live instances makes them **silently wrap to a cell that doesn't hold
-them** — a mis-route with no error. The safe way is a **new epoch** that omits the shard: the old
-epoch retains it (its instances keep resolving), then drains and retires. You drain **epochs, not
-shards** — there is no in-place "drain one shard."
-Tests: `MultiCellResolveTest.removeShardInPlaceMisroutes` (unsafe) and `…ViaNewEpochIsSafe` (safe).
+Since there is no in-place ring edit at all (the `SetRing` RPC was removed), that fall-through can never
+be reached for a live epoch's shard — the mis-route is structurally impossible rather than guarded by
+operator discipline.
+Tests: `MultiCellResolveTest.addShardViaNewEpochIsSafe`, `…removeShardViaNewEpochIsSafe`.
 
 ---
 
@@ -263,8 +270,9 @@ No id is ever rewritten and no instance data is moved.
 | ring & epoch model (`RingSlot`, `EpochRing`, status) | `coordinator/spi/**/CoordPolicy.java` |
 | node's live placement + atomic `stampFor` | `server/src/main/java/com/wiggle/server/CellPlacement.java` |
 | minting (uses `stampFor`) | `server/src/main/java/com/wiggle/server/CellBundle.java` |
-| register / resolve / openEpoch / setRing / fingerprint guard | `coordinator/runtime/**/CoordinatorApi.java` |
+| register / resolve / openEpoch / fingerprint guard | `coordinator/runtime/**/CoordinatorService.java` (gRPC adapter: `CoordinatorApi.java`) |
 | drain → retire lifecycle (census-driven) | `coordinator/runtime/**/CoordinatorReconciler.java` |
 | ring persisted as JSON (backend-independent) | `coordinator/spi/**/EpochCodec.java` |
+| client-side resolution & caching of the above | `client/**/CellResolver.java` — see [client-caching-contract.md](client-caching-contract.md) |
 | storage fingerprint | `server/**/store/Storage.java`, `jdbc/**/JdbcStorage.java`, `cassandra/**/CassandraStorage.java` |
 | node ⇄ coordinator link (applies placement) | `dist/**/coord/HttpCoordinatorLink.java` |

@@ -23,7 +23,6 @@ service CellCoordinator {
 
     // ---- admin (reconfiguration & definition fan-out) ----
     rpc OpenEpoch          (OpenEpochRequest)          returns (Policy);
-    rpc SetRing            (SetRingRequest)            returns (Policy);
     rpc RegisterWorkflow   (RegisterWorkflowRequest)   returns (RegisterWorkflowResponse);   // R23
     rpc DeregisterWorkflow (DeregisterWorkflowRequest) returns (DeregisterWorkflowResponse);
     rpc ListWorkflows      (ListWorkflowsRequest)      returns (ListWorkflowsResponse);
@@ -211,12 +210,6 @@ message ActiveCellsResponse {
 message OpenEpochRequest {
     string namespace = 1;
     repeated RingSlot ring = 2;    // scale out -> gen++
-}
-
-message SetRingRequest {
-    string namespace = 1;
-    uint64 epoch = 2;
-    repeated RingSlot ring = 3;
 }
 
 message RegisterWorkflowRequest {

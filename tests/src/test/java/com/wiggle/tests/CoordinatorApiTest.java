@@ -1,10 +1,9 @@
 package com.wiggle.tests;
 
-import com.wiggle.core.Tls;
 import com.wiggle.proto.EpochStatus;
 import com.wiggle.proto.Policy;
 import com.wiggle.proto.RingSlot;
-import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,9 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Phase 1 / T6: the coordinator's admin policy writes. OpenEpoch creates then appends epochs and
- * SetRing updates one -- all CAS-guarded read-modify-writes over the store. Exercised via the public
- * logic methods (no gRPC plumbing needed).
+ * Phase 1 / T6: the coordinator's admin reshard. OpenEpoch creates then appends epochs -- a
+ * CAS-guarded read-modify-write over the store, and the sole ring-writing path (a published epoch's
+ * ring is sealed; see docs/ring-immutability-guard.md). Exercised via the public logic methods (no
+ * gRPC plumbing needed).
  */
 class CoordinatorApiTest {
 
@@ -27,14 +27,14 @@ class CoordinatorApiTest {
 
     @Test @DisplayName("openEpoch creates epoch 0, then appends epoch 1 and drains the previous")
     void openEpochCreatesThenAppends() throws Exception {
-        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            Policy p0 = api.doOpenEpoch("acme", List.of(slot(0, "cell-3")));
+        try (CoordinatorService svc = new CoordinatorService(new InMemoryCoordinatorStore())) {
+            Policy p0 = svc.doOpenEpoch("acme", List.of(slot(0, "cell-3")));
             assertEquals(0, p0.getCurrentEpoch());
             assertEquals(1, p0.getRevision());
             assertEquals(EpochStatus.OPEN, p0.getEpochsOrThrow(0).getStatus());
             assertEquals("cell-3", p0.getEpochsOrThrow(0).getRing(0).getCellId());
 
-            Policy p1 = api.doOpenEpoch("acme", List.of(slot(0, "cell-5")));
+            Policy p1 = svc.doOpenEpoch("acme", List.of(slot(0, "cell-5")));
             assertEquals(1, p1.getCurrentEpoch());
             assertEquals(2, p1.getRevision());
             assertEquals(EpochStatus.DRAINING, p1.getEpochsOrThrow(0).getStatus(), "previous epoch drains");
@@ -45,25 +45,14 @@ class CoordinatorApiTest {
 
     @Test @DisplayName("reaper dead-timeout is derived from the node heartbeat interval, always exceeding it")
     void reaperTimeoutTracksNodeHeartbeat() {
-        long beatMillis = CoordinatorApi.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
+        long beatMillis = CoordinatorService.NODE_HEARTBEAT_INTERVAL_SECONDS * 1000L;
         // Whatever the missed-count (even a misconfigured 0/1), the dead timeout must exceed one beat,
         // so a live node that heartbeats on schedule is never reaped.
         for (int missed : new int[]{0, 1, 2, 3, 5}) {
-            assertTrue(CoordinatorApi.nodeDeadMillis(missed) > beatMillis,
+            assertTrue(CoordinatorService.nodeDeadMillis(missed) > beatMillis,
                     "dead timeout must exceed the node heartbeat interval for missed=" + missed);
         }
-        assertEquals(3 * beatMillis, CoordinatorApi.nodeDeadMillis(3));
-        assertEquals(2 * beatMillis, CoordinatorApi.nodeDeadMillis(1), "floored at two beats");
-    }
-
-    @Test @DisplayName("setRing replaces an epoch's ring and bumps the revision")
-    void setRingUpdatesEpoch() throws Exception {
-        try (CoordinatorApi api = new CoordinatorApi(new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED)) {
-            api.doOpenEpoch("acme", List.of(slot(0, "cell-3")));
-            Policy p = api.doSetRing("acme", 0, List.of(slot(0, "cell-9")));
-            assertEquals("cell-9", p.getEpochsOrThrow(0).getRing(0).getCellId());
-            assertEquals(2, p.getRevision());
-            assertEquals(EpochStatus.OPEN, p.getEpochsOrThrow(0).getStatus(), "status preserved");
-        }
+        assertEquals(3 * beatMillis, CoordinatorService.nodeDeadMillis(3));
+        assertEquals(2 * beatMillis, CoordinatorService.nodeDeadMillis(1), "floored at two beats");
     }
 }
