@@ -50,10 +50,10 @@ step after it. Unset ⇒ the queue is the **workflow name**.
 
 ```java
 Workflow.define("orders")
-    .step("validate", Steps::validate)                 // queue "orders" (the default)
-    .step("charge",   Steps::charge,   "payments")     // queue "payments"
-    .step("render-receipt", Steps::render, "gpu")      // queue "gpu"
-    .step("email",    Steps::email,    "notify")       // queue "notify"
+    .step("validate")                 // queue "orders" (the default)
+    .step("charge", "payments")     // queue "payments"
+    .step("render-receipt", "gpu")      // queue "gpu"
+    .step("email", "notify")       // queue "notify"
     .build();
 ```
 
