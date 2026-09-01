@@ -9,10 +9,9 @@ import com.wiggle.dist.coord.NoopCoordinatorLink;
 import com.wiggle.server.Logging;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.coordinator.etcd.EtcdCoordinatorStore;
+import com.wiggle.coordinator.ratis.RatisCoordinatorStoreProvider;
 import com.wiggle.server.coord.CoordinatorServer;
 import com.wiggle.server.coord.CoordinatorStore;
-import com.wiggle.server.store.Storage;
 
 /**
  * Entry point for the standalone server distribution. Reads configuration from the environment,
@@ -80,33 +79,29 @@ public final class Main {
 
     /**
      * Runs the coordinator control plane: build its store, then a self-hosted {@link CoordinatorServer}.
-     * No engine, no cell. The store is either etcd (consensus-backed, no engine DB — set
-     * {@code WIGGLE_ETCD_ENDPOINTS}) or the configured database (reuse-DB, coord schema self-migrated).
-     * Leader election is a durable lease over that store, keyed on the node name.
+     * No engine, no cell. The store is the embedded Ratis + RocksDB backend — a consensus-backed control
+     * plane with no external store and no engine database. Its data directory (and, for a multi-node group,
+     * its peers) come from {@code WIGGLE_COORD_STORE=ratis://<dir>?peers=...}, defaulting to a single-member
+     * group at {@code /var/lib/wiggle/coord}. Leader election is a durable lease over that store, keyed on
+     * the node name.
      */
     private static void runCoordinator(ServerConfig config) throws Exception {
-        String etcd = System.getenv("WIGGLE_ETCD_ENDPOINTS");
-        CoordinatorStore store;
-        AutoCloseable backing;   // closed on shutdown; owns the store's underlying connection/session/client
-        String storageDesc;
-        if (etcd != null && !etcd.isBlank()) {
-            EtcdCoordinatorStore es = EtcdCoordinatorStore.connect(etcd);
-            store = es; backing = es; storageDesc = "etcd " + etcd;
-        } else {
-            WiggleStorageFactory factory = new WiggleStorageFactory();
-            Storage storage = factory.create(config);
-            store = factory.coordinatorStore(config, storage);   // coord schema self-migrates
-            backing = storage; storageDesc = config.isInMemory() ? "in-memory" : config.jdbcUrl();
+        String uri = System.getenv("WIGGLE_COORD_STORE");
+        if (uri == null || uri.isBlank()) uri = "ratis:///var/lib/wiggle/coord";
+        if (!uri.startsWith("ratis:")) {
+            throw new IllegalArgumentException("the coordinator store is Ratis-only; set "
+                    + "WIGGLE_COORD_STORE=ratis://<dir>?peers=... (got '" + uri + "')");
         }
+        CoordinatorStore store = new RatisCoordinatorStoreProvider(uri).coordinatorStore();
         CoordinatorServer coordinator = new CoordinatorServer(store, config.port(), config.tls(),
                 config.missedHeartbeatsBeforeDead(), config.nodeName()).start();
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle coordinator '" + config.nodeName() + "' on 127.0.0.1:" + coordinator.port()
-                + " (gRPC: " + (tls ? "TLS" : "plaintext") + ", store: " + storageDesc + ")");
+                + " (gRPC: " + (tls ? "TLS" : "plaintext") + ", store: ratis " + uri + ")");
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             coordinator.close();
-            try { backing.close(); } catch (Exception ignored) { }
+            try { store.close(); } catch (Exception ignored) { }
         }));
         Thread.currentThread().join();
     }

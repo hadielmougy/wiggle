@@ -3,9 +3,7 @@ rootProject.name = "wiggle"
 include(
     "core",
     "proto",
-    "coordinator:spi",
-    "coordinator:runtime",
-    "coordinator:etcd",
+    "coordinator",
     "server",
     "jdbc",
     "postgres",
