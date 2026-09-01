@@ -115,10 +115,18 @@ def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE) -> list[dict]:
     svc = {
         "apiVersion": "v1", "kind": "Service",
         "metadata": {"name": "coordinator", "namespace": ns, "labels": labels},
-        "spec": {"clusterIP": "None", "selector": {"app": "coordinator"}, "ports": [
-            {"name": "grpc", "port": C.COORD_GRPC_PORT, "targetPort": C.COORD_GRPC_PORT},
-            {"name": "raft", "port": C.COORD_RAFT_PORT, "targetPort": C.COORD_RAFT_PORT},
-        ]},
+        "spec": {
+            "clusterIP": "None",
+            # Publish each pod's DNS as soon as it has an IP, before it is Ready. Without this the Raft
+            # peers cannot resolve coordinator-N.coordinator until they are Ready -- but they cannot become
+            # Ready until they resolve each other and form the group. A bootstrap deadlock (UnknownHost).
+            "publishNotReadyAddresses": True,
+            "selector": {"app": "coordinator"},
+            "ports": [
+                {"name": "grpc", "port": C.COORD_GRPC_PORT, "targetPort": C.COORD_GRPC_PORT},
+                {"name": "raft", "port": C.COORD_RAFT_PORT, "targetPort": C.COORD_RAFT_PORT},
+            ],
+        },
     }
     return [svc, sts]
 
