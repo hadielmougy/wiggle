@@ -156,6 +156,26 @@ class RatisCoordinatorStoreTest {
         }
     }
 
+    @Test @DisplayName("embedded Ratis store: a multi-slot ring round-trips every slot")
+    @Timeout(60)
+    void multiSlotRingRoundTrips(@TempDir Path dir) throws Exception {
+        try (CoordinatorStore store = bootStore(dir)) {
+            // epoch 1 with TWO slots: shard 0 -> cellA, shard 1 -> cellB (the reshard the lab does).
+            EpochRing two = new EpochRing(List.of(
+                    new RingSlot(0, "cellA", "eu"),
+                    new RingSlot(1, "cellB", "us")), EpochStatus.OPEN);
+            assertEquals(1, store.casPolicy("abc", 0, policy("abc", 1, Map.of(1L, two))));
+
+            CoordPolicy got = store.getPolicy("abc").orElseThrow();
+            EpochRing er = got.epochs().get(1L);
+            assertEquals(2, er.ring().size(), "both ring slots persist");
+            assertEquals("cellA", er.ring().get(0).cellId());
+            assertEquals(0, er.ring().get(0).shard());
+            assertEquals("cellB", er.ring().get(1).cellId());
+            assertEquals(1, er.ring().get(1).shard());
+        }
+    }
+
     @Test @DisplayName("embedded Ratis store: leadership lease is take-once, renewable, and releasable")
     @Timeout(60)
     void leadership(@TempDir Path dir) throws Exception {
