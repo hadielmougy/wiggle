@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -79,5 +80,50 @@ class CellPlacementTest {
         assertFalse(p.mintable(), "empty shard set means standby");
         assertThrows(IllegalStateException.class, () -> p.shardFor(Ids.token()), "standby cell refuses to mint");
         assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
+    }
+
+    // ---- standby self-heal: a start routed to a cell just before its heartbeat applied a new epoch ----
+
+    @Test @DisplayName("a standby mint re-fetches on-demand, then mints once placed")
+    void standbyRefreshesThenMints() {
+        CellPlacement p = new CellPlacement(1, new int[]{});   // standby in epoch 1
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandbyRefresh(() -> {                             // the on-demand re-fetch places this cell
+            calls.incrementAndGet();
+            p.set(1, new int[]{3});
+        });
+
+        CellPlacement.Stamp s = p.stampFor(Ids.token());
+        assertEquals(1, s.epoch());
+        assertEquals(3, s.shard());
+        assertEquals(1, calls.get(), "refreshed exactly once");
+    }
+
+    @Test @DisplayName("a mintable cell never triggers a standby refresh")
+    void mintableDoesNotRefresh() {
+        CellPlacement p = new CellPlacement(1, new int[]{2});
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandbyRefresh(calls::incrementAndGet);
+        assertEquals(2, p.stampFor(Ids.token()).shard());
+        assertEquals(0, calls.get());
+    }
+
+    @Test @DisplayName("still-standby after refresh throws (self-heal doesn't loop forever)")
+    void stillStandbyThrows() {
+        CellPlacement p = new CellPlacement(0, new int[]{});
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandbyRefresh(calls::incrementAndGet);            // refresh does not place it
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
+        assertEquals(1, calls.get());
+    }
+
+    @Test @DisplayName("bursty standby mints are debounced to one refresh")
+    void refreshIsDebounced() {
+        CellPlacement p = new CellPlacement(0, new int[]{});
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandbyRefresh(calls::incrementAndGet);            // never places it -> stays standby
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));   // within the window
+        assertEquals(1, calls.get(), "a second standby mint within the debounce window does not re-refresh");
     }
 }

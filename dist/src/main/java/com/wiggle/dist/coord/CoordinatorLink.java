@@ -23,6 +23,10 @@ public interface CoordinatorLink extends AutoCloseable {
     /** Liveness ping; observing a newer config generation is how change propagates (T7). */
     void heartbeat();
 
+    /** Re-fetch and apply this node's placement now (best-effort). Used as the cell's on-demand
+     *  self-heal when a mint hits standby after an epoch bump. No-op without a coordinator. */
+    default void refreshPlacement() { }
+
     /** Deregister on shutdown. */
     @Override void close();
 
