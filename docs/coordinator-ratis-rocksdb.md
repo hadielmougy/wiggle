@@ -1,8 +1,9 @@
-# Design sketch — an embedded coordinator store on Apache Ratis + RocksDB
+# Embedded coordinator store on Apache Ratis + RocksDB
 
-**Status:** design sketch (illustrative skeleton code under `coordinator/ratis/`; not yet wired into the
-build). Goal: a `CoordinatorStore` implementation whose durable state lives in an **embedded Raft group
-over local RocksDB**, so the control plane needs no external database *or* etcd.
+**Status:** implemented and shipped — the coordinator's **only** store backend. The code lives in the
+standalone `coordinator/` module (store under `com.wiggle.coordinator.ratis`, contract under
+`com.wiggle.server.coord`). Durable state lives in an **embedded Raft group over local RocksDB**, so the
+control plane needs no external database *or* etcd — both were removed as coordinator options.
 
 > One-line: the coordinator's cluster becomes one Ratis group; every write is a replicated command
 > applied deterministically to RocksDB; reads are linearizable Ratis queries. Leadership is Raft's, not a
@@ -21,8 +22,8 @@ The coordinator is the **low-risk** place to embed consensus (the engine is not 
 - **Queries are simple.** All reads are point-gets or small per-namespace scans (`nodes(ns)`,
   `definitions(ns)`). No ad-hoc SQL, so losing SQL costs almost nothing here (unlike the engine).
 - **It already speaks consensus.** `CoordinatorStore` is CAS-centric (`casPolicy`, `bindCell`,
-  `acquireLeadership`), and there is already an **etcd backend** doing exactly this via version-fenced
-  puts. Ratis+RocksDB is that same contract, embedded.
+  `acquireLeadership`). An earlier etcd backend proved this exact contract via version-fenced puts (since
+  removed); Ratis+RocksDB is that same contract, embedded.
 
 ### The determinism gift
 A Raft state machine must apply commands **identically on every replica** — so the apply function may not
@@ -56,7 +57,9 @@ call `System.currentTimeMillis()` / `UUID` internally — that would need work.)
 | `putNamespace` / `getNamespace` / `namespaces` | write / read | command / query |
 | `acquireLeadership(nodeId, now, lease)` | write | see §4 — either a lease command, or replaced by Raft leadership |
 
-Values are the existing JSON encodings (`EpochCodec` for epoch maps, `Json` for the rest) — no new codec.
+Values use the shared `CoordCodec` (`EpochCodec` for epoch maps, `Json` for the rest), mirroring the field
+names the JDBC/Cassandra stores persisted — with one deliberate twist: every record is **self-contained**
+(the policy blob carries its own `namespace`), so a value read back from RocksDB decodes without its key.
 
 ---
 
@@ -65,18 +68,19 @@ Values are the existing JSON encodings (`EpochCodec` for epoch maps, `Json` for 
 One column family, prefixed keys (all UTF-8):
 
 ```
-policy/<ns>                     -> {currentEpoch, revision, epochs(EpochCodec)}
+policy/<ns>                     -> {namespace, currentEpoch, revision, epochs(EpochCodec)}
 node/<id>                       -> CoordNode JSON
-node-ns/<ns>/<id>               -> "" (secondary index for nodes(ns) prefix scan)
 cell/<ns>/<cellId>              -> fingerprint
 def/<ns>/<name>                 -> CoordDefinition JSON
 ns/<ns>                         -> CoordNamespace JSON
-leader                          -> {holder, expiresAt}   (only if we keep option A, §4)
+leader                          -> {holder, expiresAt}   (leadership option A, §4)
 ```
 
-`nodes(ns)` and `definitions(ns)` are RocksDB **prefix iterations**; the `node-ns/` index keeps
-`nodes(ns)` from scanning the whole roster. Writes update the primary + index in one **`WriteBatch`** so
-apply stays atomic.
+`definitions(ns)` is a RocksDB **prefix iteration** under `def/<ns>/`. `nodes(ns)` is a full `node/` scan
+filtered by namespace **in memory** — the state is bounded, so this is simpler than (and as cheap as) a
+maintained secondary index. An early draft kept a `node-ns/<ns>/<id>` index for this; it was dropped in
+favour of the in-memory filter, the same approach the removed etcd/JDBC stores took. A command's writes
+commit through one **`WriteBatch`** so apply stays atomic.
 
 ---
 
@@ -94,8 +98,8 @@ leader for free, so:
   can commit, so reconcile/retire duties key off Raft leadership directly — no lease, no `now` clock, no
   brief-overlap window at all.
 
-The sketch implements **Option A** (keeps everything else untouched) and notes where Option B would remove
-code.
+The store ships **Option A** (keeps `LeaderElection`/`CoordinatorReconciler` untouched); Option B remains
+the recommended long-term simplification.
 
 ---
 
@@ -108,25 +112,42 @@ code.
 - **Backup** = copy a checkpoint directory (or add a follower and let it snapshot). This is the real new
   operational surface — but the dataset is small, so a full snapshot is cheap.
 
+> **Not yet wired:** `takeSnapshot()` writes the RocksDB checkpoint, but snapshot **install/restore** is
+> not hooked up, so a durable restart currently replays the log from the beginning. That is fine for a
+> single-member dev group; it must be finished before multi-node or long-lived deployments.
+> `CoordStateMachine` carries this caveat inline.
+
 ---
 
 ## 6. Module layout & wiring
 
+The coordinator is now a **single standalone module** (the former `coordinator/{spi,runtime,ratis}` split
+was merged):
+
 ```
-coordinator/ratis/
-  build.gradle                        # deps: coordinator:spi, ratis-server/ratis-grpc, rocksdbjni
-  src/main/java/com/wiggle/coordinator/ratis/
-    RatisCoordinatorStore.java        # implements CoordinatorStore: ops -> commands, reads -> queries
-    RatisCoordinatorStoreProvider.java# the CoordinatorStoreProvider seam
-    CoordStateMachine.java            # Ratis BaseStateMachine over RocksDB (apply/query/snapshot)
-    CoordCommand.java                 # command+query envelope, op enum, (de)serialization
-    RocksKv.java                      # RocksDB open + WriteBatch + prefix-scan helper, key layout
+coordinator/
+  build.gradle                        # deps: core, proto, ratis-server/ratis-grpc, ratis-metrics-default, rocksdbjni
+  src/main/java/com/wiggle/
+    server/coord/                     # the CoordinatorStore contract, records, EpochCodec, in-memory store,
+                                      #   CoordinatorServer, reconcile/retire, live census, provisioning
+    coordinator/ratis/
+      RatisCoordinatorStore.java      # implements CoordinatorStore: ops -> commands, reads -> queries
+      RatisCoordinatorStoreProvider.java # boots/joins the Raft group + RocksDB; the provider seam
+      CoordStateMachine.java          # Ratis BaseStateMachine over RocksDB (apply/query/snapshot)
+      CoordCommand.java               # command+query envelope, op enum, (de)serialization
+      CoordCodec.java                 # shared JSON on-disk form (records + EpochCodec)
+      RocksKv.java                    # RocksDB open + WriteBatch + prefix-scan helpers, key layout
+  src/test/java/com/wiggle/coordinator/ratis/
+    RatisCoordinatorStoreTest.java    # the CoordinatorStore contract + leadership, on a real embedded group
 ```
 
-- **Decoupling stays intact.** It depends only on `coordinator:spi` — never on the engine `Storage` (the
-  server ⊥ coordinator rule holds; the coordinator runtime and engine still share only the gRPC proto).
-- **`dist` composition** resolves it via `CoordinatorStoreProvider`, same seam as JDBC/Cassandra/etcd. A
-  config like `WIGGLE_COORD_STORE=ratis:///var/lib/wiggle/coord?peers=…` selects it.
+- **Standalone & decoupled.** The module depends only on `core` + `proto` (+ Ratis/RocksDB) — never on the
+  engine `Storage` or a storage module. **Nothing outside the module implements the coordinator contract**
+  (the JDBC/Cassandra coordinator stores were removed), so the server ⊥ coordinator rule is now structural,
+  not just conventional; the coordinator and engine still share only the gRPC proto.
+- **Sole backend.** etcd and the DB-backed coordinator store are gone. `dist` runs the coordinator on Ratis
+  only: `WIGGLE_COORD_STORE=ratis://<dir>?peers=…` sets the data dir / peers, defaulting to a single-member
+  group at `/var/lib/wiggle/coord`; a non-`ratis:` value is rejected.
 - **Dev/single-node** = a one-member Ratis group (no external anything) — the "just a JAR" story, now for
   the coordinator too.
 
@@ -135,9 +156,11 @@ coordinator/ratis/
 ## 7. Tradeoffs vs. today's backends
 
 **Gain**
-- No external RDBMS **or** etcd for the control plane — it's embedded and self-contained.
+- No external RDBMS **or** etcd for the control plane — it's embedded and self-contained, and now the only
+  coordinator store, so there is no backend to choose or configure.
 - Leadership is real consensus (Option B removes the lease entirely).
-- The per-dialect CAS matrix (JDBC unique-PK / Cassandra LWT / etcd txn) collapses to one apply function.
+- The per-dialect CAS matrix (JDBC unique-PK / Cassandra LWT / etcd txn) is gone — one apply function, and
+  the storage modules no longer carry any coordinator code at all.
 
 **Cost**
 - You run a Ratis group (3–5 coordinator nodes) and own snapshot/backup/membership. But coordinator HA
@@ -146,17 +169,19 @@ coordinator/ratis/
   coordinator scale and volumes.
 
 **Risk: low** relative to doing the engine — small bounded state, simple queries, a contract already proven
-against etcd. This is the sane first step of the "embedded, no external store" direction; the engine can
-stay on the pluggable `StorageFactory` (Postgres/Cassandra) until/unless the same treatment is justified
-there.
+against the earlier etcd/JDBC backends. This is the "embedded, no external store" direction, now adopted
+for the coordinator; the **engine** stays on the pluggable `StorageFactory` (Postgres/MySQL/Oracle/SQL
+Server/Cassandra) — that decision is unchanged and unaffected.
 
 ---
 
 ## 8. Open questions
 
+- **Snapshot install/restore** — the concrete next task (see §5): wire Ratis `InstallSnapshot` +
+  restore-from-checkpoint so a durable restart doesn't replay the whole log. Required before multi-node.
 - **Read level for the reconciler.** It only runs on the leader; leader-local reads are fine and cheaper
   than read-index. Client-facing resolves already go through the gRPC layer, not this store.
 - **Snapshot cadence** — by log size vs. applied-index interval (Ratis config).
-- **Option A vs B** for leadership — ship A, plan B.
-- **Cassandra/JDBC coexistence** — this is an *additional* backend behind the provider, not a replacement;
-  operators choose per deployment.
+- **Option A vs B** for leadership — shipped A, plan B.
+- **Multi-node ops** — membership changes (`setConfiguration`), peer/`id` wiring, and backup runbook, once
+  install/restore lands.
