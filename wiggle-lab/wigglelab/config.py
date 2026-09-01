@@ -20,7 +20,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 # In-cluster ports.
 COORD_GRPC_PORT = 8099          # CoordinatorServer (CellCoordinator gRPC)
 COORD_RAFT_PORT = 10000         # Apache Ratis peer transport (between coordinator pods)
-COORD_DEFAULT_GROUP_SIZE = 3    # a real HA Ratis group (odd sizes give a majority)
+COORD_DEFAULT_GROUP_SIZE = 1    # start as a single-member group; scale up to an odd size (3, 5) for HA
 CELL_GRPC_PORT = 8080           # WiggleControlPlane gRPC on a cell node
 CELL_DASHBOARD_PORT = 8090      # cell web dashboard
 DB_PORT = 5432
