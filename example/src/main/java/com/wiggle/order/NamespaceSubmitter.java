@@ -42,6 +42,7 @@ public final class NamespaceSubmitter {
                 Order order = Order.of("A-" + (2000 + i), "customer-" + i, 1 + (i % 3),
                         new BigDecimal("100.00").add(BigDecimal.valueOf(i)));
                 ids.add(resolver.clientForNamespace(ns).start(bp, order));
+                Thread.sleep(10);
             }
             System.out.println("submitted " + count + " orders to namespace '" + ns + "' via coordinator " + coord);
 
