@@ -155,8 +155,9 @@ cells = lab.cells()
 cols[1].metric("Cells", len(cells))
 cols[2].metric("Namespaces", len({c["namespace"] for c in cells if c["namespace"]}))
 
-overview, cells_tab, placement, client, forwards, logs_tab = st.tabs(
-    ["📊 Overview", "🗄 Cells", "🧭 Placement (epochs)", "🚀 Client tests", "🔌 Forwards", "📜 Logs"])
+overview, cells_tab, placement, client, forwards, logs_tab, db_tab = st.tabs(
+    ["📊 Overview", "🗄 Cells", "🧭 Placement (epochs)", "🚀 Client tests", "🔌 Forwards",
+     "📜 Logs", "🗃 Database"])
 
 # ---- Overview ----
 with overview:
@@ -362,3 +363,32 @@ with logs_tab:
             st.rerun()
         text = lab.logs(pod, int(tail), previous=prev)
         st.code(text or "(no output)", language="text")
+
+# ---- Database ----
+with db_tab:
+    st.subheader("Databases (one Postgres per cell)")
+    if not cells:
+        st.caption("No cells yet.")
+    else:
+        cell = st.selectbox("Cell", [c["cell"] for c in cells], key="db-cell")
+        pod = lab.db_pod(cell)
+        st.caption(f"db pod: `{pod or '— none —'}`")
+
+        st.markdown("**Tables**")
+        try:
+            tables = lab.list_tables(cell)
+            if tables:
+                st.dataframe(tables, use_container_width=True, hide_index=True)
+            else:
+                st.caption("no user tables yet (has the cell finished migrating?)")
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"could not list tables: {e}")
+
+        st.divider()
+        st.markdown("**Query**")
+        sql = st.text_area("SQL", value="SELECT id, workflow, status FROM wf_instance ORDER BY updated_at DESC LIMIT 20;",
+                           height=100, label_visibility="collapsed", key="db-sql")
+        if st.button("Run query", disabled=not pod):
+            with st.spinner("running…"):
+                out = lab.query(cell, sql)
+            st.code(out or "(no output)", language="text")

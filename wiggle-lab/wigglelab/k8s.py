@@ -67,6 +67,15 @@ def pods(selector: str | None = None) -> list[dict]:
     return out
 
 
+def psql(pod: str, sql: str, tuples_only: bool = False, timeout: int = 30) -> shell.Result:
+    """Run SQL in a Postgres pod via `kubectl exec ... psql`. With tuples_only, output is
+    tab-separated rows with no header/decoration (easy to parse)."""
+    flags = ["-U", "wiggle", "-d", "wiggle", "-P", "pager=off", "-v", "ON_ERROR_STOP=1"]
+    if tuples_only:
+        flags += ["-t", "-A", "-F", "\t"]
+    return kubectl(["exec", pod, "--", "psql", *flags, "-c", sql], timeout=timeout)
+
+
 def logs(pod: str, tail: int = 200, previous: bool = False) -> str:
     args = ["logs", pod, f"--tail={tail}", "--all-containers=true", "--prefix=true"]
     if previous:

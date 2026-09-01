@@ -159,6 +159,35 @@ class Lab:
     def logs(self, pod: str, tail: int = 200, previous: bool = False) -> str:
         return k8s.logs(pod, tail=tail, previous=previous)
 
+    # ---- per-cell database inspection ----
+    def db_pod(self, cell: str) -> str | None:
+        ps = self.pods(role="db", cell=cell)
+        return ps[0]["name"] if ps else None
+
+    def list_tables(self, cell: str) -> list[dict]:
+        pod = self.db_pod(cell)
+        if not pod:
+            raise RuntimeError(f"no db pod for cell '{cell}'")
+        sql = ("SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables "
+               "ORDER BY schemaname, relname")
+        r = k8s.psql(pod, sql, tuples_only=True)
+        if not r.ok:
+            raise RuntimeError(r.err.strip() or r.out.strip() or "query failed")
+        rows = []
+        for line in r.out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 3:
+                rows.append({"schema": parts[0], "table": parts[1], "rows": parts[2]})
+        return rows
+
+    def query(self, cell: str, sql: str) -> str:
+        """Run arbitrary SQL against a cell's Postgres and return psql's rendered output."""
+        pod = self.db_pod(cell)
+        if not pod:
+            raise RuntimeError(f"no db pod for cell '{cell}'")
+        r = k8s.psql(pod, sql)
+        return r.out if r.ok else (r.err.strip() or r.out.strip() or "(no output)")
+
     @record
     def create_cell(self, cell: str, namespace: str, replicas: int = 1, region: str = ""):
         self.ensure_namespace()
