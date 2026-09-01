@@ -7,6 +7,7 @@ import com.wiggle.proto.ActiveCellsResponse;
 import com.wiggle.proto.AllocatedWorkflow;
 import com.wiggle.proto.CoordinatorHeartbeatResponse;
 import com.wiggle.proto.DeregisterWorkflowResponse;
+import com.wiggle.proto.DumpResponse;
 import com.wiggle.proto.Endpoint;
 import com.wiggle.proto.EpochRing;
 import com.wiggle.proto.EpochStatus;
@@ -297,6 +298,68 @@ public final class CoordinatorService implements AutoCloseable {
                     .setName(d.name()).setVersion(d.version()).setRegisteredAt(d.registeredAt()).build());
         }
         return b.build();
+    }
+
+    /**
+     * A debug snapshot of the coordinator store's logical contents -- placements, namespace registry,
+     * node roster and definition registry -- as JSON. Assembled from the read side of the store (no raw
+     * key/value access), so it works over any backend. For operators/tools inspecting a live coordinator.
+     */
+    public DumpResponse doDump() {
+        java.util.Set<String> namespaces = new java.util.TreeSet<>();
+
+        List<Object> policies = new ArrayList<>();
+        for (CoordPolicy p : store.listPolicies()) {
+            namespaces.add(p.namespace());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("namespace", p.namespace());
+            m.put("currentEpoch", p.currentEpoch());
+            m.put("revision", p.revision());
+            m.put("epochs", Json.parse(EpochCodec.encode(p.epochs())));
+            policies.add(m);
+        }
+
+        List<Object> namespaceRecords = new ArrayList<>();
+        for (CoordNamespace n : store.namespaces()) {
+            namespaces.add(n.namespace());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("namespace", n.namespace());
+            m.put("state", n.state().name());
+            m.put("endpoint", n.endpoint());
+            m.put("replicas", n.replicas());
+            namespaceRecords.add(m);
+        }
+
+        List<Object> nodes = new ArrayList<>();
+        List<Object> definitions = new ArrayList<>();
+        for (String ns : namespaces) {
+            for (CoordNode nd : store.nodes(ns)) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", nd.id());
+                m.put("namespace", nd.namespace());
+                m.put("cellId", nd.cellId());
+                m.put("endpoint", nd.endpoint());
+                m.put("region", nd.region());
+                m.put("cellFingerprint", nd.cellFingerprint());
+                m.put("lastHeartbeat", nd.lastHeartbeat());
+                nodes.add(m);
+            }
+            for (CoordDefinition d : store.definitions(ns)) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("namespace", d.namespace());
+                m.put("name", d.name());
+                m.put("version", d.version());
+                m.put("hash", d.hash());
+                definitions.add(m);
+            }
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("policies", policies);
+        out.put("namespaces", namespaceRecords);
+        out.put("nodes", nodes);
+        out.put("definitions", definitions);
+        return DumpResponse.newBuilder().setJson(Json.write(out)).build();
     }
 
     /**
