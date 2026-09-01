@@ -15,6 +15,11 @@ from wigglelab import kind, workflows
 from wigglelab.controller import Lab
 from wigglelab.ringspec import parse_ring
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:  # optional dep; without it, refresh stays manual
+    st_autorefresh = None
+
 st.set_page_config(page_title="Wiggle Lab", page_icon="🧫", layout="wide")
 
 
@@ -124,6 +129,15 @@ with st.sidebar:
         st.caption("Send this file over to reproduce & fix (replay it with `python replay.py <file>`).")
 
     st.divider()
+    ar1, ar2 = st.columns([1.3, 1])
+    auto = ar1.checkbox("Auto-refresh", value=False, help="periodically re-read cluster status")
+    interval = ar2.selectbox("every", [2, 5, 10, 30], index=1, format_func=lambda s: f"{s}s",
+                             label_visibility="collapsed", disabled=not auto)
+    if auto:
+        if st_autorefresh:
+            st_autorefresh(interval=interval * 1000, key="autorefresh")
+        else:
+            st.caption("`pip install -r requirements.txt` to enable auto-refresh")
     if st.button("🔄 Refresh", use_container_width=True):
         st.rerun()
 

@@ -1,4 +1,5 @@
 streamlit>=1.30
+streamlit-autorefresh>=1.0
 grpcio>=1.60
 grpcio-tools>=1.60
 protobuf>=4.25
