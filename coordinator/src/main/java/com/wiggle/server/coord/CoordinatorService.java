@@ -309,6 +309,14 @@ public final class CoordinatorService implements AutoCloseable {
         if (nodes.isEmpty()) {
             throw new IllegalStateException("no cell for namespace '" + namespace + "' to register '" + name + "'");
         }
+        String hash = sha256(definitionJson);
+        // Idempotent: an unchanged definition is already on every cell (a newly joined cell is seeded on
+        // join), so skip the fan-out instead of re-seeding every cell on each identical register call.
+        var existing = store.getDefinition(namespace, name);
+        if (existing.isPresent() && hash.equals(existing.get().hash())) {
+            return RegisterWorkflowResponse.newBuilder()
+                    .setVersion(existing.get().version()).setCellsSeeded(0).build();
+        }
         Struct struct = ProtoJson.toStruct(Json.parseObject(new String(definitionJson, StandardCharsets.UTF_8)));
         WorkflowDefinition wd = WorkflowDefinition.newBuilder().setDefinition(struct).build();
         int version = 0;
@@ -318,8 +326,7 @@ public final class CoordinatorService implements AutoCloseable {
             version = Integer.parseInt(r.getVersion());
             seeded++;
         }
-        store.putDefinition(new CoordDefinition(namespace, name, version, sha256(definitionJson),
-                System.currentTimeMillis()));
+        store.putDefinition(new CoordDefinition(namespace, name, version, hash, System.currentTimeMillis()));
         int fanned = seeded;
         int v = version;
         LOG.log(System.Logger.Level.INFO, () -> "fanned out workflow '" + name + "' v" + v
