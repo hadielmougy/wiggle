@@ -50,6 +50,11 @@ class CoordinatorClient:
         resp = self._stub.ListWorkflows(cpb.ListWorkflowsRequest(namespace=namespace))
         return [msg_to_dict(w) for w in resp.workflows]
 
+    def dump(self) -> dict:
+        """The coordinator store's logical contents (JSON), decoded to a dict."""
+        resp = self._stub.Dump(cpb.DumpRequest(), timeout=10)
+        return json.loads(resp.json) if resp.json else {}
+
     # ---- resolution (read) ----
 
     def resolve_namespace(self, namespace: str, region: str = "") -> dict:

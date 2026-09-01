@@ -34,7 +34,8 @@ def delete_pod(pod: str) -> shell.Result:
 
 
 def delete_by_label(selector: str) -> shell.Result:
-    return kubectl(["delete", "deployment,service,pod", "-l", selector, "--wait=false"], timeout=120)
+    return kubectl(["delete", "deployment,statefulset,service,pod", "-l", selector, "--wait=false"],
+                   timeout=120)
 
 
 def get_json(resource: str, selector: str | None = None) -> dict:
@@ -63,6 +64,7 @@ def pods(selector: str | None = None) -> list[dict]:
             "phase": status.get("phase", "?"),
             "ready": ready,
             "restarts": restarts,
+            "ip": status.get("podIP", ""),
         })
     return out
 
@@ -76,8 +78,16 @@ def psql(pod: str, sql: str, tuples_only: bool = False, timeout: int = 30) -> sh
     return kubectl(["exec", pod, "--", "psql", *flags, "-c", sql], timeout=timeout)
 
 
-def logs(pod: str, tail: int = 200, previous: bool = False) -> str:
-    args = ["logs", pod, f"--tail={tail}", "--all-containers=true", "--prefix=true"]
+def exec_sh(pod: str, script: str, timeout: int = 30) -> str:
+    """Run a shell snippet inside a pod via `kubectl exec ... sh -c`."""
+    r = kubectl(["exec", pod, "--", "sh", "-c", script], timeout=timeout)
+    return r.out if r.ok else (r.err.strip() or r.out.strip() or "(no output)")
+
+
+def logs(pod: str, tail: int = 200, previous: bool = False, prefix: bool = True) -> str:
+    args = ["logs", pod, f"--tail={tail}", "--all-containers=true"]
+    if prefix:
+        args.append("--prefix=true")
     if previous:
         args.append("--previous")
     r = kubectl(args, timeout=30)

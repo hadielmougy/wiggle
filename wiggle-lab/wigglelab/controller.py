@@ -112,21 +112,41 @@ class Lab:
 
     # ---- coordinator ----
     @record
-    def deploy_coordinator(self):
-        """(Re)deploy the coordinator with a FRESH store. On a redeploy the pod is rolled so its
-        emptyDir-backed Ratis+RocksDB starts empty — all prior nodes, epochs and policies are wiped
-        (existing cells re-register on their next heartbeat; re-open your epochs afterward)."""
+    def deploy_coordinator(self, size: int = C.COORD_DEFAULT_GROUP_SIZE):
+        """(Re)deploy the coordinator as one Ratis group of ``size`` pods (a StatefulSet behind a headless
+        Service). Every pod serves the same replicated store, so a client reaching any pod sees consistent
+        state. Redeploying deletes the old group and re-forms a fresh one (emptyDir stores start empty),
+        wiping prior nodes/epochs/policies. A fixed peer list means it is not dynamically scalable — pick a
+        size at deploy time (odd for a majority)."""
         self.ensure_namespace()
         self.pf.stop("coordinator")
-        existed = bool(k8s.deployments(selector="wiggle-lab/role=coordinator"))
-        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests())).check()
+        existed = bool(self.pods(role="coordinator")) or bool(
+            k8s.get_json("statefulset", "wiggle-lab/role=coordinator").get("items"))
         if existed:
-            k8s.rollout_restart("coordinator").check()   # new pod -> fresh emptyDir -> empty RocksDB
-            self.policies.clear()                        # cached rings are gone with the store
+            k8s.delete_by_label("wiggle-lab/role=coordinator")
+            self._wait(lambda: not self.pods(role="coordinator"), 120, "old coordinator removed")
+            self.policies.clear()
             self._save_state()
+        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests(size))).check()
 
     def coordinator_ready(self) -> bool:
         return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coordinator"))
+
+    def coordinator_group_size(self) -> int:
+        items = k8s.get_json("statefulset", "wiggle-lab/role=coordinator").get("items", [])
+        return items[0].get("spec", {}).get("replicas", 0) if items else 0
+
+    def dump_coordinator_store(self) -> dict:
+        """The coordinator store's logical contents (policies/namespaces/nodes/definitions) via the Dump
+        RPC — served by whichever coordinator pod the Service routes to."""
+        with self.coord_client() as cc:
+            return cc.dump()
+
+    def coordinator_store_files(self, pod: str) -> str:
+        """The Ratis + RocksDB store files inside one coordinator pod (per-pod, so divergence is visible
+        when scaled)."""
+        return k8s.exec_sh(pod, "echo '# tree'; ls -R /var/lib/wiggle/coord 2>/dev/null; "
+                                "echo; echo '# sizes'; du -sh /var/lib/wiggle/coord/* 2>/dev/null")
 
     # ---- readiness waits (used by replay to reproduce faithfully) ----
     def wait_coordinator_ready(self, timeout: int = 180):
@@ -177,15 +197,37 @@ class Lab:
     def logs(self, pod: str, tail: int = 200, previous: bool = False) -> str:
         return k8s.logs(pod, tail=tail, previous=previous)
 
+    def collect_pod_errors(self, tail: int = 3000) -> str:
+        """Scan every pod's recent logs for error/warning lines (plus their stack-trace continuations)
+        and return one report. For grabbing failures before tearing the cluster down."""
+        import re
+        pat = re.compile(r"ERROR|SEVERE|FATAL|WARNING|Exception|Traceback|Caused by|\bfailed\b")
+        cont = ("at ", "Caused by", "...", "Suppressed:")
+        sections = []
+        for p in self.pods():
+            name = p["name"]
+            role = p["labels"].get("wiggle-lab/role", "?")
+            text = k8s.logs(name, tail=tail, prefix=False)
+            hits = [ln for ln in text.splitlines()
+                    if pat.search(ln) or ln.strip().startswith(cont)]
+            if hits:
+                sections.append(f"===== {name} ({role}) — {len(hits)} line(s) =====")
+                sections.extend(hits)
+                sections.append("")
+        return "\n".join(sections) if sections else "(no error/warning lines found across pods)"
+
     # ---- per-cell database inspection ----
     def db_pod(self, cell: str) -> str | None:
         ps = self.pods(role="db", cell=cell)
         return ps[0]["name"] if ps else None
 
-    def list_tables(self, cell: str) -> list[dict]:
-        pod = self.db_pod(cell)
-        if not pod:
-            raise RuntimeError(f"no db pod for cell '{cell}'")
+    def db_pods(self) -> list[dict]:
+        """All Postgres pods (one per cell), each tagged with its cell label."""
+        return [{"pod": p["name"], "cell": p["labels"].get("wiggle-lab/cell", "?"),
+                 "ready": p["ready"], "phase": p["phase"]}
+                for p in self.pods(role="db")]
+
+    def list_tables(self, pod: str) -> list[dict]:
         sql = ("SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables "
                "ORDER BY schemaname, relname")
         r = k8s.psql(pod, sql, tuples_only=True)
@@ -198,11 +240,8 @@ class Lab:
                 rows.append({"schema": parts[0], "table": parts[1], "rows": parts[2]})
         return rows
 
-    def query(self, cell: str, sql: str) -> str:
-        """Run arbitrary SQL against a cell's Postgres and return psql's rendered output."""
-        pod = self.db_pod(cell)
-        if not pod:
-            raise RuntimeError(f"no db pod for cell '{cell}'")
+    def query(self, pod: str, sql: str) -> str:
+        """Run arbitrary SQL against a specific Postgres pod and return psql's rendered output."""
         r = k8s.psql(pod, sql)
         return r.out if r.ok else (r.err.strip() or r.out.strip() or "(no output)")
 
@@ -282,6 +321,21 @@ class Lab:
 
     def dashboard_target(self, cell: str) -> str | None:
         return self.pf.target(f"dash:{cell}")
+
+    def endpoint_rewrite_spec(self, namespace: str | None = None) -> str:
+        """Build a WIGGLE_ENDPOINT_REWRITE value that maps each cell's live pod IP(s) to that cell's own
+        port-forward, so a host-run client/worker routes to the RIGHT cell (not all to one). Ensures a
+        forward per cell first. Restrict to one namespace with ``namespace``."""
+        entries = []
+        for c in self.cells():
+            if namespace and c["namespace"] != namespace:
+                continue
+            cell = c["cell"]
+            local = self.forward_cell(cell).split(":")[-1]   # ensure the forward; take its local port
+            for p in self.pods(role="cell", cell=cell):
+                if p.get("ip"):
+                    entries.append(f"{p['ip']}:{C.CELL_GRPC_PORT}=127.0.0.1:{local}")
+        return "WIGGLE_ENDPOINT_REWRITE=" + ",".join(entries) if entries else "WIGGLE_ENDPOINT_REWRITE="
 
     def forward_status(self) -> dict[str, str | None]:
         """Live local addresses for the coordinator and each cell forward (None if not forwarded)."""

@@ -56,32 +56,71 @@ def namespace_manifest() -> dict:
             "metadata": {"name": C.K8S_NAMESPACE, "labels": {"app.kubernetes.io/part-of": C.PART_OF}}}
 
 
-def coordinator_manifests() -> list[dict]:
+def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE) -> list[dict]:
+    """A single Apache Ratis group of ``size`` coordinator pods, as a StatefulSet behind a headless
+    Service. Every pod serves the CellCoordinator gRPC (8099) backed by the SAME replicated store, so a
+    client reaching any pod sees consistent state -- unlike independent single-member coordinators.
+    A fixed peer list means this is not dynamically scalable: choose ``size`` at deploy time (odd for a
+    majority); redeploying re-forms the group."""
     labels = C.labels("coordinator")
+    ns = C.K8S_NAMESPACE
+
+    def peer(i: int) -> str:
+        host = f"coordinator-{i}.coordinator.{ns}.svc.cluster.local"
+        return f"coordinator-{i}@{host}:{C.COORD_RAFT_PORT}"
+
+    peers = ",".join(peer(i) for i in range(size))
+    # Each pod's Raft id is its own name; peers is the whole group. k8s expands $(POD_NAME) from the env
+    # defined just above it.
+    store_uri = f"ratis://{C.COORD_DATA_DIR}?peers={peers}&id=$(POD_NAME)"
+
     container = {
         "name": "coordinator", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
-        "ports": [{"containerPort": C.COORD_GRPC_PORT}],
+        "ports": [{"containerPort": C.COORD_GRPC_PORT, "name": "grpc"},
+                  {"containerPort": C.COORD_RAFT_PORT, "name": "raft"}],
         "env": [
-            _node_name_env(),
+            {"name": "POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+            {"name": "WIGGLE_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
             *_env({
                 "WIGGLE_ROLE": "coordinator",
-                "WIGGLE_COORD_STORE": C.COORD_STORE_URI,
                 "WIGGLE_PORT": C.COORD_GRPC_PORT,
+                "WIGGLE_COORD_STORE": store_uri,
             }),
         ],
         "volumeMounts": [{"name": "coord-data", "mountPath": C.COORD_DATA_DIR}],
         "readinessProbe": {"tcpSocket": {"port": C.COORD_GRPC_PORT},
                            "initialDelaySeconds": 5, "periodSeconds": 3},
-        # Run as root so the embedded Ratis+RocksDB store can create its data dir on the mounted volume.
-        "_pod": {"volumes": [{"name": "coord-data", "emptyDir": {}}],
-                 "securityContext": {"runAsUser": 0, "runAsGroup": 0}},
     }
-    dep = _deployment("coordinator", labels, 1, container)
-    # Recreate (not RollingUpdate): terminate the old pod before starting the new one, so the emptyDir-
-    # backed Ratis+RocksDB volume is genuinely fresh on a redeploy and two coordinators never coexist.
-    dep["spec"]["strategy"] = {"type": "Recreate"}
-    svc = _service("coordinator", labels, C.COORD_GRPC_PORT, C.COORD_GRPC_PORT)
-    return [dep, svc]
+    sts = {
+        "apiVersion": "apps/v1", "kind": "StatefulSet",
+        "metadata": {"name": "coordinator", "namespace": ns, "labels": labels},
+        "spec": {
+            "serviceName": "coordinator",
+            "replicas": size,
+            "podManagementPolicy": "Parallel",   # start all peers together so the group can form quorum
+            "selector": {"matchLabels": {"app": "coordinator"}},
+            "template": {
+                "metadata": {"labels": {**labels, "app": "coordinator"}},
+                "spec": {
+                    "containers": [container],
+                    "volumes": [{"name": "coord-data", "emptyDir": {}}],
+                    # Run as root so the embedded Ratis+RocksDB store can write its data dir on the volume.
+                    "securityContext": {"runAsUser": 0, "runAsGroup": 0},
+                },
+            },
+        },
+    }
+    # Headless Service: gives each pod stable DNS (coordinator-i.coordinator...) for the Raft peers, and
+    # also fronts the gRPC API for clients (any pod serves the same replicated state).
+    svc = {
+        "apiVersion": "v1", "kind": "Service",
+        "metadata": {"name": "coordinator", "namespace": ns, "labels": labels},
+        "spec": {"clusterIP": "None", "selector": {"app": "coordinator"}, "ports": [
+            {"name": "grpc", "port": C.COORD_GRPC_PORT, "targetPort": C.COORD_GRPC_PORT},
+            {"name": "raft", "port": C.COORD_RAFT_PORT, "targetPort": C.COORD_RAFT_PORT},
+        ]},
+    }
+    return [svc, sts]
 
 
 def cell_db_manifests(cell: str) -> list[dict]:

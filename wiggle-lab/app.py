@@ -88,8 +88,9 @@ with st.sidebar:
         if c2.button("② Load image → kind", use_container_width=True, disabled=not img):
             action("Load image into kind", lab.load_image, spinner="kind load docker-image…")
         if st.button("③ Deploy coordinator", use_container_width=True, disabled=not img,
-                     help="Redeploying rolls the pod → fresh RocksDB (wipes nodes/epochs/policies)."):
-            action("Deploy coordinator", lab.deploy_coordinator)
+                     help="Deploys a Ratis group; redeploying re-forms it fresh (wipes nodes/epochs/policies)."):
+            action("Deploy coordinator", lab.deploy_coordinator,
+                   st.session_state.get("coord_size", C.COORD_DEFAULT_GROUP_SIZE))
             st.rerun()
         with st.expander("🗄 disk"):
             st.caption("Postgres `initdb` fails with \"No space left on device\" when the node fills — "
@@ -105,6 +106,19 @@ with st.sidebar:
             st.caption("Reclaim build cache from repeated image builds with "
                        "`docker builder prune -af` (safe). Do NOT `docker volume prune` — it deletes "
                        "other projects' volumes (minikube, other DBs).")
+
+        st.divider()
+        if st.button("🩺 Collect errors from all pods", use_container_width=True):
+            with st.spinner("scanning pod logs…"):
+                st.session_state["error_report"] = lab.collect_pod_errors()
+        rep = st.session_state.get("error_report")
+        if rep:
+            st.caption(f"{rep.count(chr(10)) + 1} line(s) collected")
+            st.download_button("⬇︎ Download errors", data=rep, file_name="wiggle-lab-errors.txt",
+                               mime="text/plain", use_container_width=True)
+            if st.button("Discard errors", use_container_width=True):
+                st.session_state.pop("error_report", None)
+                st.rerun()
 
         st.divider()
         if st.button("🧨 Tear down cluster", type="primary", use_container_width=True):
@@ -171,9 +185,9 @@ cells = lab.cells()
 cols[1].metric("Cells", len(cells))
 cols[2].metric("Namespaces", len({c["namespace"] for c in cells if c["namespace"]}))
 
-overview, cells_tab, placement, client, forwards, logs_tab, db_tab = st.tabs(
-    ["📊 Overview", "🗄 Cells", "🧭 Placement (epochs)", "🚀 Client tests", "🔌 Forwards",
-     "📜 Logs", "🗃 Database"])
+overview, cells_tab, placement, coord_tab, client, forwards, logs_tab, db_tab = st.tabs(
+    ["📊 Overview", "🗄 Cells", "🧭 Placement (epochs)", "⚙️ Coordinator", "🚀 Client tests",
+     "🔌 Forwards", "📜 Logs", "🗃 Database"])
 
 # ---- Overview ----
 with overview:
@@ -370,6 +384,19 @@ with forwards:
                 action(f"Forward {cell} dashboard", lab.forward_cell_dashboard, cell)
                 st.rerun()
 
+    st.divider()
+    st.markdown("**Client routing (multi-cell)**")
+    st.caption("The coordinator hands clients in-cluster cell addresses (pod IPs). To reach them from a "
+               "host-run worker/client AND spread starts across cells, run it with this "
+               "`WIGGLE_ENDPOINT_REWRITE` — it maps each cell's pod IP to its own port-forward. Without it, "
+               "every start lands on whichever single cell you rewrote to.")
+    if st.button("Generate WIGGLE_ENDPOINT_REWRITE (forwards all cells)"):
+        with st.spinner("forwarding cells…"):
+            st.session_state["rewrite_spec"] = lab.endpoint_rewrite_spec()
+    spec = st.session_state.get("rewrite_spec")
+    if spec:
+        st.code(spec, language="bash")
+
 # ---- Logs ----
 with logs_tab:
     st.subheader("Pod logs")
@@ -395,21 +422,61 @@ with logs_tab:
         text = lab.logs(pod, int(tail), previous=prev)
         st.code(text or "(no output)", language="text")
 
+# ---- Coordinator ----
+with coord_tab:
+    st.subheader("Coordinator")
+    cpods = lab.pods(role="coordinator")
+    ready = sum(1 for p in cpods if p["ready"])
+    size = lab.coordinator_group_size()
+    s1, s2, s3 = st.columns([2, 1, 1])
+    s1.markdown(f"Ratis group: **{ready}/{len(cpods)}** ready" + (f" · size {size}" if size else " · (none)"))
+    opts = [1, 3, 5]
+    cur = st.session_state.get("coord_size", C.COORD_DEFAULT_GROUP_SIZE)
+    chosen = s2.selectbox("size", opts, index=opts.index(cur) if cur in opts else 1,
+                          key="coord-size-sel", label_visibility="collapsed")
+    st.session_state["coord_size"] = chosen
+    if s3.button("Deploy", key="coord-deploy-btn", help="(re)form the group at this size — fresh state"):
+        action(f"Deploy coordinator group ({chosen})", lab.deploy_coordinator, int(chosen))
+        st.rerun()
+    st.caption("One replicated Ratis group — any pod serves consistent state. The peer list is fixed, so "
+               "it is not dynamically scalable: choose a size (odd for a majority); redeploying re-forms it "
+               "fresh.")
+    if cpods:
+        st.dataframe([{"pod": p["name"], "phase": p["phase"], "ready": "✅" if p["ready"] else "⏳",
+                       "restarts": p["restarts"]} for p in cpods], use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("**Store contents** — policies / namespaces / node roster / definitions "
+                "(via the coordinator the Service routes to)")
+    if st.button("Dump store", disabled=not lab.coordinator_ready()):
+        try:
+            st.json(lab.dump_coordinator_store())
+        except Exception as e:  # noqa: BLE001
+            st.error(f"dump failed: {e}")
+
+    st.divider()
+    st.markdown("**Store files per pod** — the Ratis log + RocksDB in each coordinator pod")
+    for p in cpods:
+        with st.expander(p["name"]):
+            st.code(lab.coordinator_store_files(p["name"]), language="text")
+
 # ---- Database ----
 with db_tab:
     st.subheader("Databases (one Postgres per cell)")
-    if not cells:
-        st.caption("No cells yet.")
+    dbpods = lab.db_pods()
+    if not dbpods:
+        st.caption("No database pods yet.")
     else:
-        cell = st.selectbox("Cell", [c["cell"] for c in cells], key="db-cell")
-        pod = lab.db_pod(cell)
-        st.caption(f"db pod: `{pod or '— none —'}`")
+        opts = {f'{d["cell"]}  ·  {d["pod"]}' + ("" if d["ready"] else f'  ({d["phase"]})'): d["pod"]
+                for d in dbpods}
+        picked = st.selectbox("Database pod", list(opts), key="db-podsel")
+        pod = opts[picked]
 
         left, right = st.columns([1, 2])
         with left:
             st.markdown("**Tables** — click to preview last 20 rows")
             try:
-                tables = lab.list_tables(cell)
+                tables = lab.list_tables(pod)
             except Exception as e:  # noqa: BLE001
                 tables = []
                 st.warning(f"could not list tables: {e}")
@@ -417,19 +484,19 @@ with db_tab:
                 st.caption("no user tables yet (has the cell finished migrating?)")
             for t in tables:
                 if st.button(f'{t["table"]}  ·  {t["rows"]} rows', use_container_width=True,
-                             key=f'tbl-{t["schema"]}-{t["table"]}'):
+                             key=f'tbl-{pod}-{t["schema"]}-{t["table"]}'):
                     st.session_state["db_sql"] = (
                         f'SELECT * FROM "{t["schema"]}"."{t["table"]}" ORDER BY ctid DESC LIMIT 20;')
                     st.session_state["db_autorun"] = True
                     st.rerun()
 
         with right:
-            st.markdown("**Query** — edit and re-run")
+            st.markdown(f"**Query** on `{pod}` — edit and re-run")
             st.session_state.setdefault(
                 "db_sql", "SELECT id, workflow, status FROM wf_instance ORDER BY updated_at DESC LIMIT 20;")
             st.text_area("SQL", key="db_sql", height=110, label_visibility="collapsed")
-            run = st.button("Run query", disabled=not pod)
+            run = st.button("Run query")
             if run or st.session_state.pop("db_autorun", False):
                 with st.spinner("running…"):
-                    out = lab.query(cell, st.session_state["db_sql"])
+                    out = lab.query(pod, st.session_state["db_sql"])
                 st.code(out or "(no output)", language="text")
