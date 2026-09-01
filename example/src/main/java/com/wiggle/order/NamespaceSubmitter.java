@@ -32,7 +32,10 @@ public final class NamespaceSubmitter {
         try (CellResolver resolver = CellResolver.coordinator(coord, Tls.Options.DISABLED, "us")) {
             Blueprint<Order> bp = OrderFulfilment.blueprint();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
-            resolver.withEndpointRewriter(t -> "127.0.0.1:18100");
+            // Cell addresses come from the coordinator as in-cluster pod IPs; to reach them from the host
+            // AND spread starts across cells, set WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its own
+            // port-forward). CellResolver picks it up from the env by default -- the lab's Forwards tab
+            // generates the exact value. Without it, every start would land on one forwarded cell.
 
             List<String> ids = new ArrayList<>(count);
             for (int i = 0; i < count; i++) {

@@ -18,7 +18,8 @@ public final class NamespaceWorkerMain {
         String id = env("WIGGLE_WORKER_ID", "order-fulfilment");
 
         CellResolver resolver = CellResolver.coordinator(coord, Tls.Options.DISABLED, "eu");
-        resolver.withEndpointRewriter(t -> "127.0.0.1:18100");
+        // Reach in-cluster cells from the host via WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its
+        // port-forward), which CellResolver reads from the env; the lab's Forwards tab generates it.
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
                 w -> w.register(OrderFulfilment.blueprint())).start();
 
