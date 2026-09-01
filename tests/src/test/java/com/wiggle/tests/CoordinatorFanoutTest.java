@@ -70,6 +70,41 @@ class CoordinatorFanoutTest {
         }
     }
 
+    @Test @DisplayName("re-registering an unchanged definition is a no-op (no re-fan-out)")
+    void reRegisterUnchangedIsNoOp() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (WiggleServer a = new WiggleServer(cell()).start();
+             WiggleServer b = new WiggleServer(cell()).start();
+             CoordinatorService coord = new CoordinatorService(store)) {
+            register(coord, a);
+            register(coord, b);
+
+            RegisterWorkflowResponse first = coord.doRegisterWorkflow("orders", "wf", definitionJson());
+            assertEquals(2, first.getCellsSeeded(), "first register fans out to both cells");
+
+            RegisterWorkflowResponse again = coord.doRegisterWorkflow("orders", "wf", definitionJson());
+            assertEquals(0, again.getCellsSeeded(), "unchanged definition -> fan-out skipped");
+            assertEquals(first.getVersion(), again.getVersion(), "same content-hash version returned");
+        }
+    }
+
+    @Test @DisplayName("Dump reflects the placement policy, node roster and definition registry")
+    void dumpReflectsState() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (WiggleServer a = new WiggleServer(cell()).start();
+             CoordinatorService coord = new CoordinatorService(store)) {
+            register(coord, a);
+            coord.doOpenEpoch("orders", java.util.List.of(
+                    com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
+            coord.doRegisterWorkflow("orders", "wf", definitionJson());
+
+            String json = coord.doDump().getJson();
+            assertTrue(json.contains("\"policies\"") && json.contains("\"orders\""), json);
+            assertTrue(json.contains("\"nodes\"") && json.contains("CellA"), json);
+            assertTrue(json.contains("\"definitions\"") && json.contains("\"wf\""), json);
+        }
+    }
+
     @Test @DisplayName("allocate then deallocate: list reflects it, and deregister is idempotent")
     void allocateListDeallocate() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();

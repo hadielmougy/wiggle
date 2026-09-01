@@ -50,15 +50,16 @@ class VersionedContextTest {
 
     // ---- pure codec round-trip ----
 
-    @Test @DisplayName("encode wraps the record in a versioned envelope stamped at the current version")
+    @Test @DisplayName("encode stamps the version envelope and writes record fields flat (top level)")
     void encodeWrapsInEnvelope() {
         Object env = codecV3().encode(new Order("A-1", 2, new java.math.BigDecimal("9.99"), "USD", 0));
         Map<String, Object> m = Json.asObject(env);
         assertEquals("order", m.get("_schema"));
         assertEquals(3L, ((Number) m.get("_v")).longValue());
-        Map<String, Object> data = Json.asObject(m.get("data"));
-        assertEquals("A-1", data.get("id"));
-        assertNull(m.get("id"), "record fields live under data, not at the envelope top level");
+        // Fields are flat at the top level (not nested under "data") so the engine's shallow, field-level
+        // context merge can combine parallel fork branches without one clobbering the other.
+        assertEquals("A-1", m.get("id"));
+        assertNull(m.get("data"), "no nested data envelope -- fields are flat for field-level merges");
     }
 
     @Test @DisplayName("decode of a v1 envelope upcasts through v2 and v3 to the current record")

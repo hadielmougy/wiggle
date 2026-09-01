@@ -80,7 +80,19 @@ public final class WiggleServer implements AutoCloseable {
     /** The dashboard's port, or {@code -1} if it is not enabled. */
     public int dashboardPort() { return bundle.dashboardPort(); }
 
-    public String baseUrl() { return "127.0.0.1:" + port(); }
+    /**
+     * The address this node advertises to a coordinator (and, via Resolve, to clients). Defaults to
+     * {@code 127.0.0.1} — correct for single-host/local runs — but must be overridden to a
+     * coordinator-reachable host when nodes and the coordinator run in separate pods/hosts. Set it with
+     * {@code WIGGLE_ADVERTISE_HOST} (or {@code -Dwiggle.advertiseHost}), e.g. the pod IP on Kubernetes.
+     */
+    public String baseUrl() { return advertiseHost() + ":" + port(); }
+
+    private static String advertiseHost() {
+        String host = System.getProperty("wiggle.advertiseHost",
+                System.getenv().getOrDefault("WIGGLE_ADVERTISE_HOST", "127.0.0.1"));
+        return (host == null || host.isBlank()) ? "127.0.0.1" : host;
+    }
 
     /** The workflow engine. */
     public WorkflowEngine engine() { return bundle.engine(); }

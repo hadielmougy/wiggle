@@ -7,6 +7,7 @@ import com.wiggle.proto.ActiveCellsResponse;
 import com.wiggle.proto.AllocatedWorkflow;
 import com.wiggle.proto.CoordinatorHeartbeatResponse;
 import com.wiggle.proto.DeregisterWorkflowResponse;
+import com.wiggle.proto.DumpResponse;
 import com.wiggle.proto.Endpoint;
 import com.wiggle.proto.EpochRing;
 import com.wiggle.proto.EpochStatus;
@@ -300,6 +301,68 @@ public final class CoordinatorService implements AutoCloseable {
     }
 
     /**
+     * A debug snapshot of the coordinator store's logical contents -- placements, namespace registry,
+     * node roster and definition registry -- as JSON. Assembled from the read side of the store (no raw
+     * key/value access), so it works over any backend. For operators/tools inspecting a live coordinator.
+     */
+    public DumpResponse doDump() {
+        java.util.Set<String> namespaces = new java.util.TreeSet<>();
+
+        List<Object> policies = new ArrayList<>();
+        for (CoordPolicy p : store.listPolicies()) {
+            namespaces.add(p.namespace());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("namespace", p.namespace());
+            m.put("currentEpoch", p.currentEpoch());
+            m.put("revision", p.revision());
+            m.put("epochs", Json.parse(EpochCodec.encode(p.epochs())));
+            policies.add(m);
+        }
+
+        List<Object> namespaceRecords = new ArrayList<>();
+        for (CoordNamespace n : store.namespaces()) {
+            namespaces.add(n.namespace());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("namespace", n.namespace());
+            m.put("state", n.state().name());
+            m.put("endpoint", n.endpoint());
+            m.put("replicas", n.replicas());
+            namespaceRecords.add(m);
+        }
+
+        List<Object> nodes = new ArrayList<>();
+        List<Object> definitions = new ArrayList<>();
+        for (String ns : namespaces) {
+            for (CoordNode nd : store.nodes(ns)) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", nd.id());
+                m.put("namespace", nd.namespace());
+                m.put("cellId", nd.cellId());
+                m.put("endpoint", nd.endpoint());
+                m.put("region", nd.region());
+                m.put("cellFingerprint", nd.cellFingerprint());
+                m.put("lastHeartbeat", nd.lastHeartbeat());
+                nodes.add(m);
+            }
+            for (CoordDefinition d : store.definitions(ns)) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("namespace", d.namespace());
+                m.put("name", d.name());
+                m.put("version", d.version());
+                m.put("hash", d.hash());
+                definitions.add(m);
+            }
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("policies", policies);
+        out.put("namespaces", namespaceRecords);
+        out.put("nodes", nodes);
+        out.put("definitions", definitions);
+        return DumpResponse.newBuilder().setJson(Json.write(out)).build();
+    }
+
+    /**
      * Registers a workflow across every cell of a namespace and records it in the definition registry.
      * Content-hash versioning makes this idempotent -- the same definition yields the same version on
      * every cell, so a replay is a no-op.
@@ -308,6 +371,14 @@ public final class CoordinatorService implements AutoCloseable {
         List<CoordNode> nodes = store.nodes(namespace);
         if (nodes.isEmpty()) {
             throw new IllegalStateException("no cell for namespace '" + namespace + "' to register '" + name + "'");
+        }
+        String hash = sha256(definitionJson);
+        // Idempotent: an unchanged definition is already on every cell (a newly joined cell is seeded on
+        // join), so skip the fan-out instead of re-seeding every cell on each identical register call.
+        var existing = store.getDefinition(namespace, name);
+        if (existing.isPresent() && hash.equals(existing.get().hash())) {
+            return RegisterWorkflowResponse.newBuilder()
+                    .setVersion(existing.get().version()).setCellsSeeded(0).build();
         }
         Struct struct = ProtoJson.toStruct(Json.parseObject(new String(definitionJson, StandardCharsets.UTF_8)));
         WorkflowDefinition wd = WorkflowDefinition.newBuilder().setDefinition(struct).build();
@@ -318,8 +389,7 @@ public final class CoordinatorService implements AutoCloseable {
             version = Integer.parseInt(r.getVersion());
             seeded++;
         }
-        store.putDefinition(new CoordDefinition(namespace, name, version, sha256(definitionJson),
-                System.currentTimeMillis()));
+        store.putDefinition(new CoordDefinition(namespace, name, version, hash, System.currentTimeMillis()));
         int fanned = seeded;
         int v = version;
         LOG.log(System.Logger.Level.INFO, () -> "fanned out workflow '" + name + "' v" + v

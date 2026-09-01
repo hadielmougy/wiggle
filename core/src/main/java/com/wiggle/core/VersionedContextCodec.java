@@ -60,11 +60,16 @@ public final class VersionedContextCodec<T> implements ContextCodec<T> {
 
     @Override
     public Object encode(T value) {
-        Map<String, Object> env = new LinkedHashMap<>();
-        env.put(SCHEMA, schema);
+        // The record's fields are written FLAT (top-level), not nested under "data". The engine merges
+        // task results with a shallow, field-level diff (Json.shallowDiff + putAll); nesting the whole
+        // record under one "data" key made that a wholesale replace, so parallel fork branches clobbered
+        // each other's writes (payment vs tracking). Flat fields diff/merge per key. decode() already
+        // folds top-level keys into the record, and still reads the legacy "data" envelope, so this is
+        // backward compatible.
+        Map<String, Object> env = new LinkedHashMap<>(Json.asObject(RecordMapper.toJson(value)));
+        env.put(SCHEMA, schema);          // envelope keys are authoritative over any colliding field name
         env.put(VERSION, currentVersion);
         if (meta != null && !meta.isEmpty()) env.put(META, meta);
-        env.put(DATA, RecordMapper.toJson(value));
         return env;
     }
 

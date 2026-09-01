@@ -26,9 +26,10 @@ import java.util.concurrent.TimeUnit;
  * it never stops the node. If a heartbeat reports the node is unknown (it was expired), the link
  * re-registers on the next beat.
  *
- * <p>Phase 1/T7: registration + liveness are real. A newer config {@code generation} is detected and
- * logged; applying a new config to a running node (or DRAIN-initiated graceful stop) is wired in a
- * later phase (T13) -- for now the coordinator's config is advisory.
+ * <p>A newer config {@code generation} (the policy revision) is detected on heartbeat and re-points the
+ * running node's placement via {@link #refetchPlacement} -- an epoch bump / ring edit moves where it
+ * mints without a restart. A (re-)registration resets {@code lastGeneration} so the next beat always
+ * re-syncs, even against a coordinator whose generation sequence restarted (e.g. a fresh store).
  */
 public final class HttpCoordinatorLink implements CoordinatorLink {
 
@@ -85,6 +86,12 @@ public final class HttpCoordinatorLink implements CoordinatorLink {
                             .build())
                     .build());
             this.nodeId = r.getNodeId();
+            // Force the next heartbeat to re-fetch placement. A (re-)registration can land on a coordinator
+            // whose generation sequence differs from what we last applied -- e.g. after the coordinator was
+            // redeployed with a fresh store: its revision restarts low and may coincide with our stale
+            // lastGeneration, so the generation-change check would miss the new epoch and leave us on the
+            // standby placement we got at register time. Resetting to -1 makes the next beat always re-sync.
+            this.lastGeneration = -1;
             applyPlacement(r.getEpoch(), r.getShardsList());
             LOG.log(System.Logger.Level.INFO,
                     () -> "registered with coordinator " + coordinatorUrl + " as node " + nodeId
@@ -94,6 +101,11 @@ public final class HttpCoordinatorLink implements CoordinatorLink {
             LOG.log(System.Logger.Level.WARNING, "coordinator register failed (will retry): " + e);
             return 0;
         }
+    }
+
+    /** On-demand re-fetch (the cell's standby self-heal), delegating to the best-effort re-fetch. */
+    @Override public void refreshPlacement() {
+        refetchPlacement();
     }
 
     /** Re-fetches this node's placement (after a policy change) and applies it to the running minter. */

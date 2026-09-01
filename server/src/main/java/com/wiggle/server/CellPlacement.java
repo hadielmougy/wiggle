@@ -32,6 +32,13 @@ public final class CellPlacement {
 
     private volatile Snapshot snap;
 
+    // Optional: re-fetch placement from the coordinator on-demand when a mint hits standby, so a start
+    // routed to a freshly-placed cell before its next heartbeat self-heals instead of failing. Injected by
+    // the composition layer (which owns the coordinator link); a standalone cell leaves it null.
+    private volatile Runnable onStandbyRefresh;
+    private volatile long lastRefreshNanos;
+    private static final long REFRESH_MIN_INTERVAL_NANOS = 250_000_000L;   // debounce a standby burst
+
     public CellPlacement() {
         this(0, new int[]{0});
     }
@@ -73,7 +80,31 @@ public final class CellPlacement {
      */
     public Stamp stampFor(String ulid) {
         Snapshot s = snap;                        // one volatile read fixes both fields for this id
-        return new Stamp(s.epoch(), shardOf(s, ulid));
+        if (s.shards().length == 0) {             // standby -> one on-demand re-fetch, then re-read
+            maybeRefresh();
+            s = snap;
+        }
+        return new Stamp(s.epoch(), shardOf(s, ulid));   // still standby -> shardOf throws
+    }
+
+    /**
+     * Installs a hook that re-fetches this node's placement from the coordinator (best-effort, bounded)
+     * when a mint hits standby -- so a start that races an epoch bump self-heals instead of failing. Set
+     * by the composition layer; a standalone cell never has one.
+     */
+    public void onStandbyRefresh(Runnable refresher) {
+        this.onStandbyRefresh = refresher;
+    }
+
+    /** Invoke the standby-refresh hook at most once per {@link #REFRESH_MIN_INTERVAL_NANOS} (debounced so
+     *  a burst of starts against a standby cell does not stampede the coordinator). */
+    private void maybeRefresh() {
+        Runnable r = onStandbyRefresh;
+        if (r == null) return;
+        long now = System.nanoTime();
+        if (now - lastRefreshNanos < REFRESH_MIN_INTERVAL_NANOS) return;
+        lastRefreshNanos = now;
+        r.run();                                  // re-fetches + set(); best-effort (never throws)
     }
 
     /** The epoch and shard a single new id is stamped with. */

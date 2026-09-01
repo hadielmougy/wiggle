@@ -26,6 +26,14 @@ service CellCoordinator {
     rpc RegisterWorkflow   (RegisterWorkflowRequest)   returns (RegisterWorkflowResponse);   // R23
     rpc DeregisterWorkflow (DeregisterWorkflowRequest) returns (DeregisterWorkflowResponse);
     rpc ListWorkflows      (ListWorkflowsRequest)      returns (ListWorkflowsResponse);
+
+    // ---- debug: the coordinator store's logical contents (policies, namespaces, nodes, definitions) ----
+    rpc Dump (DumpRequest) returns (DumpResponse);
+}
+
+message DumpRequest {}
+message DumpResponse {
+    string json = 1;   // policies / namespaces / node roster / definition registry, as JSON
 }
 
 // ---------------------------------------------------------------- shared types

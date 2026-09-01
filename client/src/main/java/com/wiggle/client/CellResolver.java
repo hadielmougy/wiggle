@@ -48,6 +48,9 @@ public final class CellResolver implements AutoCloseable {
     private final Map<String, Cached> byShard = new ConcurrentHashMap<>();   // (ns|epoch|shard) -> cell, for instance ops
     private final Map<String, WiggleClient> clients = new ConcurrentHashMap<>();
 
+    // Applied to every resolved cell target before connecting; identity by default (see EndpointRewriter).
+    private volatile EndpointRewriter endpointRewriter = EndpointRewriter.fromEnv();
+
     private record Cached(Endpoint endpoint, long expiryNanos) {}
 
     private CellResolver(String coordinatorUrl, String staticTarget, Tls.Options tls, String callerRegion) {
@@ -72,6 +75,18 @@ public final class CellResolver implements AutoCloseable {
     /** No coordinator: every call goes to {@code staticTarget} (today's behaviour). */
     public static CellResolver direct(String staticTarget, Tls.Options tls) {
         return new CellResolver(null, staticTarget, tls, null);
+    }
+
+    /**
+     * Override the address of every resolved cell before connecting -- a testing seam for when the
+     * coordinator advertises an address unreachable from where the client runs (e.g. a Kubernetes pod IP,
+     * redirected to a {@code kubectl port-forward}). Passing {@code null} restores identity. By default a
+     * rewriter is loaded from {@code wiggle.endpointRewrite} / {@code WIGGLE_ENDPOINT_REWRITE}. See
+     * {@link EndpointRewriter}.
+     */
+    public CellResolver withEndpointRewriter(EndpointRewriter rewriter) {
+        this.endpointRewriter = rewriter == null ? EndpointRewriter.identity() : rewriter;
+        return this;
     }
 
     /** A client for the cell that hosts new instances of {@code namespace}. */
@@ -139,11 +154,11 @@ public final class CellResolver implements AutoCloseable {
 
     /** The cells hosting live work for a namespace (a worker polls all of them). */
     public List<String> activeCellTargets(String namespace) {
-        if (coordinatorUrl == null) return List.of(staticTarget);
+        if (coordinatorUrl == null) return List.of(rewriteTarget(staticTarget));
         ActiveCellsResponse r = coord.activeCells(ActiveCellsRequest.newBuilder()
                 .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build());
         List<String> targets = new ArrayList<>();
-        for (Endpoint e : r.getCellsList()) targets.add(e.getTarget());
+        for (Endpoint e : r.getCellsList()) targets.add(rewriteTarget(e.getTarget()));
         return targets;
     }
 
@@ -180,7 +195,12 @@ public final class CellResolver implements AutoCloseable {
     }
 
     private WiggleClient clientFor(String target) {
-        return clients.computeIfAbsent(strip(target), t -> new WiggleClient(t, tls));
+        return clients.computeIfAbsent(rewriteTarget(target), t -> new WiggleClient(t, tls));
+    }
+
+    /** Strip any scheme, apply the endpoint rewriter, strip again (a replacement may carry a scheme). */
+    private String rewriteTarget(String target) {
+        return strip(endpointRewriter.rewrite(strip(target)));
     }
 
     @Override public void close() {

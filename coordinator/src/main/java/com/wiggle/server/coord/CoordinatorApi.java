@@ -176,6 +176,10 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
         run(resp, () -> service.doListWorkflows(req.getNamespace()));
     }
 
+    @Override public void dump(com.wiggle.proto.DumpRequest req, StreamObserver<com.wiggle.proto.DumpResponse> resp) {
+        run(resp, service::doDump);
+    }
+
     private static Map<Long, Long> toLongMap(Map<Long, Integer> m) {
         if (m.isEmpty()) return Map.of();
         Map<Long, Long> out = new LinkedHashMap<>();
