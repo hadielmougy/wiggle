@@ -77,6 +77,9 @@ def coordinator_manifests() -> list[dict]:
                  "securityContext": {"runAsUser": 0, "runAsGroup": 0}},
     }
     dep = _deployment("coordinator", labels, 1, container)
+    # Recreate (not RollingUpdate): terminate the old pod before starting the new one, so the emptyDir-
+    # backed Ratis+RocksDB volume is genuinely fresh on a redeploy and two coordinators never coexist.
+    dep["spec"]["strategy"] = {"type": "Recreate"}
     svc = _service("coordinator", labels, C.COORD_GRPC_PORT, C.COORD_GRPC_PORT)
     return [dep, svc]
 
@@ -88,7 +91,11 @@ def cell_db_manifests(cell: str) -> list[dict]:
         "name": "postgres", "image": "postgres:16-alpine",
         "env": _env({"POSTGRES_DB": "wiggle", "POSTGRES_USER": "wiggle", "POSTGRES_PASSWORD": "wiggle"}),
         "ports": [{"containerPort": C.DB_PORT}],
-        "readinessProbe": {"exec": {"command": ["pg_isready", "-U", "wiggle"]},
+        # Probe over TCP (-h 127.0.0.1), not the unix socket: the postgres image's first-boot init runs a
+        # temporary server with TCP disabled, so a socket probe would mark the pod Ready mid-init. A client
+        # that connects then gets "terminating connection due to administrator command" when the init
+        # server shuts down. TCP probing stays not-Ready until the real server accepts connections.
+        "readinessProbe": {"exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-U", "wiggle"]},
                            "initialDelaySeconds": 3, "periodSeconds": 3},
     }
     return [_deployment(name, labels, 1, container), _service(name, labels, C.DB_PORT, C.DB_PORT)]
@@ -123,7 +130,16 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "") -
         "livenessProbe": {"tcpSocket": {"port": C.CELL_GRPC_PORT},
                           "initialDelaySeconds": 12, "periodSeconds": 10},
     }
-    return [_deployment(name, labels, replicas, container), _service(name, labels, C.CELL_GRPC_PORT, C.CELL_GRPC_PORT)]
+    # The cell Service exposes both gRPC (8080) and the web dashboard (8090) so each can be port-forwarded.
+    svc = {
+        "apiVersion": "v1", "kind": "Service",
+        "metadata": {"name": name, "namespace": C.K8S_NAMESPACE, "labels": labels},
+        "spec": {"selector": {"app": name}, "ports": [
+            {"name": "grpc", "port": C.CELL_GRPC_PORT, "targetPort": C.CELL_GRPC_PORT},
+            {"name": "dashboard", "port": C.CELL_DASHBOARD_PORT, "targetPort": C.CELL_DASHBOARD_PORT},
+        ]},
+    }
+    return [_deployment(name, labels, replicas, container), svc]
 
 
 def to_yaml(docs: list[dict]) -> str:

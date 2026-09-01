@@ -86,6 +86,15 @@ class Lab:
     def image_local(self) -> bool:
         return kind.image_exists_local()
 
+    def node_disk(self) -> str:
+        return kind.node_disk()
+
+    def host_disk(self) -> str:
+        return kind.host_docker_df()
+
+    def reclaim_disk(self):
+        kind.prune_node_images().check()
+
     @record
     def create_cluster(self):
         kind.create_cluster().check()
@@ -104,8 +113,17 @@ class Lab:
     # ---- coordinator ----
     @record
     def deploy_coordinator(self):
+        """(Re)deploy the coordinator with a FRESH store. On a redeploy the pod is rolled so its
+        emptyDir-backed Ratis+RocksDB starts empty — all prior nodes, epochs and policies are wiped
+        (existing cells re-register on their next heartbeat; re-open your epochs afterward)."""
         self.ensure_namespace()
+        self.pf.stop("coordinator")
+        existed = bool(k8s.deployments(selector="wiggle-lab/role=coordinator"))
         k8s.apply(manifests.to_yaml(manifests.coordinator_manifests())).check()
+        if existed:
+            k8s.rollout_restart("coordinator").check()   # new pod -> fresh emptyDir -> empty RocksDB
+            self.policies.clear()                        # cached rings are gone with the store
+            self._save_state()
 
     def coordinator_ready(self) -> bool:
         return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coordinator"))
@@ -201,13 +219,15 @@ class Lab:
     @record
     def restart_cell(self, cell: str):
         """Roll the cell's pods (e.g. after reloading a new image so nodes re-register with a fresh
-        pod IP). Drops the stale port-forward since the pods are being replaced."""
+        pod IP). Drops the stale port-forwards since the pods are being replaced."""
         self.pf.stop(f"cell:{cell}")
+        self.pf.stop(f"dash:{cell}")
         k8s.rollout_restart(C.dns_name("cell", cell)).check()
 
     @record
     def remove_cell(self, cell: str):
         self.pf.stop(f"cell:{cell}")
+        self.pf.stop(f"dash:{cell}")
         k8s.delete_by_label(f"wiggle-lab/cell={cell}").check()
 
     @record
@@ -246,6 +266,22 @@ class Lab:
 
     def stop_forward_cell(self, cell: str):
         self.pf.stop(f"cell:{cell}")
+
+    def _cell_dashboard_local_port(self, cell: str) -> int:
+        ids = [c["cell"] for c in self.cells()]
+        idx = ids.index(cell) if cell in ids else len(ids)
+        return C.CELL_DASHBOARD_LOCAL_PORT_BASE + idx
+
+    def forward_cell_dashboard(self, cell: str) -> str:
+        self.pf.ensure(f"dash:{cell}", C.dns_name("cell", cell), C.CELL_DASHBOARD_PORT,
+                       self._cell_dashboard_local_port(cell))
+        return self.pf.target(f"dash:{cell}") or ""
+
+    def stop_forward_cell_dashboard(self, cell: str):
+        self.pf.stop(f"dash:{cell}")
+
+    def dashboard_target(self, cell: str) -> str | None:
+        return self.pf.target(f"dash:{cell}")
 
     def forward_status(self) -> dict[str, str | None]:
         """Live local addresses for the coordinator and each cell forward (None if not forwarded)."""

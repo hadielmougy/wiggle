@@ -87,9 +87,25 @@ with st.sidebar:
             st.rerun()
         if c2.button("② Load image → kind", use_container_width=True, disabled=not img):
             action("Load image into kind", lab.load_image, spinner="kind load docker-image…")
-        if st.button("③ Deploy coordinator", use_container_width=True, disabled=not img):
+        if st.button("③ Deploy coordinator", use_container_width=True, disabled=not img,
+                     help="Redeploying rolls the pod → fresh RocksDB (wipes nodes/epochs/policies)."):
             action("Deploy coordinator", lab.deploy_coordinator)
             st.rerun()
+        with st.expander("🗄 disk"):
+            st.caption("Postgres `initdb` fails with \"No space left on device\" when the node fills — "
+                       "check **inodes** too, not just bytes.")
+            st.markdown("**kind node**")
+            st.code(lab.node_disk(), language="text")
+            if st.button("🧹 Reclaim node disk", use_container_width=True,
+                         help="prune images the node isn't using (safe; keeps running pods' images)"):
+                action("Reclaim node disk", lab.reclaim_disk, spinner="pruning unused node images…")
+                st.rerun()
+            st.markdown("**host Docker**")
+            st.code(lab.host_disk(), language="text")
+            st.caption("Reclaim build cache from repeated image builds with "
+                       "`docker builder prune -af` (safe). Do NOT `docker volume prune` — it deletes "
+                       "other projects' volumes (minikube, other DBs).")
+
         st.divider()
         if st.button("🧨 Tear down cluster", type="primary", use_container_width=True):
             action("Teardown", lab.teardown, spinner="Deleting kind cluster…")
@@ -331,13 +347,28 @@ with forwards:
         r1.markdown(f"**{cell}** · ns `{c['namespace']}`")
         r2.code(addr or "— not forwarded —", language=None)
         if addr:
-            r2.caption(f"worker: WIGGLE_URL={addr}")
+            r2.caption(f"gRPC (worker): WIGGLE_URL={addr}")
             if r3.button("Stop", key=f"fw-stop-{cell}"):
                 lab.stop_forward_cell(cell)
                 st.rerun()
         elif r3.button("Forward", key=f"fw-{cell}"):
             action(f"Forward {cell}", lab.forward_cell, cell)
             st.rerun()
+
+        # dashboard (HTTP) sub-row
+        dash = lab.dashboard_target(cell)
+        d1, d2, d3 = st.columns([2, 3, 1.3])
+        d1.caption("↳ dashboard")
+        if dash:
+            d2.markdown(f"[http://{dash}](http://{dash})")
+            if d3.button("Stop", key=f"dash-stop-{cell}"):
+                lab.stop_forward_cell_dashboard(cell)
+                st.rerun()
+        else:
+            d2.code("— not forwarded —", language=None)
+            if d3.button("Forward", key=f"dash-{cell}"):
+                action(f"Forward {cell} dashboard", lab.forward_cell_dashboard, cell)
+                st.rerun()
 
 # ---- Logs ----
 with logs_tab:
@@ -374,21 +405,31 @@ with db_tab:
         pod = lab.db_pod(cell)
         st.caption(f"db pod: `{pod or '— none —'}`")
 
-        st.markdown("**Tables**")
-        try:
-            tables = lab.list_tables(cell)
-            if tables:
-                st.dataframe(tables, use_container_width=True, hide_index=True)
-            else:
+        left, right = st.columns([1, 2])
+        with left:
+            st.markdown("**Tables** — click to preview last 20 rows")
+            try:
+                tables = lab.list_tables(cell)
+            except Exception as e:  # noqa: BLE001
+                tables = []
+                st.warning(f"could not list tables: {e}")
+            if not tables:
                 st.caption("no user tables yet (has the cell finished migrating?)")
-        except Exception as e:  # noqa: BLE001
-            st.warning(f"could not list tables: {e}")
+            for t in tables:
+                if st.button(f'{t["table"]}  ·  {t["rows"]} rows', use_container_width=True,
+                             key=f'tbl-{t["schema"]}-{t["table"]}'):
+                    st.session_state["db_sql"] = (
+                        f'SELECT * FROM "{t["schema"]}"."{t["table"]}" ORDER BY ctid DESC LIMIT 20;')
+                    st.session_state["db_autorun"] = True
+                    st.rerun()
 
-        st.divider()
-        st.markdown("**Query**")
-        sql = st.text_area("SQL", value="SELECT id, workflow, status FROM wf_instance ORDER BY updated_at DESC LIMIT 20;",
-                           height=100, label_visibility="collapsed", key="db-sql")
-        if st.button("Run query", disabled=not pod):
-            with st.spinner("running…"):
-                out = lab.query(cell, sql)
-            st.code(out or "(no output)", language="text")
+        with right:
+            st.markdown("**Query** — edit and re-run")
+            st.session_state.setdefault(
+                "db_sql", "SELECT id, workflow, status FROM wf_instance ORDER BY updated_at DESC LIMIT 20;")
+            st.text_area("SQL", key="db_sql", height=110, label_visibility="collapsed")
+            run = st.button("Run query", disabled=not pod)
+            if run or st.session_state.pop("db_autorun", False):
+                with st.spinner("running…"):
+                    out = lab.query(cell, st.session_state["db_sql"])
+                st.code(out or "(no output)", language="text")

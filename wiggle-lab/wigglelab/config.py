@@ -26,6 +26,7 @@ DB_PORT = 5432
 # Host-side local ports the lab forwards to (kubectl port-forward).
 COORD_LOCAL_PORT = int(os.environ.get("WIGGLE_LAB_COORD_LOCAL_PORT", "18099"))
 CELL_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CELL_LOCAL_PORT_BASE", "18100"))
+CELL_DASHBOARD_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CELL_DASH_LOCAL_PORT_BASE", "18200"))
 
 # Coordinator Ratis store (single-member embedded group; no external store).
 COORD_STORE_URI = "ratis:///var/lib/wiggle/coord"
