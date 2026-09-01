@@ -11,10 +11,9 @@ plugins {
 dependencies {
     implementation(project(":server"))
     // The composition layer: it runs a cell (WiggleServer) OR a coordinator (CoordinatorServer), and
-    // owns the one bridge that needs both -- EmbeddedCellDeployer (starts in-process cells).
-    implementation(project(":coordinator:runtime"))
-    // An optional consensus-backed coordinator store (etcd); lets a coordinator run with no engine DB.
-    implementation(project(":coordinator:etcd"))
+    // owns the one bridge that needs both -- EmbeddedCellDeployer (starts in-process cells). The
+    // coordinator is a single standalone module (control plane + embedded Ratis+RocksDB store).
+    implementation(project(":coordinator"))
     implementation(project(":jdbc"))
     implementation(project(":postgres"))
     implementation(project(":mysql"))

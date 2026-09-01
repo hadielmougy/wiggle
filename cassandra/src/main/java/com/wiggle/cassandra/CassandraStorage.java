@@ -43,7 +43,7 @@ import java.util.function.Function;
  * token rows in one instance partition. {@code listInstances}/{@code countInstances} read a single
  * bounded index partition. See the module README.
  */
-public final class CassandraStorage implements Storage, com.wiggle.server.coord.CoordinatorStoreProvider {
+public final class CassandraStorage implements Storage {
 
     private static final int SHARDS = 8;
 
@@ -110,39 +110,6 @@ public final class CassandraStorage implements Storage, com.wiggle.server.coord.
     @Override public void migrate() {
         for (String ddl : SCHEMA) session.execute(ddl);
     }
-
-    /** The coordinator store over this keyspace: create the {@code coord_*} tables (idempotent), then a
-     *  CQL store (policy CAS via LWT) sharing this session. Reached via {@link CoordinatorStoreProvider},
-     *  never via {@code Storage} -- the engine and the coordinator are decoupled. */
-    @Override public com.wiggle.server.coord.CoordinatorStore coordinatorStore() {
-        for (String ddl : COORD_SCHEMA) session.execute(ddl);
-        return new CassandraCoordinatorStore(session);
-    }
-
-    /** Coordinator control-plane tables (bounded state): policy, node roster, definition + namespace registries. */
-    private static final List<String> COORD_SCHEMA = List.of(
-            "CREATE TABLE IF NOT EXISTS coord_leader (id text PRIMARY KEY, holder text, expires_at bigint)",
-            """
-            CREATE TABLE IF NOT EXISTS coord_policy (
-              namespace text PRIMARY KEY, current_epoch bigint, epochs text, revision bigint)""",
-            """
-            CREATE TABLE IF NOT EXISTS coord_node (
-              id text PRIMARY KEY, namespace text, cell_id text, endpoint text, region text,
-              engine_version text, cell_fingerprint text, config_generation bigint, last_heartbeat bigint)""",
-            // Cell-identity binding: one partition per (namespace, cell_id), so the duplicate-cell-id guard
-            // is a single-partition LWT (INSERT ... IF NOT EXISTS), atomic without a roster scan.
-            """
-            CREATE TABLE IF NOT EXISTS coord_cell (
-              namespace text, cell_id text, fingerprint text, PRIMARY KEY ((namespace, cell_id)))""",
-            """
-            CREATE TABLE IF NOT EXISTS coord_definition (
-              namespace text, name text, version int, hash text, registered_at bigint,
-              PRIMARY KEY ((namespace), name))""",
-            """
-            CREATE TABLE IF NOT EXISTS coord_namespace (
-              namespace text PRIMARY KEY, state text, scheme text, jdbc_url text, db_user text,
-              secret_ref text, pool_size int, replicas int, region text, endpoint text, error text,
-              updated_at bigint)""");
 
     private static final List<String> SCHEMA = List.of(
             """

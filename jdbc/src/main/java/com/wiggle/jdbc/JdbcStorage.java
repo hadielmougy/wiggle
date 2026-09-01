@@ -3,8 +3,6 @@ package com.wiggle.jdbc;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import com.wiggle.core.*;
-import com.wiggle.server.coord.CoordinatorStore;
-import com.wiggle.server.coord.CoordinatorStoreProvider;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
 import com.wiggle.server.store.Storage;
@@ -25,7 +23,7 @@ import java.util.function.Function;
  * and H2 (via {@code wiggle-postgres}), MySQL/MariaDB (via {@code wiggle-mysql}) and Oracle
  * (via {@code wiggle-oracle}). Connection pooling is provided by HikariCP.
  */
-public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
+public final class JdbcStorage implements Storage {
 
     private final Dialect dialect;
     private final HikariDataSource ds;
@@ -202,80 +200,6 @@ public final class JdbcStorage implements Storage, CoordinatorStoreProvider {
             new Migration(6, "schedule-workflow-unique", """
             CREATE UNIQUE INDEX IF NOT EXISTS ux_schedule_workflow ON wf_schedule (workflow);
             """));
-
-    /**
-     * Coordinator schema. A coordinator runs on its <em>own</em> database (separate from any cell), so
-     * this is a distinct baseline lineage -- it shares no {@code wf_schema_version} table with the cell
-     * set. It carries its own {@code coord_leader} lease table: the coordinator is engine-free and does
-     * its own leader election over this database, not via the cell {@code ClusterManager}.
-     */
-    public static final List<Migration> COORDINATOR_MIGRATIONS = List.of(
-            new Migration(1, "coordinator-baseline", """
-            CREATE TABLE IF NOT EXISTS coord_leader (
-              id         VARCHAR(40)  PRIMARY KEY,
-              holder     VARCHAR(200),
-              expires_at BIGINT
-            );
-            CREATE TABLE IF NOT EXISTS coord_policy (
-              namespace      VARCHAR(200) PRIMARY KEY,
-              current_epoch  BIGINT       NOT NULL,
-              epochs         TEXT         NOT NULL,
-              revision       BIGINT       NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS coord_node (
-              id                VARCHAR(64)  PRIMARY KEY,
-              namespace         VARCHAR(200) NOT NULL,
-              cell_id           VARCHAR(200) NOT NULL,
-              endpoint          VARCHAR(300) NOT NULL,
-              region            VARCHAR(120),
-              engine_version    VARCHAR(60),
-              cell_fingerprint  VARCHAR(200),
-              config_generation BIGINT       NOT NULL,
-              last_heartbeat    BIGINT       NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS ix_coord_node_ns ON coord_node (namespace, last_heartbeat);
-            CREATE INDEX IF NOT EXISTS ix_coord_node_cell ON coord_node (namespace, cell_id);
-            CREATE TABLE IF NOT EXISTS coord_definition (
-              namespace      VARCHAR(200) NOT NULL,
-              name           VARCHAR(200) NOT NULL,
-              version        INT          NOT NULL,
-              hash           VARCHAR(64)  NOT NULL,
-              registered_at  BIGINT       NOT NULL,
-              PRIMARY KEY (namespace, name)
-            );
-            CREATE TABLE IF NOT EXISTS coord_namespace (
-              namespace   VARCHAR(200) PRIMARY KEY,
-              state       VARCHAR(30)  NOT NULL,
-              scheme      VARCHAR(30),
-              jdbc_url    VARCHAR(500),
-              db_user     VARCHAR(120),
-              secret_ref  VARCHAR(300),
-              pool_size   INT,
-              replicas    INT,
-              region      VARCHAR(120),
-              endpoint    VARCHAR(300),
-              error       VARCHAR(1000),
-              updated_at  BIGINT       NOT NULL
-            );
-            """),
-            // Cell-identity binding: one fingerprint per (namespace, cell_id). The PRIMARY KEY makes the
-            // duplicate-cell-id guard an atomic single-row claim (insert-or-compare), not a roster scan.
-            new Migration(2, "coord-cell-binding", """
-            CREATE TABLE IF NOT EXISTS coord_cell (
-              namespace    VARCHAR(200) NOT NULL,
-              cell_id      VARCHAR(200) NOT NULL,
-              fingerprint  VARCHAR(200) NOT NULL,
-              PRIMARY KEY (namespace, cell_id)
-            );
-            """));
-
-    /** The coordinator store over this database: migrate the {@code coord_*} schema (idempotent, its own
-     *  baseline lineage), then a store sharing this pool. This is the coordinator's business, not the
-     *  engine's -- it is reached via {@link CoordinatorStoreProvider}, never via {@code Storage}. */
-    @Override public CoordinatorStore coordinatorStore() {
-        applyMigrations(COORDINATOR_MIGRATIONS, "coordinator-baseline");
-        return new JdbcCoordinatorStore(ds);   // shares this store's pool; does not own/close it
-    }
 
     /** Applies the cell schema. */
     @Override public void migrate() {

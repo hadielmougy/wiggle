@@ -1,0 +1,26 @@
+// The standalone coordinator control plane, in one module. It carries:
+//   * the CoordinatorStore contract, domain records, epoch codec and in-memory reference store
+//     (formerly :coordinator:spi),
+//   * the self-hosted CoordinatorServer, the gRPC CellCoordinator service, the reconcile/retire loop,
+//     the live census and namespace provisioning (formerly :coordinator:runtime),
+//   * the embedded Apache Ratis + RocksDB store backend (formerly :coordinator:ratis).
+//
+// It talks to cells only over gRPC (:proto) and NEVER depends on :server or any storage module -- the
+// cell engine and the coordinator are fully decoupled in source. Nothing outside this module implements
+// its contract, so it is genuinely standalone.
+dependencies {
+    api(project(":core"))
+    api(project(":proto"))
+
+    // Embedded Raft consensus (server + gRPC transport) + a RocksDB-backed state machine: the store.
+    implementation("org.apache.ratis:ratis-server:${property("ratisVersion")}")
+    implementation("org.apache.ratis:ratis-grpc:${property("ratisVersion")}")
+    // Ratis loads its metrics registry impl by name at startup; the API jar alone throws
+    // ClassNotFoundException on RaftServer.start(). This supplies MetricRegistriesImpl at runtime.
+    runtimeOnly("org.apache.ratis:ratis-metrics-default:${property("ratisVersion")}")
+    implementation("org.rocksdb:rocksdbjni:${property("rocksdbVersion")}")
+
+    testImplementation(platform("org.junit:junit-bom:${property("junitVersion")}"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
