@@ -1,0 +1,22 @@
+// DESIGN SKETCH — an embedded, no-external-store coordinator backend: CoordinatorStore over an Apache
+// Ratis group with a RocksDB-backed state machine. Depends only on the coordinator SPI (+ core for JSON)
+// -- never the engine or an engine database, so the server ⊥ coordinator decoupling holds.
+//
+// NOT YET REGISTERED: this module is intentionally left out of settings.gradle while it is a sketch, so
+// the build stays green. To make it real: add `include("coordinator:ratis")` to settings.gradle, pin the
+// versions below, and flesh out the RaftServer/RocksDB boot in RatisCoordinatorStoreProvider.
+
+dependencies {
+    api(project(":coordinator:spi"))
+    implementation(project(":core"))                      // com.wiggle.core.Json
+
+    // Apache Ratis — Raft consensus (server + gRPC transport). Pin an actual version when adopting.
+    implementation("org.apache.ratis:ratis-server:${property("ratisVersion")}")
+    implementation("org.apache.ratis:ratis-grpc:${property("ratisVersion")}")
+
+    // RocksDB local storage for the state machine.
+    implementation("org.rocksdb:rocksdbjni:${property("rocksdbVersion")}")
+
+    testImplementation(platform("org.junit:junit-bom:${property("junitVersion")}"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+}
