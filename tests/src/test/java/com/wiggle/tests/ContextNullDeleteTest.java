@@ -4,6 +4,8 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -29,17 +31,13 @@ class ContextNullDeleteTest {
     @Test @DisplayName("a step that drops a field removes it from the context (not left as null)")
     void droppedFieldIsRemoved() throws Exception {
         Blueprint bp = Workflow.define("trim")
-                .step("trim", ctx -> {
-                    Map<String, Object> next = new LinkedHashMap<>(ctx);
-                    next.remove("drop");            // shallowDiff emits drop -> null
-                    return next;
-                })
+                .step("trim")
                 .build();
 
         Map<String, Object> in = new LinkedHashMap<>();
         in.put("keep", 1);
         in.put("drop", 2);
-        Map<String, Object> out = run(bp, in);
+        Map<String, Object> out = run(bp, new TrimH(), in);
 
         assertEquals(1, ((Number) out.get("keep")).intValue());
         assertFalse(out.containsKey("drop"), "dropped key must be gone, not a lingering null: " + out);
@@ -49,13 +47,12 @@ class ContextNullDeleteTest {
     void combineScratchKeysAreRemoved() throws Exception {
         Blueprint bp = Workflow.define("trip")
                 .fork(
-                        Branch.of("air", s -> s.step("air", ctx -> Map.of("price", 100))),
-                        Branch.of("hotel", s -> s.step("hotel", ctx -> Map.of("price", 75))))
-                .combine("merge", (ctx, parts) -> Map.of("total",
-                        price(parts.get("air")) + price(parts.get("hotel"))))
+                        Branch.of("air", s -> s.step("air")),
+                        Branch.of("hotel", s -> s.step("hotel")))
+                .combine("merge")
                 .build();
 
-        Map<String, Object> out = run(bp, new LinkedHashMap<>(Map.of("id", "t1")));
+        Map<String, Object> out = run(bp, new TripH(), new LinkedHashMap<>(Map.of("id", "t1")));
 
         assertEquals(175, ((Number) out.get("total")).intValue());
         assertTrue(out.containsKey("id"));
@@ -68,8 +65,27 @@ class ContextNullDeleteTest {
         return ((Number) ((Map<String, Object>) branchOutput).get("price")).intValue();
     }
 
+    @Handlers("trim")
+    static final class TrimH {
+        public Map<String, Object> trim(Map<String, Object> ctx) {
+            Map<String, Object> next = new LinkedHashMap<>(ctx);
+            next.remove("drop");            // shallowDiff emits drop -> null
+            return next;
+        }
+    }
+
+    @Handlers("trip")
+    static final class TripH {
+        public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
+        public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
+        public Map<String, Object> merge(@Arm("air") Map<String, Object> air,
+                                         @Arm("hotel") Map<String, Object> hotel) {
+            return Map.of("total", price(air) + price(hotel));
+        }
+    }
+
     /** Runs a single instance to completion on a one-node, in-memory H2 server and returns its context. */
-    private static Map<String, Object> run(Blueprint bp, Map<String, Object> input) throws Exception {
+    private static Map<String, Object> run(Blueprint bp, Object handlers, Map<String, Object> input) throws Exception {
         String url = "jdbc:h2:mem:nulldel-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
                 0, "node-0", url, "sa", "", 8,
@@ -80,7 +96,7 @@ class ContextNullDeleteTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(bp);
+            w.register(bp).handlers(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);

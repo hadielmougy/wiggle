@@ -26,7 +26,8 @@ public final class WorkerMain {
                         .withConcurrency(concurrency)
                         .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
-                .register(blueprint);
+                .register(blueprint)
+                .handlers(new OrderHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

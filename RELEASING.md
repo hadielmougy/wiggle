@@ -67,8 +67,9 @@ following hours.
 
 ## Releasing the `wiggle` CLI
 
-The CLI ships as a self-contained archive attached to the GitHub Release (not to Maven Central).
-It's a JVM app, so users need Java 21 on their machine.
+The CLI (the coordinator namespace/epoch tool — see the README's "Command-line tool" section) ships
+as a self-contained archive attached to the GitHub Release (not to Maven Central). It's a JVM app, so
+users need Java 21 on their machine.
 
 1. After tagging `vx.y.z` and creating the GitHub Release, build the archives and print their
    checksums:
@@ -80,5 +81,5 @@ It's a JVM app, so users need Java 21 on their machine.
    `url` version and paste the **`.tar` SHA-256** printed above. Commit it (and mirror it into the
    `homebrew-tap` repo if you keep one).
 
-Users then install per the "Installing the CLI" section of
-[docs/workflow-yaml.md](docs/workflow-yaml.md).
+Users then install per the "Command-line tool (`wiggle`)" section of the
+[README](README.md#command-line-tool-wiggle).

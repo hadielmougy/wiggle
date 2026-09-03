@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
@@ -45,11 +46,11 @@ class DynamicConstructsTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private InstanceView run(Blueprint bp, Map<String, Object> input, String jdbcUrl)
+    private InstanceView run(Blueprint bp, Object handlers, Map<String, Object> input, String jdbcUrl)
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "dyn-" + Ids.next("x")).register(bp)) {
+             Worker w = new Worker(client, "dyn-" + Ids.next("x")).register(bp).handlers(handlers)) {
             w.start();
             return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
         }
@@ -57,17 +58,26 @@ class DynamicConstructsTest {
 
     // ------------------------------------------------------------------ doWhile
 
-    private static Blueprint counterLoop(ExecutionMode mode, AtomicInteger bodyRuns) {
+    private static Blueprint counterLoop(ExecutionMode mode) {
         return Workflow.define("dyn-loop")
                 .execution(mode)
-                .step("init", ctx -> put(ctx, "i", 0L))
-                .doWhile("more", ctx -> (Long) ctx.get("i") < 5,
-                        b -> b.step("work", ctx -> {
-                            bodyRuns.incrementAndGet();
-                            return put(ctx, "i", (Long) ctx.get("i") + 1);
-                        }))
-                .step("after", ctx -> put(ctx, "done", true))
+                .step("init")
+                .doWhile("more", b -> b.step("work"))
+                .step("after")
                 .build();
+    }
+
+    @Handlers("dyn-loop")
+    static final class LoopH {
+        final AtomicInteger bodyRuns;
+        LoopH(AtomicInteger bodyRuns) { this.bodyRuns = bodyRuns; }
+        public Map<String, Object> init(Map<String, Object> ctx) { return put(ctx, "i", 0L); }
+        public boolean more(Map<String, Object> ctx) { return (Long) ctx.get("i") < 5; }
+        public Map<String, Object> work(Map<String, Object> ctx) {
+            bodyRuns.incrementAndGet();
+            return put(ctx, "i", (Long) ctx.get("i") + 1);
+        }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
     @Test @DisplayName("doWhile iterates until the condition fails, in every execution mode")
@@ -75,7 +85,7 @@ class DynamicConstructsTest {
         for (ExecutionMode mode : ExecutionMode.values()) {
             if (mode == ExecutionMode.DEFAULT) continue;
             AtomicInteger bodyRuns = new AtomicInteger();
-            InstanceView v = run(counterLoop(mode, bodyRuns), Map.of(), null);
+            InstanceView v = run(counterLoop(mode), new LoopH(bodyRuns), Map.of(), null);
             assertEquals("COMPLETED", v.status(), mode + " status");
             Map<String, Object> ctx = Json.asObject(v.context());
             assertEquals(5L, ctx.get("i"), mode + " loop counter");
@@ -88,14 +98,10 @@ class DynamicConstructsTest {
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
         Blueprint bp = Workflow.define("dyn-loop-once")
-                .doWhile("never-again", ctx -> false,
-                        b -> b.step("work", ctx -> {
-                            bodyRuns.incrementAndGet();
-                            return put(ctx, "ran", true);
-                        }))
-                .step("after", ctx -> put(ctx, "done", true))
+                .doWhile("never-again", b -> b.step("work"))
+                .step("after")
                 .build();
-        InstanceView v = run(bp, Map.of(), null);
+        InstanceView v = run(bp, new LoopOnceH(bodyRuns), Map.of(), null);
         assertEquals("COMPLETED", v.status());
         assertEquals(1, bodyRuns.get(), "do-while body runs once even when the condition is false");
         assertEquals(true, Json.asObject(v.context()).get("done"));
@@ -103,23 +109,44 @@ class DynamicConstructsTest {
 
     // ----------------------------------------------------------------- forkEach
 
+    @Handlers("dyn-loop-once")
+    static final class LoopOnceH {
+        final AtomicInteger bodyRuns;
+        LoopOnceH(AtomicInteger bodyRuns) { this.bodyRuns = bodyRuns; }
+        public boolean neverAgain(Map<String, Object> ctx) { return false; }
+        public Map<String, Object> work(Map<String, Object> ctx) {
+            bodyRuns.incrementAndGet();
+            return put(ctx, "ran", true);
+        }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
+    }
+
     /** Two-step branch: the second step proves the item payload survives along the branch. */
     private static Blueprint fanOut(ExecutionMode mode) {
         return Workflow.define("dyn-fan")
                 .execution(mode)
                 .forkEach("per-item", "items", "item", b -> b
-                        .step("upper", ctx -> put(ctx, "out" + ctx.get("itemIndex"),
-                                String.valueOf(ctx.get("item")).toUpperCase()))
-                        .step("measure", ctx -> put(ctx, "len" + ctx.get("itemIndex"),
-                                (long) String.valueOf(ctx.get("item")).length())))
-                .step("after", ctx -> put(ctx, "done", true))
+                        .step("upper")
+                        .step("measure"))
+                .step("after")
                 .build();
+    }
+
+    @Handlers("dyn-fan")
+    static final class FanH {
+        public Map<String, Object> upper(Map<String, Object> ctx) {
+            return put(ctx, "out" + ctx.get("itemIndex"), String.valueOf(ctx.get("item")).toUpperCase());
+        }
+        public Map<String, Object> measure(Map<String, Object> ctx) {
+            return put(ctx, "len" + ctx.get("itemIndex"), (long) String.valueOf(ctx.get("item")).length());
+        }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
     @Test @DisplayName("forkEach fans out one branch per list element and merges the results")
     void fanOutOverItems() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC}) {
-            InstanceView v = run(fanOut(mode), Map.of("items", List.of("ab", "cde", "f")), null);
+            InstanceView v = run(fanOut(mode), new FanH(), Map.of("items", List.of("ab", "cde", "f")), null);
             assertEquals("COMPLETED", v.status(), mode + " status");
             Map<String, Object> ctx = Json.asObject(v.context());
             assertEquals("AB", ctx.get("out0"), mode + " out0");
@@ -136,16 +163,16 @@ class DynamicConstructsTest {
     @Test @DisplayName("an empty or missing items list skips straight past the join")
     void emptyListSkips() throws Exception {
         assertEquals(true, Json.asObject(
-                run(fanOut(ExecutionMode.SERVER), Map.of("items", List.of()), null).context()).get("done"),
+                run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of("items", List.of()), null).context()).get("done"),
                 "empty list");
         assertEquals(true, Json.asObject(
-                run(fanOut(ExecutionMode.SERVER), Map.of(), null).context()).get("done"),
+                run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of(), null).context()).get("done"),
                 "missing key");
     }
 
     @Test @DisplayName("a non-list at the items key fails the instance with a clear error")
     void nonListFails() throws Exception {
-        InstanceView v = run(fanOut(ExecutionMode.SERVER), Map.of("items", "oops"), null);
+        InstanceView v = run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of("items", "oops"), null);
         assertEquals("FAILED", v.status());
         assertTrue(v.error().contains("not a list"), v.error());
         assertTrue(v.error().contains("items"), "names the offending key");
@@ -154,7 +181,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("forkEach round-trips through the JDBC store (payload column, graph columns)")
     void fanOutOnJdbc() throws Exception {
         String url = "jdbc:h2:mem:dyn-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        InstanceView v = run(fanOut(ExecutionMode.SERVER), Map.of("items", List.of("x", "yz")), url);
+        InstanceView v = run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of("items", List.of("x", "yz")), url);
         assertEquals("COMPLETED", v.status());
         Map<String, Object> ctx = Json.asObject(v.context());
         assertEquals("X", ctx.get("out0"));

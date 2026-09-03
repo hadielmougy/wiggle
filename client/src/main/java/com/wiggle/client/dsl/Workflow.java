@@ -3,19 +3,30 @@ package com.wiggle.client.dsl;
 import com.wiggle.core.RetryPolicy;
 
 /**
- * Entry point to the workflow DSL.
- *
- * <p>The workflow itself carries no context type. Each step is generic like {@code Stream.map}: it
- * takes an input type and returns a possibly different one, declaring its input {@code Class} so the
- * engine can rebuild it from the JSON persisted between steps.
+ * Entry point to the workflow DSL. A workflow is defined as a pure <em>topology</em> -- named steps
+ * and how they chain, branch, and rejoin -- with no step logic and no context type. The
+ * implementations are bound separately on a worker via a
+ * {@link com.wiggle.client.worker.Handlers @Handlers} class, where each method's name matches a step
+ * and its signature defines the types (input decoded from JSON, output encoded back; a method may
+ * return a different type than it takes, like {@code Stream.map}).
  *
  * <pre>{@code
- * Blueprint bp = Workflow.define("order-fulfilment")
- *         .step("validate", Order.class,  o -> o.withStatus("VALIDATED"))   // Order  -> Order
- *         .gate("in-stock", Order.class,  o -> o.quantity() > 0)
- *         .step("price",    Order.class,  o -> new Priced(o, price(o)))     // Order  -> Priced
- *         .step("ship",     Priced.class, p -> new Shipment(p))             // Priced -> Shipment
+ * // topology
+ * Blueprint order = Workflow.define("order-fulfilment")
+ *         .step("validate").gate("in-stock")
+ *         .fork(Branch.of("payment",  s -> s.step("charge")),
+ *               Branch.of("shipping", s -> s.step("reserve").sleep(Duration.ofSeconds(2)).step("label")))
+ *         .combine("settle").step("notify")
  *         .build();
+ *
+ * // logic
+ * @Handlers("order-fulfilment")
+ * class OrderHandlers {
+ *     Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
+ *     boolean inStock(Order o)   { return o.quantity() > 0; }
+ *     Order   charge(Order o)    { ... }
+ *     Order   settle(@Arm("payment") Order pay, @Arm("shipping") Order ship) { ... }
+ * }
  * }</pre>
  */
 public final class Workflow {

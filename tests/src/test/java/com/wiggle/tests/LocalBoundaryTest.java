@@ -1,10 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
@@ -52,19 +52,18 @@ class LocalBoundaryTest {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
             Blueprint bp = Workflow.define("lb-fork")
                     .execution(mode)
-                    .step("seed", ctx -> counted(runs, "seed", put(ctx, "seeded", true)))
-                    .step("prep", ctx -> counted(runs, "prep", put(ctx, "prepped", true)))
+                    .step("seed")
+                    .step("prep")
                     .fork(
-                            Branch.of("left", s -> s.step("l1", ctx -> counted(runs, "l1", put(ctx, "left", "L")))
-                                                    .step("l2", ctx -> counted(runs, "l2", put(ctx, "left2", "L2")))),
-                            Branch.of("right", s -> s.step("r1", ctx -> counted(runs, "r1", put(ctx, "right", "R")))))
-                    .combine("merge", Aggregator.union())
-                .step("after", ctx -> counted(runs, "after", put(ctx, "joined", true)))
+                            Branch.of("left", s -> s.step("l1").step("l2")),
+                            Branch.of("right", s -> s.step("r1")))
+                    .combine("merge")
+                .step("after")
                     .build();
 
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
-                 Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp)) {
+                 Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp).handlers(new ForkH(runs))) {
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status(), mode + " status");
@@ -85,17 +84,14 @@ class LocalBoundaryTest {
         AtomicInteger downstream = new AtomicInteger();
         Blueprint bp = Workflow.define("lb-gate")
                 .execution(ExecutionMode.LOCAL_SYNC)
-                .step("seed", ctx -> put(ctx, "keep", false))
-                .gate("keep", ctx -> Boolean.TRUE.equals(ctx.get("keep")))
-                .step("never", ctx -> {
-                    downstream.incrementAndGet();
-                    return ctx;
-                })
+                .step("seed")
+                .gate("keep")
+                .step("never")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp)) {
+             Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp).handlers(new GateH(downstream))) {
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
@@ -130,9 +126,11 @@ class LocalBoundaryTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker general = new Worker(client, "general",
-                     WorkerOptions.defaults().withQueues("lb-queues")).register(generalBp);
+                     WorkerOptions.defaults().withQueues("lb-queues"))
+                     .register(generalBp).handlers(new QueuesH(ranOn, "general"));
              Worker special = new Worker(client, "special",
-                     WorkerOptions.defaults().withQueues("special")).register(specialBp)) {
+                     WorkerOptions.defaults().withQueues("special"))
+                     .register(specialBp).handlers(new QueuesH(ranOn, "special"))) {
             general.start();
             special.start();
             InstanceView v = client.awaitCompletion(client.start(generalBp, Map.of()), Duration.ofSeconds(20));
@@ -148,11 +146,43 @@ class LocalBoundaryTest {
             ExecutionMode mode, String label, Map<String, String> ranOn) {
         return Workflow.define("lb-queues")
                 .execution(mode)
-                .step("a", ctx -> tag(ranOn, "a", label, ctx))
-                .step("b", ctx -> tag(ranOn, "b", label, ctx))
-                .step("c", ctx -> tag(ranOn, "c", label, ctx), "special")
-                .step("d", ctx -> tag(ranOn, "d", label, ctx))
+                .step("a")
+                .step("b")
+                .step("c", "special")
+                .step("d")
                 .build();
+    }
+
+    @Handlers("lb-fork")
+    static final class ForkH {
+        final Map<String, AtomicInteger> runs;
+        ForkH(Map<String, AtomicInteger> runs) { this.runs = runs; }
+        public Map<String, Object> seed(Map<String, Object> ctx) { return counted(runs, "seed", put(ctx, "seeded", true)); }
+        public Map<String, Object> prep(Map<String, Object> ctx) { return counted(runs, "prep", put(ctx, "prepped", true)); }
+        public Map<String, Object> l1(Map<String, Object> ctx) { return counted(runs, "l1", put(ctx, "left", "L")); }
+        public Map<String, Object> l2(Map<String, Object> ctx) { return counted(runs, "l2", put(ctx, "left2", "L2")); }
+        public Map<String, Object> r1(Map<String, Object> ctx) { return counted(runs, "r1", put(ctx, "right", "R")); }
+        public Map<String, Object> after(Map<String, Object> ctx) { return counted(runs, "after", put(ctx, "joined", true)); }
+    }
+
+    @Handlers("lb-gate")
+    static final class GateH {
+        final AtomicInteger downstream;
+        GateH(AtomicInteger downstream) { this.downstream = downstream; }
+        public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "keep", false); }
+        public boolean keep(Map<String, Object> ctx) { return Boolean.TRUE.equals(ctx.get("keep")); }
+        public Map<String, Object> never(Map<String, Object> ctx) { downstream.incrementAndGet(); return ctx; }
+    }
+
+    @Handlers("lb-queues")
+    static final class QueuesH {
+        final Map<String, String> ranOn;
+        final String label;
+        QueuesH(Map<String, String> ranOn, String label) { this.ranOn = ranOn; this.label = label; }
+        public Map<String, Object> a(Map<String, Object> ctx) { return tag(ranOn, "a", label, ctx); }
+        public Map<String, Object> b(Map<String, Object> ctx) { return tag(ranOn, "b", label, ctx); }
+        public Map<String, Object> c(Map<String, Object> ctx) { return tag(ranOn, "c", label, ctx); }
+        public Map<String, Object> d(Map<String, Object> ctx) { return tag(ranOn, "d", label, ctx); }
     }
 
     private static Map<String, Object> counted(Map<String, AtomicInteger> runs, String step, Map<String, Object> ctx) {

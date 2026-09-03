@@ -37,7 +37,12 @@ class NamespaceWorkerTest {
     }
 
     private static Blueprint workflow() {
-        return Workflow.define("wf").step("a", c -> c).build();
+        return Workflow.define("wf").step("a").build();
+    }
+
+    @com.wiggle.client.worker.Handlers("wf")
+    static final class WfHandlers {
+        public java.util.Map<String, Object> a(java.util.Map<String, Object> ctx) { return ctx; }
     }
 
     private static final Duration NEVER = Duration.ofHours(1);   // pin the auto-reconcile out of the way
@@ -55,7 +60,7 @@ class NamespaceWorkerTest {
 
             AtomicReference<List<String>> cells = new AtomicReference<>(List.of(a.baseUrl(), b.baseUrl()));
             try (NamespaceWorker nw = new NamespaceWorker(cells::get, WiggleClient::new, "w",
-                    WorkerOptions.defaults(), w -> w.register(bp))) {
+                    WorkerOptions.defaults(), w -> w.register(bp).handlers(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(a.baseUrl(), b.baseUrl()), nw.activeCells(), "one worker per active cell");
 
@@ -94,7 +99,7 @@ class NamespaceWorkerTest {
                     com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
             CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
-            try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp))) {
+            try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp).handlers(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(cell.baseUrl()), nw.activeCells(), "resolved the namespace's one active cell");
                 assertEquals("COMPLETED", cc.awaitCompletion(cc.start("wf", Map.of()), Duration.ofSeconds(5)).status());

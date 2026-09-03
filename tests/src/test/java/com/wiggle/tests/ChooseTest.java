@@ -4,6 +4,7 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -40,33 +41,47 @@ class ChooseTest {
     private Blueprint withDefault() {
         return Workflow.define("choose-default")
                 .choose(
-                        Case.when("is-gold", c -> "gold".equals(c.get("tier")),
-                                b -> b.step("gold", c -> { counter("gold").incrementAndGet(); return put(c, "path", "gold"); })),
-                        Case.when("is-premium", c -> c.get("tier") != null,   // also true for "gold": must not win
-                                b -> b.step("premium", c -> { counter("premium").incrementAndGet(); return put(c, "path", "premium"); })),
-                        Case.otherwise("plain",
-                                b -> b.step("plain", c -> { counter("plain").incrementAndGet(); return put(c, "path", "plain"); })))
-                .step("finalize", c -> { counter("finalize").incrementAndGet(); return put(c, "done", true); })
+                        Case.when("is-gold", b -> b.step("gold")),
+                        Case.when("is-premium", b -> b.step("premium")),   // also true for "gold": must not win
+                        Case.otherwise("plain", b -> b.step("plain")))
+                .step("finalize")
                 .build();
+    }
+
+    @Handlers("choose-default")
+    final class DefaultH {
+        public boolean isGold(Map<String, Object> c) { return "gold".equals(c.get("tier")); }
+        public boolean isPremium(Map<String, Object> c) { return c.get("tier") != null; }
+        public Map<String, Object> gold(Map<String, Object> c) { counter("gold").incrementAndGet(); return put(c, "path", "gold"); }
+        public Map<String, Object> premium(Map<String, Object> c) { counter("premium").incrementAndGet(); return put(c, "path", "premium"); }
+        public Map<String, Object> plain(Map<String, Object> c) { counter("plain").incrementAndGet(); return put(c, "path", "plain"); }
+        public Map<String, Object> finalize(Map<String, Object> c) { counter("finalize").incrementAndGet(); return put(c, "done", true); }
     }
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
     private Blueprint withoutDefault() {
         return Workflow.define("choose-skip")
                 .choose(
-                        Case.when("is-a", c -> "a".equals(c.get("k")),
-                                b -> b.step("a", c -> put(c, "path", "a"))))
-                .step("finalize", c -> put(c, "done", true))
+                        Case.when("is-a", b -> b.step("a")))
+                .step("finalize")
                 .build();
     }
 
-    private void withServer(Blueprint bp, java.util.function.BiConsumer<WiggleClient, Blueprint> body) throws Exception {
+    @Handlers("choose-skip")
+    static final class SkipH {
+        public boolean isA(Map<String, Object> c) { return "a".equals(c.get("k")); }
+        public Map<String, Object> a(Map<String, Object> c) { return put(c, "path", "a"); }
+        public Map<String, Object> finalize(Map<String, Object> c) { return put(c, "done", true); }
+    }
+
+    private void withServer(Blueprint bp, Object handlers,
+                            java.util.function.BiConsumer<WiggleClient, Blueprint> body) throws Exception {
         ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "w-choose").register(bp)) {
+             Worker w = new Worker(client, "w-choose").register(bp).handlers(handlers)) {
             w.start();
             body.accept(client, bp);
         }
@@ -81,7 +96,7 @@ class ChooseTest {
     @Test @DisplayName("the first matching guard wins and only its branch runs")
     void firstMatchWins() throws Exception {
         ran.clear();
-        withServer(withDefault(), (client, bp) -> {
+        withServer(withDefault(), new DefaultH(), (client, bp) -> {
             Map<String, Object> out = run(client, bp, Map.of("tier", "gold"));
             assertEquals("gold", out.get("path"), "gold branch chosen");
             assertEquals(true, out.get("done"), "continuation ran");
@@ -95,7 +110,7 @@ class ChooseTest {
     @Test @DisplayName("a later guard runs when earlier ones miss")
     void laterGuardMatches() throws Exception {
         ran.clear();
-        withServer(withDefault(), (client, bp) -> {
+        withServer(withDefault(), new DefaultH(), (client, bp) -> {
             Map<String, Object> out = run(client, bp, Map.of("tier", "silver"));
             assertEquals("premium", out.get("path"), "second guard chosen");
             assertEquals(0, counter("gold").get());
@@ -107,7 +122,7 @@ class ChooseTest {
     @Test @DisplayName("the default branch runs when no guard matches")
     void defaultRuns() throws Exception {
         ran.clear();
-        withServer(withDefault(), (client, bp) -> {
+        withServer(withDefault(), new DefaultH(), (client, bp) -> {
             Map<String, Object> out = run(client, bp, Map.of());   // no tier
             assertEquals("plain", out.get("path"), "default branch chosen");
             assertEquals(1, counter("plain").get());
@@ -118,7 +133,7 @@ class ChooseTest {
 
     @Test @DisplayName("with no default, an unmatched context skips straight to the continuation")
     void noMatchSkips() throws Exception {
-        withServer(withoutDefault(), (client, bp) -> {
+        withServer(withoutDefault(), new SkipH(), (client, bp) -> {
             Map<String, Object> out = run(client, bp, Map.of("k", "other"));
             assertNull(out.get("path"), "no branch ran");
             assertEquals(true, out.get("done"), "continuation still ran");

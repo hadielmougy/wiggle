@@ -36,7 +36,7 @@ class CellRoutingTest {
     }
 
     private static Blueprint workflow() {
-        return Workflow.define("wf").step("a", c -> c).build();
+        return Workflow.define("wf").step("a").build();
     }
 
     @Test @DisplayName("resolver routes start + operate-by-id to the coordinator-resolved cell")

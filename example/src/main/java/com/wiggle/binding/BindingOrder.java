@@ -38,7 +38,7 @@ public final class BindingOrder {
     public static Blueprint blueprint() {
         return Workflow.define(NAME)
                 .step("validate")
-                .gate("in-stock", ctx -> ((Number) ctx.get("quantity")).intValue() > 0)
+                .gate("in-stock")
                 .step("charge", PAYMENTS_QUEUE)
                 .step("ship")
                 .effect("notify")

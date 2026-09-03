@@ -34,7 +34,7 @@ class HousekeeperTest {
     private static Blueprint sleeper(long millis) {
         return Workflow.define("hk-sleeper")
                 .sleep("nap", Duration.ofMillis(millis))
-                .step("after", ctx -> ctx)
+                .step("after")
                 .build();
     }
 

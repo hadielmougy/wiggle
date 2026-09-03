@@ -50,7 +50,7 @@ class OracleStoreTest {
 
     private static Blueprint uniqueWorkflow() {
         return Workflow.define("oracle-claim-" + Ids.next("wf"))
-                .step("work", ctx -> ctx)
+                .step("work")
                 .build();
     }
 

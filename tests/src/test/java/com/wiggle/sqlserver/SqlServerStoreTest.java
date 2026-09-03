@@ -51,7 +51,7 @@ class SqlServerStoreTest {
 
     private static Blueprint uniqueWorkflow() {
         return Workflow.define("sqlserver-claim-" + Ids.next("wf"))
-                .step("work", ctx -> ctx)
+                .step("work")
                 .build();
     }
 

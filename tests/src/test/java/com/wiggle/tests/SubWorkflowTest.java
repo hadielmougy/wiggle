@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -39,22 +40,45 @@ class SubWorkflowTest {
 
     private static Blueprint parent() {
         return Workflow.define("sub-parent")
-                .step("prepare", ctx -> put(ctx, "prepared", true))
+                .step("prepare")
                 .subWorkflow("delegate", "sub-child")
-                .step("wrap-up", ctx -> put(ctx, "wrapped", true))
+                .step("wrap-up")
                 .build();
+    }
+
+    @Handlers("sub-parent")
+    static final class ParentH {
+        public Map<String, Object> prepare(Map<String, Object> c) { return put(c, "prepared", true); }
+        public Map<String, Object> wrapUp(Map<String, Object> c) { return put(c, "wrapped", true); }
+    }
+
+    @Handlers("sub-child")
+    static final class ChildOkH {
+        public Map<String, Object> childWork(Map<String, Object> c) { return put(c, "childSaw", c.get("prepared")); }
+        public Map<String, Object> childDone(Map<String, Object> c) { return put(c, "childResult", 42L); }
+    }
+
+    @Handlers("sub-child")
+    static final class ChildFailH {
+        public Map<String, Object> childWork(Map<String, Object> c) { throw new IllegalStateException("child broke"); }
+    }
+
+    @Handlers("sub-child")
+    static final class ChildParkH {
+        public Map<String, Object> childDone(Map<String, Object> c) { return c; }
     }
 
     @Test @DisplayName("the child runs with the parent's context and its result merges back")
     void childCompletes() throws Exception {
         Blueprint child = Workflow.define("sub-child")
-                .step("child-work", ctx -> put(ctx, "childSaw", ctx.get("prepared")))
-                .step("child-done", ctx -> put(ctx, "childResult", 42L))
+                .step("child-work")
+                .step("child-done")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w").register(parent()).register(child)) {
+             Worker w = new Worker(client, "sub-w").register(parent()).register(child)
+                     .handlers(new ParentH()).handlers(new ChildOkH())) {
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of("input", 1L)),
                     Duration.ofSeconds(20));
@@ -70,13 +94,13 @@ class SubWorkflowTest {
     @Test @DisplayName("a failing child fails the parent with the child's error")
     void childFailureFailsParent() throws Exception {
         Blueprint child = Workflow.define("sub-child")
-                .step("child-work", ctx -> { throw new IllegalStateException("child broke"); },
-                        com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1)))
+                .step("child-work", com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1)))
                 .build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w2").register(parent()).register(child)) {
+             Worker w = new Worker(client, "sub-w2").register(parent()).register(child)
+                     .handlers(new ParentH()).handlers(new ChildFailH())) {
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -89,7 +113,7 @@ class SubWorkflowTest {
     void unregisteredChildFailsParent() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w3").register(parent())) {
+             Worker w = new Worker(client, "sub-w3").register(parent()).handlers(new ParentH())) {
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -101,12 +125,13 @@ class SubWorkflowTest {
     void cancelCascades() throws Exception {
         Blueprint child = Workflow.define("sub-child")
                 .awaitSignal("never-arrives")   // the child parks so it is definitely still running
-                .step("child-done", ctx -> ctx)
+                .step("child-done")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w4").register(parent()).register(child)) {
+             Worker w = new Worker(client, "sub-w4").register(parent()).register(child)
+                     .handlers(new ParentH()).handlers(new ChildParkH())) {
             w.start();
             String parentId = client.start(parent(), Map.of());
 

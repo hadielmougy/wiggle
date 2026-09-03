@@ -39,7 +39,15 @@ public final class CookbookDemo {
             try (Worker worker = new Worker(client, "cookbook-worker")
                     .register(linearGate).register(chooseFork).register(forkEachQueues)
                     .register(pollLoop).register(approval).register(parentChild)
-                    .register(batchedLoop).register(kitchenSink)) {
+                    .register(batchedLoop).register(kitchenSink)
+                    .handlers(new CookbookHandlers.LinearGate())
+                    .handlers(new CookbookHandlers.ChooseFork())
+                    .handlers(new CookbookHandlers.ForeachQueues())
+                    .handlers(new CookbookHandlers.PollUntilReady())
+                    .handlers(new CookbookHandlers.ApprovalEscalation())
+                    .handlers(new CookbookHandlers.Parent())
+                    .handlers(new CookbookHandlers.BatchedLoop())
+                    .handlers(new CookbookHandlers.KitchenSink())) {
                 worker.start();
 
                 run(client, "1. step + then + effect + gate", linearGate,

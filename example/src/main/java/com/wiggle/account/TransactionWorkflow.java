@@ -10,8 +10,8 @@ public class TransactionWorkflow {
 
     public static Blueprint blueprint() {
         return Workflow.define("accounts-workflow", RetryPolicy.fixed(100, Duration.ofSeconds(1)))
-                .step("make-withdraw", Transaction.class, Transaction::withdraw)
-                .step("make-deposit", Transaction.class, Transaction::deposit)
+                .step("make-withdraw")
+                .step("make-deposit")
                 .build();
     }
 }

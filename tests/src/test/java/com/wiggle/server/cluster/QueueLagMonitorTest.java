@@ -65,7 +65,7 @@ class QueueLagMonitorTest {
 
     private WorkflowDefinition registerLagWorkflow(WorkflowEngine engine) {
         Blueprint bp = Workflow.define("lag-probe")
-                .step("work", ctx -> ctx)   // never claimed: no worker ever polls in this test
+                .step("work")   // never claimed: no worker ever polls in this test
                 .build();
         return engine.definitions().register(bp.definition());
     }

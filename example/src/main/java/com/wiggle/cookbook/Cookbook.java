@@ -1,7 +1,6 @@
 package com.wiggle.cookbook;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
@@ -10,7 +9,6 @@ import com.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,14 +29,14 @@ public final class Cookbook {
     private Cookbook() {}
 
     /** Returns a copy of {@code ctx} with {@code key} set to {@code value}. */
-    private static Map<String, Object> with(Map<String, Object> ctx, String key, Object value) {
+    static Map<String, Object> with(Map<String, Object> ctx, String key, Object value) {
         Map<String, Object> m = new LinkedHashMap<>(ctx);
         m.put(key, value);
         return m;
     }
 
     /** Returns a copy of {@code ctx} with two keys set. */
-    private static Map<String, Object> with(Map<String, Object> ctx, String k1, Object v1, String k2, Object v2) {
+    static Map<String, Object> with(Map<String, Object> ctx, String k1, Object v1, String k2, Object v2) {
         Map<String, Object> m = with(ctx, k1, v1);
         m.put(k2, v2);
         return m;
@@ -50,14 +48,14 @@ public final class Cookbook {
     public static Blueprint linearWithGate() {
         return Workflow.define("cb-linear-gate")
 
-                .step("normalise", ctx -> with(ctx, "email", String.valueOf(ctx.get("email")).toLowerCase()))
+                .step("normalise")
 
-                .then("classify", ctx -> with(ctx, "vip", "hadi@wiggle.dev".equals(ctx.get("email"))))
+                .then("classify")
 
                 // A false gate ends the instance successfully as "gated:eligible" -- not an error.
-                .gate("eligible", ctx -> Boolean.TRUE.equals(ctx.get("vip")))
+                .gate("eligible")
 
-                .effect("welcome", ctx -> System.out.println("   [cookbook] welcome email -> " + ctx.get("email")))
+                .effect("welcome")
 
                 .build();
     }
@@ -69,17 +67,15 @@ public final class Cookbook {
         return Workflow.define("cb-choose-fork")
 
                 .choose(
-                        Case.when("is-large", ctx -> ((Number) ctx.get("amount")).doubleValue() >= 1000,
+                        Case.when("is-large",
                                 b -> b.fork(
                                         Branch.of("fraud-check", s -> s.step("fraud-check",
-                                                ctx -> with(ctx, "fraudChecked", true),
                                                 RetryPolicy.exponential(3, Duration.ofMillis(50)))),
-                                        Branch.of("manager-notice", s -> s.effect("manager-notice",
-                                                ctx -> System.out.println("   [cookbook] large txn: " + ctx.get("amount"))))).combine("large-merge", Aggregator.union())),
+                                        Branch.of("manager-notice", s -> s.effect("manager-notice"))).combine("large-merge")),
 
-                        Case.otherwise("standard", b -> b.step("fast-path", ctx -> with(ctx, "fraudChecked", false))))
+                        Case.otherwise("standard", b -> b.step("fast-path")))
 
-                .step("settle", ctx -> with(ctx, "settled", true))
+                .step("settle")
                 .build();
     }
 
@@ -92,13 +88,11 @@ public final class Cookbook {
                 .forkEach("charge-items", "items", "item", b -> b
                         // forkEach branches share one context, so a plain "priced" key would race
                         // across items (last write wins) -- namespace by itemIndex instead.
-                        .step("price", item -> with(item, "priced-" + item.get("itemIndex"), true))
+                        .step("price")
                         // Only this step moves to the "gpu" queue; the workflow default stays "cpu".
-                        .step("render-thumbnail", item ->
-                                with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex")),
-                                "gpu"))
+                        .step("render-thumbnail", "gpu"))
 
-                .step("summarise", ctx -> with(ctx, "done", true))
+                .step("summarise")
                 .build();
     }
 
@@ -109,16 +103,13 @@ public final class Cookbook {
     public static Blueprint pollUntilReady() {
         return Workflow.define("cb-poll-until-ready")
 
-                .doWhile("still-pending", ctx -> !Boolean.TRUE.equals(ctx.get("ready")), b -> b
+                .doWhile("still-pending", b -> b
                         // gate() short-circuits to the loop's exit (the enclosing join/end),
                         // not just the body -- a cancellation ends the whole instance here.
-                        .gate("not-cancelled", ctx -> !Boolean.TRUE.equals(ctx.get("cancelled")))
-                        .step("poll", ctx -> {
-                            int n = ((Number) ctx.getOrDefault("polls", 0)).intValue() + 1;
-                            return with(with(ctx, "polls", n), "ready", n >= 3);
-                        }))
+                        .gate("not-cancelled")
+                        .step("poll"))
 
-                .step("finish", ctx -> with(ctx, "finishedAfter", ctx.get("polls")))
+                .step("finish")
                 .build();
     }
 
@@ -128,16 +119,16 @@ public final class Cookbook {
     public static Blueprint approvalWithEscalation() {
         return Workflow.define("cb-approval-escalation")
 
-                .step("submit", ctx -> with(ctx, "submitted", true))
+                .step("submit")
 
                 .awaitSignal("manager-approval", Duration.ofMillis(200),
-                        esc -> esc.step("auto-escalate", ctx -> with(with(ctx, "escalated", true), "approved", false)))
+                        esc -> esc.step("auto-escalate"))
 
                 .choose(
-                        Case.when("was-escalated", ctx -> Boolean.TRUE.equals(ctx.get("escalated")),
-                                b -> b.effect("notify-director", ctx -> System.out.println("   [cookbook] escalated to director"))),
+                        Case.when("was-escalated",
+                                b -> b.effect("notify-director")),
                         Case.otherwise("was-approved",
-                                b -> b.effect("notify-submitter", ctx -> System.out.println("   [cookbook] approved directly"))))
+                                b -> b.effect("notify-submitter")))
 
                 .build();
     }
@@ -151,12 +142,12 @@ public final class Cookbook {
                 // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
                 .subWorkflow("run-eligibility", "cb-linear-gate")
 
-                .gate("child-passed", ctx -> Boolean.TRUE.equals(ctx.get("vip")))
+                .gate("child-passed")
 
                 .fork(
-                        Branch.of("provision", s -> s.step("provision", ctx -> with(ctx, "provisioned", true))),
-                        Branch.of("audit", s -> s.effect("audit", ctx -> System.out.println("   [cookbook] provisioning audited"))))
-                .combine("merge", Aggregator.union())
+                        Branch.of("provision", s -> s.step("provision")),
+                        Branch.of("audit", s -> s.effect("audit")))
+                .combine("merge")
                 .build();
     }
 
@@ -167,14 +158,11 @@ public final class Cookbook {
     public static Blueprint batchedLoopWithCheckpoint() {
         return Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
 
-                .doWhile("more-batches", ctx -> ((Number) ctx.getOrDefault("batch", 0)).intValue() < 3, b -> b
-                        .step("process-batch", ctx -> {
-                            int n = ((Number) ctx.getOrDefault("batch", 0)).intValue() + 1;
-                            return with(ctx, "batch", n);
-                        })
+                .doWhile("more-batches", b -> b
+                        .step("process-batch")
                         .checkpoint()) // flush the buffer before the next iteration under LOCAL_ASYNC
 
-                .step("finalise", ctx -> with(ctx, "batchesDone", ctx.get("batch")))
+                .step("finalise")
                 .build();
     }
 
@@ -186,38 +174,35 @@ public final class Cookbook {
     public static Blueprint kitchenSink() {
         return Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
 
-                .step("intake", ctx -> with(ctx, "stage", "intake"))
+                .step("intake")
 
-                .gate("has-items", ctx -> ctx.get("items") != null && !((List<?>) ctx.get("items")).isEmpty())
+                .gate("has-items")
 
                 .subWorkflow("run-eligibility", "cb-linear-gate")
 
                 .choose(
-                        Case.when("is-vip", ctx -> Boolean.TRUE.equals(ctx.get("vip")), b -> b
+                        Case.when("is-vip", b -> b
                                 .fork(
                                         Branch.of("priority-pack", s -> s
-                                                .step("pack", ctx -> with(ctx, "packed", true),
+                                                .step("pack",
                                                         RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing")),
                                         Branch.of("priority-notice", s -> s
                                                 .sleep("brief-hold", Duration.ofMillis(50))
-                                                .effect("notice", ctx -> System.out.println("   [cookbook] VIP order held briefly")))).combine("large-merge", Aggregator.union())),
+                                                .effect("notice"))).combine("large-merge")),
 
                         Case.otherwise("standard", b -> b
                                 // Namespaced by itemIndex for the same reason as example 3.
                                 .forkEach("pack-items", "items", "item", body -> body
-                                        .step("pack-item", item -> with(item, "packed-" + item.get("itemIndex"), true)))))
+                                        .step("pack-item"))))
 
                 .awaitSignal("dock-clear", Duration.ofMillis(150),
-                        esc -> esc.effect("auto-clear", ctx -> System.out.println("   [cookbook] dock auto-cleared")))
+                        esc -> esc.effect("auto-clear"))
 
-                .doWhile("more-checks", ctx -> ((Number) ctx.getOrDefault("checks", 0)).intValue() < 2, b -> b
-                        .step("run-check", ctx -> {
-                            int n = ((Number) ctx.getOrDefault("checks", 0)).intValue() + 1;
-                            return with(ctx, "checks", n);
-                        })
+                .doWhile("more-checks", b -> b
+                        .step("run-check")
                         .checkpoint())
 
-                .step("ship", ctx -> with(ctx, "stage", "shipped"))
+                .step("ship")
                 .build();
     }
 }

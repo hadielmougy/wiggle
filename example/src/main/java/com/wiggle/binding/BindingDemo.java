@@ -10,8 +10,6 @@ import com.wiggle.server.WiggleServer;
 import java.time.Duration;
 import java.util.Map;
 
-import static com.wiggle.binding.BindingOrder.put;
-
 /**
  * Name-only binding, runnable. A workflow's topology is registered <b>once</b>, and independent
  * workers implement its steps by {@code (workflow, step)} name -- no worker re-declares the graph.
@@ -48,18 +46,11 @@ public final class BindingDemo {
             try (Worker fulfilment = new Worker(client, "fulfilment-worker");
                  Worker payments = new Worker(client, "payments-worker")) {
 
-                fulfilment.handle(BindingOrder.NAME, "validate", ctx -> put(ctx, "status", "VALIDATED"))
-                          .handleGate(BindingOrder.NAME, "in-stock",
-                                  ctx -> ((Number) Json.asObject(ctx).get("quantity")).intValue() > 0)
-                          .handle(BindingOrder.NAME, "ship",
-                                  ctx -> put(ctx, "trackingLabel", "DHL-" + Json.asObject(ctx).get("orderId")))
-                          .handleEffect(BindingOrder.NAME, "notify",
-                                  ctx -> System.out.println("   [fulfilment] notified " + Json.asObject(ctx).get("orderId")))
+                fulfilment.handlers(new FulfilmentHandlers())
                           .start();   // reconciles: validates names/kinds, discovers queues
                 System.out.println("[fulfilment] serving validate / in-stock / ship / notify by name");
 
-                payments.handle(BindingOrder.NAME, "charge",
-                                ctx -> put(ctx, "paymentRef", "auth-" + Json.asObject(ctx).get("orderId")))
+                payments.handlers(new PaymentsHandlers())
                         .start();
                 System.out.println("[payments]   serving charge on the payments queue");
 

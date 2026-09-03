@@ -45,7 +45,12 @@ class TlsTest {
     private static Path serverKs, clientKs, trust;
 
     private static final Blueprint BP =
-            Workflow.define("tls-wf").step("work", ctx -> ctx).build();
+            Workflow.define("tls-wf").step("work").build();
+
+    @com.wiggle.client.worker.Handlers("tls-wf")
+    static final class WorkHandlers {
+        public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
+    }
 
     @BeforeAll
     static void generateCerts() throws Exception {
@@ -74,7 +79,7 @@ class TlsTest {
             Tls.Options clientTls = opts(null, trust);   // trusts the server, no client cert
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), clientTls);
-                 Worker w = new Worker(client, "tls-w").register(BP)) {
+                 Worker w = new Worker(client, "tls-w").register(BP).handlers(new WorkHandlers())) {
                 w.start();
                 String id = client.start(BP, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());
@@ -93,7 +98,7 @@ class TlsTest {
         try (WiggleServer server = new WiggleServer(config).start()) {
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust));   // presents a cert
-                 Worker w = new Worker(client, "mtls-w").register(BP)) {
+                 Worker w = new Worker(client, "mtls-w").register(BP).handlers(new WorkHandlers())) {
                 w.start();
                 String id = client.start(BP, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());

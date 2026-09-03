@@ -6,34 +6,26 @@ import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** {@link WorkflowStream#fork} with its mandatory {@link ForkStage#combine}: isolated branches
- *  rejoined by an explicit aggregator. This covers the graph shape the DSL emits; the isolation
- *  semantics are exercised end-to-end in the engine tests. */
+/** {@link WorkflowStream#fork} with its mandatory {@link ForkStage#combine}: the topology it emits
+ *  (an isolated fork rejoined by a combine node that carries the arm names). The combine's merge
+ *  logic is a worker concern, exercised end-to-end in the engine tests. */
 class ForkCombineTest {
 
-    /** air/hotel each contribute a price; combine sums them. */
     private static Blueprint tripBlueprint() {
         return Workflow.define("trip")
-                .step("prep", ctx -> ctx)
+                .step("prep")
                 .fork(
-                        Branch.of("air", s -> s.step("book-air", ctx -> Map.of("air", 100))),
-                        Branch.of("hotel", s -> s.step("book-hotel", ctx -> Map.of("hotel", 75))))
-                .combine("merge", (ctx, parts) -> Map.of("total",
-                        price(parts.get("air"), "air") + price(parts.get("hotel"), "hotel")))
-                .step("book", ctx -> ctx)
+                        Branch.of("air", s -> s.step("book-air")),
+                        Branch.of("hotel", s -> s.step("book-hotel")))
+                .combine("merge")
+                .step("book")
                 .build();
-    }
-
-    @SuppressWarnings("unchecked")
-    private static int price(Object armResult, String key) {
-        return (int) ((Map<String, Object>) armResult).get(key);
     }
 
     private static Node only(WorkflowDefinition def, NodeKind kind) {
@@ -48,7 +40,7 @@ class ForkCombineTest {
     }
 
     @Test
-    void forkCombineWiresForkBranchesJoinAggregator() {
+    void forkCombineWiresForkBranchesJoinCombine() {
         WorkflowDefinition def = tripBlueprint().definition();
 
         Node fork = only(def, NodeKind.FORK);
@@ -58,15 +50,10 @@ class ForkCombineTest {
         Node merge = named(def, "merge");
         Node book = named(def, "book");
 
-        // fork -> the two branch starts
         assertEquals(List.of(air.id(), hotel.id()), fork.branches());
         assertNull(fork.next(), "a static FORK carries no next edge");
-
-        // each branch -> JOIN
         assertEquals(join.id(), air.next());
         assertEquals(join.id(), hotel.next());
-
-        // JOIN(expected=2) -> the mandatory combine -> book -> end
         assertEquals(2, join.expected());
         assertEquals(merge.id(), join.next());
         assertEquals(NodeKind.TASK, merge.kind());
@@ -75,32 +62,17 @@ class ForkCombineTest {
     }
 
     @Test
-    void combineNodeCarriesArmNamesSoTheEngineCanKeyBranchResults() {
+    void combineNodeCarriesArmNamesForTheEngineToKeyBranchResults() {
         WorkflowDefinition def = tripBlueprint().definition();
-        Node merge = named(def, "merge");
         // The arm names ride on the combine node's itemsKey (a store-portable field) as a JSON array,
-        // in fork order, so the engine can key each isolated branch's result at the join.
-        assertEquals("[\"air\",\"hotel\"]", merge.itemsKey());
-    }
-
-    @Test
-    void combineReadsArmsByNameAndReturnsMergedFields() throws Exception {
-        Blueprint bp = tripBlueprint();
-        // The engine stages each isolated arm's result under its name; the handler reads them.
-        Map<String, Object> staged = Map.of("air", Map.of("air", 100), "hotel", Map.of("hotel", 75));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> delta = (Map<String, Object>) bp.handlers().get("trip#merge").invoke(staged);
-        assertEquals(175, delta.get("total"));
+        // in fork order, so the engine can stage each isolated branch's result under its name.
+        assertEquals("[\"air\",\"hotel\"]", named(def, "merge").itemsKey());
     }
 
     @Test
     void combineIsMandatory_forgottenCombineFailsBuild() {
-        WorkflowStream stream = Workflow.define("t")
-                .step("prep", ctx -> ctx);
-        // Fan out but never combine: the fork is left pending.
-        stream.fork(
-                Branch.of("a", s -> s.step("a", ctx -> Map.of())),
-                Branch.of("b", s -> s.step("b", ctx -> Map.of())));
+        WorkflowStream stream = Workflow.define("t").step("prep");
+        stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, stream::build);
         assertTrue(ex.getMessage().toLowerCase().contains("merge")
@@ -109,20 +81,16 @@ class ForkCombineTest {
 
     @Test
     void combineTwiceThrows() {
-        WorkflowStream stream = Workflow.define("t")
-                .step("prep", ctx -> ctx);
-        ForkStage stage = stream.fork(
-                Branch.of("a", s -> s.step("a", ctx -> Map.of())),
-                Branch.of("b", s -> s.step("b", ctx -> Map.of())));
-        stage.combine("m", (ctx, parts) -> Map.of());
-        assertThrows(IllegalStateException.class, () -> stage.combine("m2", (ctx, parts) -> Map.of()));
+        WorkflowStream stream = Workflow.define("t").step("prep");
+        ForkStage stage = stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
+        stage.combine("m");
+        assertThrows(IllegalStateException.class, () -> stage.combine("m2"));
     }
 
     @Test
     void combineResumesNormalFlowAndBuilds() {
-        Blueprint bp = tripBlueprint();
-        assertTrue(bp.definition().version() != 0);
-        WorkflowDefinition def = bp.definition();
+        WorkflowDefinition def = tripBlueprint().definition();
+        assertTrue(def.version() != 0);
         assertEquals(NodeKind.END, def.nodes().get(named(def, "book").next()).kind());
     }
 }

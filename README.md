@@ -39,9 +39,6 @@ docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me
 > Spreading one flow across many services? See **[docs/queues.md](docs/queues.md)** — how a step's
 > **queue** routes work to the microservice that serves it (with diagrams).
 >
-> Prefer not to write Java to define a workflow? Author the topology as a YAML file and register it
-> with the **`wiggle` CLI** — see **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
->
 > Not on the JVM? There are idiomatic **[Python](https://github.com/hadielmougy/wiggle-python)** and
 > **[Go](https://github.com/hadielmougy/wiggle-go)** clients that speak the same gRPC control plane, so
 > their workers interoperate with Java (and each other) on one server — dispatch is by activity name,
@@ -108,24 +105,33 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
-// 1. Define a workflow. Here the context is a plain Map; see below for typed records.
-// A step must return the whole context, not just the fields it changed -- the engine
-// diffs the return value against what it was given, so a bare Map.of("greeting", ...)
-// would tell it "name" was deliberately cleared.
-Blueprint<Map<String, Object>> greet = Workflow.define("greet")
-        .step("say-hello", ctx -> {
-            Map<String, Object> next = new HashMap<>(ctx);
-            next.put("greeting", "hello, " + ctx.get("name"));
-            return next;
-        })
+// 1. Define a workflow as a topology -- named steps and their wiring, no logic.
+//    build() returns a Blueprint: just the graph, with no context type.
+Blueprint greet = Workflow.define("greet")
+        .step("say-hello")
         .build();
+
+// The step logic lives in a @Handlers class, matched to the graph by method name
+// (say-hello <-> sayHello). A step must return the whole context, not just the fields
+// it changed -- the engine diffs the return value against what it was given, so a bare
+// Map.of("greeting", ...) would tell it "name" was deliberately cleared. Here the context
+// is a plain Map<String,Object>; a method can also take and return a typed record.
+@Handlers("greet")
+class GreetHandlers {
+    public Map<String, Object> sayHello(Map<String, Object> ctx) {
+        Map<String, Object> next = new HashMap<>(ctx);
+        next.put("greeting", "hello, " + ctx.get("name"));
+        return next;
+    }
+}
 
 // 2. Start an embedded, in-memory server (great for dev and tests).
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
-    // 3. Run a worker that knows how to execute the steps.
-    try (Worker worker = new Worker(client, "worker-1").register(greet)) {
+    // 3. Run a worker: register the blueprint, then bind the handlers to it by name.
+    try (Worker worker = new Worker(client, "worker-1")
+            .register(greet).handlers(new GreetHandlers())) {
         worker.start();
 
         // 4. Start an instance and wait for it to finish.
@@ -148,47 +154,73 @@ Prefer to just run it? The repo ships a full example:
 
 ## Defining a workflow
 
-A workflow is a chain of steps. Nothing runs while you build it; `build()` produces a
-`Blueprint` you register and start.
+A workflow definition is pure **topology** — named steps and how they chain, branch, and rejoin,
+with no step logic and no context type. Nothing runs while you build it; `build()` produces a
+`Blueprint` (just the graph) you register and start.
 
 ```java
-Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.records(Order.class))
+Blueprint orders = Workflow.define("order-fulfilment")
 
-        .step("validate", order -> order.withStatus("VALIDATED"))
+        .step("validate")
 
         // A false guard ends the instance successfully — an empty stream, not an error.
-        .gate("in-stock", order -> order.quantity() > 0)
+        .gate("in-stock")
 
         .fork(
                 Branch.of("payment", s -> s
-                        // Retry policy is an optional parameter on the step itself.
-                        .step("authorise", Payments::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                        .step("capture", Payments::capture)),
+                        // Retry policy is an optional parameter on the topology node itself.
+                        .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(100)))
+                        .step("capture")),
 
                 Branch.of("shipping", s -> s
-                        .step("reserve-stock", Stock::reserve)
+                        .step("reserve-stock")
                         .sleep("await-warehouse", Duration.ofMillis(300))
-                        .step("print-label", Labels::print)))
+                        .step("print-label")))
 
-        .step("notify", Notifier::send)
+        // Each branch runs on an isolated copy of the context; the mandatory combine rejoins them.
+        // The two arms here change disjoint fields, so the default union folds them (no handler needed).
+        .combine("merge")
+
+        .step("notify")
         .build();
+```
+
+The step logic lives in a separate class annotated `@Handlers("<workflow-name>")`, bound on a
+worker by name. Each public method whose name matches a step (case/style-insensitive, so `inStock`
+serves `in-stock`) is a handler; its **signature** defines the step — one parameter is the input
+(decoded from JSON), the return type is the output (a `boolean` return is a gate, `void` is an
+effect, any other return is a task whose value becomes the next context):
+
+```java
+@Handlers("order-fulfilment")
+class OrderHandlers {
+    public Order   validate(Order o)     { return o.withStatus("VALIDATED"); }
+    public boolean inStock(Order o)      { return o.quantity() > 0; }              // gate; matches "in-stock"
+    public Order   authorise(Order o)    { return o.withPaymentRef("auth-" + o.orderId()); }
+    public Order   capture(Order o)      { return o.log("captured"); }
+    public Order   reserveStock(Order o) { return o.withShipmentRef("shp-" + o.orderId()); }
+    public Order   printLabel(Order o)   { return o.withTrackingLabel("DHL-" + o.orderId()); }
+    public Order   notify(Order o)       { return o.withStatus("FULFILLED"); }     // "merge" has no method, so
+}                                                                                 // its branches fold by union
 ```
 
 ### The operations
 
+Every operation is topology only — it names a node; the matching `@Handlers` method supplies its logic.
+
 | Operation | What it does |
 |---|---|
-| `step(name, fn)` / `then(name, fn)` | run `fn` on a worker; its return value becomes the new context |
-| `step(name, fn, retry)` / `step(name, fn, queue)` / `step(name, fn, retry, queue)` | same, with an explicit `RetryPolicy` and/or a dedicated `queue` for that step |
-| `effect(name, fn)` | run `fn` for a side effect; context unchanged (also takes optional `retry`/`queue`) |
-| `gate(name, pred)` | continue only while `pred` is true; a false result ends the instance as `gated:<name>` (also takes optional `retry`/`queue`) |
+| `step(name)` / `then(name)` | run the step's handler on a worker; its return value becomes the new context |
+| `step(name, retry)` / `step(name, queue)` / `step(name, retry, queue)` | same, with an explicit `RetryPolicy` and/or a dedicated `queue` for that step |
+| `effect(name)` | the handler runs for a side effect (a `void` method); context unchanged (also takes optional `retry`/`queue`) |
+| `gate(name)` | continue only while the guard handler returns true; a false result ends the instance as `gated:<name>` (also takes optional `retry`/`queue`) |
 | `choose(cases…)` | switch/case: run the branch of the **first** matching guard, then continue |
 | `sleep(name, duration)` | wait on a server-side timer — **no worker is held** while waiting |
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
 | `subWorkflow(name, workflow)` | run another workflow as a child; its result merges back, its failure fails the parent |
-| `fork(branches…)` | run branches in parallel, then wait for all of them to finish (join) |
+| `fork(branches…).combine(name)` | run branches in parallel on isolated context copies, then rejoin at the **mandatory** `combine` node |
 | `forkEach(name, itemsKey, itemKey, body)` | **runtime** fan-out: one parallel branch per element of the list at `itemsKey`, each seeing its element as `itemKey` (and `itemKey + "Index"`); empty list skips through |
-| `doWhile(name, cond, body)` | run `body`, then re-run while `cond` holds (body runs at least once) |
+| `doWhile(name, body)` | run `body`, then re-run while the guard handler named `name` holds (body runs at least once) |
 | `defaultQueue(q)` | set the queue for every following step (a per-step `queue` argument overrides it) |
 | `build()` | finish; produces the `Blueprint` |
 
@@ -197,50 +229,47 @@ to use the workflow's default policy.
 
 ### The context
 
-The context is your workflow's data. It's the same type from the first step to the last:
-`step` returns a new context of the same type (think `UnaryOperator<T>`, not
-`Function<T,R>`). Two flavors:
+The context is your workflow's data — a JSON document the server persists between steps. The
+definition carries no context type; **each handler picks the type it works in by its signature**,
+and (like `Stream.map`) a method may return a different type than it takes. Two flavors:
 
-- **Typed records** — `Workflow.define("name", ContextCodec.records(Order.class))`. Your
-  steps take and return an `Order`. Records are immutable and serialize cleanly.
-- **Versioned records** — `VersionedContextCodec.builder(Order.class, 3)…`. Same as above,
-  but the context is wrapped in a `{_schema, _v, data}` envelope so the record's shape can
-  evolve safely. See [Evolving the context schema](#evolving-the-context-schema).
-- **JSON maps** — `Workflow.defineJson("name")`. Steps take and return a
-  `Map<String, Object>`. Handy when you don't want a dedicated type.
+- **Typed records** — a method takes and returns a record such as `Order`. Wiggle decodes the
+  persisted JSON into it and encodes the result back. Records are immutable and serialize cleanly.
+- **JSON maps** — a method takes and returns a `Map<String, Object>` for raw JSON, handy when you
+  don't want a dedicated type.
 
-> **Parallel branches merge automatically.** Each step writes back only the fields it
-> *changed*, so branches that touch different fields merge cleanly. If two branches write
-> the same field, the later write wins.
+A record and a map are the **same JSON on the wire**, so handlers of either shape can serve
+different steps of the same instance interchangeably.
+
+> **A step returns the whole context, not just what it changed.** The engine diffs the returned
+> document against the one it was given and merges only the keys that actually changed, so parallel
+> branches that touch different fields merge cleanly. If two branches write the same field, the
+> later write wins.
 
 ### Evolving the context schema
 
-A plain `ContextCodec.records(Order.class)` stores the record's fields directly. If you later
-add, remove, rename, or retype a field, **already-running instances** were written under the old
-shape — they'll be silently defaulted, lose data, or fail to decode, because nothing tracks which
-version their context was written at.
+A handler decodes the persisted JSON into its parameter type reflectively. If a record's shape
+changes over time — a field added, removed, renamed, or retyped — **instances already in flight**
+were written under the old shape and would silently default, lose data, or fail to decode.
 
-`VersionedContextCodec` fixes this. It wraps the context in a small envelope
-(`{"_schema":"order","_v":3,"data":{…}}`) and migrates older data forward on read, so your steps
-only ever see the current shape:
+Opt into custom decoding with a `@Decode` method in the handler class. It takes the raw JSON
+(`Map<String, Object>`) and returns the current type, running instead of the default reflective
+mapping wherever a step or combine parameter of that type is bound. It's the seam for schema-version
+upcasts or a bespoke codec:
 
 ```java
-var codec = VersionedContextCodec.builder(Order.class, /* current version */ 3)
-    .schema("order")
-    .upcast(1, m -> { m.put("currency", "USD"); return m; })   // v1 → v2: add a field
-    .upcast(2, m -> { m.put("total", m.remove("amount")); return m; })  // v2 → v3: rename
-    .build();
+@Handlers("order-fulfilment")
+class OrderHandlers {
 
-Blueprint<Order> orders = Workflow.define("order-fulfilment", codec) …;
+    @Decode
+    public Order load(Map<String, Object> raw) {   // upcast an older shape to the current Order
+        raw.putIfAbsent("currency", "USD");         // e.g. default a field added in a later version
+        return RecordMapper.fromJson(raw, Order.class);
+    }
+
+    // ... step methods, which now receive the upcast Order ...
+}
 ```
-
-- **Upcast to current.** On decode, data written at an older `_v` runs through the `upcast` chain
-  until it matches the current record; on the next write the instance is re-stored at the current
-  version. Bare, pre-envelope contexts are read as version 1, so existing instances upgrade
-  transparently — no flag day.
-- **Condition on the version.** Inside a step, `ContextVersion.current()` returns the version the
-  context was persisted at, so a handler can treat older instances specially. For an origin marker
-  that survives every step, stamp it into the data from an upcast (it then persists as a normal field).
 
 ### Branching: `choose` vs `fork`
 
@@ -249,22 +278,25 @@ Blueprint<Order> orders = Workflow.define("order-fulfilment", codec) …;
   **first** match runs. Unmatched input falls through to `Case.otherwise(...)` if present,
   or straight to the next step. Exactly one branch runs.
 
+Each case's guard is a `boolean` handler named for the case (`isDigital`, `isPhysical`); the topology
+just names them and wires the branch that runs when a guard is the first to hold.
+
 ```java
 import static com.wiggle.client.dsl.Case.*;   // when, otherwise
 
 .choose(
-        when("is-digital",  o -> o.type() == Type.DIGITAL,
-                b -> b.step("grant-access", Fulfil::grantAccess)),
+        when("is-digital",
+                b -> b.step("grant-access")),
 
-        when("is-physical", o -> o.type() == Type.PHYSICAL,
-                b -> b.step("reserve", Stock::reserve)
+        when("is-physical",
+                b -> b.step("reserve")
                       .sleep("await-warehouse", Duration.ofMillis(300))
-                      .step("ship", Shipping::send)),
+                      .step("ship")),
 
         otherwise("backorder",
-                b -> b.step("queue-backorder", Backorders::queue)))
+                b -> b.step("queue-backorder")))
 
-.step("notify", Notifier::send)   // runs once, after the chosen branch
+.step("notify")   // runs once, after the chosen branch
 ```
 
 ### Execution mode (local step chaining)
@@ -275,10 +307,10 @@ steps locally** instead, cutting the round-trips and keeping the context in the 
 steps:
 
 ```java
-Workflow.defineJson("etl").execution(ExecutionMode.LOCAL_SYNC)
-        .step("extract",  ...)
-        .step("transform",...)
-        .step("load",     ...)
+Workflow.define("etl").execution(ExecutionMode.LOCAL_SYNC)
+        .step("extract")
+        .step("transform")
+        .step("load")
         .build();
 ```
 
@@ -314,6 +346,7 @@ try (WiggleClient client = new WiggleClient("localhost:8080")) {
                         .withConcurrency(16)                  // steps in flight at once
                         .withLease(Duration.ofSeconds(30)))   // how long a step may run before recovery
             .register(orders)
+            .handlers(new OrderHandlers())                    // bind the @Handlers class by name
             .start();
 
     // ... worker runs in the background until closed ...
@@ -326,7 +359,7 @@ try (WiggleClient client = new WiggleClient("localhost:8080")) {
 else is a `WorkerOptions` setting.
 
 **Worker specialization**: by default a worker serves every queue of the blueprints it
-registered. Pair a step's queue argument — `step("render", fn, "gpu")` — with
+registered. Pair a step's queue argument — `step("render", "gpu")` — with
 `WorkerOptions.defaults().withQueues("gpu")` on a dedicated worker pool, and only those workers
 execute it — a local-execution chain hands the step over automatically at the queue boundary.
 See **[docs/queues.md](docs/queues.md)** for how queues distribute one flow's steps across many
@@ -336,82 +369,56 @@ microservices, end to end.
 
 ## Name-only binding: define the flow once, implement steps by name
 
-The server drives the graph, and workers dispatch by activity name (`"<workflow>#<step>"`) — so
-the topology only needs to live in **one** place. Register the workflow once, then attach step
-implementations **by name** from wherever each step belongs. Independent workers (different teams,
-different deploys) can own different steps of the same flow without any of them re-declaring it.
+The topology and the step logic are separate artifacts, matched **by name**. The definition lives in
+**one** place; the implementations are `@Handlers` classes bound on workers, each method matched to a
+step by its name. Independent workers (different teams, different deploys) can own different steps of
+the same flow — a worker's `@Handlers` class need only supply the methods for the steps it serves;
+steps it doesn't implement are served by whoever does.
 
 ```java
-// The order team authors and registers the graph — topology only.
-client.register(OrderFulfilment.blueprint());
+// The order team authors the graph — topology only.
+Blueprint orders = OrderFulfilment.blueprint();
 
-// A worker that never saw that blueprint implements some steps, by (workflow, step) name:
-new Worker(client, "fulfilment-worker")
-        .handle("order-fulfilment", "validate", ctx -> put(ctx, "status", "VALIDATED"))
-        .handleGate("order-fulfilment", "in-stock", ctx -> qty(ctx) > 0)
-        .handleEffect("order-fulfilment", "notify", ctx -> email(ctx))
-        .start();   // reconciles against the registered graph before polling
-
-// A separate worker owns just `charge` — on its own queue:
-new Worker(client, "payments-worker")
-        .handle("order-fulfilment", "charge", ctx -> put(ctx, "paymentRef", auth(ctx)))
-        .start();
-```
-
-`handle` (task), `handleGate` (predicate), and `handleEffect` (side effect) bind by name. On
-`start()` the worker **reconciles** its bindings against the graph the server holds: it verifies each
-step exists and is the right kind (a mistyped name or a task-bound-as-gate fails fast with the
-available step names), and it **discovers which queue each step polls** — so a name-only worker needs
-no queue configuration. Steps a worker doesn't implement are simply served by whoever does.
-
-One constraint: the graph must be **registered before** a name-only worker starts, or it fails fast.
-Register it as a deploy step; for local/dev, `WorkerOptions.withAwaitRegistration(Duration)` rides out
-the startup race.
-
-See it run: [`example:runBinding`](example/src/main/java/com/wiggle/binding/BindingDemo.java)
-authors the flow and serves it from two independent workers bound purely by name — a fulfilment
-worker and a payments-queue worker — then submits an order and prints the result.
-
-**A whole object of handlers.** Instead of one `handle(...)` per step, hand the worker an object whose
-methods *are* the steps — matched by name, with the **method signature picking the kind**:
-
-```java
-class OrderHandlers {
-    Map<String,Object> validate(Map<String,Object> c) { return put(c, "status", "VALIDATED"); } // task
-    boolean inStock(Map<String,Object> c)             { return qty(c) > 0; }                     // gate; matches "in-stock"
-    void notify(Map<String,Object> c)                 { email(c); }                              // side effect
+// One worker serves the fulfilment steps. The @Handlers annotation names the workflow; each
+// method's signature picks the kind (Map task / boolean gate / void effect).
+@Handlers("order-fulfilment")
+class FulfilmentHandlers {
+    public Map<String,Object> validate(Map<String,Object> c) { return put(c, "status", "VALIDATED"); } // task
+    public boolean inStock(Map<String,Object> c)             { return qty(c) > 0; }                     // gate; matches "in-stock"
+    public void    notify(Map<String,Object> c)              { email(c); }                              // effect
 }
 
 new Worker(client, "fulfilment-worker")
-        .registerHandlers("order-fulfilment", new OrderHandlers())
+        .register(orders).handlers(new FulfilmentHandlers())
+        .start();   // reconciles the handlers against the registered graph before polling
+
+// A separate worker owns just `charge` — on its own queue — with its own @Handlers class:
+@Handlers("order-fulfilment")
+class PaymentsHandlers {
+    public Map<String,Object> charge(Map<String,Object> c) { return put(c, "paymentRef", auth(c)); }
+}
+new Worker(client, "payments-worker")
+        .register(orders).handlers(new PaymentsHandlers())
         .start();
 ```
 
-Each method that takes the context and returns a `Map` (task), `boolean` (gate), or `void` (effect) is
-matched to a step **by case-insensitive name** (`inStock` ↔ `in-stock`) on `start()`, the graph
-confirming the exact name and gate-vs-task. Methods of any other shape are ignored, so helpers can live
-on the object. Two method names that collide under case-folding are rejected at `registerHandlers`; a
-method matching no step, or a signature that clashes with the graph's kind, fails fast on `start()`.
+On `start()` the worker **reconciles** its handlers against the registered graph: it verifies each
+matched method's step exists and its signature is the right kind (a name-collision, or a
+task-method-bound-to-a-gate, fails fast with the available step names), and it **discovers which
+queue each step polls** — so a worker needs no queue configuration. A combine node with no method
+folds its branches with the default union.
 
-**Typed contexts too.** A handler can work on a **record** rather than a JSON map — pass a
-`ContextCodec` to `handle`:
+See it run: [`example:runBinding`](example/src/main/java/com/wiggle/binding/BindingDemo.java)
+authors the flow and serves it from two independent workers — a fulfilment worker and a
+payments-queue worker — then submits an order and prints the result.
 
-```java
-ContextCodec<Purchase> codec = ContextCodec.records(Purchase.class);
-new Worker(client, "fulfilment")
-        .handle("typed-order", "validate", codec, p -> p.withStatus("VALIDATED"))   // Purchase -> Purchase
-        .handleGate("typed-order", "in-stock", codec, p -> p.quantity() > 0)
-        .start();
-```
-
-A record and a map are the **same JSON on the wire**, so a typed handler and an untyped one can serve
-different steps of the same instance interchangeably — binding is by step name, not by type.
+**Typed contexts too.** A method can work on a **record** rather than a `Map` — just declare the
+parameter and return type as the record, and Wiggle decodes the persisted JSON into it and encodes
+the result back (see `OrderHandlers`, which works entirely in `Order`). A record and a map are the
+**same JSON on the wire**, so a typed handler and an untyped one can serve different steps of the same
+instance interchangeably — binding is by step name, not by type.
 [`example:runTypedBinding`](example/src/main/java/com/wiggle/binding/typed/TypedBindingDemo.java)
 is the same demo with a typed `Purchase` context.
-
-Since the topology is authored once and implemented by name, it doesn't have to be authored in Java
-at all — describe it as a **[YAML file](docs/workflow-yaml.md)** and register it with the `wiggle`
-CLI, then bind handlers by name exactly as above.
 
 ### Other language clients
 
@@ -431,23 +438,27 @@ is per-language and need not match, because interop is by activity name.
 
 ## Command-line tool (`wiggle`)
 
-`wiggle` authors and registers workflows from a declarative **[YAML file](docs/workflow-yaml.md)** —
-no Java required. It's the deploy-time companion to name-only binding: register the topology once,
-then let workers implement steps by name.
+`wiggle` manages a **coordinator's** namespace allocations and placement epochs — the cellular
+control plane. Workflows themselves are defined and registered in **Java** (topology via the DSL,
+handlers via `@Handlers` classes on a worker), not from the CLI.
 
 ```bash
-wiggle validate order.yaml                          # compile + validate offline (no server) — great in CI
-wiggle register order.yaml --server prod:8080       # register with a running server
+wiggle use coordinator prod:8099            # remember which coordinator the CLI talks to (~/.wiggle)
+wiggle open-epoch -n orders 0=cellA 1=cellB # publish a new shard->cell ring (a reshard) for a namespace
+wiggle allocations -n orders                # list the workflows allocated to a namespace
+wiggle deallocate -w order-fulfilment -n orders   # stop fanning a workflow out to cells that join later
 ```
 
-- **Which server:** `--server`/`-s`, else `$WIGGLE_URL`, else `localhost:8080`. `validate` needs no server.
-- **TLS:** reads the same `WIGGLE_TLS_*` env as workers; `--tls-truststore`/`--tls-keystore` (mTLS) or
-  `--tls` (JVM default trust store) override per invocation.
+- **Which coordinator:** `-c`/`--coordinator`, else `$WIGGLE_COORDINATOR_URL`, else the target saved
+  by `wiggle use`, else `localhost:8099`.
+- **TLS:** reads the same `WIGGLE_TLS_*` env as workers.
 - **Install:** `brew tap hadielmougy/wiggle https://github.com/hadielmougy/wiggle && brew install hadielmougy/wiggle/wiggle`,
-  or download the archive from the release — see [docs/workflow-yaml.md](docs/workflow-yaml.md#installing-the-cli).
-  (It's a JVM app; needs a recent JDK.)
+  or download the archive from the release. (It's a JVM app; needs a recent JDK.)
 
-The full YAML schema and every subcommand detail live in **[docs/workflow-yaml.md](docs/workflow-yaml.md)**.
+**Allocating** a workflow *to* a namespace is programmatic, not a CLI step: call
+`CellResolver.registerWorkflow(namespace, blueprint)` from your app so the coordinator fans it out to
+the namespace's cells. See **[docs/sharding-and-epochs.md](docs/sharding-and-epochs.md)** for the
+cellular model.
 
 ---
 
@@ -479,18 +490,19 @@ client.cancel(id, "customer changed their mind");
 - If a worker dies mid-step, its lease expires and the step is automatically **redelivered**
   to another worker.
 
-Need the current attempt inside a step (e.g. to behave differently after earlier
-failures)? Read it from `Step` — no change to your step's signature:
+The retry policy rides on the topology node — `.step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(100)))`.
+Need the current attempt inside the handler (e.g. to behave differently after earlier failures)?
+Read it from `Step` — no change to the method's signature:
 
 ```java
 import com.wiggle.client.worker.Step;
 
-.step("authorise", order -> {
+public Order authorise(Order order) {
     if (Step.attempt() <= 2) {                 // 1 on the first try, +1 each retry
         throw new IllegalStateException("payment gateway timeout");
     }
     return order.withPaymentRef("auth-" + order.orderId());
-}, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+}
 ```
 
 `Step` also exposes `Step.name()` and `Step.instanceId()`. It's valid only inside a
@@ -505,15 +517,15 @@ approving, another system reporting back. No worker is held while it waits, so i
 days. Signals are addressed by *(instance, name)*, not an opaque task id.
 
 ```java
-Workflow.defineJson("expense")
-        .step("submit", Expenses::record)
+Workflow.define("expense")
+        .step("submit")
 
         // Waits for the "manager-approval" signal. Optional deadline (here 48h)
         // runs the escalation branch if nobody acts.
         .awaitSignal("manager-approval", Duration.ofHours(48),
-                b -> b.step("auto-escalate", Escalations::toDirector))
+                b -> b.step("auto-escalate"))
 
-        .step("pay-out", Expenses::disburse)
+        .step("pay-out")
         .build();
 ```
 
@@ -545,10 +557,10 @@ completion the child's final context merges back. A failed or cancelled child **
 parent** with the child's error; cancelling the parent **cascades** to running children.
 
 ```java
-Workflow.defineJson("onboarding")
-        .step("create-account", Accounts::create)
+Workflow.define("onboarding")
+        .step("create-account")
         .subWorkflow("run-kyc", "kyc-checks")     // reuse the whole kyc-checks workflow
-        .step("activate", Accounts::activate)
+        .step("activate")
         .build();
 ```
 

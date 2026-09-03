@@ -2,9 +2,9 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -37,16 +37,24 @@ class ForkJoinContextMergeTest {
 
     private static Blueprint blueprint() {
         return Workflow.define("merge-check")
-                .step("validate", ctx -> put(ctx, "validated", true))
+                .step("validate")
                 .fork(
                         Branch.of("payment", s -> s
-                                .step("authorise", ctx -> put(ctx, "payment", "auth"))),
+                                .step("authorise")),
                         Branch.of("shipping", s -> s
                                 .sleep("await", Duration.ofMillis(50))
-                                .step("label", ctx -> put(ctx, "tracking", "DHL"))))
-                .combine("merge", Aggregator.union())
-                .step("notify", ctx -> put(ctx, "done", true))
+                                .step("label")))
+                .combine("merge")
+                .step("notify")
                 .build();
+    }
+
+    @Handlers("merge-check")
+    static final class MergeH {
+        public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
+        public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
+        public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "tracking", "DHL"); }
+        public Map<String, Object> notify(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
     @Test @DisplayName("both parallel branches' fields survive the join (no sibling clobber)")
@@ -68,7 +76,7 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp);
+                w.register(bp).handlers(new MergeH());
                 workers.add(w.start());
             }
 
@@ -107,15 +115,23 @@ class ForkJoinContextMergeTest {
 
     private static Blueprint typedBlueprint() {
         return Workflow.define("parcel-merge")
-                .step("validate", Parcel.class, p -> p)
+                .step("validate")
                 .fork(
-                        Branch.of("payment", s -> s.step("authorise", Parcel.class, p -> p.withPayment("auth"))),
+                        Branch.of("payment", s -> s.step("authorise")),
                         Branch.of("shipping", s -> s
                                 .sleep("await", Duration.ofMillis(50))
-                                .step("label", Parcel.class, p -> p.withTracking("DHL"))))
-                .combine("merge", Aggregator.union())
-                .step("notify", Parcel.class, p -> p)
+                                .step("label")))
+                .combine("merge")
+                .step("notify")
                 .build();
+    }
+
+    @Handlers("parcel-merge")
+    static final class ParcelH {
+        public Parcel validate(Parcel p) { return p; }
+        public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
+        public Parcel label(Parcel p) { return p.withTracking("DHL"); }
+        public Parcel notify(Parcel p) { return p; }
     }
 
     @Test @DisplayName("typed-record branches (codec round-trip) keep both fields")
@@ -137,7 +153,7 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp);
+                w.register(bp).handlers(new ParcelH());
                 workers.add(w.start());
             }
 

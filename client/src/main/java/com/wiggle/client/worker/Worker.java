@@ -37,19 +37,13 @@ public final class Worker implements AutoCloseable {
     private final List<Blueprint> blueprints = new CopyOnWriteArrayList<>();
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
-    /** Handlers bound by name via {@link #handle}, reconciled against the server graph on start. */
-    private final List<Claim> claims = new CopyOnWriteArrayList<>();
-    /** Method objects bound via {@link #registerHandlers}, matched to graph steps by name on start. */
+    /** {@link Handlers @Handlers} objects, matched to graph steps by name on start. */
     private final List<HandlerSet> handlerSets = new CopyOnWriteArrayList<>();
 
-    /** A {@link #handle}-bound step: the graph the server holds must agree on its name and kind. */
-    private record Claim(String workflow, String step, NodeKind kind) {}
-
-    /** One method of a {@link #registerHandlers} object: its expected kind and the ready-to-bind handler. */
-    private record HandlerCandidate(String method, NodeKind kind, ActivityHandler handler) {}
-
-    /** A {@link #registerHandlers} object's methods, keyed by canonical (case-folded) step name. */
-    private record HandlerSet(String workflow, Map<String, HandlerCandidate> byCanonical) {}
+    /** A registered {@link Handlers @Handlers} object: its step methods (by canonical name) and its
+     *  {@link Decode @Decode} custom decoders (by decoded type). */
+    private record HandlerSet(String workflow, Object target, Map<String, Method> byName,
+                              Map<Class<?>, Method> decoders) {}
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -89,169 +83,80 @@ public final class Worker implements AutoCloseable {
     /** Whether the worker is currently running (started and not yet closed). */
     public boolean isRunning() { return running.get(); }
 
-    /** Adds a workflow's handlers to this worker's dispatch table. */
+    /** Registers a workflow's topology on this worker (the graph it will poll and drive). */
     public Worker register(Blueprint blueprint) {
         WorkflowDefinition def = blueprint.definition();
         blueprints.add(blueprint);
-        handlers.putAll(blueprint.handlers());
         graphs.put(def.key(), def);
         queues.addAll(def.workerQueues());
         return this;
     }
 
     /**
-     * Binds a handler to one step of an already-registered workflow, by name -- no topology
-     * re-declaration. The graph lives on the server; this worker just implements {@code step}.
-     * {@code fn} receives the context as JSON and returns the JSON object to merge back (only the
-     * changed keys are sent); the merge is idempotent, so returning the whole context is fine too.
-     * The queue the step polls is discovered from the graph on {@link #start()}, which also fails
-     * fast if {@code step} does not exist in the workflow or is not a task.
-     */
-    public Worker handle(String workflow, String step, ActivityHandler fn) {
-        return bind(workflow, step, NodeKind.TASK, ctx -> {
-            Object out = fn.invoke(ctx);
-            return out == null ? null : com.wiggle.core.Json.shallowDiff(ctx, out);
-        });
-    }
-
-    /**
-     * Binds a predicate step (a gate / choose guard / do-while condition) by name; {@code fn} must
-     * return a {@link Boolean}. See {@link #handle}.
-     */
-    public Worker handleGate(String workflow, String step, ActivityHandler fn) {
-        return bind(workflow, step, NodeKind.PREDICATE, fn);
-    }
-
-    /**
-     * Binds a side-effect step by name; {@code fn} consumes the context and the context is left
-     * unchanged. See {@link #handle}.
-     */
-    public Worker handleEffect(String workflow, String step, java.util.function.Consumer<Object> fn) {
-        return bind(workflow, step, NodeKind.TASK, ctx -> {
-            fn.accept(ctx);
-            return null;
-        });
-    }
-
-    /**
-     * Typed variant of {@link #handle(String, String, ActivityHandler)}: {@code fn}'s input is
-     * rebuilt from the JSON as {@code in} (a record type, or {@code Map} for raw JSON) and its
-     * output is encoded back, only the changed keys being sent -- exactly as the DSL's {@code step}
-     * does. The wire form is the same JSON either way, so a typed Java handler and an untyped
-     * ({@code dict}) Python handler interoperate on the same step.
-     */
-    public <I, O> Worker handle(String workflow, String step, Class<I> in,
-                                com.wiggle.client.dsl.Step<I, O> fn) {
-        return bind(workflow, step, NodeKind.TASK,
-                ctx -> Json.shallowDiff(ctx, RecordMapper.toJson(fn.apply(decode(ctx, in)))));
-    }
-
-    /** Typed variant of {@link #handleGate}: {@code test} works on the decoded input {@code in}. */
-    public <I> Worker handleGate(String workflow, String step, Class<I> in,
-                                 com.wiggle.client.dsl.Predicate<I> test) {
-        return bind(workflow, step, NodeKind.PREDICATE, ctx -> test.test(decode(ctx, in)));
-    }
-
-    /** Typed variant of {@link #handleEffect}: {@code fn} consumes the decoded input {@code in}. */
-    public <I> Worker handleEffect(String workflow, String step, Class<I> in,
-                                   com.wiggle.client.dsl.SideEffect<I> fn) {
-        return bind(workflow, step, NodeKind.TASK, ctx -> {
-            fn.accept(decode(ctx, in));
-            return null;
-        });
-    }
-
-    /** Rebuilds a step's typed input from JSON: a plain map for {@code null}/{@code Map} types,
-     *  otherwise the declared record type via reflection. */
-    private static <I> I decode(Object json, Class<I> type) {
-        if (type == null || Map.class.isAssignableFrom(type)) {
-            @SuppressWarnings("unchecked") I asMap = (I) Json.asObject(json);
-            return asMap;
-        }
-        @SuppressWarnings("unchecked") I value = (I) RecordMapper.fromJson(json, type);
-        return value;
-    }
-
-    private Worker bind(String workflow, String step, NodeKind kind, ActivityHandler handler) {
-        if (workflow == null || workflow.isBlank() || step == null || step.isBlank()) {
-            throw new IllegalArgumentException("workflow and step are required");
-        }
-        String activity = workflow + "#" + step;
-        if (handlers.putIfAbsent(activity, handler) != null) {
-            throw new IllegalStateException("duplicate handler for activity '" + activity + "'");
-        }
-        claims.add(new Claim(workflow, step, kind));
-        return this;
-    }
-
-    /**
-     * Binds a whole object's methods as step handlers in one call. Each public method shaped like a
-     * handler -- one {@code Map}/{@code Object} parameter (the context), returning the new context
-     * (a {@code Map}, a task), a {@code boolean} (a gate), or {@code void} (a side effect) -- is
-     * matched on {@link #start()} to a step of {@code workflow} by <b>case-insensitive name</b>
-     * ({@code inStock} matches a step named {@code in-stock}), the graph confirming the exact name and
-     * whether it is a gate. Methods of any other shape are ignored, so helpers can live on the object.
+     * Binds a {@link Handlers @Handlers}-annotated object's methods as this worker's step
+     * implementations. The annotation names the workflow; each method whose name matches a step
+     * (case/style-insensitive, so {@code inStock} binds {@code in-stock}) is a handler, its signature
+     * defining the step: one parameter is the input (decoded from JSON into that type), a
+     * {@code boolean} return is a gate, {@code void} an effect, any other return type a task whose
+     * value becomes the next context. A method with {@link Arm @Arm} parameters is the combine for the
+     * matching {@code combine} node -- each branch's result decoded into its parameter's type, plus an
+     * optional {@link Context @Context} parameter for the pre-fork context. A {@link Decode @Decode}
+     * method is a custom decoder for its return type (versioning / upcasts / bespoke codecs).
      *
-     * <p>Two methods whose names collide under case-folding are rejected here (ambiguous); a method
-     * matching no step, or a kind that clashes with the graph, is caught on {@link #start()}.
+     * <p>Matched against the registered graph on {@link #start()}: a name collision here, or a
+     * signature that clashes with the graph node's kind, fails fast; a step with no matching method is
+     * simply served by no handler on this worker (logged), and a combine with no method folds its
+     * branches with the default union.
      */
-    public Worker registerHandlers(String workflow, Object handlers) {
+    public Worker handlers(Object handlerObject) {
+        if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
+        Handlers ann = handlerObject.getClass().getAnnotation(Handlers.class);
+        if (ann == null) {
+            throw new IllegalArgumentException(handlerObject.getClass().getName()
+                    + " is not annotated @Handlers(\"<workflow>\")");
+        }
+        String workflow = ann.value();
         if (workflow == null || workflow.isBlank()) {
-            throw new IllegalArgumentException("workflow is required");
+            throw new IllegalArgumentException("@Handlers on " + handlerObject.getClass().getName()
+                    + " needs the workflow name");
         }
-        if (handlers == null) {
-            throw new IllegalArgumentException("handlers is required");
-        }
-        Map<String, HandlerCandidate> byCanonical = new LinkedHashMap<>();
-        for (Method m : handlers.getClass().getMethods()) {
-            HandlerCandidate cand = candidateFor(handlers, m);
-            if (cand == null) continue;
+        Map<String, Method> byName = new LinkedHashMap<>();
+        Map<Class<?>, Method> decoders = new LinkedHashMap<>();
+        for (Method m : handlerObject.getClass().getMethods()) {
+            if (m.isSynthetic() || m.isBridge() || Modifier.isStatic(m.getModifiers())) continue;
+            if (m.getDeclaringClass() == Object.class) continue;
+            m.setAccessible(true);
+            if (m.isAnnotationPresent(Decode.class)) {
+                decoders.put(m.getReturnType(), m);
+                continue;
+            }
+            if (m.getParameterCount() == 0) continue;   // a helper, not a handler
             String canon = canonicalName(m.getName());
             if (canon.isEmpty()) continue;
-            HandlerCandidate prev = byCanonical.putIfAbsent(canon, cand);
+            Method prev = byName.putIfAbsent(canon, m);
             if (prev != null) {
-                throw new IllegalArgumentException("methods '" + prev.method() + "' and '" + m.getName()
+                throw new IllegalArgumentException("methods '" + prev.getName() + "' and '" + m.getName()
                         + "' map to the same step name '" + canon + "'; names differing only in "
                         + "case/style are ambiguous -- rename one");
             }
         }
-        if (byCanonical.isEmpty()) {
-            throw new IllegalArgumentException(handlers.getClass().getName() + " exposes no handler "
-                    + "methods (a method taking the context and returning a Map (task), boolean (gate), "
-                    + "or void (effect))");
-        }
-        handlerSets.add(new HandlerSet(workflow, byCanonical));
+        handlerSets.add(new HandlerSet(workflow, handlerObject, byName, decoders));
         return this;
     }
 
-    /** Wraps a handler-shaped method as an {@link ActivityHandler}, or returns null if it is not one. */
-    private static HandlerCandidate candidateFor(Object target, Method m) {
-        if (m.isSynthetic() || m.isBridge() || Modifier.isStatic(m.getModifiers())) return null;
-        if (m.getDeclaringClass() == Object.class) return null;
-        if (m.getParameterCount() != 1) return null;
-        // the context arrives as a Map (JSON object); accept a parameter a Map can be passed to
-        if (!m.getParameterTypes()[0].isAssignableFrom(Map.class)) return null;
-        m.setAccessible(true);
-        Class<?> ret = m.getReturnType();
-        if (ret == boolean.class || ret == Boolean.class) {
-            return new HandlerCandidate(m.getName(), NodeKind.PREDICATE, ctx -> invoke(m, target, ctx));
-        }
-        if (ret == void.class || ret == Void.class) {
-            return new HandlerCandidate(m.getName(), NodeKind.TASK, ctx -> {
-                invoke(m, target, ctx);
-                return null;
-            });
-        }
-        return new HandlerCandidate(m.getName(), NodeKind.TASK, ctx -> {
-            Object out = invoke(m, target, ctx);
-            return out == null ? null : Json.shallowDiff(ctx, out);
-        });
+    /** Decodes JSON into {@code type}: a class's {@link Decode @Decode} method if one is registered,
+     *  otherwise a raw {@code Map} for Map types, else the record type via reflection. */
+    private static Object decode(Object json, Class<?> type, Object target, Map<Class<?>, Method> decoders) throws Exception {
+        Method dec = decoders.get(type);
+        if (dec != null) return call(dec, target, Json.asObject(json));
+        if (Map.class.isAssignableFrom(type)) return Json.asObject(json);
+        return RecordMapper.fromJson(json, type);
     }
 
-    /** Invokes a bound handler method, unwrapping the reflective exception to the real cause. */
-    private static Object invoke(Method m, Object target, Object ctx) throws Exception {
+    /** Invokes a handler method, unwrapping the reflective exception to the real cause. */
+    private static Object call(Method m, Object target, Object... args) throws Exception {
         try {
-            return m.invoke(target, ctx);
+            return m.invoke(target, args);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
             if (cause instanceof Exception ex) throw ex;   // preserves PermanentActivityException etc.
@@ -279,7 +184,7 @@ public final class Worker implements AutoCloseable {
         if (options.registerOnStart()) {
             for (Blueprint bp : blueprints) client.register(bp);
         }
-        if (!claims.isEmpty() || !handlerSets.isEmpty()) reconcile();
+        if (!handlerSets.isEmpty()) reconcile();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
@@ -290,97 +195,129 @@ public final class Worker implements AutoCloseable {
         return this;
     }
 
-    /**
-     * Checks every {@link #handle}-bound claim against the server's registered graph and learns the
-     * queue each claimed step polls -- a name-only binding has no other way to know it. Fails fast on
-     * a mistyped step name or a kind mismatch, so a bad binding surfaces at start rather than as a
-     * silent runtime "no handler" much later.
-     */
     private void reconcile() {
-        Map<String, List<Claim>> byWorkflow = new LinkedHashMap<>();
-        for (Claim c : claims) byWorkflow.computeIfAbsent(c.workflow(), k -> new ArrayList<>()).add(c);
-
-        for (var entry : byWorkflow.entrySet()) {
-            String wf = entry.getKey();
-            WorkflowDefinition def = fetchGraph(wf);
-            Map<String, Node> byActivity = new HashMap<>();
-            for (Node n : def.nodes().values()) {
-                if (n.isWorkerDispatched() && n.activity() != null) byActivity.put(n.activity(), n);
-            }
-            Set<String> served = new HashSet<>();
-            for (Claim c : entry.getValue()) {
-                String activity = wf + "#" + c.step();
-                Node node = byActivity.get(activity);
-                if (node == null) {
-                    throw new IllegalStateException("no step '" + c.step() + "' in registered workflow '"
-                            + wf + "' (available steps: " + availableSteps(byActivity) + ")");
-                }
-                if (node.kind() != c.kind()) {
-                    String verb = node.kind() == NodeKind.PREDICATE ? "handleGate" : "handle";
-                    throw new IllegalStateException("activity '" + activity + "' is a " + node.kind()
-                            + " in the graph but was bound as " + c.kind() + "; use " + verb + "() instead");
-                }
-                queues.add(node.queue() != null ? node.queue() : wf);
-                served.add(activity);
-            }
-            graphs.put(def.key(), def);
-            Set<String> unclaimed = new TreeSet<>();
-            for (String a : byActivity.keySet()) {
-                if (!served.contains(a)) unclaimed.add(a.substring(a.indexOf('#') + 1));
-            }
-            if (!unclaimed.isEmpty()) {   // info, not an error: this worker may intentionally serve a subset
-                LOG.log(System.Logger.Level.INFO,
-                        () -> "workflow '" + wf + "' has steps served by no handler on this worker: " + unclaimed);
-            }
-        }
         for (HandlerSet set : handlerSets) matchHandlerSet(set);
     }
 
     /**
-     * Resolves a {@link #registerHandlers} object against the registered graph: each method is matched
-     * to a step by canonical name, its kind checked against the node, and its handler bound. A method
-     * matching no step (or a kind clash) fails fast, exactly like a mistyped {@link #handle}.
+     * Resolves a {@link Handlers @Handlers} object against the registered graph, node by node: each
+     * worker-dispatched step is bound to the method whose name matches (case/style-insensitive), its
+     * signature checked against the node's kind. A combine node with no matching method folds its
+     * branches with the default union; a step with no method is served by no handler here (logged);
+     * a method matching no step is a helper (ignored).
      */
     private void matchHandlerSet(HandlerSet set) {
         WorkflowDefinition def = fetchGraph(set.workflow());
-        Map<String, Node> nodeByCanonical = new HashMap<>();
-        Map<String, String> stepByCanonical = new HashMap<>();   // canonical -> real step name
-        for (Node n : def.nodes().values()) {
-            if (!n.isWorkerDispatched() || n.name() == null) continue;
-            String c = canonicalName(n.name());
-            nodeByCanonical.putIfAbsent(c, n);
-            stepByCanonical.putIfAbsent(c, n.name());
-        }
         Set<String> served = new TreeSet<>();
-        for (var e : set.byCanonical().entrySet()) {
-            HandlerCandidate cand = e.getValue();
-            Node node = nodeByCanonical.get(e.getKey());
-            if (node == null) {
-                throw new IllegalStateException("handler '" + cand.method() + "' matches no step in "
-                        + "workflow '" + set.workflow() + "' (available steps: "
-                        + new TreeSet<>(stepByCanonical.values()) + ")");
+        Set<String> allSteps = new TreeSet<>();
+        for (Node node : def.nodes().values()) {
+            if (!node.isWorkerDispatched() || node.name() == null) continue;
+            allSteps.add(node.name());
+            Method m = set.byName().get(canonicalName(node.name()));
+            ActivityHandler handler;
+            if (m != null) {
+                handler = buildHandler(set, node, m);
+            } else if (isCombine(node)) {
+                handler = unionCombine(node);   // no combine method -> default: fold all arms
+            } else {
+                continue;                       // no handler on this worker for this step
             }
-            String step = stepByCanonical.get(e.getKey());
-            String activity = set.workflow() + "#" + step;
-            if (node.kind() != cand.kind()) {
-                throw new IllegalStateException("activity '" + activity + "' is a " + node.kind()
-                        + " in the graph but handler '" + cand.method() + "' is a " + cand.kind());
-            }
-            if (handlers.putIfAbsent(activity, cand.handler()) != null) {
-                throw new IllegalStateException("duplicate handler for activity '" + activity + "'");
+            if (handlers.putIfAbsent(node.activity(), handler) != null) {
+                throw new IllegalStateException("duplicate handler for activity '" + node.activity() + "'");
             }
             queues.add(node.queue() != null ? node.queue() : set.workflow());
-            served.add(step);
+            served.add(node.name());
         }
         graphs.put(def.key(), def);
-        Set<String> unclaimed = new TreeSet<>();
-        for (String s : stepByCanonical.values()) {
-            if (!served.contains(s)) unclaimed.add(s);
-        }
-        if (!unclaimed.isEmpty()) {   // info, not an error: this worker may intentionally serve a subset
+        Set<String> unserved = new TreeSet<>(allSteps);
+        unserved.removeAll(served);
+        if (!unserved.isEmpty()) {   // info, not an error: this worker may intentionally serve a subset
             LOG.log(System.Logger.Level.INFO, () -> "workflow '" + set.workflow()
-                    + "' has steps served by no handler on this worker: " + unclaimed);
+                    + "' has steps served by no handler on this worker: " + unserved);
         }
+    }
+
+    /** A combine node carries its fork arm names (a JSON array) on its itemsKey; a plain task does not. */
+    private static boolean isCombine(Node node) {
+        return node.kind() == NodeKind.TASK && node.itemsKey() != null;
+    }
+
+    private static List<String> armNames(Node node) {
+        return Json.asArray(Json.parse(node.itemsKey())).stream().map(String::valueOf).toList();
+    }
+
+    /** Builds the handler for a graph node from its matched method, validating the signature vs kind. */
+    private static ActivityHandler buildHandler(HandlerSet set, Node node, Method m) {
+        Object target = set.target();
+        Map<Class<?>, Method> decoders = set.decoders();
+        if (isCombine(node)) return combineHandler(node, m, target, decoders);
+
+        Class<?> ret = m.getReturnType();
+        boolean returnsBool = (ret == boolean.class || ret == Boolean.class);
+        if (node.kind() == NodeKind.PREDICATE) {
+            if (!returnsBool || m.getParameterCount() != 1) {
+                throw new IllegalStateException("gate '" + node.name() + "' handler '" + m.getName()
+                        + "' must take the context and return boolean");
+            }
+            Class<?> in = m.getParameterTypes()[0];
+            return ctx -> call(m, target, decode(ctx, in, target, decoders));
+        }
+        if (returnsBool || m.getParameterCount() != 1) {
+            throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
+                    + "' must take the context and return the next context (or void for an effect)");
+        }
+        Class<?> in = m.getParameterTypes()[0];
+        boolean effect = (ret == void.class || ret == Void.class);
+        if (effect) {
+            return ctx -> { call(m, target, decode(ctx, in, target, decoders)); return null; };
+        }
+        return ctx -> {
+            Object out = call(m, target, decode(ctx, in, target, decoders));
+            return out == null ? null : Json.shallowDiff(ctx, RecordMapper.toJson(out));
+        };
+    }
+
+    /** A combine method: each {@link Arm @Arm} parameter gets that branch's result decoded to its
+     *  type, an optional {@link Context @Context} parameter gets the pre-fork context; the return
+     *  value is the merged context (staged arm keys are stripped by the engine afterward). */
+    private static ActivityHandler combineHandler(Node node, Method m, Object target, Map<Class<?>, Method> decoders) {
+        List<String> arms = armNames(node);
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        return ctx -> {
+            Map<String, Object> map = Json.asObject(ctx);
+            Object[] args = new Object[params.length];
+            for (int i = 0; i < params.length; i++) {
+                java.lang.reflect.Parameter p = params[i];
+                Arm arm = p.getAnnotation(Arm.class);
+                if (arm != null) {
+                    args[i] = decode(map.get(arm.value()), p.getType(), target, decoders);
+                } else if (p.isAnnotationPresent(Context.class)) {
+                    Map<String, Object> base = new LinkedHashMap<>(map);
+                    arms.forEach(base::remove);
+                    args[i] = decode(base, p.getType(), target, decoders);
+                } else {
+                    throw new IllegalStateException("combine '" + node.name() + "' handler '" + m.getName()
+                            + "' parameter " + i + " must be @Arm(\"branch\") or @Context");
+                }
+            }
+            Object out = call(m, target, args);
+            return out == null ? null : RecordMapper.toJson(out);
+        };
+    }
+
+    /** The default combine when no method matches: fold every branch's result into the context. */
+    private static ActivityHandler unionCombine(Node node) {
+        List<String> arms = armNames(node);
+        return ctx -> {
+            Map<String, Object> map = Json.asObject(ctx);
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (String arm : arms) {
+                if (map.get(arm) instanceof Map<?, ?> branch) {
+                    branch.forEach((k, v) -> out.put(String.valueOf(k), v));
+                }
+            }
+            return out;
+        };
     }
 
     /** Fetches the registered graph, waiting out a registration race up to {@code awaitRegistration}. */
@@ -403,13 +340,6 @@ public final class Worker implements AutoCloseable {
                 throw e;
             }
         }
-    }
-
-    private static java.util.List<String> availableSteps(Map<String, Node> byActivity) {
-        java.util.List<String> steps = new ArrayList<>();
-        for (String a : byActivity.keySet()) steps.add(a.substring(a.indexOf('#') + 1));
-        Collections.sort(steps);
-        return steps;
     }
 
     private void pollLoop() {

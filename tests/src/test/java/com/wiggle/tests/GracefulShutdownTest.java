@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
@@ -36,6 +37,25 @@ class GracefulShutdownTest {
         return n;
     }
 
+    @Handlers("shutdown-drain")
+    static final class DrainH {
+        final AtomicInteger runsOfA, runsOfB, runsOfC;
+        final CountDownLatch aStarted, proceed;
+        DrainH(AtomicInteger runsOfA, AtomicInteger runsOfB, AtomicInteger runsOfC,
+               CountDownLatch aStarted, CountDownLatch proceed) {
+            this.runsOfA = runsOfA; this.runsOfB = runsOfB; this.runsOfC = runsOfC;
+            this.aStarted = aStarted; this.proceed = proceed;
+        }
+        public Map<String, Object> a(Map<String, Object> ctx) {
+            runsOfA.incrementAndGet();
+            aStarted.countDown();
+            await(proceed);
+            return put(ctx, "a", 1L);
+        }
+        public Map<String, Object> b(Map<String, Object> ctx) { runsOfB.incrementAndGet(); return put(ctx, "b", 2L); }
+        public Map<String, Object> c(Map<String, Object> ctx) { runsOfC.incrementAndGet(); return put(ctx, "c", 3L); }
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(0, "shutdown-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -55,19 +75,16 @@ class GracefulShutdownTest {
         // only in the worker's in-memory buffer until a boundary, a full batch, or a drain.
         Blueprint bp = Workflow.define("shutdown-drain")
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a", ctx -> {
-                    runsOfA.incrementAndGet();
-                    aStarted.countDown();
-                    await(proceed);
-                    return put(ctx, "a", 1L);
-                })
-                .step("b", ctx -> { runsOfB.incrementAndGet(); return put(ctx, "b", 2L); })
-                .step("c", ctx -> { runsOfC.incrementAndGet(); return put(ctx, "c", 3L); })
+                .step("a")
+                .step("b")
+                .step("c")
                 .build();
+
+        DrainH drainH = new DrainH(runsOfA, runsOfB, runsOfC, aStarted, proceed);
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
-            Worker worker = new Worker(client, "w-" + Ids.next("x")).register(bp);
+            Worker worker = new Worker(client, "w-" + Ids.next("x")).register(bp).handlers(drainH);
             worker.start();
             String id = client.start(bp, Map.of());
 
@@ -93,7 +110,7 @@ class GracefulShutdownTest {
             assertEquals(1L, Json.asObject(mid.context()).get("a"), "the drained step is committed, not lost");
 
             // A fresh worker picks up right where the drain left off.
-            try (Worker second = new Worker(client, "w-" + Ids.next("x")).register(bp)) {
+            try (Worker second = new Worker(client, "w-" + Ids.next("x")).register(bp).handlers(drainH)) {
                 second.start();
                 InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status());

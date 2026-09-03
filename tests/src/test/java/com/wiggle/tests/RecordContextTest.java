@@ -1,10 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.RecordMapper;
@@ -40,14 +40,23 @@ class RecordContextTest {
 
     private static Blueprint blueprint() {
         return Workflow.define("record-shipment")
-                .step("validate", Shipment.class, s -> s.withStatus("VALIDATED"))
-                .gate("has-items", Shipment.class, s -> s.items() > 0)
+                .step("validate")
+                .gate("has-items")
                 .fork(
-                        Branch.of("labelling", b -> b.step("label", Shipment.class, s -> s.withLabel("LBL-" + s.id()))),
-                        Branch.of("billing", b -> b.step("invoice", Shipment.class, s -> s.withInvoice("INV-" + s.id()))))
-                .combine("merge", Aggregator.union())
-                .step("dispatch", Shipment.class, s -> s.withStatus("DISPATCHED"))
+                        Branch.of("labelling", b -> b.step("label")),
+                        Branch.of("billing", b -> b.step("invoice")))
+                .combine("merge")
+                .step("dispatch")
                 .build();
+    }
+
+    @Handlers("record-shipment")
+    static final class ShipmentH {
+        public Shipment validate(Shipment s) { return s.withStatus("VALIDATED"); }
+        public boolean hasItems(Shipment s) { return s.items() > 0; }
+        public Shipment label(Shipment s) { return s.withLabel("LBL-" + s.id()); }
+        public Shipment invoice(Shipment s) { return s.withInvoice("INV-" + s.id()); }
+        public Shipment dispatch(Shipment s) { return s.withStatus("DISPATCHED"); }
     }
 
     private static ServerConfig config() {
@@ -62,7 +71,7 @@ class RecordContextTest {
         Blueprint bp = blueprint();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp)) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
             w.start();
             Shipment in = new Shipment("s-1", 3, new BigDecimal("19.99"), "NEW", null, null, List.of("created"));
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
@@ -84,7 +93,7 @@ class RecordContextTest {
         Blueprint bp = blueprint();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp)) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
             w.start();
             Shipment in = new Shipment("s-2", 0, new BigDecimal("1.00"), "NEW", null, null, List.of());
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));

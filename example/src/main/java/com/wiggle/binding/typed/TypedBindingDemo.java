@@ -42,16 +42,11 @@ public final class TypedBindingDemo {
             try (Worker fulfilment = new Worker(client, "typed-fulfilment");
                  Worker payments = new Worker(client, "typed-payments")) {
 
-                fulfilment.handle(TypedBindingOrder.NAME, "validate", Purchase.class, p -> p.withStatus("VALIDATED"))
-                          .handleGate(TypedBindingOrder.NAME, "in-stock", Purchase.class, p -> p.quantity() > 0)
-                          .handleEffect(TypedBindingOrder.NAME, "notify", Purchase.class,
-                                  p -> System.out.println("   [fulfilment] notified " + p.orderId()
-                                          + " status=" + p.status() + " payment=" + p.paymentRef()))
+                fulfilment.handlers(new TypedFulfilmentHandlers())
                           .start();
                 System.out.println("[fulfilment] serving validate / in-stock / notify as typed Purchase handlers");
 
-                payments.handle(TypedBindingOrder.NAME, "charge", Purchase.class,
-                                p -> p.withPaymentRef("auth-" + p.orderId()))
+                payments.handlers(new TypedPaymentsHandlers())
                         .start();
                 System.out.println("[payments]   serving charge on the payments queue");
 

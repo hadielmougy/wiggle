@@ -10,15 +10,11 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * The accumulating build model behind the {@link WorkflowStream} DSL: it owns the graph's
- * nodes, their edges, the worker-side activity handlers, the queue set, and the workflow-level
- * settings, and it assembles them into an immutable {@link Blueprint} on {@link #build()}.
- *
- * <p>All state is private. Callers never see the collections; they add nodes through the
- * intention-revealing {@code addXxx} methods (each returns the new node's id), connect them
- * with {@link #wireNext}/{@link #wireAlt}, and read nothing back. A task/effect/guard is added
- * as one atomic operation that registers its handler, reserves its name, and records its queue
- * together, so the node and its handler can never drift apart.
+ * The accumulating build model behind the {@link WorkflowStream} DSL: it owns the graph's nodes and
+ * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
+ * {@link Blueprint} on {@link #build()}. The blueprint is pure topology -- no step logic -- so this
+ * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
+ * on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes.
  */
 final class Pipeline {
 
@@ -26,7 +22,6 @@ final class Pipeline {
     private final RetryPolicy defaultRetry;
 
     private final Map<String, Node> nodes = new LinkedHashMap<>();
-    private final Map<String, ActivityHandler> handlers = new LinkedHashMap<>();
     private final Set<String> queues = new LinkedHashSet<>();
     private final Set<String> stepNames = new LinkedHashSet<>();
     private final Set<String> checkpoints = new LinkedHashSet<>();
@@ -43,17 +38,6 @@ final class Pipeline {
         this.defaultQueue = name;
     }
 
-    /** Rebuilds a step's typed input from the persisted JSON: a plain JSON map when no type is
-     *  given (or the type is a Map), otherwise the declared record type via reflection. */
-    static <I> I decode(Object json, Class<I> type) {
-        if (type == null || Map.class.isAssignableFrom(type)) {
-            @SuppressWarnings("unchecked") I asMap = (I) Json.asObject(json);
-            return asMap;
-        }
-        @SuppressWarnings("unchecked") I value = (I) RecordMapper.fromJson(json, type);
-        return value;
-    }
-
     void defaultQueue(String queue) { this.defaultQueue = Objects.requireNonNull(queue); }
 
     void executionMode(ExecutionMode mode) { this.executionMode = Objects.requireNonNull(mode, "mode"); }
@@ -64,111 +48,39 @@ final class Pipeline {
     /** Marks an already-added step as a checkpoint (see {@link WorkflowStream#checkpoint()}). */
     void markCheckpoint(String nodeId) { checkpoints.add(nodeId); }
 
-    /**
-     * A task node in the spirit of {@code Stream.map}: {@code fn}'s input is rebuilt from the JSON as
-     * {@code in}, and its (possibly differently-typed) output is encoded back and diffed against the
-     * old context, so the context transforms from one step to the next. A {@code null} {@code in}
-     * hands the raw JSON map to {@code fn}.
-     */
-    <I, O> String addStep(String name, Class<I> in, Step<I, O> fn, RetryPolicy retry, String queue) {
-        return addWorkerTask(
-                name,
-                json -> Json.shallowDiff(json, RecordMapper.toJson(fn.apply(decode(json, in)))),
-                retry, queue);
-    }
-
-    /**
-     * The mandatory merge at a fork's join: the engine stages each isolated branch's result under
-     * its branch name, so this reads them by name, lets {@code combine} produce the fields to merge,
-     * and returns them. The branch scratch keys never reach the shared context -- the engine strips
-     * them from the continuation once the combine runs. The arm names are recorded on the node's
-     * {@code itemsKey} (a field that round-trips through every store, unlike a TASK node's branches)
-     * so the engine can key each branch and know which scratch keys to strip; they are also baked
-     * into the handler so it can gather the parts it hands to {@code combine}.
-     */
-    String addAggregator(String name, List<String> branchNames, Aggregator combine,
-                         RetryPolicy retry, String queue) {
-        List<String> names = List.copyOf(branchNames);
-        String id = addWorkerTask(
-                name,
-                json -> {
-                    Map<String, Object> ctx = Json.asObject(json);
-                    Map<String, Object> parts = new LinkedHashMap<>();
-                    for (String b : names) parts.put(b, ctx.get(b));
-                    Map<String, Object> merged = combine.merge(ctx, parts);
-                    return merged == null ? Map.of() : merged;
-                },
-                retry, queue);
-        nodes.put(id, nodes.get(id).withItemsKey(Json.write(names)));
-        return id;
-    }
-
-    /** A task node run for its side effect only; the context is left unchanged. */
-    <I> String addEffect(String name, Class<I> in, SideEffect<I> fn, RetryPolicy retry, String queue) {
-        return addWorkerTask(
-                name,
-                json -> {
-                    fn.accept(decode(json, in));
-                    return null;
-                },
-                retry, queue);
-    }
-
-    /** A predicate node evaluated on a worker; its handler returns a {@link Boolean}. */
-    <I> String addGuard(String name, Class<I> in, Predicate<I> test, RetryPolicy retry, String queue) {
-        return addWorkerPredicate(
-                name,
-                json -> test.test(decode(json, in)),
-                retry, queue);
-    }
-
     /** The step's own queue, or the workflow default when none is given. */
     private String queueOr(String queue) { return queue == null || queue.isBlank() ? defaultQueue : queue; }
 
-    private String addWorkerPredicate(String name, ActivityHandler handler, RetryPolicy retry, String queue) {
-        String q = queueOr(queue);
-        queues.add(q);
-        NodeDraft draft = NodeDraft.predicate(name, registerActivity(name, handler), q, retryOr(retry));
-        return add(draft);
-    }
-
-    private String addWorkerTask(String name, ActivityHandler handler, RetryPolicy retry, String queue) {
-        String q = queueOr(queue);
-        queues.add(q);
-        NodeDraft draft = NodeDraft.task(name, registerActivity(name, handler), q, retryOr(retry));
-        return add(draft);
-    }
-
-    /** Reserves the step name, registers its handler, and returns the derived activity id. */
-    private String registerActivity(String name, ActivityHandler handler) {
-        reserveName(name);
-        String activity = this.name + "#" + name;
-        handlers.put(activity, handler);
-        return activity;
-    }
-
-    /** Reserves the step name and returns its activity id, binding <em>no</em> handler. The topology
-     *  and queue are declared here; the handler is bound on the worker by name (handle/registerHandlers).
-     *  A worker that claims this step without a bound handler fails it fast -- there is no silent no-op. */
+    /** Reserves the step name and returns its activity id; the handler is bound on the worker by name. */
     private String reserveActivity(String name) {
         reserveName(name);
         return this.name + "#" + name;
     }
 
-    /** A worker task node with no baked handler (name-only). Used by {@code step(name[, queue])} and
-     *  {@code effect(name[, queue])}; the handler is bound on the worker by name. */
-    String addTaskNameOnly(String name, RetryPolicy retry, String queue) {
+    /** A worker task node (step/effect); its handler is bound on the worker by name. */
+    String addTask(String name, RetryPolicy retry, String queue) {
         String q = queueOr(queue);
         queues.add(q);
         return add(NodeDraft.task(name, reserveActivity(name), q, retryOr(retry)));
     }
 
-    /** A predicate node with no baked handler (name-only). Used by {@code gate(name[, retry], queue)};
-     *  the guard is bound on the worker by name. */
-    String addGuardNameOnly(String name, RetryPolicy retry, String queue) {
+    /** A worker predicate node (gate / choose guard / do-while condition); bound on the worker by name. */
+    String addGuard(String name, RetryPolicy retry, String queue) {
         String q = queueOr(queue);
         queues.add(q);
         return add(NodeDraft.predicate(name, reserveActivity(name), q, retryOr(retry)));
+    }
+
+    /**
+     * The mandatory merge node after a fork's join. It is a task node bound by name like any other,
+     * but it carries the fork's arm names (a JSON array) on its {@code itemsKey} -- a field that
+     * round-trips through every store -- so the engine can stage each isolated branch's result under
+     * its name for the combine handler, and strip those scratch keys afterward.
+     */
+    String addCombine(String name, List<String> branchNames, RetryPolicy retry, String queue) {
+        String id = addTask(name, retry, queue);
+        nodes.put(id, nodes.get(id).withItemsKey(Json.write(List.copyOf(branchNames))));
+        return id;
     }
 
     /** A server-side timer. Sleep names are not required to be unique (nothing addresses them). */
@@ -214,9 +126,9 @@ final class Pipeline {
     }
 
     /**
-     * Assembles the accumulated nodes into a validated, content-addressed {@link Blueprint}.
-     * The caller ({@link WorkflowStream#build()}) has already appended the terminal end node and
-     * wired every open edge to it.
+     * Assembles the accumulated nodes into a validated, content-addressed {@link Blueprint}. The
+     * caller ({@link WorkflowStream#build()}) has already appended the terminal end node and wired
+     * every open edge to it.
      */
     Blueprint build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
@@ -224,7 +136,7 @@ final class Pipeline {
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);
-        return new Blueprint(def, handlers);
+        return new Blueprint(def);
     }
 
     private Set<String> copyOf(Set<String> set) {

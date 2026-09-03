@@ -1,9 +1,9 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
@@ -40,23 +40,34 @@ class JdbcForkJoinStressTest {
 
     private static Blueprint blueprint() {
         return Workflow.define("order-ish")
-                .step("validate", ctx -> put(ctx, "validated", true))
-                .gate("in-stock", ctx -> true)
+                .step("validate")
+                .gate("in-stock")
                 .fork(
                         Branch.of("payment", s -> s
-                                .step("authorise", ctx -> {
-                                    int attempt = Step.attempt();
-                                    if (attempt <= 2) throw new IllegalStateException("gateway timeout " + attempt);
-                                    return put(ctx, "paid", true);
-                                }, RetryPolicy.exponential(5, Duration.ofMillis(50)))
-                                .step("capture", ctx -> put(ctx, "captured", true))),
+                                .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(50)))
+                                .step("capture")),
                         Branch.of("shipping", s -> s
-                                .step("reserve", ctx -> put(ctx, "reserved", true))
+                                .step("reserve")
                                 .sleep("await", Duration.ofMillis(150))
-                                .step("label", ctx -> put(ctx, "labelled", true))))
-                .combine("merge", Aggregator.union())
-                .step("notify", ctx -> put(ctx, "fulfilled", true))
+                                .step("label")))
+                .combine("merge")
+                .step("notify")
                 .build();
+    }
+
+    @Handlers("order-ish")
+    static final class OrderH {
+        public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
+        public boolean inStock(Map<String, Object> ctx) { return true; }
+        public Map<String, Object> authorise(Map<String, Object> ctx) {
+            int attempt = Step.attempt();
+            if (attempt <= 2) throw new IllegalStateException("gateway timeout " + attempt);
+            return put(ctx, "paid", true);
+        }
+        public Map<String, Object> capture(Map<String, Object> ctx) { return put(ctx, "captured", true); }
+        public Map<String, Object> reserve(Map<String, Object> ctx) { return put(ctx, "reserved", true); }
+        public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "labelled", true); }
+        public Map<String, Object> notify(Map<String, Object> ctx) { return put(ctx, "fulfilled", true); }
     }
 
     @Test @DisplayName("many fork/join instances all complete on the JDBC backend")
@@ -80,7 +91,7 @@ class JdbcForkJoinStressTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp);
+                w.register(bp).handlers(new OrderH());
                 workers.add(w.start());
             }
 

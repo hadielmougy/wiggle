@@ -1,10 +1,10 @@
 package com.wiggle.cassandra;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
@@ -60,23 +60,54 @@ class CassandraStoreTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private InstanceView run(Blueprint bp, Map<String, Object> input) throws Exception {
+    private InstanceView run(Blueprint bp, Object handlers, Map<String, Object> input) throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cass-" + Ids.next("x")).register(bp)) {
+             Worker w = new Worker(client, "cass-" + Ids.next("x")).register(bp).handlers(handlers)) {
             w.start();
             return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(30));
         }
     }
 
+    @Handlers("cass-linear")
+    static final class LinearH {
+        public Map<String, Object> a(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
+        public Map<String, Object> b(Map<String, Object> ctx) { return put(ctx, "b", 2L); }
+        public Map<String, Object> c(Map<String, Object> ctx) { return put(ctx, "c", 3L); }
+    }
+
+    @Handlers("cass-fork")
+    static final class ForkH {
+        public Map<String, Object> left(Map<String, Object> ctx) { return put(ctx, "left", true); }
+        public Map<String, Object> right(Map<String, Object> ctx) { return put(ctx, "right", true); }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "joined", true); }
+    }
+
+    @Handlers("cass-sleep")
+    static final class SleepH {
+        public Map<String, Object> before(Map<String, Object> ctx) { return put(ctx, "before", true); }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", true); }
+    }
+
+    @Handlers("cass-parent")
+    static final class ParentH {
+        public Map<String, Object> prepare(Map<String, Object> ctx) { return put(ctx, "prepared", true); }
+        public Map<String, Object> wrapUp(Map<String, Object> ctx) { return put(ctx, "wrapped", true); }
+    }
+
+    @Handlers("cass-child")
+    static final class ChildH {
+        public Map<String, Object> childWork(Map<String, Object> ctx) { return put(ctx, "childResult", 42L); }
+    }
+
     @Test @DisplayName("a linear workflow runs to completion end-to-end on Cassandra")
     void linearWorkflow() throws Exception {
-        Blueprint bp = Workflow.define("cass-linear-" + Ids.next("wf"))
-                .step("a", ctx -> put(ctx, "a", 1L))
-                .step("b", ctx -> put(ctx, "b", 2L))
-                .step("c", ctx -> put(ctx, "c", 3L))
+        Blueprint bp = Workflow.define("cass-linear")
+                .step("a")
+                .step("b")
+                .step("c")
                 .build();
-        InstanceView v = run(bp, Map.of());
+        InstanceView v = run(bp, new LinearH(), Map.of());
         assertEquals("COMPLETED", v.status());
         Map<String, Object> ctx = Json.asObject(v.context());
         assertEquals(1L, ctx.get("a"));
@@ -86,14 +117,14 @@ class CassandraStoreTest {
 
     @Test @DisplayName("a fork/join workflow completes (many token rows in one instance partition)")
     void forkJoin() throws Exception {
-        Blueprint bp = Workflow.define("cass-fork-" + Ids.next("wf"))
+        Blueprint bp = Workflow.define("cass-fork")
                 .fork(
-                        Branch.of("left-branch", b -> b.step("left", ctx -> put(ctx, "left", true))),
-                        Branch.of("right-branch", b -> b.step("right", ctx -> put(ctx, "right", true))))
-                .combine("merge", Aggregator.union())
-                .step("after", ctx -> put(ctx, "joined", true))
+                        Branch.of("left-branch", b -> b.step("left")),
+                        Branch.of("right-branch", b -> b.step("right")))
+                .combine("merge")
+                .step("after")
                 .build();
-        InstanceView v = run(bp, Map.of());
+        InstanceView v = run(bp, new ForkH(), Map.of());
         assertEquals("COMPLETED", v.status());
         Map<String, Object> ctx = Json.asObject(v.context());
         assertEquals(true, ctx.get("left"));
@@ -103,12 +134,12 @@ class CassandraStoreTest {
 
     @Test @DisplayName("a sleep timer fires and the workflow completes (timer index + sweep)")
     void sleepTimer() throws Exception {
-        Blueprint bp = Workflow.define("cass-sleep-" + Ids.next("wf"))
-                .step("before", ctx -> put(ctx, "before", true))
+        Blueprint bp = Workflow.define("cass-sleep")
+                .step("before")
                 .sleep(Duration.ofMillis(300))
-                .step("after", ctx -> put(ctx, "after", true))
+                .step("after")
                 .build();
-        InstanceView v = run(bp, Map.of());
+        InstanceView v = run(bp, new SleepH(), Map.of());
         assertEquals("COMPLETED", v.status());
         Map<String, Object> ctx = Json.asObject(v.context());
         assertEquals(true, ctx.get("before"));
@@ -118,16 +149,17 @@ class CassandraStoreTest {
     @Test @DisplayName("a sub-workflow runs and resumes the parent (uncontended cross-partition case)")
     void subWorkflow() throws Exception {
         Blueprint child = Workflow.define("cass-child")
-                .step("child-work", ctx -> put(ctx, "childResult", 42L))
+                .step("child-work")
                 .build();
         Blueprint parent = Workflow.define("cass-parent")
-                .step("prepare", ctx -> put(ctx, "prepared", true))
+                .step("prepare")
                 .subWorkflow("delegate", "cass-child")
-                .step("wrap-up", ctx -> put(ctx, "wrapped", true))
+                .step("wrap-up")
                 .build();
         try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cass-sub-" + Ids.next("x")).register(parent).register(child)) {
+             Worker w = new Worker(client, "cass-sub-" + Ids.next("x")).register(parent).register(child)
+                     .handlers(new ParentH()).handlers(new ChildH())) {
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent, Map.of()), Duration.ofSeconds(30));
             assertEquals("COMPLETED", v.status());
@@ -147,7 +179,7 @@ class CassandraStoreTest {
             String queue = "cass-q-" + Ids.next("q");
             Blueprint bp = Workflow.define("cass-claim-" + Ids.next("wf"))
                     .defaultQueue(queue)
-                    .step("work", ctx -> ctx).build();
+                    .step("work").build();
             engine.register(bp.definition());
             int tokens = 40;
             for (int i = 0; i < tokens; i++) engine.start(bp.name(), bp.version(), Map.of(), null);

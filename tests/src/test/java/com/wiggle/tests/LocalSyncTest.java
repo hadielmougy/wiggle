@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
@@ -41,15 +42,26 @@ class LocalSyncTest {
     }
 
     /** A five-step linear pipeline; each step's value depends on the previous. */
-    private static Blueprint linear(ExecutionMode mode, AtomicInteger runs) {
+    private static Blueprint linear(ExecutionMode mode) {
         return Workflow.define("ls-linear")
                 .execution(mode)
-                .step("a", ctx -> { runs.incrementAndGet(); return put(ctx, "a", 1L); })
-                .step("b", ctx -> { runs.incrementAndGet(); return put(ctx, "b", (Long) ctx.get("a") + 1); })
-                .gate("keep", ctx -> { runs.incrementAndGet(); return (Long) ctx.get("b") > 0; })
-                .step("c", ctx -> { runs.incrementAndGet(); return put(ctx, "c", (Long) ctx.get("b") + 1); })
-                .step("d", ctx -> { runs.incrementAndGet(); return put(ctx, "d", (Long) ctx.get("c") + 1); })
+                .step("a")
+                .step("b")
+                .gate("keep")
+                .step("c")
+                .step("d")
                 .build();
+    }
+
+    @Handlers("ls-linear")
+    static final class LinearH {
+        final AtomicInteger runs;
+        LinearH(AtomicInteger runs) { this.runs = runs; }
+        public Map<String, Object> a(Map<String, Object> ctx) { runs.incrementAndGet(); return put(ctx, "a", 1L); }
+        public Map<String, Object> b(Map<String, Object> ctx) { runs.incrementAndGet(); return put(ctx, "b", (Long) ctx.get("a") + 1); }
+        public boolean keep(Map<String, Object> ctx) { runs.incrementAndGet(); return (Long) ctx.get("b") > 0; }
+        public Map<String, Object> c(Map<String, Object> ctx) { runs.incrementAndGet(); return put(ctx, "c", (Long) ctx.get("b") + 1); }
+        public Map<String, Object> d(Map<String, Object> ctx) { runs.incrementAndGet(); return put(ctx, "d", (Long) ctx.get("c") + 1); }
     }
 
     @Test @DisplayName("a linear pipeline yields the same context under every execution mode")
@@ -57,11 +69,11 @@ class LocalSyncTest {
         for (ExecutionMode mode : new ExecutionMode[]{
                 ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             AtomicInteger runs = new AtomicInteger();
-            Blueprint bp = linear(mode, runs);
+            Blueprint bp = linear(mode);
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
-                         WorkerOptions.defaults().withConcurrency(4)).register(bp)) {
+                         WorkerOptions.defaults().withConcurrency(4)).register(bp).handlers(new LinearH(runs))) {
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status(), mode + " status");
@@ -81,7 +93,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            Blueprint bp = linear(ExecutionMode.LOCAL_SYNC, new AtomicInteger());
+            Blueprint bp = linear(ExecutionMode.LOCAL_SYNC);
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();
 
@@ -114,8 +126,8 @@ class LocalSyncTest {
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
             Blueprint bp = Workflow.define("async-batch")
                     .execution(ExecutionMode.LOCAL_ASYNC)
-                    .step("x", ctx -> put(ctx, "x", 1L))
-                    .step("y", ctx -> put(ctx, "y", 2L))
+                    .step("x")
+                    .step("y")
                     .build();
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();

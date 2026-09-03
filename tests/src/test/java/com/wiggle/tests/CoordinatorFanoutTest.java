@@ -34,7 +34,7 @@ class CoordinatorFanoutTest {
     }
 
     private static byte[] definitionJson() {
-        Blueprint bp = Workflow.define("wf").step("a", c -> c).build();
+        Blueprint bp = Workflow.define("wf").step("a").build();
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 

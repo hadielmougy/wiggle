@@ -31,7 +31,8 @@ public final class Demo {
             System.out.println("Workflow " + blueprint.name() + " v" + blueprint.version()
                     + " compiled to " + blueprint.definition().nodes().size() + " nodes");
 
-            try (Worker worker = new Worker(client, "worker-1").register(blueprint)) {
+            try (Worker worker = new Worker(client, "worker-1")
+                    .register(blueprint).handlers(new OrderHandlers())) {
                 worker.start();
 
                 System.out.println("\n--- happy path (retries through a flaky gateway) ---");

@@ -10,22 +10,20 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link Pipeline}, the package-private graph builder behind the DSL. These
  * drive its API directly (rather than through {@link WorkflowStream}) so each responsibility --
- * id assignment, name uniqueness, handler registration, edge wiring, queue tracking, and the
- * validation/content-versioning done by {@link Pipeline#build()} -- is checked in isolation.
+ * id assignment, name uniqueness, edge wiring, queue tracking, and the validation/content-versioning
+ * done by {@link Pipeline#build()} -- is checked in isolation. The pipeline builds pure topology now:
+ * it declares named nodes (task/guard/combine/...) with retry and queue, but no step logic.
  */
 class PipelineTest {
 
@@ -33,16 +31,9 @@ class PipelineTest {
         return new Pipeline("wf", null);
     }
 
-    /** A copy of {@code ctx} with one key set -- steps must return the whole context. */
-    private static Map<String, Object> with(Map<String, Object> ctx, String key, Object value) {
-        Map<String, Object> m = new LinkedHashMap<>(ctx);
-        m.put(key, value);
-        return m;
-    }
-
     /** Builds a valid two-node graph: one task wired to a terminal end. */
     private static WorkflowDefinition linearTaskGraph(Pipeline p, String stepName) {
-        String task = p.addStep(stepName, Map.class, ctx -> ctx, null, null);
+        String task = p.addTask(stepName, null, null);
         p.startAt(task);
         p.wireNext(task, p.addEnd(null));
         return p.build().definition();
@@ -58,8 +49,8 @@ class PipelineTest {
         @DisplayName("each kind gets its own prefix, numbered by a shared counter")
         void prefixesAndCounter() {
             Pipeline p = pipeline();
-            assertEquals("n1", p.addStep("a", Map.class, ctx -> ctx, null, null));
-            assertEquals("n2", p.addGuard("g", Map.class, ctx -> true, null, null));
+            assertEquals("n1", p.addTask("a", null, null));
+            assertEquals("n2", p.addGuard("g", null, null));
             assertEquals("n3", p.addSleep("s", 10));
             assertEquals("n4", p.addSignal("sig", 0));
             assertEquals("fork5", p.addFork());
@@ -84,9 +75,9 @@ class PipelineTest {
         @DisplayName("a duplicate step name is rejected")
         void duplicateStep() {
             Pipeline p = pipeline();
-            p.addStep("dup", Map.class, ctx -> ctx, null, null);
+            p.addTask("dup", null, null);
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> p.addStep("dup", Map.class, ctx -> ctx, null, null));
+                    () -> p.addTask("dup", null, null));
             assertTrue(e.getMessage().contains("duplicate step name 'dup'"), e.getMessage());
         }
 
@@ -95,22 +86,22 @@ class PipelineTest {
         void uniquenessSpansKinds() {
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline p = pipeline();
-                p.addStep("x", Map.class, ctx -> ctx, null, null);
-                p.addGuard("x", Map.class, ctx -> true, null, null);        // collides with the step
+                p.addTask("x", null, null);
+                p.addGuard("x", null, null);        // collides with the step
             });
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline p = pipeline();
-                p.addStep("x", Map.class, ctx -> ctx, null, null);
+                p.addTask("x", null, null);
                 p.addSignal("x", 0);
             });
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline p = pipeline();
-                p.addStep("x", Map.class, ctx -> ctx, null, null);
+                p.addTask("x", null, null);
                 p.addSubWorkflow("x", "child");
             });
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline p = pipeline();
-                p.addStep("x", Map.class, ctx -> ctx, null, null);
+                p.addTask("x", null, null);
                 p.addDynFork("x", "items", "item");
             });
         }
@@ -119,7 +110,7 @@ class PipelineTest {
         @DisplayName("sleep names are not reserved, so they never collide")
         void sleepNamesAreNotReserved() {
             Pipeline p = pipeline();
-            p.addStep("s", Map.class, ctx -> ctx, null, null);
+            p.addTask("s", null, null);
             p.addSleep("s", 1);   // shares the name with the step -- allowed
             p.addSleep("s", 2);   // and with another sleep -- allowed
             // no exception
@@ -130,53 +121,35 @@ class PipelineTest {
         void blankName() {
             Pipeline p = pipeline();
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> p.addStep("  ", Map.class, ctx -> ctx, null, null));
+                    () -> p.addTask("  ", null, null));
             assertTrue(e.getMessage().contains("step name is required"), e.getMessage());
         }
     }
 
     @Nested
-    @DisplayName("activity handlers")
-    class Handlers {
+    @DisplayName("combine")
+    class Combine {
 
         @Test
-        @DisplayName("a step's handler is keyed by 'workflow#name' and returns the context diff")
-        void stepHandlerReturnsDiff() throws Exception {
+        @DisplayName("a combine is a task node that carries its fork arm names on itemsKey")
+        void combineCarriesArmNames() {
             Pipeline p = pipeline();
-            String id = p.addStep("greet", Map.class, ctx -> with(ctx, "greeting", "hi"), null, null);
-            p.startAt(id);
-            p.wireNext(id, p.addEnd(null));
-            Blueprint bp = p.build();
+            String fork = p.addFork();
+            String b1 = p.addTask("b1", null, null);
+            String b2 = p.addTask("b2", null, null);
+            String join = p.addJoin(2);
+            String merge = p.addCombine("merge", List.of("air", "hotel"), null, null);
+            p.startAt(fork);
+            p.setBranches(fork, List.of(b1, b2));
+            p.wireNext(b1, join);
+            p.wireNext(b2, join);
+            p.wireNext(join, merge);
+            p.wireNext(merge, p.addEnd(null));
+            WorkflowDefinition def = p.build().definition();
 
-            ActivityHandler h = bp.handlers().get("wf#greet");
-            assertEquals(Map.of("greeting", "hi"), h.invoke(Map.of("name", "ada")));
-        }
-
-        @Test
-        @DisplayName("an effect's handler returns null (context unchanged)")
-        void effectHandlerReturnsNull() throws Exception {
-            Pipeline p = pipeline();
-            String id = p.addEffect("audit", Map.class, ctx -> { /* observe only */ }, null, null);
-            p.startAt(id);
-            p.wireNext(id, p.addEnd(null));
-            Blueprint bp = p.build();
-
-            assertNull(bp.handlers().get("wf#audit").invoke(Map.of("a", 1L)));
-        }
-
-        @Test
-        @DisplayName("a guard's handler returns a Boolean")
-        void guardHandlerReturnsBoolean() throws Exception {
-            Pipeline p = pipeline();
-            String g = p.addGuard("positive", Map.class, ctx -> ((Number) ctx.get("n")).intValue() > 0, null, null);
-            p.startAt(g);
-            p.wireNext(g, p.addEnd(null));
-            p.wireAlt(g, p.addEnd("gated:positive"));
-            Blueprint bp = p.build();
-
-            ActivityHandler h = bp.handlers().get("wf#positive");
-            assertEquals(Boolean.TRUE, h.invoke(Map.of("n", 3L)));
-            assertEquals(Boolean.FALSE, h.invoke(Map.of("n", -1L)));
+            assertEquals(NodeKind.TASK, def.node(merge).kind());
+            assertEquals("[\"air\",\"hotel\"]", def.node(merge).itemsKey(),
+                    "the arm names ride on the combine node as a JSON array, in fork order");
         }
     }
 
@@ -197,9 +170,9 @@ class PipelineTest {
         @DisplayName("defaultQueue changes the queue of subsequently added steps")
         void changingDefaultQueue() {
             Pipeline p = pipeline();
-            String a = p.addStep("a", Map.class, ctx -> ctx, null, null);   // on "wf"
+            String a = p.addTask("a", null, null);   // on "wf"
             p.defaultQueue("batch");
-            String b = p.addStep("b", Map.class, ctx -> ctx, null, null);   // on "batch"
+            String b = p.addTask("b", null, null);   // on "batch"
             p.startAt(a);
             p.wireNext(a, b);
             p.wireNext(b, p.addEnd(null));
@@ -214,7 +187,7 @@ class PipelineTest {
         @DisplayName("a per-step queue routes a single node and records the new queue")
         void perStepQueueRoutesOneNode() {
             Pipeline p = pipeline();
-            String a = p.addStep("a", Map.class, ctx -> ctx, null, "gpu");
+            String a = p.addTask("a", null, "gpu");
             p.startAt(a);
             p.wireNext(a, p.addEnd(null));
             WorkflowDefinition def = p.build().definition();
@@ -243,7 +216,7 @@ class PipelineTest {
         @DisplayName("markCheckpoint records the node id on the definition")
         void checkpoints() {
             Pipeline p = pipeline();
-            String a = p.addStep("a", Map.class, ctx -> ctx, null, null);
+            String a = p.addTask("a", null, null);
             p.markCheckpoint(a);
             p.startAt(a);
             p.wireNext(a, p.addEnd(null));
@@ -259,7 +232,7 @@ class PipelineTest {
         @DisplayName("wireNext and wireAlt set the two outgoing edges independently")
         void nextAndAlt() {
             Pipeline p = pipeline();
-            String g = p.addGuard("g", Map.class, ctx -> true, null, null);
+            String g = p.addGuard("g", null, null);
             String pass = p.addEnd(null);
             String fail = p.addEnd("gated:g");
             p.startAt(g);
@@ -277,8 +250,8 @@ class PipelineTest {
             Pipeline p = pipeline();
             String fork = p.addFork();
             String join = p.addJoin(2);
-            String b1 = p.addStep("b1", Map.class, ctx -> ctx, null, null);
-            String b2 = p.addStep("b2", Map.class, ctx -> ctx, null, null);
+            String b1 = p.addTask("b1", null, null);
+            String b2 = p.addTask("b2", null, null);
             p.startAt(fork);
             p.setBranches(fork, List.of(b1, b2));
             p.wireNext(b1, join);
@@ -308,7 +281,7 @@ class PipelineTest {
         @DisplayName("a task with no successor fails validation")
         void taskWithoutSuccessor() {
             Pipeline p = pipeline();
-            String a = p.addStep("a", Map.class, ctx -> ctx, null, null);
+            String a = p.addTask("a", null, null);
             p.startAt(a);   // never wired onward
             IllegalStateException e = assertThrows(IllegalStateException.class, p::build);
             assertTrue(e.getMessage().contains("has no successor"), e.getMessage());
@@ -318,7 +291,7 @@ class PipelineTest {
         @DisplayName("a predicate with no false branch fails validation")
         void predicateWithoutFalseBranch() {
             Pipeline p = pipeline();
-            String g = p.addGuard("g", Map.class, ctx -> true, null, null);
+            String g = p.addGuard("g", null, null);
             p.startAt(g);
             p.wireNext(g, p.addEnd(null));   // true edge only; altNext left null
             IllegalStateException e = assertThrows(IllegalStateException.class, p::build);
@@ -330,7 +303,7 @@ class PipelineTest {
         void forkTooFewBranches() {
             Pipeline p = pipeline();
             String fork = p.addFork();
-            String only = p.addStep("only", Map.class, ctx -> ctx, null, null);
+            String only = p.addTask("only", null, null);
             String join = p.addJoin(1);
             p.startAt(fork);
             p.setBranches(fork, List.of(only));
@@ -344,7 +317,7 @@ class PipelineTest {
         @DisplayName("an edge pointing at an unknown node fails validation")
         void danglingEdge() {
             Pipeline p = pipeline();
-            String a = p.addStep("a", Map.class, ctx -> ctx, null, null);
+            String a = p.addTask("a", null, null);
             p.startAt(a);
             p.wireNext(a, "ghost");   // no such node
             IllegalStateException e = assertThrows(IllegalStateException.class, p::build);
@@ -396,8 +369,8 @@ class PipelineTest {
     void retryDefaulting() {
         RetryPolicy custom = RetryPolicy.exponential(7, Duration.ofMillis(250));
         Pipeline p = new Pipeline("wf", custom);
-        String a = p.addStep("a", Map.class, ctx -> ctx, null, null);            // inherits the default
-        String b = p.addStep("b", Map.class, ctx -> ctx, RetryPolicy.none(), null);   // explicit override
+        String a = p.addTask("a", null, null);            // inherits the default
+        String b = p.addTask("b", RetryPolicy.none(), null);   // explicit override
         p.startAt(a);
         p.wireNext(a, b);
         p.wireNext(b, p.addEnd(null));
@@ -419,17 +392,16 @@ class PipelineTest {
         }
 
         @Test
-        @DisplayName("gate(name, queue) honours the queue and bakes no predicate (bound by name)")
-        void gateNameOnlyQueueAndNoHandler() {
+        @DisplayName("gate(name, queue) honours the queue and declares a PREDICATE (bound by name)")
+        void gateNameOnlyQueue() {
             Blueprint bp = Workflow.define("wf")
                     .gate("check", "gpu")
-                    .step("run", ctx -> ctx)
+                    .step("run")
                     .build();
             WorkflowDefinition def = bp.definition();
 
             assertEquals("gpu", byActivity(def, "wf#check").queue(), "queue must be honoured, not dropped");
             assertEquals(NodeKind.PREDICATE, byActivity(def, "wf#check").kind());
-            assertNull(bp.handlers().get("wf#check"), "name-only gate must bake no predicate (no silent x->true)");
             assertTrue(def.queues().contains("gpu"));
         }
 
@@ -438,16 +410,15 @@ class PipelineTest {
         void gateNameOnlyRetryAndQueue() {
             Blueprint bp = Workflow.define("wf")
                     .gate("check", RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
-                    .step("run", ctx -> ctx)
+                    .step("run")
                     .build();
             Node gate = byActivity(bp.definition(), "wf#check");
             assertEquals("gpu", gate.queue());
             assertEquals(7, gate.retry().maxAttempts());
-            assertNull(bp.handlers().get("wf#check"));
         }
 
         @Test
-        @DisplayName("step(name, queue) / effect(name) route correctly and bake no handler")
+        @DisplayName("step(name, queue) / effect(name) route correctly")
         void stepAndEffectNameOnly() {
             Blueprint bp = Workflow.define("wf")
                     .step("ingest", "gpu")
@@ -457,17 +428,15 @@ class PipelineTest {
 
             assertEquals("gpu", byActivity(def, "wf#ingest").queue());
             assertEquals("wf", byActivity(def, "wf#notify").queue(), "no queue -> the workflow-name default");
-            assertNull(bp.handlers().get("wf#ingest"), "name-only step bakes no handler");
-            assertNull(bp.handlers().get("wf#notify"), "name-only effect bakes no handler");
         }
 
         @Test
-        @DisplayName("a name-only node leaves nothing for a name-bound handler to collide with")
-        void nameOnlyLeavesNoHandlerToCollide() {
-            // The DSL declares topology only; the worker binds the handler by name. Because the blueprint
-            // registers no handler for the step, Worker.bind's duplicate-handler guard never trips.
+        @DisplayName("a name-only workflow declares topology only (the worker binds handlers by name)")
+        void nameOnlyDeclaresTopologyOnly() {
+            // The DSL declares topology only; the worker binds the handler by name. The blueprint
+            // therefore carries just the graph -- there is no baked step logic to collide with.
             Blueprint bp = Workflow.define("wf").step("check").build();
-            assertTrue(bp.handlers().isEmpty(), "a name-only workflow bakes no handlers");
+            assertEquals(NodeKind.TASK, byActivity(bp.definition(), "wf#check").kind());
         }
     }
 }

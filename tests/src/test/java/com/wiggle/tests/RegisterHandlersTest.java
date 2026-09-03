@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -22,10 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Object-based handler binding ({@link Worker#registerHandlers}): hand the worker an object whose
- * methods are the steps. Each method is matched to a step by case-insensitive name and its kind is
- * taken from the signature (Map = task, boolean = gate, void = effect); the graph confirms the exact
- * name and gate-vs-task.
+ * Object-based handler binding ({@link Worker#handlers(Object)}): hand the worker a
+ * {@link Handlers @Handlers} object whose methods are the steps. Each method is matched to a step by
+ * case-insensitive name and its kind is taken from the signature (Map = task, boolean = gate, void =
+ * effect); the graph confirms the exact name and gate-vs-task.
  */
 class RegisterHandlersTest {
 
@@ -38,10 +39,10 @@ class RegisterHandlersTest {
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
     private Blueprint authoredGraph() {
         return Workflow.define("order-fulfilment")
-                .step("validate", c -> put(c, "status", "VALIDATED"))
-                .gate("in-stock", c -> ((Number) c.get("qty")).intValue() > 0)
-                .step("authorise", c -> put(c, "paymentRef", "auth-" + c.get("orderId")), "payments")
-                .effect("audit", c -> { /* side effect only */ })
+                .step("validate")
+                .gate("in-stock")
+                .step("authorise", "payments")
+                .effect("audit")
                 .build();
     }
 
@@ -56,6 +57,7 @@ class RegisterHandlersTest {
     }
 
     /** Methods in mixed case styles; the return type picks the kind. "inStock" matches step "in-stock". */
+    @Handlers("order-fulfilment")
     public static final class OrderHandlers {
         final AtomicReference<Object> audited;
         OrderHandlers(AtomicReference<Object> audited) { this.audited = audited; }
@@ -64,18 +66,18 @@ class RegisterHandlersTest {
         public boolean inStock(Map<String, Object> c) { return ((Number) c.get("qty")).intValue() > 0; }
         public Map<String, Object> authorise(Map<String, Object> c) { return put(c, "paymentRef", "auth-" + c.get("orderId")); }
         public void audit(Map<String, Object> c) { audited.set(c.get("paymentRef")); }
-        public String describe() { return "not a handler (two-return-shape is ignored)"; } // ignored: no context param
+        public String describe() { return "not a handler (no context param, so ignored)"; }
     }
 
     @Test
-    @DisplayName("registerHandlers matches methods to steps by name and kind, and runs to completion")
+    @DisplayName("handlers matches methods to steps by name and kind, and runs to completion")
     void objectBindingRunsToCompletion() throws Exception {
         withServer((client, server) -> {
             client.register(authoredGraph());   // author registers topology only
 
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "obj-1")) {
-                impl.registerHandlers("order-fulfilment", new OrderHandlers(audited));
+                impl.handlers(new OrderHandlers(audited));
                 impl.start();   // reconciles: matches inStock->in-stock, discovers the payments queue
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
@@ -90,52 +92,22 @@ class RegisterHandlersTest {
         });
     }
 
+    @Handlers("order-fulfilment")
     public static final class DupHandlers {
         public boolean inStock(Map<String, Object> c) { return true; }
         public boolean in_stock(Map<String, Object> c) { return false; }  // folds to the same step name
     }
 
     @Test
-    @DisplayName("two methods that collide under case-folding are rejected at registerHandlers")
+    @DisplayName("two methods that collide under case-folding are rejected at handlers()")
     void caseFoldDuplicateRejected() {
         Worker w = new Worker((WiggleClient) null, "obj-dup");
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> w.registerHandlers("order-fulfilment", new DupHandlers()));
+                () -> w.handlers(new DupHandlers()));
         assertTrue(e.getMessage().contains("same step name 'instock'"), e.getMessage());
     }
 
-    public static final class NoHandlers {
-        public int add(int a, int b) { return a + b; }   // not a handler shape
-    }
-
-    @Test
-    @DisplayName("an object with no handler-shaped method is rejected at registerHandlers")
-    void noHandlerMethodsRejected() {
-        Worker w = new Worker((WiggleClient) null, "obj-none");
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> w.registerHandlers("order-fulfilment", new NoHandlers()));
-        assertTrue(e.getMessage().contains("no handler methods"), e.getMessage());
-    }
-
-    public static final class StrayHandlers {
-        public Map<String, Object> validate(Map<String, Object> c) { return c; }
-        public Map<String, Object> shipItNow(Map<String, Object> c) { return c; }   // no such step
-    }
-
-    @Test
-    @DisplayName("a method matching no step fails fast on start")
-    void methodMatchingNoStepRejected() throws Exception {
-        withServer((client, server) -> {
-            client.register(authoredGraph());
-            try (Worker impl = new Worker(client, "obj-stray")) {
-                impl.registerHandlers("order-fulfilment", new StrayHandlers());
-                IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("shipItNow"), e.getMessage());
-                assertTrue(e.getMessage().contains("matches no step"), e.getMessage());
-            }
-        });
-    }
-
+    @Handlers("order-fulfilment")
     public static final class ClashHandlers {
         // returns a Map (task) but the graph's "in-stock" is a gate (PREDICATE)
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }
@@ -147,9 +119,10 @@ class RegisterHandlersTest {
         withServer((client, server) -> {
             client.register(authoredGraph());
             try (Worker impl = new Worker(client, "obj-clash")) {
-                impl.registerHandlers("order-fulfilment", new ClashHandlers());
+                impl.handlers(new ClashHandlers());
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("is a PREDICATE"), e.getMessage());
+                assertTrue(e.getMessage().contains("in-stock"), e.getMessage());
+                assertTrue(e.getMessage().contains("boolean"), e.getMessage());
             }
         });
     }

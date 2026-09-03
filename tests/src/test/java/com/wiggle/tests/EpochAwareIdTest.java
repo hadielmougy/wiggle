@@ -29,7 +29,7 @@ class EpochAwareIdTest {
     }
 
     private static Blueprint workflow() {
-        return Workflow.define("wf").step("a", c -> c).build();
+        return Workflow.define("wf").step("a").build();
     }
 
     @Test @DisplayName("a namespace-configured cell mints ns.e0.s0.<ulid> ids")

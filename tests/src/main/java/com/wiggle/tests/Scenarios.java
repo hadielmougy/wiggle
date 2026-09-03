@@ -1,10 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowStream;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
@@ -26,6 +26,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * Behavioural conformance suite for the engine. Each method is self-contained and
  * throws {@link AssertionError} on failure, so it can be driven either by
  * {@link #main} or by the JUnit wrapper in tests/src/test.
+ *
+ * <p>Each workflow is pure topology; its step logic lives in a {@code @Handlers} class below whose
+ * method names match the steps and whose signatures define the types.
  */
 public final class Scenarios {
 
@@ -45,10 +48,10 @@ public final class Scenarios {
         }
     }
 
-    private static Worker startWorker(WiggleClient client, Blueprint... blueprints) {
+    private static Worker startWorker(WiggleClient client, Blueprint bp, Object handlers) {
         Worker w = new Worker(client, "w-" + Ids.next("x"),
-                WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-        for (Blueprint bp : blueprints) w.register(bp);
+                WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)))
+                .register(bp).handlers(handlers);
         return w.start();
     }
 
@@ -56,7 +59,7 @@ public final class Scenarios {
         return Workflow.define(name);
     }
 
-    private static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {
+    static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {
         Map<String, Object> next = new LinkedHashMap<>(ctx);
         next.put(key, value);
         return next;
@@ -66,13 +69,13 @@ public final class Scenarios {
     /** A linear pipeline runs its steps in order and the context accumulates. */
     public static void sequentialPipeline() throws Exception {
         Blueprint bp = json("seq")
-                .step("one", ctx -> put(ctx, "a", 1L))
-                .step("two", ctx -> put(ctx, "b", (Long) ctx.get("a") + 1))
-                .step("three", ctx -> put(ctx, "c", (Long) ctx.get("b") + 1))
+                .step("one")
+                .step("two")
+                .step("three")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new SeqH())) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Map<String, Object> ctx = Json.asObject(v.context());
@@ -83,20 +86,24 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("seq")
+    static final class SeqH {
+        public Map<String, Object> one(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
+        public Map<String, Object> two(Map<String, Object> ctx) { return put(ctx, "b", (Long) ctx.get("a") + 1); }
+        public Map<String, Object> three(Map<String, Object> ctx) { return put(ctx, "c", (Long) ctx.get("b") + 1); }
+    }
+
     /** A false gate ends the instance successfully and skips everything downstream. */
     public static void gateShortCircuits() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
         Blueprint bp = json("gated")
-                .step("seed", ctx -> put(ctx, "keep", false))
-                .gate("gate", ctx -> Boolean.TRUE.equals(ctx.get("keep")))
-                .step("never", ctx -> {
-                    downstream.incrementAndGet();
-                    return put(ctx, "ran", true);
-                })
+                .step("seed")
+                .gate("gate")
+                .step("never")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new GatedH(downstream))) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Check.equal(v.terminationReason(), "gated:gate", "termination reason");
@@ -105,22 +112,31 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("gated")
+    static final class GatedH {
+        final AtomicInteger downstream;
+        GatedH(AtomicInteger downstream) { this.downstream = downstream; }
+        public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "keep", false); }
+        public boolean gate(Map<String, Object> ctx) { return Boolean.TRUE.equals(ctx.get("keep")); }
+        public Map<String, Object> never(Map<String, Object> ctx) {
+            downstream.incrementAndGet();
+            return put(ctx, "ran", true);
+        }
+    }
+
     /** Parallel branches merge field-by-field instead of clobbering each other. */
     public static void forkMergesDisjointWrites() throws Exception {
         Blueprint bp = json("fork-merge")
-                .step("seed", ctx -> put(ctx, "seeded", true))
+                .step("seed")
                 .fork(
-                        Branch.of("left", s -> s.step("slow-left", ctx -> {
-                            Check.sleep(150);           // finishes last on purpose
-                            return put(ctx, "left", "L");
-                        })),
-                        Branch.of("right", s -> s.step("fast-right", ctx -> put(ctx, "right", "R"))))
-                .combine("merge", Aggregator.union())
-                .step("after", ctx -> put(ctx, "joined", true))
+                        Branch.of("left", s -> s.step("slow-left")),
+                        Branch.of("right", s -> s.step("fast-right")))
+                .combine("merge")
+                .step("after")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new ForkMergeH())) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Map<String, Object> ctx = Json.asObject(v.context());
@@ -131,23 +147,31 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("fork-merge")
+    static final class ForkMergeH {
+        public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "seeded", true); }
+        public Map<String, Object> slowLeft(Map<String, Object> ctx) {
+            Check.sleep(150);           // finishes last on purpose
+            return put(ctx, "left", "L");
+        }
+        public Map<String, Object> fastRight(Map<String, Object> ctx) { return put(ctx, "right", "R"); }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "joined", true); }
+    }
+
     /** The step after a fork runs exactly once, no matter how many branches there were. */
     public static void joinRunsContinuationOnce() throws Exception {
         AtomicInteger afterCount = new AtomicInteger();
         Blueprint bp = json("join-once")
                 .fork(
-                        Branch.of("a", s -> s.step("a1", ctx -> put(ctx, "a", 1L))),
-                        Branch.of("b", s -> s.step("b1", ctx -> put(ctx, "b", 1L))),
-                        Branch.of("c", s -> s.step("c1", ctx -> put(ctx, "c", 1L))))
-                .combine("merge", Aggregator.union())
-                .step("after", ctx -> {
-                    afterCount.incrementAndGet();
-                    return ctx;
-                })
+                        Branch.of("a", s -> s.step("a1")),
+                        Branch.of("b", s -> s.step("b1")),
+                        Branch.of("c", s -> s.step("c1")))
+                .combine("merge")
+                .step("after")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new JoinOnceH(afterCount))) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Check.sleep(300);
@@ -156,22 +180,35 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("join-once")
+    static final class JoinOnceH {
+        final AtomicInteger afterCount;
+        JoinOnceH(AtomicInteger afterCount) { this.afterCount = afterCount; }
+        public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
+        public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1L); }
+        public Map<String, Object> c1(Map<String, Object> ctx) { return put(ctx, "c", 1L); }
+        public Map<String, Object> after(Map<String, Object> ctx) {
+            afterCount.incrementAndGet();
+            return ctx;
+        }
+    }
+
     /** Forks nest: the join stack pops back to the right barrier. */
     public static void nestedForks() throws Exception {
         Blueprint bp = json("nested")
                 .fork(
                         Branch.of("outer-left", s -> s.fork(
-                                Branch.of("inner-a", t -> t.step("ia", ctx -> put(ctx, "ia", 1L))),
-                                Branch.of("inner-b", t -> t.step("ib", ctx -> put(ctx, "ib", 1L))))
-                                .combine("inner-merge", Aggregator.union())
-                                .step("inner-after", ctx -> put(ctx, "innerAfter", 1L))),
-                        Branch.of("outer-right", s -> s.step("or", ctx -> put(ctx, "or", 1L))))
-                .combine("outer-merge", Aggregator.union())
-                .step("outer-after", ctx -> put(ctx, "outerAfter", 1L))
+                                Branch.of("inner-a", t -> t.step("ia")),
+                                Branch.of("inner-b", t -> t.step("ib")))
+                                .combine("inner-merge")
+                                .step("inner-after")),
+                        Branch.of("outer-right", s -> s.step("or")))
+                .combine("outer-merge")
+                .step("outer-after")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new NestedH())) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Map<String, Object> ctx = Json.asObject(v.context());
@@ -182,20 +219,29 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("nested")
+    static final class NestedH {
+        public Map<String, Object> ia(Map<String, Object> ctx) { return put(ctx, "ia", 1L); }
+        public Map<String, Object> ib(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
+        public Map<String, Object> innerAfter(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
+        public Map<String, Object> or(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
+        public Map<String, Object> outerAfter(Map<String, Object> ctx) { return put(ctx, "outerAfter", 1L); }
+    }
+
     /** A gate inside a branch short-circuits that branch only; siblings still join. */
     public static void gateInsideBranchDoesNotStrandSiblings() throws Exception {
         Blueprint bp = json("branch-gate")
                 .fork(
                         Branch.of("gated", s -> s
-                                .gate("gate", ctx -> false)
-                                .step("skipped", ctx -> put(ctx, "skipped", true))),
-                        Branch.of("other", s -> s.step("ran", ctx -> put(ctx, "ran", true))))
-                .combine("merge", Aggregator.union())
-                .step("after", ctx -> put(ctx, "after", true))
+                                .gate("gate")
+                                .step("skipped")),
+                        Branch.of("other", s -> s.step("ran")))
+                .combine("merge")
+                .step("after")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new BranchGateH())) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Map<String, Object> ctx = Json.asObject(v.context());
@@ -206,19 +252,23 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("branch-gate")
+    static final class BranchGateH {
+        public boolean gate(Map<String, Object> ctx) { return false; }
+        public Map<String, Object> skipped(Map<String, Object> ctx) { return put(ctx, "skipped", true); }
+        public Map<String, Object> ran(Map<String, Object> ctx) { return put(ctx, "ran", true); }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", true); }
+    }
+
     /** A transient failure is retried according to the step's policy. */
     public static void retriesTransientFailures() throws Exception {
         Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
         Blueprint bp = json("retry")
-                .step("flaky", ctx -> {
-                    int n = attempts.computeIfAbsent("flaky", k -> new AtomicInteger()).incrementAndGet();
-                    if (n < 3) throw new IllegalStateException("boom " + n);
-                    return put(ctx, "attempts", (long) n);
-                }, RetryPolicy.fixed(5, Duration.ofMillis(50)))
+                .step("flaky", RetryPolicy.fixed(5, Duration.ofMillis(50)))
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new RetryH(attempts))) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "COMPLETED", "status");
                 Check.equal(Json.asObject(v.context()).get("attempts"), 3L, "attempts before success");
@@ -226,16 +276,25 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("retry")
+    static final class RetryH {
+        final Map<String, AtomicInteger> attempts;
+        RetryH(Map<String, AtomicInteger> attempts) { this.attempts = attempts; }
+        public Map<String, Object> flaky(Map<String, Object> ctx) {
+            int n = attempts.computeIfAbsent("flaky", k -> new AtomicInteger()).incrementAndGet();
+            if (n < 3) throw new IllegalStateException("boom " + n);
+            return put(ctx, "attempts", (long) n);
+        }
+    }
+
     /** Retries stop at the policy limit and the instance fails with the last error. */
     public static void exhaustedRetriesFailInstance() throws Exception {
         Blueprint bp = json("retry-exhausted")
-                .step("always-fails", ctx -> {
-                    throw new IllegalStateException("permanent trouble");
-                }, RetryPolicy.fixed(2, Duration.ofMillis(20)))
+                .step("always-fails", RetryPolicy.fixed(2, Duration.ofMillis(20)))
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new ExhaustedH())) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "FAILED", "status");
                 Check.contains(v.error(), "permanent trouble", "error message");
@@ -243,18 +302,22 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("retry-exhausted")
+    static final class ExhaustedH {
+        public Map<String, Object> alwaysFails(Map<String, Object> ctx) {
+            throw new IllegalStateException("permanent trouble");
+        }
+    }
+
     /** PermanentActivityException skips retries entirely. */
     public static void permanentFailureSkipsRetries() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         Blueprint bp = json("permanent")
-                .step("fatal", ctx -> {
-                    calls.incrementAndGet();
-                    throw new PermanentActivityException("do not retry me");
-                }, RetryPolicy.fixed(5, Duration.ofMillis(20)))
+                .step("fatal", RetryPolicy.fixed(5, Duration.ofMillis(20)))
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new PermanentH(calls))) {
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 Check.equal(v.status(), "FAILED", "status");
                 Check.equal(calls.get(), 1, "invocation count");
@@ -262,16 +325,26 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("permanent")
+    static final class PermanentH {
+        final AtomicInteger calls;
+        PermanentH(AtomicInteger calls) { this.calls = calls; }
+        public Map<String, Object> fatal(Map<String, Object> ctx) {
+            calls.incrementAndGet();
+            throw new PermanentActivityException("do not retry me");
+        }
+    }
+
     /** A sleep is a server-side timer: the instance waits without occupying a worker. */
     public static void sleepDefersWithoutHoldingAWorker() throws Exception {
         Blueprint bp = json("sleeper")
-                .step("before", ctx -> put(ctx, "before", System.currentTimeMillis()))
+                .step("before")
                 .sleep(Duration.ofMillis(600))
-                .step("after", ctx -> put(ctx, "after", System.currentTimeMillis()))
+                .step("after")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new SleeperH())) {
                 String id = client.start(bp, Map.of());
                 Check.sleep(200);
                 Check.equal(client.instance(id).status(), "RUNNING", "still running mid-sleep");
@@ -285,13 +358,19 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("sleeper")
+    static final class SleeperH {
+        public Map<String, Object> before(Map<String, Object> ctx) { return put(ctx, "before", System.currentTimeMillis()); }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", System.currentTimeMillis()); }
+    }
+
     /**
      * A worker that takes a task and dies must not strand the instance: the leader
      * reclaims the expired lease and the task becomes dispatchable again.
      */
     public static void expiredLeaseIsReclaimed() throws Exception {
         Blueprint bp = json("orphan")
-                .step("work", ctx -> put(ctx, "done", true), RetryPolicy.fixed(5, Duration.ofMillis(20)))
+                .step("work", RetryPolicy.fixed(5, Duration.ofMillis(20)))
                 .build();
 
         withServer((server, client) -> {
@@ -323,7 +402,7 @@ public final class Scenarios {
     /** A task may only be completed by the worker holding its lease. */
     public static void staleLeaseIsRejected() throws Exception {
         Blueprint bp = json("lease-guard")
-                .step("work", ctx -> put(ctx, "done", true))
+                .step("work")
                 .build();
 
         withServer((server, client) -> {
@@ -345,14 +424,11 @@ public final class Scenarios {
     /** Cancelling an instance stops it and abandons its in-flight work. */
     public static void cancelStopsAnInstance() throws Exception {
         Blueprint bp = json("cancellable")
-                .step("slow", ctx -> {
-                    Check.sleep(2000);
-                    return put(ctx, "done", true);
-                })
+                .step("slow")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker w = startWorker(client, bp)) {
+            try (Worker w = startWorker(client, bp, new CancellableH())) {
                 String id = client.start(bp, Map.of());
                 Check.eventually("the task to be picked up", 5000, () -> w.inFlight() > 0);
                 client.cancel(id, "operator request");
@@ -361,6 +437,14 @@ public final class Scenarios {
                 Check.equal(v.terminationReason(), "operator request", "reason");
             }
         });
+    }
+
+    @Handlers("cancellable")
+    static final class CancellableH {
+        public Map<String, Object> slow(Map<String, Object> ctx) {
+            Check.sleep(2000);
+            return put(ctx, "done", true);
+        }
     }
 
     /**
@@ -372,11 +456,7 @@ public final class Scenarios {
     public static void heartbeatKeepsLongTaskAlive() throws Exception {
         AtomicInteger invocations = new AtomicInteger();
         Blueprint bp = json("heartbeat")
-                .step("long-running", ctx -> {
-                    invocations.incrementAndGet();
-                    Check.sleep(900);               // three times the 300ms lease
-                    return put(ctx, "done", true);
-                })
+                .step("long-running")
                 .build();
 
         withServer((server, client) -> {
@@ -384,7 +464,7 @@ public final class Scenarios {
                     WorkerOptions.defaults()
                             .withLease(Duration.ofMillis(300))          // heartbeat fires at ~100ms
                             .withLongPollWait(Duration.ofMillis(250)))
-                    .register(bp);
+                    .register(bp).handlers(new HeartbeatH(invocations));
             try (w) {
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
@@ -395,12 +475,23 @@ public final class Scenarios {
         });
     }
 
+    @Handlers("heartbeat")
+    static final class HeartbeatH {
+        final AtomicInteger invocations;
+        HeartbeatH(AtomicInteger invocations) { this.invocations = invocations; }
+        public Map<String, Object> longRunning(Map<String, Object> ctx) {
+            invocations.incrementAndGet();
+            Check.sleep(900);               // three times the 300ms lease
+            return put(ctx, "done", true);
+        }
+    }
+
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
     public static void definitionVersionIsContentAddressed() {
-        Blueprint a = json("versioned").step("one", ctx -> ctx).build();
-        Blueprint b = json("versioned").step("one", ctx -> ctx).build();
+        Blueprint a = json("versioned").step("one").build();
+        Blueprint b = json("versioned").step("one").build();
         Blueprint c = json("versioned")
-                .step("one", ctx -> ctx).step("two", ctx -> ctx).build();
+                .step("one").step("two").build();
 
         Check.equal(a.version(), b.version(), "identical topologies share a version");
         Check.isTrue(a.version() != c.version(), "a changed topology gets a new version");
@@ -411,7 +502,7 @@ public final class Scenarios {
     public static void dslRejectsInvalidGraphs() {
         boolean duplicateRejected = false;
         try {
-            json("dup").step("same", ctx -> ctx).step("same", ctx -> ctx).build();
+            json("dup").step("same").step("same").build();
         } catch (IllegalArgumentException e) {
             duplicateRejected = true;
         }
@@ -456,20 +547,14 @@ public final class Scenarios {
 
     /** Two workers on one server share the work rather than duplicating it. */
     public static void workDistributesAcrossWorkers() throws Exception {
-        Map<String, AtomicInteger> byWorker = new ConcurrentHashMap<>();
         AtomicInteger total = new AtomicInteger();
         Blueprint bp = json("distributed")
-                .step("work", ctx -> {
-                    total.incrementAndGet();
-                    Check.sleep(40);
-                    return put(ctx, "done", true);
-                })
+                .step("work")
                 .build();
 
         withServer((server, client) -> {
-            try (Worker a = startWorker(client, bp); Worker b = startWorker(client, bp)) {
-                byWorker.put(a.workerId(), new AtomicInteger());
-                byWorker.put(b.workerId(), new AtomicInteger());
+            DistributedH handlers = new DistributedH(total);
+            try (Worker a = startWorker(client, bp, handlers); Worker b = startWorker(client, bp, handlers)) {
                 List<String> ids = new ArrayList<>();
                 for (int i = 0; i < 20; i++) ids.add(client.start(bp, Map.of("i", (long) i)));
                 for (String id : ids) {
@@ -479,6 +564,17 @@ public final class Scenarios {
                 Check.equal(total.get(), 20, "each task executed exactly once");
             }
         });
+    }
+
+    @Handlers("distributed")
+    static final class DistributedH {
+        final AtomicInteger total;
+        DistributedH(AtomicInteger total) { this.total = total; }
+        public Map<String, Object> work(Map<String, Object> ctx) {
+            total.incrementAndGet();
+            Check.sleep(40);
+            return put(ctx, "done", true);
+        }
     }
 
     /** Records round-trip through JSON without losing types. */
