@@ -1,6 +1,7 @@
 package com.wiggle.order;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
@@ -41,23 +42,24 @@ public final class DashboardSeed {
         }
         ServerConfig config = ServerConfig.fromEnvironment();
 
-        Blueprint<Map<String, Object>> kyc = Workflow.define("kyc-checks")
+        Blueprint kyc = Workflow.define("kyc-checks")
                 .step("verify-id", ctx -> put(ctx, "idOk", true))
                 .step("risk-score", ctx -> put(ctx, "risk", 12))
                 .build();
 
-        Blueprint<Map<String, Object>> onboarding = Workflow.define("onboarding")
+        Blueprint onboarding = Workflow.define("onboarding")
                 .step("create-account", ctx -> put(ctx, "accountId", "acc-42"))
                 .fork(
                         Branch.of("send-welcome", b -> b.step("welcome", ctx -> put(ctx, "welcomed", true))),
                         Branch.of("provision", b -> b.step("provision-hw", ctx -> put(ctx, "provisioned", true))))
+                .combine("merge", Aggregator.union())
                 .subWorkflow("run-kyc", "kyc-checks")
                 .awaitSignal("manager-approval", Duration.ofHours(48),
                         b -> b.step("auto-escalate", ctx -> put(ctx, "escalated", true)))
                 .step("activate", ctx -> put(ctx, "active", true))
                 .build();
 
-        Blueprint<Map<String, Object>> report = Workflow.define("nightly-report")
+        Blueprint report = Workflow.define("nightly-report")
                 .step("gather", ctx -> put(ctx, "rows", 128))
                 .step("render", ctx -> put(ctx, "done", true))
                 .build();

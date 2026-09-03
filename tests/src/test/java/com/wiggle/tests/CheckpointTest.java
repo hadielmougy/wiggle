@@ -38,9 +38,9 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        Blueprint<Map<String, Object>> plain = Workflow.define("cp")
+        Blueprint plain = Workflow.define("cp")
                 .step("a", ctx -> ctx).step("b", ctx -> ctx).build();
-        Blueprint<Map<String, Object>> checked = Workflow.define("cp")
+        Blueprint checked = Workflow.define("cp")
                 .step("a", ctx -> ctx).checkpoint().step("b", ctx -> ctx).build();
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
@@ -56,7 +56,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint<Map<String, Object>> bp = Workflow.define("cp-flush")
+        Blueprint bp = Workflow.define("cp-flush")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a", ctx -> put(ctx, "a", 1L)).checkpoint()
                 .step("b", ctx -> { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); })
@@ -90,7 +90,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint<Map<String, Object>> bp = Workflow.define("cp-nobuf")
+        Blueprint bp = Workflow.define("cp-nobuf")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a", ctx -> put(ctx, "a", 1L))   // no checkpoint
                 .step("b", ctx -> { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); })

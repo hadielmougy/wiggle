@@ -49,7 +49,7 @@ class SqlServerStoreTest {
         return storage;
     }
 
-    private static Blueprint<Map<String, Object>> uniqueWorkflow() {
+    private static Blueprint uniqueWorkflow() {
         return Workflow.define("sqlserver-claim-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
@@ -59,7 +59,7 @@ class SqlServerStoreTest {
     void migrateAndRun() {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint<Map<String, Object>> bp = uniqueWorkflow();
+            Blueprint bp = uniqueWorkflow();
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
             assertTrue(id != null && !id.isBlank(), "an instance id is returned");
@@ -98,7 +98,7 @@ class SqlServerStoreTest {
     void concurrentClaimsAreExclusive() throws Exception {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint<Map<String, Object>> bp = uniqueWorkflow();
+            Blueprint bp = uniqueWorkflow();
             engine.register(bp.definition());
             int tokens = 40;
             for (int i = 0; i < tokens; i++) engine.start(bp.name(), bp.version(), Map.of(), null);

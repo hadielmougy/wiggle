@@ -2,12 +2,12 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
-import com.wiggle.core.VersionedContextCodec;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -35,7 +35,7 @@ class ForkJoinContextMergeTest {
         return n;
     }
 
-    private static Blueprint<Map<String, Object>> blueprint() {
+    private static Blueprint blueprint() {
         return Workflow.define("merge-check")
                 .step("validate", ctx -> put(ctx, "validated", true))
                 .fork(
@@ -44,6 +44,7 @@ class ForkJoinContextMergeTest {
                         Branch.of("shipping", s -> s
                                 .sleep("await", Duration.ofMillis(50))
                                 .step("label", ctx -> put(ctx, "tracking", "DHL"))))
+                .combine("merge", Aggregator.union())
                 .step("notify", ctx -> put(ctx, "done", true))
                 .build();
     }
@@ -51,7 +52,7 @@ class ForkJoinContextMergeTest {
     @Test @DisplayName("both parallel branches' fields survive the join (no sibling clobber)")
     void bothBranchFieldsSurvive() throws Exception {
         String url = "jdbc:h2:mem:merge-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint<Map<String, Object>> bp = blueprint();
+        Blueprint bp = blueprint();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();
@@ -104,24 +105,23 @@ class ForkJoinContextMergeTest {
         Parcel withTracking(String t) { return new Parcel(id, payment, t); }
     }
 
-    private static Blueprint<Parcel> typedBlueprint() {
-        VersionedContextCodec<Parcel> codec = VersionedContextCodec.builder(Parcel.class, 1)
-                .schema("parcel").build();
-        return Workflow.define("parcel-merge", codec)
-                .step("validate", p -> p)
+    private static Blueprint typedBlueprint() {
+        return Workflow.define("parcel-merge")
+                .step("validate", Parcel.class, p -> p)
                 .fork(
-                        Branch.of("payment", s -> s.step("authorise", p -> p.withPayment("auth"))),
+                        Branch.of("payment", s -> s.step("authorise", Parcel.class, p -> p.withPayment("auth"))),
                         Branch.of("shipping", s -> s
                                 .sleep("await", Duration.ofMillis(50))
-                                .step("label", p -> p.withTracking("DHL"))))
-                .step("notify", p -> p)
+                                .step("label", Parcel.class, p -> p.withTracking("DHL"))))
+                .combine("merge", Aggregator.union())
+                .step("notify", Parcel.class, p -> p)
                 .build();
     }
 
     @Test @DisplayName("typed-record branches (codec round-trip) keep both fields")
     void typedBothBranchFieldsSurvive() throws Exception {
         String url = "jdbc:h2:mem:merge2-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint<Parcel> bp = typedBlueprint();
+        Blueprint bp = typedBlueprint();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();

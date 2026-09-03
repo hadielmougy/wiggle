@@ -20,10 +20,9 @@ import java.util.Set;
  * as one atomic operation that registers its handler, reserves its name, and records its queue
  * together, so the node and its handler can never drift apart.
  */
-final class Pipeline<T> {
+final class Pipeline {
 
     private final String name;
-    private final ContextCodec<T> codec;
     private final RetryPolicy defaultRetry;
 
     private final Map<String, Node> nodes = new LinkedHashMap<>();
@@ -37,12 +36,22 @@ final class Pipeline<T> {
     private ExecutionMode executionMode = ExecutionMode.DEFAULT;
     private int counter;
 
-    Pipeline(String name, ContextCodec<T> codec, RetryPolicy defaultRetry) {
+    Pipeline(String name, RetryPolicy defaultRetry) {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("workflow name is required");
         this.name = name;
-        this.codec = codec;
         this.defaultRetry = defaultRetry == null ? RetryPolicy.forever() : defaultRetry;
         this.defaultQueue = name;
+    }
+
+    /** Rebuilds a step's typed input from the persisted JSON: a plain JSON map when no type is
+     *  given (or the type is a Map), otherwise the declared record type via reflection. */
+    static <I> I decode(Object json, Class<I> type) {
+        if (type == null || Map.class.isAssignableFrom(type)) {
+            @SuppressWarnings("unchecked") I asMap = (I) Json.asObject(json);
+            return asMap;
+        }
+        @SuppressWarnings("unchecked") I value = (I) RecordMapper.fromJson(json, type);
+        return value;
     }
 
     void defaultQueue(String queue) { this.defaultQueue = Objects.requireNonNull(queue); }
@@ -55,46 +64,61 @@ final class Pipeline<T> {
     /** Marks an already-added step as a checkpoint (see {@link WorkflowStream#checkpoint()}). */
     void markCheckpoint(String nodeId) { checkpoints.add(nodeId); }
 
-    /** A task node: {@code fn}'s result is diffed against the context and merged back. */
-    String addStep(String name, Activity<T> fn, RetryPolicy retry, String queue) {
+    /**
+     * A task node in the spirit of {@code Stream.map}: {@code fn}'s input is rebuilt from the JSON as
+     * {@code in}, and its (possibly differently-typed) output is encoded back and diffed against the
+     * old context, so the context transforms from one step to the next. A {@code null} {@code in}
+     * hands the raw JSON map to {@code fn}.
+     */
+    <I, O> String addStep(String name, Class<I> in, Step<I, O> fn, RetryPolicy retry, String queue) {
         return addWorkerTask(
                 name,
-                json -> {
-                    try {
-                        return Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json))));
-                    } finally {
-                        ContextVersion.clear();
-                    }
-                },
+                json -> Json.shallowDiff(json, RecordMapper.toJson(fn.apply(decode(json, in)))),
                 retry, queue);
     }
 
+    /**
+     * The mandatory merge at a fork's join: the engine stages each isolated branch's result under
+     * its branch name, so this reads them by name, lets {@code combine} produce the fields to merge,
+     * and returns them. The branch scratch keys never reach the shared context -- the engine strips
+     * them from the continuation once the combine runs. The arm names are recorded on the node's
+     * {@code itemsKey} (a field that round-trips through every store, unlike a TASK node's branches)
+     * so the engine can key each branch and know which scratch keys to strip; they are also baked
+     * into the handler so it can gather the parts it hands to {@code combine}.
+     */
+    String addAggregator(String name, List<String> branchNames, Aggregator combine,
+                         RetryPolicy retry, String queue) {
+        List<String> names = List.copyOf(branchNames);
+        String id = addWorkerTask(
+                name,
+                json -> {
+                    Map<String, Object> ctx = Json.asObject(json);
+                    Map<String, Object> parts = new LinkedHashMap<>();
+                    for (String b : names) parts.put(b, ctx.get(b));
+                    Map<String, Object> merged = combine.merge(ctx, parts);
+                    return merged == null ? Map.of() : merged;
+                },
+                retry, queue);
+        nodes.put(id, nodes.get(id).withItemsKey(Json.write(names)));
+        return id;
+    }
+
     /** A task node run for its side effect only; the context is left unchanged. */
-    String addEffect(String name, SideEffect<T> fn, RetryPolicy retry, String queue) {
+    <I> String addEffect(String name, Class<I> in, SideEffect<I> fn, RetryPolicy retry, String queue) {
         return addWorkerTask(
                 name,
                 json -> {
-                    try {
-                        fn.accept(codec.decode(json));
-                        return null;
-                    } finally {
-                        ContextVersion.clear();
-                    }
+                    fn.accept(decode(json, in));
+                    return null;
                 },
                 retry, queue);
     }
 
     /** A predicate node evaluated on a worker; its handler returns a {@link Boolean}. */
-    String addGuard(String name, Predicate<T> test, RetryPolicy retry, String queue) {
+    <I> String addGuard(String name, Class<I> in, Predicate<I> test, RetryPolicy retry, String queue) {
         return addWorkerPredicate(
                 name,
-                json -> {
-                    try {
-                        return test.test(codec.decode(json));
-                    } finally {
-                        ContextVersion.clear();
-                    }
-                },
+                json -> test.test(decode(json, in)),
                 retry, queue);
     }
 
@@ -194,13 +218,13 @@ final class Pipeline<T> {
      * The caller ({@link WorkflowStream#build()}) has already appended the terminal end node and
      * wired every open edge to it.
      */
-    Blueprint<T> build() {
+    Blueprint build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);
-        return new Blueprint<>(def, handlers, codec);
+        return new Blueprint(def, handlers);
     }
 
     private Set<String> copyOf(Set<String> set) {

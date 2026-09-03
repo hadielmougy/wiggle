@@ -95,7 +95,7 @@ public final class Wiggle implements Runnable {
         @Override
         public Integer call() {
             try {
-                Blueprint<Map<String, Object>> bp = WorkflowYaml.load(file);
+                Blueprint bp = WorkflowYaml.load(file);
                 System.out.printf("OK  %s  v%d  (%d nodes, queues %s)%n",
                         bp.name(), bp.version(), bp.definition().nodes().size(), new TreeSet<>(bp.queues()));
                 return 0;
@@ -138,7 +138,7 @@ public final class Wiggle implements Runnable {
 
         @Override
         public Integer call() {
-            Blueprint<Map<String, Object>> bp;
+            Blueprint bp;
             try {
                 bp = WorkflowYaml.load(file);   // validate before touching the network
             } catch (Exception e) {
@@ -202,7 +202,7 @@ public final class Wiggle implements Runnable {
 
         @Override
         public Integer call() {
-            Blueprint<Map<String, Object>> bp;
+            Blueprint bp;
             try {
                 bp = WorkflowYaml.load(file);
             } catch (Exception e) {

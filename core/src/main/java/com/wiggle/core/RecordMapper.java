@@ -46,7 +46,7 @@ public final class RecordMapper {
         Class<?> type = value.getClass();
         if (!type.isRecord()) {
             throw new IllegalArgumentException("unsupported context type: " + type.getName()
-                    + " (use a record, a Map, or a custom ContextCodec)");
+                    + " (use a record or a Map)");
         }
         Map<String, Object> out = new LinkedHashMap<>();
         for (RecordComponent rc : type.getRecordComponents()) {

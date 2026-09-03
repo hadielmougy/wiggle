@@ -58,7 +58,7 @@ class SignalTest {
 
     @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
     void signalOverGrpc() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-approve")
+        Blueprint bp = Workflow.define("sig-approve")
                 .awaitSignal("approval")
                 .step("after", ctx -> put(ctx, "advanced", true))
                 .build();
@@ -86,7 +86,7 @@ class SignalTest {
 
     @Test @DisplayName("signalling an instance that is not waiting for that name is a 409")
     void wrongSignalConflicts() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-wrong")
+        Blueprint bp = Workflow.define("sig-wrong")
                 .awaitSignal("expected")
                 .step("after", ctx -> ctx)
                 .build();
@@ -106,7 +106,7 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline runs the escalation branch, then rejoins the flow")
     void deadlineEscalates() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-escalate")
+        Blueprint bp = Workflow.define("sig-escalate")
                 .awaitSignal("approval", Duration.ofMillis(250),
                         b -> b.step("escalate", ctx -> put(ctx, "escalated", true)))
                 .step("after", ctx -> put(ctx, "advanced", true))
@@ -128,7 +128,7 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline with no escalation fails the instance")
     void deadlineFails() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-timeout")
+        Blueprint bp = Workflow.define("sig-timeout")
                 .awaitSignal("approval", Duration.ofMillis(250))
                 .step("after", ctx -> ctx)
                 .build();
@@ -148,7 +148,7 @@ class SignalTest {
         int dash;
         try (ServerSocket s = new ServerSocket(0)) { dash = s.getLocalPort(); }
 
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-http")
+        Blueprint bp = Workflow.define("sig-http")
                 .awaitSignal("sign-off")
                 .step("after", ctx -> put(ctx, "advanced", true))
                 .build();

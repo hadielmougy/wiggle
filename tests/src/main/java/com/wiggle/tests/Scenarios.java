@@ -1,6 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowStream;
@@ -44,14 +45,14 @@ public final class Scenarios {
         }
     }
 
-    private static Worker startWorker(WiggleClient client, Blueprint<?>... blueprints) {
+    private static Worker startWorker(WiggleClient client, Blueprint... blueprints) {
         Worker w = new Worker(client, "w-" + Ids.next("x"),
                 WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-        for (Blueprint<?> bp : blueprints) w.register(bp);
+        for (Blueprint bp : blueprints) w.register(bp);
         return w.start();
     }
 
-    private static WorkflowStream<Map<String, Object>> json(String name) {
+    private static WorkflowStream json(String name) {
         return Workflow.define(name);
     }
 
@@ -61,9 +62,10 @@ public final class Scenarios {
         return next;
     }
 
+
     /** A linear pipeline runs its steps in order and the context accumulates. */
     public static void sequentialPipeline() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("seq")
+        Blueprint bp = json("seq")
                 .step("one", ctx -> put(ctx, "a", 1L))
                 .step("two", ctx -> put(ctx, "b", (Long) ctx.get("a") + 1))
                 .step("three", ctx -> put(ctx, "c", (Long) ctx.get("b") + 1))
@@ -84,7 +86,7 @@ public final class Scenarios {
     /** A false gate ends the instance successfully and skips everything downstream. */
     public static void gateShortCircuits() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = json("gated")
+        Blueprint bp = json("gated")
                 .step("seed", ctx -> put(ctx, "keep", false))
                 .gate("gate", ctx -> Boolean.TRUE.equals(ctx.get("keep")))
                 .step("never", ctx -> {
@@ -105,7 +107,7 @@ public final class Scenarios {
 
     /** Parallel branches merge field-by-field instead of clobbering each other. */
     public static void forkMergesDisjointWrites() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("fork-merge")
+        Blueprint bp = json("fork-merge")
                 .step("seed", ctx -> put(ctx, "seeded", true))
                 .fork(
                         Branch.of("left", s -> s.step("slow-left", ctx -> {
@@ -113,6 +115,7 @@ public final class Scenarios {
                             return put(ctx, "left", "L");
                         })),
                         Branch.of("right", s -> s.step("fast-right", ctx -> put(ctx, "right", "R"))))
+                .combine("merge", Aggregator.union())
                 .step("after", ctx -> put(ctx, "joined", true))
                 .build();
 
@@ -131,11 +134,12 @@ public final class Scenarios {
     /** The step after a fork runs exactly once, no matter how many branches there were. */
     public static void joinRunsContinuationOnce() throws Exception {
         AtomicInteger afterCount = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = json("join-once")
+        Blueprint bp = json("join-once")
                 .fork(
                         Branch.of("a", s -> s.step("a1", ctx -> put(ctx, "a", 1L))),
                         Branch.of("b", s -> s.step("b1", ctx -> put(ctx, "b", 1L))),
                         Branch.of("c", s -> s.step("c1", ctx -> put(ctx, "c", 1L))))
+                .combine("merge", Aggregator.union())
                 .step("after", ctx -> {
                     afterCount.incrementAndGet();
                     return ctx;
@@ -154,13 +158,15 @@ public final class Scenarios {
 
     /** Forks nest: the join stack pops back to the right barrier. */
     public static void nestedForks() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("nested")
+        Blueprint bp = json("nested")
                 .fork(
                         Branch.of("outer-left", s -> s.fork(
                                 Branch.of("inner-a", t -> t.step("ia", ctx -> put(ctx, "ia", 1L))),
                                 Branch.of("inner-b", t -> t.step("ib", ctx -> put(ctx, "ib", 1L))))
+                                .combine("inner-merge", Aggregator.union())
                                 .step("inner-after", ctx -> put(ctx, "innerAfter", 1L))),
                         Branch.of("outer-right", s -> s.step("or", ctx -> put(ctx, "or", 1L))))
+                .combine("outer-merge", Aggregator.union())
                 .step("outer-after", ctx -> put(ctx, "outerAfter", 1L))
                 .build();
 
@@ -178,12 +184,13 @@ public final class Scenarios {
 
     /** A gate inside a branch short-circuits that branch only; siblings still join. */
     public static void gateInsideBranchDoesNotStrandSiblings() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("branch-gate")
+        Blueprint bp = json("branch-gate")
                 .fork(
                         Branch.of("gated", s -> s
                                 .gate("gate", ctx -> false)
                                 .step("skipped", ctx -> put(ctx, "skipped", true))),
                         Branch.of("other", s -> s.step("ran", ctx -> put(ctx, "ran", true))))
+                .combine("merge", Aggregator.union())
                 .step("after", ctx -> put(ctx, "after", true))
                 .build();
 
@@ -202,7 +209,7 @@ public final class Scenarios {
     /** A transient failure is retried according to the step's policy. */
     public static void retriesTransientFailures() throws Exception {
         Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
-        Blueprint<Map<String, Object>> bp = json("retry")
+        Blueprint bp = json("retry")
                 .step("flaky", ctx -> {
                     int n = attempts.computeIfAbsent("flaky", k -> new AtomicInteger()).incrementAndGet();
                     if (n < 3) throw new IllegalStateException("boom " + n);
@@ -221,7 +228,7 @@ public final class Scenarios {
 
     /** Retries stop at the policy limit and the instance fails with the last error. */
     public static void exhaustedRetriesFailInstance() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("retry-exhausted")
+        Blueprint bp = json("retry-exhausted")
                 .step("always-fails", ctx -> {
                     throw new IllegalStateException("permanent trouble");
                 }, RetryPolicy.fixed(2, Duration.ofMillis(20)))
@@ -239,7 +246,7 @@ public final class Scenarios {
     /** PermanentActivityException skips retries entirely. */
     public static void permanentFailureSkipsRetries() throws Exception {
         AtomicInteger calls = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = json("permanent")
+        Blueprint bp = json("permanent")
                 .step("fatal", ctx -> {
                     calls.incrementAndGet();
                     throw new PermanentActivityException("do not retry me");
@@ -257,7 +264,7 @@ public final class Scenarios {
 
     /** A sleep is a server-side timer: the instance waits without occupying a worker. */
     public static void sleepDefersWithoutHoldingAWorker() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("sleeper")
+        Blueprint bp = json("sleeper")
                 .step("before", ctx -> put(ctx, "before", System.currentTimeMillis()))
                 .sleep(Duration.ofMillis(600))
                 .step("after", ctx -> put(ctx, "after", System.currentTimeMillis()))
@@ -283,7 +290,7 @@ public final class Scenarios {
      * reclaims the expired lease and the task becomes dispatchable again.
      */
     public static void expiredLeaseIsReclaimed() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("orphan")
+        Blueprint bp = json("orphan")
                 .step("work", ctx -> put(ctx, "done", true), RetryPolicy.fixed(5, Duration.ofMillis(20)))
                 .build();
 
@@ -315,7 +322,7 @@ public final class Scenarios {
 
     /** A task may only be completed by the worker holding its lease. */
     public static void staleLeaseIsRejected() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("lease-guard")
+        Blueprint bp = json("lease-guard")
                 .step("work", ctx -> put(ctx, "done", true))
                 .build();
 
@@ -337,7 +344,7 @@ public final class Scenarios {
 
     /** Cancelling an instance stops it and abandons its in-flight work. */
     public static void cancelStopsAnInstance() throws Exception {
-        Blueprint<Map<String, Object>> bp = json("cancellable")
+        Blueprint bp = json("cancellable")
                 .step("slow", ctx -> {
                     Check.sleep(2000);
                     return put(ctx, "done", true);
@@ -364,7 +371,7 @@ public final class Scenarios {
      */
     public static void heartbeatKeepsLongTaskAlive() throws Exception {
         AtomicInteger invocations = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = json("heartbeat")
+        Blueprint bp = json("heartbeat")
                 .step("long-running", ctx -> {
                     invocations.incrementAndGet();
                     Check.sleep(900);               // three times the 300ms lease
@@ -390,9 +397,9 @@ public final class Scenarios {
 
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
     public static void definitionVersionIsContentAddressed() {
-        Blueprint<Map<String, Object>> a = json("versioned").step("one", ctx -> ctx).build();
-        Blueprint<Map<String, Object>> b = json("versioned").step("one", ctx -> ctx).build();
-        Blueprint<Map<String, Object>> c = json("versioned")
+        Blueprint a = json("versioned").step("one", ctx -> ctx).build();
+        Blueprint b = json("versioned").step("one", ctx -> ctx).build();
+        Blueprint c = json("versioned")
                 .step("one", ctx -> ctx).step("two", ctx -> ctx).build();
 
         Check.equal(a.version(), b.version(), "identical topologies share a version");
@@ -451,7 +458,7 @@ public final class Scenarios {
     public static void workDistributesAcrossWorkers() throws Exception {
         Map<String, AtomicInteger> byWorker = new ConcurrentHashMap<>();
         AtomicInteger total = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = json("distributed")
+        Blueprint bp = json("distributed")
                 .step("work", ctx -> {
                     total.incrementAndGet();
                     Check.sleep(40);
@@ -480,12 +487,12 @@ public final class Scenarios {
         record Basket(String id, List<Line> lines, Map<String, String> tags,
                       java.math.BigDecimal total, java.time.Instant at, Optional<String> note) {}
 
-        ContextCodec<Basket> codec = ContextCodec.records(Basket.class);
         Basket original = new Basket("b1", List.of(new Line("sku-1", 2), new Line("sku-2", 5)),
                 Map.of("channel", "web"), new java.math.BigDecimal("19.99"),
                 java.time.Instant.parse("2026-01-02T03:04:05Z"), Optional.of("gift"));
 
-        Basket round = codec.decode(Json.parse(Json.write(codec.encode(original))));
+        Basket round = (Basket) RecordMapper.fromJson(
+                Json.parse(Json.write(RecordMapper.toJson(original))), Basket.class);
         Check.equal(round, original, "record round trip");
     }
 

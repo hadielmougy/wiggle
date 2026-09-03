@@ -4,9 +4,9 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
-import com.wiggle.core.ContextCodec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.core.RecordMapper;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -37,7 +37,7 @@ class HandleBindingTest {
     }
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
-    private Blueprint<Map<String, Object>> authoredGraph() {
+    private Blueprint authoredGraph() {
         return Workflow.define("order-fulfilment")
                 .step("validate", c -> put(c, "status", "VALIDATED"))
                 .gate("in-stock", c -> ((Number) c.get("qty")).intValue() > 0)
@@ -129,25 +129,24 @@ class HandleBindingTest {
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
     void typedNameOnlyBinding() throws Exception {
         withServer((client, server) -> {
-            ContextCodec<Item> codec = ContextCodec.records(Item.class);
-            client.register(Workflow.define("typed-wf", codec)
+            client.register(Workflow.define("typed-wf")
                     .step("check")
-                    .gate("available", i -> i.qty() > 0)
+                    .gate("available", Item.class, i -> i.qty() > 0)
                     .effect("done")
                     .build());
 
             AtomicReference<String> doneState = new AtomicReference<>();
             try (Worker impl = new Worker(client, "typed-impl")) {
-                impl.handle("typed-wf", "check", codec, i -> new Item(i.id(), i.qty(), "CHECKED"))
-                    .handleGate("typed-wf", "available", codec, i -> i.qty() > 0)
-                    .handleEffect("typed-wf", "done", codec, i -> doneState.set(i.state()));
+                impl.handle("typed-wf", "check", Item.class, i -> new Item(i.id(), i.qty(), "CHECKED"))
+                    .handleGate("typed-wf", "available", Item.class, i -> i.qty() > 0)
+                    .handleEffect("typed-wf", "done", Item.class, i -> doneState.set(i.state()));
                 impl.start();
 
                 String id = client.start("typed-wf", Map.of("id", "x1", "qty", 3));
                 InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
 
                 assertEquals("COMPLETED", v.status(), "status");
-                Item out = codec.decode(v.context());
+                Item out = (Item) RecordMapper.fromJson(v.context(), Item.class);
                 assertEquals("CHECKED", out.state(), "typed handler updated the record");
                 assertEquals("CHECKED", doneState.get(), "typed effect saw the decoded record");
             }

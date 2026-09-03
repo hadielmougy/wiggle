@@ -41,7 +41,7 @@ class LocalSyncTest {
     }
 
     /** A five-step linear pipeline; each step's value depends on the previous. */
-    private static Blueprint<Map<String, Object>> linear(ExecutionMode mode, AtomicInteger runs) {
+    private static Blueprint linear(ExecutionMode mode, AtomicInteger runs) {
         return Workflow.define("ls-linear")
                 .execution(mode)
                 .step("a", ctx -> { runs.incrementAndGet(); return put(ctx, "a", 1L); })
@@ -57,7 +57,7 @@ class LocalSyncTest {
         for (ExecutionMode mode : new ExecutionMode[]{
                 ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             AtomicInteger runs = new AtomicInteger();
-            Blueprint<Map<String, Object>> bp = linear(mode, runs);
+            Blueprint bp = linear(mode, runs);
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
@@ -81,7 +81,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            Blueprint<Map<String, Object>> bp = linear(ExecutionMode.LOCAL_SYNC, new AtomicInteger());
+            Blueprint bp = linear(ExecutionMode.LOCAL_SYNC, new AtomicInteger());
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();
 
@@ -91,11 +91,11 @@ class LocalSyncTest {
             // Worker w1 claims the first step and sees the resolved mode.
             List<TaskActivation> claimed = engine.poll("w1", queues, 10, null);
             assertEquals(1, claimed.size());
-            TaskActivation first = claimed.get(0);
+            TaskActivation first = claimed.getFirst();
             assertEquals(ExecutionMode.LOCAL_SYNC, first.executionMode(), "mode stamped on the activation");
 
             // w1 reports step 'a' as non-final; the continuation ('b') is leased straight back to w1.
-            WorkflowEngine.AdvanceOutcome out = engine.advanceRun(first.taskId(), "w1",
+            WorkflowEngine.AdvanceOutcome out = engine.advance(first.taskId(), "w1",
                     List.of(new WorkflowEngine.StepInput(first.nodeId(), Map.of("a", 1L), null)), false);
             assertEquals("RUNNING", out.instanceStatus(), "instance still running");
             assertNotNull(out.nextTaskId(), "a continuation token was leased back");
@@ -112,7 +112,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            Blueprint<Map<String, Object>> bp = Workflow.define("async-batch")
+            Blueprint bp = Workflow.define("async-batch")
                     .execution(ExecutionMode.LOCAL_ASYNC)
                     .step("x", ctx -> put(ctx, "x", 1L))
                     .step("y", ctx -> put(ctx, "y", 2L))
@@ -126,7 +126,7 @@ class LocalSyncTest {
             String yNode = bp.definition().node(xNode).next();
 
             // The worker buffered both steps and flushes them in a single final batch.
-            WorkflowEngine.AdvanceOutcome out = engine.advanceRun(first.taskId(), "w1", List.of(
+            WorkflowEngine.AdvanceOutcome out = engine.advance(first.taskId(), "w1", List.of(
                     new WorkflowEngine.StepInput(xNode, Map.of("x", 1L), null),
                     new WorkflowEngine.StepInput(yNode, Map.of("y", 2L), null)), true);
 

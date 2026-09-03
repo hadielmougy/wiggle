@@ -1,6 +1,7 @@
 package com.wiggle.cassandra;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
@@ -59,7 +60,7 @@ class CassandraStoreTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private InstanceView run(Blueprint<Map<String, Object>> bp, Map<String, Object> input) throws Exception {
+    private InstanceView run(Blueprint bp, Map<String, Object> input) throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "cass-" + Ids.next("x")).register(bp)) {
@@ -70,7 +71,7 @@ class CassandraStoreTest {
 
     @Test @DisplayName("a linear workflow runs to completion end-to-end on Cassandra")
     void linearWorkflow() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("cass-linear-" + Ids.next("wf"))
+        Blueprint bp = Workflow.define("cass-linear-" + Ids.next("wf"))
                 .step("a", ctx -> put(ctx, "a", 1L))
                 .step("b", ctx -> put(ctx, "b", 2L))
                 .step("c", ctx -> put(ctx, "c", 3L))
@@ -85,10 +86,11 @@ class CassandraStoreTest {
 
     @Test @DisplayName("a fork/join workflow completes (many token rows in one instance partition)")
     void forkJoin() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("cass-fork-" + Ids.next("wf"))
+        Blueprint bp = Workflow.define("cass-fork-" + Ids.next("wf"))
                 .fork(
                         Branch.of("left-branch", b -> b.step("left", ctx -> put(ctx, "left", true))),
                         Branch.of("right-branch", b -> b.step("right", ctx -> put(ctx, "right", true))))
+                .combine("merge", Aggregator.union())
                 .step("after", ctx -> put(ctx, "joined", true))
                 .build();
         InstanceView v = run(bp, Map.of());
@@ -101,7 +103,7 @@ class CassandraStoreTest {
 
     @Test @DisplayName("a sleep timer fires and the workflow completes (timer index + sweep)")
     void sleepTimer() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("cass-sleep-" + Ids.next("wf"))
+        Blueprint bp = Workflow.define("cass-sleep-" + Ids.next("wf"))
                 .step("before", ctx -> put(ctx, "before", true))
                 .sleep(Duration.ofMillis(300))
                 .step("after", ctx -> put(ctx, "after", true))
@@ -115,10 +117,10 @@ class CassandraStoreTest {
 
     @Test @DisplayName("a sub-workflow runs and resumes the parent (uncontended cross-partition case)")
     void subWorkflow() throws Exception {
-        Blueprint<Map<String, Object>> child = Workflow.define("cass-child")
+        Blueprint child = Workflow.define("cass-child")
                 .step("child-work", ctx -> put(ctx, "childResult", 42L))
                 .build();
-        Blueprint<Map<String, Object>> parent = Workflow.define("cass-parent")
+        Blueprint parent = Workflow.define("cass-parent")
                 .step("prepare", ctx -> put(ctx, "prepared", true))
                 .subWorkflow("delegate", "cass-child")
                 .step("wrap-up", ctx -> put(ctx, "wrapped", true))
@@ -143,7 +145,7 @@ class CassandraStoreTest {
             // A unique queue per run keeps this isolated from tokens other tests left in the
             // shared keyspace, so the exactly-once count is over exactly the 40 we create here.
             String queue = "cass-q-" + Ids.next("q");
-            Blueprint<Map<String, Object>> bp = Workflow.define("cass-claim-" + Ids.next("wf"))
+            Blueprint bp = Workflow.define("cass-claim-" + Ids.next("wf"))
                     .defaultQueue(queue)
                     .step("work", ctx -> ctx).build();
             engine.register(bp.definition());

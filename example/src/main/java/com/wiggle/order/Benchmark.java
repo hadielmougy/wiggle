@@ -51,7 +51,7 @@ public final class Benchmark {
         String jdbcPassword = env("WIGGLE_JDBC_PASSWORD", null);
 
         CountDownLatch done = new CountDownLatch(count);
-        Blueprint<Map<String, Object>> bp = linear("bench-linear", steps, mode, done);
+        Blueprint bp = linear("bench-linear", steps, mode, done);
 
         ServerConfig config = new ServerConfig(0, "bench", jdbcUrl, jdbcUser, jdbcPassword, 16,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
@@ -85,8 +85,8 @@ public final class Benchmark {
     }
 
     /** A linear chain of {@code steps} trivial same-queue map steps; the last one counts down. */
-    private static Blueprint<Map<String, Object>> linear(String name, int steps, ExecutionMode mode, CountDownLatch done) {
-        WorkflowStream<Map<String, Object>> s = Workflow.define(name).execution(mode);
+    private static Blueprint linear(String name, int steps, ExecutionMode mode, CountDownLatch done) {
+        WorkflowStream s = Workflow.define(name).execution(mode);
         for (int i = 0; i < steps; i++) {
             boolean last = i == steps - 1;
             s = s.step("s" + i, last ? ctx -> { done.countDown(); return ctx; } : ctx -> ctx);

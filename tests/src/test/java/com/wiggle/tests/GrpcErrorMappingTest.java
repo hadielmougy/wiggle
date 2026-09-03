@@ -49,7 +49,7 @@ class GrpcErrorMappingTest {
 
     @Test @DisplayName("settling a task without its lease surfaces as 409 over gRPC")
     void conflict() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("err-conflict")
+        Blueprint bp = Workflow.define("err-conflict")
                 .step("work", ctx -> ctx)
                 .build();
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -67,7 +67,7 @@ class GrpcErrorMappingTest {
 
     @Test @DisplayName("a non-boolean predicate result surfaces as 400 over gRPC")
     void badRequest() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("err-bad")
+        Blueprint bp = Workflow.define("err-bad")
                 .gate("check", ctx -> true)
                 .step("after", ctx -> ctx)
                 .build();

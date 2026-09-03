@@ -1,6 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Step;
@@ -37,7 +38,7 @@ class JdbcForkJoinStressTest {
         return n;
     }
 
-    private static Blueprint<Map<String, Object>> blueprint() {
+    private static Blueprint blueprint() {
         return Workflow.define("order-ish")
                 .step("validate", ctx -> put(ctx, "validated", true))
                 .gate("in-stock", ctx -> true)
@@ -53,6 +54,7 @@ class JdbcForkJoinStressTest {
                                 .step("reserve", ctx -> put(ctx, "reserved", true))
                                 .sleep("await", Duration.ofMillis(150))
                                 .step("label", ctx -> put(ctx, "labelled", true))))
+                .combine("merge", Aggregator.union())
                 .step("notify", ctx -> put(ctx, "fulfilled", true))
                 .build();
     }
@@ -62,7 +64,7 @@ class JdbcForkJoinStressTest {
         // One shared database, three server nodes -- as close to the kind cluster as a single
         // JVM gets: real leader election, three engines driving the same store.
         String url = "jdbc:h2:mem:stress-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint<Map<String, Object>> bp = blueprint();
+        Blueprint bp = blueprint();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();

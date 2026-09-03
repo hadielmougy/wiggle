@@ -27,7 +27,7 @@ public final class Demo {
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
-            Blueprint<Order> blueprint = OrderFulfilment.blueprint();
+            Blueprint blueprint = OrderFulfilment.blueprint();
             System.out.println("Workflow " + blueprint.name() + " v" + blueprint.version()
                     + " compiled to " + blueprint.definition().nodes().size() + " nodes");
 

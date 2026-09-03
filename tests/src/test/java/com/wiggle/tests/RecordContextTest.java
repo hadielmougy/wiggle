@@ -1,12 +1,13 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
-import com.wiggle.core.ContextCodec;
 import com.wiggle.core.Ids;
+import com.wiggle.core.RecordMapper;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -21,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * A typed-record context driven through a live server and worker -- gates, forks, and the
- * shallow-diff branch merge all operating on {@link ContextCodec#records} rather than JSON maps.
+ * shallow-diff branch merge all operating on typed records rather than JSON maps.
  * (The pure codec round-trip has its own scenario; this covers the record path end to end.)
  */
 class RecordContextTest {
@@ -37,16 +38,15 @@ class RecordContextTest {
         Shipment withInvoice(String i) { return new Shipment(id, items, total, status, label, i, log); }
     }
 
-    private static final ContextCodec<Shipment> CODEC = ContextCodec.records(Shipment.class);
-
-    private static Blueprint<Shipment> blueprint() {
-        return Workflow.define("record-shipment", CODEC)
-                .step("validate", s -> s.withStatus("VALIDATED"))
-                .gate("has-items", s -> s.items() > 0)
+    private static Blueprint blueprint() {
+        return Workflow.define("record-shipment")
+                .step("validate", Shipment.class, s -> s.withStatus("VALIDATED"))
+                .gate("has-items", Shipment.class, s -> s.items() > 0)
                 .fork(
-                        Branch.of("labelling", b -> b.step("label", s -> s.withLabel("LBL-" + s.id()))),
-                        Branch.of("billing", b -> b.step("invoice", s -> s.withInvoice("INV-" + s.id()))))
-                .step("dispatch", s -> s.withStatus("DISPATCHED"))
+                        Branch.of("labelling", b -> b.step("label", Shipment.class, s -> s.withLabel("LBL-" + s.id()))),
+                        Branch.of("billing", b -> b.step("invoice", Shipment.class, s -> s.withInvoice("INV-" + s.id()))))
+                .combine("merge", Aggregator.union())
+                .step("dispatch", Shipment.class, s -> s.withStatus("DISPATCHED"))
                 .build();
     }
 
@@ -59,7 +59,7 @@ class RecordContextTest {
 
     @Test @DisplayName("a record context survives gate, fork merge and typed decode end to end")
     void recordRoundTripThroughEngine() throws Exception {
-        Blueprint<Shipment> bp = blueprint();
+        Blueprint bp = blueprint();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp)) {
@@ -68,7 +68,7 @@ class RecordContextTest {
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
 
-            Shipment out = CODEC.decode(v.context());
+            Shipment out = (Shipment) RecordMapper.fromJson(v.context(), Shipment.class);
             assertEquals("s-1", out.id());
             assertEquals(3, out.items());
             assertEquals(new BigDecimal("19.99"), out.total(), "BigDecimal survives the trip");
@@ -81,7 +81,7 @@ class RecordContextTest {
 
     @Test @DisplayName("a false gate on a record context ends the instance as gated")
     void recordGateShortCircuits() throws Exception {
-        Blueprint<Shipment> bp = blueprint();
+        Blueprint bp = blueprint();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp)) {
@@ -90,7 +90,7 @@ class RecordContextTest {
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
             assertEquals("gated:has-items", v.terminationReason());
-            assertEquals("VALIDATED", CODEC.decode(v.context()).status(), "stopped after validate");
+            assertEquals("VALIDATED", ((Shipment) RecordMapper.fromJson(v.context(), Shipment.class)).status(), "stopped after validate");
         }
     }
 }

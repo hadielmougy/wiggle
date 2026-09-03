@@ -1,6 +1,7 @@
 package com.wiggle.cookbook;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
@@ -46,7 +47,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 1. step + then + effect + gate -- the smallest linear pipeline with a filter.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> linearWithGate() {
+    public static Blueprint linearWithGate() {
         return Workflow.define("cb-linear-gate")
 
                 .step("normalise", ctx -> with(ctx, "email", String.valueOf(ctx.get("email")).toLowerCase()))
@@ -64,7 +65,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 2. choose + fork + retry -- an exclusive branch whose body itself fans out in parallel.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> chooseThenFork() {
+    public static Blueprint chooseThenFork() {
         return Workflow.define("cb-choose-fork")
 
                 .choose(
@@ -74,7 +75,7 @@ public final class Cookbook {
                                                 ctx -> with(ctx, "fraudChecked", true),
                                                 RetryPolicy.exponential(3, Duration.ofMillis(50)))),
                                         Branch.of("manager-notice", s -> s.effect("manager-notice",
-                                                ctx -> System.out.println("   [cookbook] large txn: " + ctx.get("amount")))))),
+                                                ctx -> System.out.println("   [cookbook] large txn: " + ctx.get("amount"))))).combine("large-merge", Aggregator.union())),
 
                         Case.otherwise("standard", b -> b.step("fast-path", ctx -> with(ctx, "fraudChecked", false))))
 
@@ -85,7 +86,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 3. forkEach + per-step queue -- dynamic fan-out with mixed worker pools.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> forkEachAcrossQueues() {
+    public static Blueprint forkEachAcrossQueues() {
         return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
 
                 .forkEach("charge-items", "items", "item", b -> b
@@ -105,7 +106,7 @@ public final class Cookbook {
     // 4. doWhile + gate -- retry-until-ready loop, with an inner gate short-circuiting a
     //    cancelled draw straight out of the loop.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> pollUntilReady() {
+    public static Blueprint pollUntilReady() {
         return Workflow.define("cb-poll-until-ready")
 
                 .doWhile("still-pending", ctx -> !Boolean.TRUE.equals(ctx.get("ready")), b -> b
@@ -124,7 +125,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 5. awaitSignal (timeout + escalation) + choose -- branch on how the wait resolved.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> approvalWithEscalation() {
+    public static Blueprint approvalWithEscalation() {
         return Workflow.define("cb-approval-escalation")
 
                 .step("submit", ctx -> with(ctx, "submitted", true))
@@ -144,7 +145,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 6. subWorkflow + gate + fork -- compose a registered child workflow into a bigger one.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> childCheckThenFork() {
+    public static Blueprint childCheckThenFork() {
         return Workflow.define("cb-parent")
 
                 // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
@@ -155,7 +156,7 @@ public final class Cookbook {
                 .fork(
                         Branch.of("provision", s -> s.step("provision", ctx -> with(ctx, "provisioned", true))),
                         Branch.of("audit", s -> s.effect("audit", ctx -> System.out.println("   [cookbook] provisioning audited"))))
-
+                .combine("merge", Aggregator.union())
                 .build();
     }
 
@@ -163,7 +164,7 @@ public final class Cookbook {
     // 7. execution(LOCAL_ASYNC) + checkpoint + doWhile -- batched local execution with a
     //    deliberate commit point so a crash mid-loop only replays the current iteration.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> batchedLoopWithCheckpoint() {
+    public static Blueprint batchedLoopWithCheckpoint() {
         return Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
 
                 .doWhile("more-batches", ctx -> ((Number) ctx.getOrDefault("batch", 0)).intValue() < 3, b -> b
@@ -182,7 +183,7 @@ public final class Cookbook {
     //    sleep, awaitSignal + escalation, subWorkflow, doWhile, defaultQueue, and checkpoint,
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint<Map<String, Object>> kitchenSink() {
+    public static Blueprint kitchenSink() {
         return Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
 
                 .step("intake", ctx -> with(ctx, "stage", "intake"))
@@ -199,7 +200,7 @@ public final class Cookbook {
                                                         RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing")),
                                         Branch.of("priority-notice", s -> s
                                                 .sleep("brief-hold", Duration.ofMillis(50))
-                                                .effect("notice", ctx -> System.out.println("   [cookbook] VIP order held briefly"))))),
+                                                .effect("notice", ctx -> System.out.println("   [cookbook] VIP order held briefly")))).combine("large-merge", Aggregator.union())),
 
                         Case.otherwise("standard", b -> b
                                 // Namespaced by itemIndex for the same reason as example 3.

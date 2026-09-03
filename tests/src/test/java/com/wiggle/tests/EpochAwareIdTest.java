@@ -28,7 +28,7 @@ class EpochAwareIdTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint<Map<String, Object>> workflow() {
+    private static Blueprint workflow() {
         return Workflow.define("wf").step("a", c -> c).build();
     }
 

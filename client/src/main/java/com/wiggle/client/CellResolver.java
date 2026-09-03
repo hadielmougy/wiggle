@@ -105,7 +105,7 @@ public final class CellResolver implements AutoCloseable {
      * Registers a workflow for a namespace. With a coordinator, this fans the definition out to every
      * cell of the namespace (R23); with no coordinator it registers directly on the static cell.
      */
-    public void registerWorkflow(String namespace, Blueprint<?> blueprint) {
+    public void registerWorkflow(String namespace, Blueprint blueprint) {
         if (coordinatorUrl == null) {
             clientFor(staticTarget).register(blueprint);
             return;

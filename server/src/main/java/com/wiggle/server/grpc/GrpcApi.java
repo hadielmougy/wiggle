@@ -278,19 +278,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
             long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
-            List<com.wiggle.core.TaskActivation> tasks = engine.poll(req.getWorkerId(), queues, max, lease);
-            while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-                try {
-                    Thread.sleep(Math.min(100, Math.max(1, deadline - System.currentTimeMillis())));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-                tasks = engine.poll(req.getWorkerId(), queues, max, lease);
-            }
-            List<com.wiggle.core.TaskActivation> finalTasks = tasks;
+            List<com.wiggle.core.TaskActivation> tasks = engine.poll(req.getWorkerId(), queues, max, lease, deadline);
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
-                    + " returning " + finalTasks.size() + " task(s)");
+                    + " returning " + tasks.size() + " task(s)");
             TaskList.Builder out = TaskList.newBuilder();
             for (com.wiggle.core.TaskActivation t : tasks) out.addTasks(taskProto(t));
             return out.build();
@@ -343,7 +333,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate));
             }
             WorkflowEngine.AdvanceOutcome out =
-                    engine.advanceRun(req.getTaskId(), req.getLeaseOwner(), steps, req.getFinal());
+                    engine.advance(req.getTaskId(), req.getLeaseOwner(), steps, req.getFinal());
             return AdvanceRunResult.newBuilder()
                     .setInstanceStatus(out.instanceStatus())
                     .setLeaseExpiresAt(out.leaseExpiresAt())

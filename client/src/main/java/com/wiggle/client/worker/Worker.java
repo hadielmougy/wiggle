@@ -34,7 +34,7 @@ public final class Worker implements AutoCloseable {
     private final WorkerOptions options;
     private final Map<String, ActivityHandler> handlers = new ConcurrentHashMap<>();
     private final Set<String> queues = ConcurrentHashMap.newKeySet();
-    private final List<Blueprint<?>> blueprints = new CopyOnWriteArrayList<>();
+    private final List<Blueprint> blueprints = new CopyOnWriteArrayList<>();
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
     /** Handlers bound by name via {@link #handle}, reconciled against the server graph on start. */
@@ -90,7 +90,7 @@ public final class Worker implements AutoCloseable {
     public boolean isRunning() { return running.get(); }
 
     /** Adds a workflow's handlers to this worker's dispatch table. */
-    public Worker register(Blueprint<?> blueprint) {
+    public Worker register(Blueprint blueprint) {
         WorkflowDefinition def = blueprint.definition();
         blueprints.add(blueprint);
         handlers.putAll(blueprint.handlers());
@@ -134,46 +134,42 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Typed variant of {@link #handle(String, String, ActivityHandler)}: {@code fn} works on a
-     * decoded {@code T} (e.g. a record via {@link ContextCodec#records}) and returns the new {@code T};
-     * the codec encodes it and only the changed keys are sent back, exactly as the DSL's typed
-     * {@code step} does. The wire form is the same JSON either way, so a typed Java handler and an
-     * untyped ({@code dict}) Python handler interoperate on the same step.
+     * Typed variant of {@link #handle(String, String, ActivityHandler)}: {@code fn}'s input is
+     * rebuilt from the JSON as {@code in} (a record type, or {@code Map} for raw JSON) and its
+     * output is encoded back, only the changed keys being sent -- exactly as the DSL's {@code step}
+     * does. The wire form is the same JSON either way, so a typed Java handler and an untyped
+     * ({@code dict}) Python handler interoperate on the same step.
      */
-    public <T> Worker handle(String workflow, String step, ContextCodec<T> codec,
-                             com.wiggle.client.dsl.Activity<T> fn) {
+    public <I, O> Worker handle(String workflow, String step, Class<I> in,
+                                com.wiggle.client.dsl.Step<I, O> fn) {
+        return bind(workflow, step, NodeKind.TASK,
+                ctx -> Json.shallowDiff(ctx, RecordMapper.toJson(fn.apply(decode(ctx, in)))));
+    }
+
+    /** Typed variant of {@link #handleGate}: {@code test} works on the decoded input {@code in}. */
+    public <I> Worker handleGate(String workflow, String step, Class<I> in,
+                                 com.wiggle.client.dsl.Predicate<I> test) {
+        return bind(workflow, step, NodeKind.PREDICATE, ctx -> test.test(decode(ctx, in)));
+    }
+
+    /** Typed variant of {@link #handleEffect}: {@code fn} consumes the decoded input {@code in}. */
+    public <I> Worker handleEffect(String workflow, String step, Class<I> in,
+                                   com.wiggle.client.dsl.SideEffect<I> fn) {
         return bind(workflow, step, NodeKind.TASK, ctx -> {
-            try {
-                return Json.shallowDiff(ctx, codec.encode(fn.apply(codec.decode(ctx))));
-            } finally {
-                ContextVersion.clear();
-            }
+            fn.accept(decode(ctx, in));
+            return null;
         });
     }
 
-    /** Typed variant of {@link #handleGate}: {@code test} works on a decoded {@code T}. */
-    public <T> Worker handleGate(String workflow, String step, ContextCodec<T> codec,
-                                 com.wiggle.client.dsl.Predicate<T> test) {
-        return bind(workflow, step, NodeKind.PREDICATE, ctx -> {
-            try {
-                return test.test(codec.decode(ctx));
-            } finally {
-                ContextVersion.clear();
-            }
-        });
-    }
-
-    /** Typed variant of {@link #handleEffect}: {@code fn} consumes a decoded {@code T}. */
-    public <T> Worker handleEffect(String workflow, String step, ContextCodec<T> codec,
-                                   com.wiggle.client.dsl.SideEffect<T> fn) {
-        return bind(workflow, step, NodeKind.TASK, ctx -> {
-            try {
-                fn.accept(codec.decode(ctx));
-                return null;
-            } finally {
-                ContextVersion.clear();
-            }
-        });
+    /** Rebuilds a step's typed input from JSON: a plain map for {@code null}/{@code Map} types,
+     *  otherwise the declared record type via reflection. */
+    private static <I> I decode(Object json, Class<I> type) {
+        if (type == null || Map.class.isAssignableFrom(type)) {
+            @SuppressWarnings("unchecked") I asMap = (I) Json.asObject(json);
+            return asMap;
+        }
+        @SuppressWarnings("unchecked") I value = (I) RecordMapper.fromJson(json, type);
+        return value;
     }
 
     private Worker bind(String workflow, String step, NodeKind kind, ActivityHandler handler) {
@@ -281,7 +277,7 @@ public final class Worker implements AutoCloseable {
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
         if (options.registerOnStart()) {
-            for (Blueprint<?> bp : blueprints) client.register(bp);
+            for (Blueprint bp : blueprints) client.register(bp);
         }
         if (!claims.isEmpty() || !handlerSets.isEmpty()) reconcile();
         executor = Executors.newVirtualThreadPerTaskExecutor();

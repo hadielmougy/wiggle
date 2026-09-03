@@ -47,7 +47,7 @@ class PostgresClaimTest {
     }
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
-    private static Blueprint<Map<String, Object>> uniqueWorkflow() {
+    private static Blueprint uniqueWorkflow() {
         return Workflow.define("pg-claim-" + Ids.next("wf"))
                 .step("work", ctx -> ctx)
                 .build();
@@ -57,7 +57,7 @@ class PostgresClaimTest {
     void claimsWithLease() {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint<Map<String, Object>> bp = uniqueWorkflow();
+            Blueprint bp = uniqueWorkflow();
             engine.register(bp.definition());
             engine.start(bp.name(), bp.version(), Map.of(), null);
 
@@ -76,7 +76,7 @@ class PostgresClaimTest {
         int tasks = 20;
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint<Map<String, Object>> bp = uniqueWorkflow();
+            Blueprint bp = uniqueWorkflow();
             engine.register(bp.definition());
             for (int i = 0; i < tasks; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
 

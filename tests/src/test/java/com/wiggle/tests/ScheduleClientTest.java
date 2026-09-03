@@ -31,9 +31,9 @@ class ScheduleClientTest {
 
     @Test @DisplayName("a client creates, lists and deletes interval and cron schedules")
     void manageSchedules() throws Exception {
-        Blueprint<Map<String, Object>> bpA = Workflow.define("schedc-probe-a")
+        Blueprint bpA = Workflow.define("schedc-probe-a")
                 .step("work", ctx -> ctx).build();
-        Blueprint<Map<String, Object>> bpB = Workflow.define("schedc-probe-b")
+        Blueprint bpB = Workflow.define("schedc-probe-b")
                 .step("work", ctx -> ctx).build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -74,7 +74,7 @@ class ScheduleClientTest {
 
     @Test @DisplayName("re-creating a schedule for the same workflow updates it in place, no duplicate")
     void createIsIdempotentPerWorkflow() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("schedc-probe-dup")
+        Blueprint bp = Workflow.define("schedc-probe-dup")
                 .step("work", ctx -> ctx).build();
 
         try (WiggleServer server = new WiggleServer(config()).start();

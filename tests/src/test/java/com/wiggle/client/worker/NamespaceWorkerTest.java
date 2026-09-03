@@ -36,7 +36,7 @@ class NamespaceWorkerTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint<Map<String, Object>> workflow() {
+    private static Blueprint workflow() {
         return Workflow.define("wf").step("a", c -> c).build();
     }
 
@@ -44,7 +44,7 @@ class NamespaceWorkerTest {
 
     @Test @DisplayName("serves every active cell, and stops a cell's worker when it retires")
     void fanOutAcrossCellsAndRetire() throws Exception {
-        Blueprint<Map<String, Object>> bp = workflow();
+        Blueprint bp = workflow();
         try (WiggleServer a = new WiggleServer(config()).start();
              WiggleServer b = new WiggleServer(config()).start();
              WiggleClient ca = new WiggleClient(a.baseUrl());
@@ -79,7 +79,7 @@ class NamespaceWorkerTest {
 
     @Test @DisplayName("wired through a real coordinator, it serves the namespace's resolved cell")
     void coordinatorWired() throws Exception {
-        Blueprint<Map<String, Object>> bp = workflow();
+        Blueprint bp = workflow();
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         CoordinatorService svc = new CoordinatorService(store);
         CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED);

@@ -1,11 +1,12 @@
 package com.wiggle.cli;
 
-import com.wiggle.client.dsl.Activity;
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Predicate;
 import com.wiggle.client.dsl.SideEffect;
+import com.wiggle.client.dsl.Step;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowStream;
 import com.wiggle.core.RetryPolicy;
@@ -48,7 +49,7 @@ public final class WorkflowYaml {
             "fork", "fork_each", "choose", "do_while");
 
     // Placeholder handlers -- discarded at registration (only the graph is sent), replaced by name.
-    private static final Activity<Map<String, Object>> ID = ctx -> ctx;
+    private static final Step<Map<String, Object>, Map<String, Object>> ID = ctx -> ctx;
     private static final SideEffect<Map<String, Object>> NOOP = ctx -> { };
     private static final Predicate<Map<String, Object>> FALSE = ctx -> false;
 
@@ -57,38 +58,38 @@ public final class WorkflowYaml {
 
     private WorkflowYaml() {}
 
-    public static Blueprint<Map<String, Object>> load(Path file) throws IOException {
+    public static Blueprint load(Path file) throws IOException {
         return parse(Files.readString(file));
     }
 
-    public static Blueprint<Map<String, Object>> parse(String yaml) {
+    public static Blueprint parse(String yaml) {
         Object doc = new Yaml(new SafeConstructor(new LoaderOptions())).load(yaml);
         if (doc == null) throw err("the document is empty");
         Map<String, Object> root = asMap(doc, "document");
 
         String name = reqStr(root, "workflow");
-        WorkflowStream<Map<String, Object>> s = Workflow.define(name);
+        WorkflowStream s = Workflow.define(name);
         if (root.containsKey("defaultQueue")) s.defaultQueue(reqStr(root, "defaultQueue"));
 
         List<Object> steps = asList(root.get("steps"), "steps");
         if (steps.isEmpty()) throw err("'steps' must not be empty");
         buildInto(s, steps);
 
-        Blueprint<Map<String, Object>> bp = s.build();
+        Blueprint bp = s.build();
         if (root.containsKey("version")) bp = withVersion(bp, reqVersion(root.get("version")));
         return bp;
     }
 
     // ---- node dispatch ----------------------------------------------------------------------
 
-    private static WorkflowStream<Map<String, Object>> buildInto(
-            WorkflowStream<Map<String, Object>> s, List<Object> steps) {
+    private static WorkflowStream buildInto(
+            WorkflowStream s, List<Object> steps) {
         for (Object node : steps) s = apply(s, node);
         return s;
     }
 
-    private static WorkflowStream<Map<String, Object>> apply(
-            WorkflowStream<Map<String, Object>> s, Object nodeObj) {
+    private static WorkflowStream apply(
+            WorkflowStream s, Object nodeObj) {
         Map<String, Object> node = asMap(nodeObj, "step");
         String op = soleOperator(node);
         RetryPolicy retry = node.containsKey("retry") ? parseRetry(node.get("retry")) : null;
@@ -108,29 +109,29 @@ public final class WorkflowYaml {
         };
     }
 
-    private static WorkflowStream<Map<String, Object>> task(
-            WorkflowStream<Map<String, Object>> s, String name, RetryPolicy retry, String queue) {
+    private static WorkflowStream task(
+            WorkflowStream s, String name, RetryPolicy retry, String queue) {
         if (retry != null) return s.step(name, ID, retry, queue);
         if (queue != null) return s.step(name, queue);
         return s.step(name);
     }
 
-    private static WorkflowStream<Map<String, Object>> effect(
-            WorkflowStream<Map<String, Object>> s, String name, RetryPolicy retry, String queue) {
+    private static WorkflowStream effect(
+            WorkflowStream s, String name, RetryPolicy retry, String queue) {
         if (retry != null) return s.effect(name, NOOP, retry, queue);
         if (queue != null) return s.effect(name, NOOP, queue);
         return s.effect(name);
     }
 
-    private static WorkflowStream<Map<String, Object>> gate(
-            WorkflowStream<Map<String, Object>> s, String name, RetryPolicy retry, String queue) {
+    private static WorkflowStream gate(
+            WorkflowStream s, String name, RetryPolicy retry, String queue) {
         if (retry != null) return s.gate(name, FALSE, retry, queue);
         if (queue != null) return s.gate(name, FALSE, queue);
         return s.gate(name, FALSE);
     }
 
-    private static WorkflowStream<Map<String, Object>> sleep(
-            WorkflowStream<Map<String, Object>> s, Object value) {
+    private static WorkflowStream sleep(
+            WorkflowStream s, Object value) {
         if (value instanceof Map<?, ?>) {
             Map<String, Object> m = asMap(value, "sleep");
             Duration d = parseDuration(reqStr(m, "for"));
@@ -140,8 +141,8 @@ public final class WorkflowYaml {
         return s.sleep(parseDuration(String.valueOf(value)));
     }
 
-    private static WorkflowStream<Map<String, Object>> awaitSignal(
-            WorkflowStream<Map<String, Object>> s, Map<String, Object> node) {
+    private static WorkflowStream awaitSignal(
+            WorkflowStream s, Map<String, Object> node) {
         String name = reqStr(node, "await_signal");
         Duration timeout = node.containsKey("timeout") ? parseDuration(reqStr(node, "timeout")) : null;
         if (node.containsKey("escalation")) {
@@ -152,8 +153,8 @@ public final class WorkflowYaml {
         return timeout != null ? s.awaitSignal(name, timeout) : s.awaitSignal(name);
     }
 
-    private static WorkflowStream<Map<String, Object>> subWorkflow(
-            WorkflowStream<Map<String, Object>> s, Object value) {
+    private static WorkflowStream subWorkflow(
+            WorkflowStream s, Object value) {
         if (value instanceof Map<?, ?>) {
             Map<String, Object> m = asMap(value, "sub_workflow");
             return s.subWorkflow(reqStr(m, "name"), reqStr(m, "workflow"));
@@ -163,18 +164,21 @@ public final class WorkflowYaml {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static WorkflowStream<Map<String, Object>> fork(
-            WorkflowStream<Map<String, Object>> s, Map<String, Object> branches) {
-        List<Branch<Map<String, Object>>> arr = new ArrayList<>();
+    private static WorkflowStream fork(
+            WorkflowStream s, Map<String, Object> branches) {
+        List<Branch> arr = new ArrayList<>();
         for (Map.Entry<String, Object> e : branches.entrySet()) {
             List<Object> body = asList(e.getValue(), "branch '" + e.getKey() + "'");
             arr.add(Branch.of(e.getKey(), sub -> buildInto(sub, body)));
         }
-        return s.fork(arr.toArray(new Branch[0]));
+        // A declarative fork can't spell out a custom aggregator, so its branches are folded back
+        // with the default union() at a combine node named after the arms (unique per fork).
+        String combineName = "combine:" + String.join(",", branches.keySet());
+        return s.fork(arr.toArray(new Branch[0])).combine(combineName, Aggregator.union());
     }
 
-    private static WorkflowStream<Map<String, Object>> forkEach(
-            WorkflowStream<Map<String, Object>> s, Map<String, Object> m) {
+    private static WorkflowStream forkEach(
+            WorkflowStream s, Map<String, Object> m) {
         String over = reqStr(m, "over");
         String as = reqStr(m, "as");
         String name = optStr(m, "name");
@@ -184,9 +188,9 @@ public final class WorkflowYaml {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static WorkflowStream<Map<String, Object>> choose(
-            WorkflowStream<Map<String, Object>> s, List<Object> cases) {
-        List<Case<Map<String, Object>>> arr = new ArrayList<>();
+    private static WorkflowStream choose(
+            WorkflowStream s, List<Object> cases) {
+        List<Case> arr = new ArrayList<>();
         for (Object co : cases) {
             Map<String, Object> c = asMap(co, "choose case");
             List<Object> then = asList(c.get("then"), "case 'then'");
@@ -201,8 +205,8 @@ public final class WorkflowYaml {
         return s.choose(arr.toArray(new Case[0]));
     }
 
-    private static WorkflowStream<Map<String, Object>> doWhile(
-            WorkflowStream<Map<String, Object>> s, Map<String, Object> m) {
+    private static WorkflowStream doWhile(
+            WorkflowStream s, Map<String, Object> m) {
         List<Object> body = asList(m.get("body"), "do_while body");
         if (body.isEmpty()) throw err("do_while body must not be empty");
         return s.doWhile(reqStr(m, "while"), FALSE, sub -> buildInto(sub, body));
@@ -239,11 +243,11 @@ public final class WorkflowYaml {
         return new RetryPolicy(max, backoff, multiplier, maxBackoff, jitter);
     }
 
-    private static Blueprint<Map<String, Object>> withVersion(Blueprint<Map<String, Object>> bp, int version) {
+    private static Blueprint withVersion(Blueprint bp, int version) {
         WorkflowDefinition d = bp.definition();
         WorkflowDefinition pinned = new WorkflowDefinition(
                 d.name(), version, d.startNode(), d.nodes(), d.queues(), d.executionMode(), d.checkpoints());
-        return new Blueprint<>(pinned, bp.handlers(), bp.codec());
+        return new Blueprint(pinned, bp.handlers());
     }
 
     // ---- helpers ----------------------------------------------------------------------------

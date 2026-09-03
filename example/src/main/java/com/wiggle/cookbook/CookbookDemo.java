@@ -27,14 +27,14 @@ public final class CookbookDemo {
 
             // cb-linear-gate is also used as a child workflow by cb-parent and cb-kitchen-sink,
             // so it must be registered before either of those instances starts.
-            Blueprint<Map<String, Object>> linearGate = Cookbook.linearWithGate();
-            Blueprint<Map<String, Object>> chooseFork = Cookbook.chooseThenFork();
-            Blueprint<Map<String, Object>> forkEachQueues = Cookbook.forkEachAcrossQueues();
-            Blueprint<Map<String, Object>> pollLoop = Cookbook.pollUntilReady();
-            Blueprint<Map<String, Object>> approval = Cookbook.approvalWithEscalation();
-            Blueprint<Map<String, Object>> parentChild = Cookbook.childCheckThenFork();
-            Blueprint<Map<String, Object>> batchedLoop = Cookbook.batchedLoopWithCheckpoint();
-            Blueprint<Map<String, Object>> kitchenSink = Cookbook.kitchenSink();
+            Blueprint linearGate = Cookbook.linearWithGate();
+            Blueprint chooseFork = Cookbook.chooseThenFork();
+            Blueprint forkEachQueues = Cookbook.forkEachAcrossQueues();
+            Blueprint pollLoop = Cookbook.pollUntilReady();
+            Blueprint approval = Cookbook.approvalWithEscalation();
+            Blueprint parentChild = Cookbook.childCheckThenFork();
+            Blueprint batchedLoop = Cookbook.batchedLoopWithCheckpoint();
+            Blueprint kitchenSink = Cookbook.kitchenSink();
 
             try (Worker worker = new Worker(client, "cookbook-worker")
                     .register(linearGate).register(chooseFork).register(forkEachQueues)
@@ -68,7 +68,7 @@ public final class CookbookDemo {
         }
     }
 
-    private static void run(WiggleClient client, String label, Blueprint<Map<String, Object>> bp,
+    private static void run(WiggleClient client, String label, Blueprint bp,
                              Map<String, Object> context) throws Exception {
         System.out.println("\n--- " + label + " ---");
         String id = client.start(bp, context);

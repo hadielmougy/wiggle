@@ -44,7 +44,7 @@ class TlsTest {
     @TempDir static Path dir;
     private static Path serverKs, clientKs, trust;
 
-    private static final Blueprint<Map<String, Object>> BP =
+    private static final Blueprint BP =
             Workflow.define("tls-wf").step("work", ctx -> ctx).build();
 
     @BeforeAll

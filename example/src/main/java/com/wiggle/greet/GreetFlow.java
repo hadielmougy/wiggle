@@ -14,7 +14,7 @@ public final class GreetFlow {
 
     private GreetFlow() { }
 
-    public static Blueprint<Map<String, Object>> blueprint() {
+    public static Blueprint blueprint() {
         return Workflow.define("greet")
                 .step("hello", ctx -> { System.out.println("[greet#hello] hello " + ctx.get("name")); return ctx; })
                 .step("world", ctx -> { System.out.println("[greet#world] world"); return ctx; })

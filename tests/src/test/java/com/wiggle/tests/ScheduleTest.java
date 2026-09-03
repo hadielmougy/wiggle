@@ -25,7 +25,7 @@ class ScheduleTest {
         return new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
     }
 
-    private static Blueprint<Map<String, Object>> probe() {
+    private static Blueprint probe() {
         return Workflow.define("sched-probe").step("work", ctx -> ctx).build();
     }
 
@@ -34,7 +34,7 @@ class ScheduleTest {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
-            Blueprint<Map<String, Object>> bp = probe();
+            Blueprint bp = probe();
             engine.register(bp.definition());
 
             String id = engine.createSchedule("sched-probe", Duration.ofMillis(50), Map.of("from", "schedule"));

@@ -17,17 +17,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Offline tests for the YAML loader: parse a spec and assert on the compiled graph + validations. */
 class WorkflowYamlTest {
 
-    private static Blueprint<Map<String, Object>> parse(String yaml) {
+    private static Blueprint parse(String yaml) {
         return WorkflowYaml.parse(yaml);
     }
 
-    private static Node node(Blueprint<Map<String, Object>> bp, String name) {
+    private static Node node(Blueprint bp, String name) {
         return bp.definition().nodes().values().stream()
                 .filter(n -> name.equals(n.name())).findFirst()
                 .orElseThrow(() -> new AssertionError("no node named '" + name + "'"));
     }
 
-    private static long count(Blueprint<Map<String, Object>> bp, NodeKind kind) {
+    private static long count(Blueprint bp, NodeKind kind) {
         return bp.definition().nodes().values().stream().filter(n -> n.kind() == kind).count();
     }
 
@@ -107,7 +107,11 @@ class WorkflowYamlTest {
         Node join = bp.definition().nodes().values().stream()
                 .filter(n -> n.kind() == NodeKind.JOIN).findFirst().orElseThrow();
         assertEquals(2, join.expected(), "join waits for both branches");
-        assertEquals(node(bp, "notify").id(), join.next(), "flow continues after the join");
+        // A declarative fork gets an auto-generated combine node (default union merge) after the
+        // join; the flow continues past that.
+        Node combine = node(bp, "combine:payment,shipping");
+        assertEquals(combine.id(), join.next(), "join feeds the mandatory combine");
+        assertEquals(node(bp, "notify").id(), combine.next(), "flow continues after the combine");
     }
 
     @Test

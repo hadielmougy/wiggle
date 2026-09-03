@@ -31,7 +31,7 @@ class HousekeeperTest {
     }
 
     /** A one-sleep workflow whose timer parks the instance until the housekeeper fires it. */
-    private static Blueprint<Map<String, Object>> sleeper(long millis) {
+    private static Blueprint sleeper(long millis) {
         return Workflow.define("hk-sleeper")
                 .sleep("nap", Duration.ofMillis(millis))
                 .step("after", ctx -> ctx)
@@ -46,7 +46,7 @@ class HousekeeperTest {
             cluster.start();
             assertTrue(cluster.isLeader(), "a lone node leads");
             WorkflowEngine engine = engine(storage);
-            Blueprint<Map<String, Object>> bp = sleeper(30);
+            Blueprint bp = sleeper(30);
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
 
@@ -73,7 +73,7 @@ class HousekeeperTest {
                 follower.start();
                 assertFalse(follower.isLeader(), "the newer node follows");
                 WorkflowEngine engine = engine(storage);
-                Blueprint<Map<String, Object>> bp = sleeper(10);
+                Blueprint bp = sleeper(10);
                 engine.register(bp.definition());
                 engine.start(bp.name(), bp.version(), Map.of(), null);
                 Thread.sleep(40);
@@ -111,7 +111,7 @@ class HousekeeperTest {
             storage.migrate();
             cluster.start();
             WorkflowEngine engine = engine(storage);
-            Blueprint<Map<String, Object>> bp = sleeper(60_000);
+            Blueprint bp = sleeper(60_000);
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
             engine.cancel(id, "make it terminal");

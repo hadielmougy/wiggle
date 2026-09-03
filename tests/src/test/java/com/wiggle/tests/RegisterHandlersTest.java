@@ -36,7 +36,7 @@ class RegisterHandlersTest {
     }
 
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
-    private Blueprint<Map<String, Object>> authoredGraph() {
+    private Blueprint authoredGraph() {
         return Workflow.define("order-fulfilment")
                 .step("validate", c -> put(c, "status", "VALIDATED"))
                 .gate("in-stock", c -> ((Number) c.get("qty")).intValue() > 0)

@@ -1,6 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.Aggregator;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
@@ -49,7 +50,7 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            Blueprint<Map<String, Object>> bp = Workflow.define("lb-fork")
+            Blueprint bp = Workflow.define("lb-fork")
                     .execution(mode)
                     .step("seed", ctx -> counted(runs, "seed", put(ctx, "seeded", true)))
                     .step("prep", ctx -> counted(runs, "prep", put(ctx, "prepped", true)))
@@ -57,7 +58,8 @@ class LocalBoundaryTest {
                             Branch.of("left", s -> s.step("l1", ctx -> counted(runs, "l1", put(ctx, "left", "L")))
                                                     .step("l2", ctx -> counted(runs, "l2", put(ctx, "left2", "L2")))),
                             Branch.of("right", s -> s.step("r1", ctx -> counted(runs, "r1", put(ctx, "right", "R")))))
-                    .step("after", ctx -> counted(runs, "after", put(ctx, "joined", true)))
+                    .combine("merge", Aggregator.union())
+                .step("after", ctx -> counted(runs, "after", put(ctx, "joined", true)))
                     .build();
 
             try (WiggleServer server = new WiggleServer(config()).start();
@@ -81,7 +83,7 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = Workflow.define("lb-gate")
+        Blueprint bp = Workflow.define("lb-gate")
                 .execution(ExecutionMode.LOCAL_SYNC)
                 .step("seed", ctx -> put(ctx, "keep", false))
                 .gate("keep", ctx -> Boolean.TRUE.equals(ctx.get("keep")))
@@ -121,8 +123,8 @@ class LocalBoundaryTest {
      */
     private void runQueueSplit(ExecutionMode mode) throws Exception {
         Map<String, String> ranOn = new ConcurrentHashMap<>();
-        Blueprint<Map<String, Object>> generalBp = queueSplitBlueprint(mode, "general", ranOn);
-        Blueprint<Map<String, Object>> specialBp = queueSplitBlueprint(mode, "special", ranOn);
+        Blueprint generalBp = queueSplitBlueprint(mode, "general", ranOn);
+        Blueprint specialBp = queueSplitBlueprint(mode, "special", ranOn);
         assertEquals(generalBp.version(), specialBp.version(), "same topology, same version");
 
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -142,7 +144,7 @@ class LocalBoundaryTest {
         }
     }
 
-    private static Blueprint<Map<String, Object>> queueSplitBlueprint(
+    private static Blueprint queueSplitBlueprint(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
         return Workflow.define("lb-queues")
                 .execution(mode)

@@ -30,7 +30,7 @@ public final class NamespaceSubmitter {
         int count = args.length > 0 ? Integer.parseInt(args[0]) : 100;
 
         try (CellResolver resolver = CellResolver.coordinator(coord, Tls.Options.DISABLED, "us")) {
-            Blueprint<Order> bp = OrderFulfilment.blueprint();
+            Blueprint bp = OrderFulfilment.blueprint();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             // Cell addresses come from the coordinator as in-cluster pod IPs; to reach them from the host
             // AND spread starts across cells, set WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its own

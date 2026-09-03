@@ -37,7 +37,7 @@ class ChooseTest {
     }
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
-    private Blueprint<Map<String, Object>> withDefault() {
+    private Blueprint withDefault() {
         return Workflow.define("choose-default")
                 .choose(
                         Case.when("is-gold", c -> "gold".equals(c.get("tier")),
@@ -51,7 +51,7 @@ class ChooseTest {
     }
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
-    private Blueprint<Map<String, Object>> withoutDefault() {
+    private Blueprint withoutDefault() {
         return Workflow.define("choose-skip")
                 .choose(
                         Case.when("is-a", c -> "a".equals(c.get("k")),
@@ -60,7 +60,7 @@ class ChooseTest {
                 .build();
     }
 
-    private void withServer(Blueprint<Map<String, Object>> bp, java.util.function.BiConsumer<WiggleClient, Blueprint<Map<String, Object>>> body) throws Exception {
+    private void withServer(Blueprint bp, java.util.function.BiConsumer<WiggleClient, Blueprint> body) throws Exception {
         ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -72,7 +72,7 @@ class ChooseTest {
         }
     }
 
-    private Map<String, Object> run(WiggleClient client, Blueprint<Map<String, Object>> bp, Map<String, Object> input) {
+    private Map<String, Object> run(WiggleClient client, Blueprint bp, Map<String, Object> input) {
         InstanceView v = client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
         assertEquals("COMPLETED", v.status(), "status");
         return Json.asObject(v.context());

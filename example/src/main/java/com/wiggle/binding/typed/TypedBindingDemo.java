@@ -2,8 +2,8 @@ package com.wiggle.binding.typed;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
-import com.wiggle.core.ContextCodec;
 import com.wiggle.core.InstanceView;
+import com.wiggle.core.RecordMapper;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
@@ -11,7 +11,7 @@ import java.time.Duration;
 
 /**
  * Name-only binding with a <b>typed</b> context. The flow is authored once as a {@link Purchase}
- * record (via {@link ContextCodec#records}), and workers implement its steps by name with typed
+ * record, and workers implement its steps by name with typed
  * handlers ({@code Purchase -> Purchase}) -- no worker re-declares the graph. This process:
  * <ol>
  *   <li>starts an embedded server on :8080 and registers the {@code typed-order} graph;</li>
@@ -29,8 +29,6 @@ public final class TypedBindingDemo {
                 Duration.ofMillis(200), Duration.ofSeconds(2), 3, Duration.ofSeconds(30),
                 Duration.ofSeconds(2), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
 
-        ContextCodec<Purchase> codec = TypedBindingOrder.codec();
-
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
@@ -44,22 +42,22 @@ public final class TypedBindingDemo {
             try (Worker fulfilment = new Worker(client, "typed-fulfilment");
                  Worker payments = new Worker(client, "typed-payments")) {
 
-                fulfilment.handle(TypedBindingOrder.NAME, "validate", codec, p -> p.withStatus("VALIDATED"))
-                          .handleGate(TypedBindingOrder.NAME, "in-stock", codec, p -> p.quantity() > 0)
-                          .handleEffect(TypedBindingOrder.NAME, "notify", codec,
+                fulfilment.handle(TypedBindingOrder.NAME, "validate", Purchase.class, p -> p.withStatus("VALIDATED"))
+                          .handleGate(TypedBindingOrder.NAME, "in-stock", Purchase.class, p -> p.quantity() > 0)
+                          .handleEffect(TypedBindingOrder.NAME, "notify", Purchase.class,
                                   p -> System.out.println("   [fulfilment] notified " + p.orderId()
                                           + " status=" + p.status() + " payment=" + p.paymentRef()))
                           .start();
                 System.out.println("[fulfilment] serving validate / in-stock / notify as typed Purchase handlers");
 
-                payments.handle(TypedBindingOrder.NAME, "charge", codec,
+                payments.handle(TypedBindingOrder.NAME, "charge", Purchase.class,
                                 p -> p.withPaymentRef("auth-" + p.orderId()))
                         .start();
                 System.out.println("[payments]   serving charge on the payments queue");
 
                 String id = client.start(blueprint, Purchase.of("A-1001", 2));
                 InstanceView view = client.awaitCompletion(id, Duration.ofSeconds(30));
-                Purchase result = codec.decode(view.context());   // typed again on the way out
+                Purchase result = (Purchase) RecordMapper.fromJson(view.context(), Purchase.class);   // typed again on the way out
                 System.out.println("\n[result] status=" + view.status()
                         + " -> Purchase{orderId=" + result.orderId()
                         + ", status=" + result.status()

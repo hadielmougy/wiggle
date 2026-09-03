@@ -16,7 +16,7 @@ public class TransactionWorker {
 
         WiggleClient client = new WiggleClient(url);
 
-        Blueprint<Transaction> blueprint = TransactionWorkflow.blueprint();
+        Blueprint blueprint = TransactionWorkflow.blueprint();
 
         Worker worker = new Worker(client, id, WorkerOptions.defaults()
                 .withConcurrency(concurrency)

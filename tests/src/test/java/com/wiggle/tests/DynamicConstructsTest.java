@@ -45,7 +45,7 @@ class DynamicConstructsTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private InstanceView run(Blueprint<Map<String, Object>> bp, Map<String, Object> input, String jdbcUrl)
+    private InstanceView run(Blueprint bp, Map<String, Object> input, String jdbcUrl)
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -57,7 +57,7 @@ class DynamicConstructsTest {
 
     // ------------------------------------------------------------------ doWhile
 
-    private static Blueprint<Map<String, Object>> counterLoop(ExecutionMode mode, AtomicInteger bodyRuns) {
+    private static Blueprint counterLoop(ExecutionMode mode, AtomicInteger bodyRuns) {
         return Workflow.define("dyn-loop")
                 .execution(mode)
                 .step("init", ctx -> put(ctx, "i", 0L))
@@ -87,7 +87,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile runs its body at least once")
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
-        Blueprint<Map<String, Object>> bp = Workflow.define("dyn-loop-once")
+        Blueprint bp = Workflow.define("dyn-loop-once")
                 .doWhile("never-again", ctx -> false,
                         b -> b.step("work", ctx -> {
                             bodyRuns.incrementAndGet();
@@ -104,7 +104,7 @@ class DynamicConstructsTest {
     // ----------------------------------------------------------------- forkEach
 
     /** Two-step branch: the second step proves the item payload survives along the branch. */
-    private static Blueprint<Map<String, Object>> fanOut(ExecutionMode mode) {
+    private static Blueprint fanOut(ExecutionMode mode) {
         return Workflow.define("dyn-fan")
                 .execution(mode)
                 .forkEach("per-item", "items", "item", b -> b

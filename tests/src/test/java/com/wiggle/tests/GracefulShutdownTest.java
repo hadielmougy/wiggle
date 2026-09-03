@@ -53,7 +53,7 @@ class GracefulShutdownTest {
 
         // Default batch size (64) means step "a" alone never triggers a flush -- its result sits
         // only in the worker's in-memory buffer until a boundary, a full batch, or a drain.
-        Blueprint<Map<String, Object>> bp = Workflow.define("shutdown-drain")
+        Blueprint bp = Workflow.define("shutdown-drain")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a", ctx -> {
                     runsOfA.incrementAndGet();
