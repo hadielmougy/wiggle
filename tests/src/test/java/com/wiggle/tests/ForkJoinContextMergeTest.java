@@ -4,10 +4,10 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
-import com.wiggle.core.VersionedContextCodec;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -35,23 +35,32 @@ class ForkJoinContextMergeTest {
         return n;
     }
 
-    private static Blueprint<Map<String, Object>> blueprint() {
+    private static Blueprint blueprint() {
         return Workflow.define("merge-check")
-                .step("validate", ctx -> put(ctx, "validated", true))
+                .step("validate")
                 .fork(
                         Branch.of("payment", s -> s
-                                .step("authorise", ctx -> put(ctx, "payment", "auth"))),
+                                .step("authorise")),
                         Branch.of("shipping", s -> s
                                 .sleep("await", Duration.ofMillis(50))
-                                .step("label", ctx -> put(ctx, "tracking", "DHL"))))
-                .step("notify", ctx -> put(ctx, "done", true))
+                                .step("label")))
+                .combine("merge")
+                .step("notify")
                 .build();
+    }
+
+    @Handlers("merge-check")
+    static final class MergeH {
+        public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
+        public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
+        public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "tracking", "DHL"); }
+        public Map<String, Object> notify(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
     @Test @DisplayName("both parallel branches' fields survive the join (no sibling clobber)")
     void bothBranchFieldsSurvive() throws Exception {
         String url = "jdbc:h2:mem:merge-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint<Map<String, Object>> bp = blueprint();
+        Blueprint bp = blueprint();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();
@@ -67,7 +76,7 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp);
+                w.register(bp).handlers(new MergeH());
                 workers.add(w.start());
             }
 
@@ -104,24 +113,31 @@ class ForkJoinContextMergeTest {
         Parcel withTracking(String t) { return new Parcel(id, payment, t); }
     }
 
-    private static Blueprint<Parcel> typedBlueprint() {
-        VersionedContextCodec<Parcel> codec = VersionedContextCodec.builder(Parcel.class, 1)
-                .schema("parcel").build();
-        return Workflow.define("parcel-merge", codec)
-                .step("validate", p -> p)
+    private static Blueprint typedBlueprint() {
+        return Workflow.define("parcel-merge")
+                .step("validate")
                 .fork(
-                        Branch.of("payment", s -> s.step("authorise", p -> p.withPayment("auth"))),
+                        Branch.of("payment", s -> s.step("authorise")),
                         Branch.of("shipping", s -> s
                                 .sleep("await", Duration.ofMillis(50))
-                                .step("label", p -> p.withTracking("DHL"))))
-                .step("notify", p -> p)
+                                .step("label")))
+                .combine("merge")
+                .step("notify")
                 .build();
+    }
+
+    @Handlers("parcel-merge")
+    static final class ParcelH {
+        public Parcel validate(Parcel p) { return p; }
+        public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
+        public Parcel label(Parcel p) { return p.withTracking("DHL"); }
+        public Parcel notify(Parcel p) { return p; }
     }
 
     @Test @DisplayName("typed-record branches (codec round-trip) keep both fields")
     void typedBothBranchFieldsSurvive() throws Exception {
         String url = "jdbc:h2:mem:merge2-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint<Parcel> bp = typedBlueprint();
+        Blueprint bp = typedBlueprint();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();
@@ -137,7 +153,7 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp);
+                w.register(bp).handlers(new ParcelH());
                 workers.add(w.start());
             }
 

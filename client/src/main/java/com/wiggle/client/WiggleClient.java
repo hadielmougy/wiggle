@@ -60,7 +60,7 @@ public final class WiggleClient implements AutoCloseable {
         return i < 0 ? target : target.substring(i + 3);
     }
 
-    public void register(Blueprint<?> blueprint) {
+    public void register(Blueprint blueprint) {
         call(() -> stub.registerWorkflow(WorkflowDefinition.newBuilder()
                 .setDefinition(ProtoJson.toStruct(blueprint.definition().toJson()))
                 .build()));
@@ -81,8 +81,8 @@ public final class WiggleClient implements AutoCloseable {
         return start(workflow, context, null, null);
     }
 
-    public <T> String start(Blueprint<T> blueprint, T context) {
-        return start(blueprint.name(), blueprint.codec().encode(context), blueprint.version(), null);
+    public String start(Blueprint blueprint, Object context) {
+        return start(blueprint.name(), com.wiggle.core.RecordMapper.toJson(context), blueprint.version(), null);
     }
 
     public String start(String workflow, Object context, Integer version, String correlationId) {

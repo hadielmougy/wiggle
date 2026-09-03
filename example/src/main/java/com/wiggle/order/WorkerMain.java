@@ -20,13 +20,14 @@ public final class WorkerMain {
         int localBatch = Integer.parseInt(env("WIGGLE_LOCAL_BATCH_SIZE", "64"));   // LOCAL_ASYNC batch size
 
         WiggleClient client = new WiggleClient(url);
-        Blueprint<Order> blueprint = OrderFulfilment.blueprint();
+        Blueprint blueprint = OrderFulfilment.blueprint();
 
         Worker worker = new Worker(client, id, WorkerOptions.defaults()
                         .withConcurrency(concurrency)
                         .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
-                .register(blueprint);
+                .register(blueprint)
+                .handlers(new OrderHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

@@ -1,6 +1,5 @@
 package com.wiggle.binding;
 
-import com.wiggle.client.dsl.Activity;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Json;
@@ -36,10 +35,10 @@ public final class BindingOrder {
      * uses these -- it binds its own handlers by name -- so the author can register the blueprint
      * without running any worker at all.
      */
-    public static Blueprint<Map<String, Object>> blueprint() {
+    public static Blueprint blueprint() {
         return Workflow.define(NAME)
                 .step("validate")
-                .gate("in-stock", ctx -> ((Number) ctx.get("quantity")).intValue() > 0)
+                .gate("in-stock")
                 .step("charge", PAYMENTS_QUEUE)
                 .step("ship")
                 .effect("notify")

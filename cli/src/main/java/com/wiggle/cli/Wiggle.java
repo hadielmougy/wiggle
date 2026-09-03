@@ -1,8 +1,6 @@
 package com.wiggle.cli;
 
 import com.wiggle.client.CellResolver;
-import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.AllocatedWorkflow;
 import com.wiggle.proto.EpochRing;
@@ -13,22 +11,21 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 import java.util.concurrent.Callable;
 
 /**
- * The {@code wiggle} command-line tool. Two subcommands over a declarative workflow YAML file
- * (see {@code docs/workflow-yaml.md}): {@code validate} compiles it offline, {@code register} sends
- * it to a server. Step handlers are bound separately, by name, on workers.
+ * The {@code wiggle} command-line tool: manage a coordinator's namespace allocations and placement
+ * epochs, and choose which server the CLI talks to. Workflows themselves are defined and registered
+ * in Java (topology via the DSL, handlers via {@code @Handlers} classes on a worker), not from the
+ * CLI.
  */
 @Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.6",
-        subcommands = {Wiggle.Use.class, Wiggle.Validate.class, Wiggle.Register.class,
-                Wiggle.Allocate.class, Wiggle.Deallocate.class, Wiggle.Allocations.class, Wiggle.OpenEpoch.class},
-        description = "Author and register Wiggle workflows; allocate flows to namespaces via a coordinator.")
+        subcommands = {Wiggle.Use.class,
+                Wiggle.Deallocate.class, Wiggle.Allocations.class, Wiggle.OpenEpoch.class},
+        description = "Manage namespace allocations and placement epochs via a coordinator.")
 public final class Wiggle implements Runnable {
 
     @Override
@@ -86,146 +83,11 @@ public final class Wiggle implements Runnable {
         }
     }
 
-    @Command(name = "validate", mixinStandardHelpOptions = true,
-            description = "Compile and validate a workflow YAML file offline (no server).")
-    static final class Validate implements Callable<Integer> {
-        @Parameters(index = "0", paramLabel = "FILE", description = "the workflow YAML file")
-        Path file;
-
-        @Override
-        public Integer call() {
-            try {
-                Blueprint<Map<String, Object>> bp = WorkflowYaml.load(file);
-                System.out.printf("OK  %s  v%d  (%d nodes, queues %s)%n",
-                        bp.name(), bp.version(), bp.definition().nodes().size(), new TreeSet<>(bp.queues()));
-                return 0;
-            } catch (Exception e) {
-                System.err.println("invalid: " + describe(e));
-                return 1;
-            }
-        }
-    }
-
-    @Command(name = "register", mixinStandardHelpOptions = true,
-            description = "Validate and register a workflow YAML file with a server.")
-    static final class Register implements Callable<Integer> {
-        @Parameters(index = "0", paramLabel = "FILE", description = "the workflow YAML file")
-        Path file;
-
-        @Option(names = {"-s", "--server"},
-                description = "gRPC target host:port (default: $WIGGLE_URL, else localhost:8080)")
-        String server;
-
-        @Option(names = "--tls",
-                description = "connect over TLS using the JVM default trust store (implied by any --tls-* option)")
-        boolean tls;
-
-        @Option(names = "--tls-truststore", paramLabel = "PATH",
-                description = "truststore (.p12/.jks) that verifies the server certificate")
-        String trustStore;
-
-        @Option(names = "--tls-truststore-password", paramLabel = "PW", arity = "0..1", interactive = true,
-                description = "truststore password (prompted if the flag is given with no value)")
-        String trustStorePassword;
-
-        @Option(names = "--tls-keystore", paramLabel = "PATH",
-                description = "client keystore (.p12/.jks) presenting a certificate for mTLS")
-        String keyStore;
-
-        @Option(names = "--tls-keystore-password", paramLabel = "PW", arity = "0..1", interactive = true,
-                description = "keystore password (prompted if the flag is given with no value)")
-        String keyStorePassword;
-
-        @Override
-        public Integer call() {
-            Blueprint<Map<String, Object>> bp;
-            try {
-                bp = WorkflowYaml.load(file);   // validate before touching the network
-            } catch (Exception e) {
-                System.err.println("invalid: " + describe(e));
-                return 1;
-            }
-            String target;
-            try {
-                target = Target.resolve(Target.Kind.CELL, server);   // flag > env > saved cell > default
-            } catch (IllegalStateException e) {
-                System.err.println(e.getMessage());
-                return 2;
-            }
-
-            // Explicit flags override the WIGGLE_TLS_* environment per field; --tls (or any store)
-            // forces TLS. With nothing set, the channel stays plaintext.
-            Tls.Options env = Tls.Options.fromEnvironment();
-            Tls.Options opts = new Tls.Options(
-                    orElse(keyStore, env.keyStorePath()),
-                    orElse(keyStorePassword, env.keyStorePassword()),
-                    orElse(trustStore, env.trustStorePath()),
-                    orElse(trustStorePassword, env.trustStorePassword()));
-            boolean requireTls = tls || opts.any();
-
-            try (WiggleClient client = new WiggleClient(target, opts, requireTls)) {
-                client.register(bp);
-                System.out.printf("registered  %s  v%d  (%d nodes)  ->  %s%s%n",
-                        bp.name(), bp.version(), bp.definition().nodes().size(), target,
-                        requireTls ? " (TLS)" : "");
-                return 0;
-            } catch (Exception e) {
-                System.err.println("register failed (" + target + "): " + describe(e));
-                return 1;
-            }
-        }
-
-        private static String orElse(String flag, String fallback) {
-            return flag != null && !flag.isBlank() ? flag : fallback;
-        }
-    }
-
     // ---- coordinator: allocate / deallocate flows to namespaces ----
 
     private static CellResolver resolver(String coordinator) {
         return CellResolver.coordinator(coordinator, Tls.Options.fromEnvironment(),
                 System.getenv().getOrDefault("WIGGLE_REGION", ""));
-    }
-
-    @Command(name = "allocate", mixinStandardHelpOptions = true,
-            description = "Allocate a workflow (YAML) to a namespace: fan it out to every cell of the namespace via the coordinator.")
-    static final class Allocate implements Callable<Integer> {
-        @Parameters(index = "0", paramLabel = "FILE", description = "the workflow YAML file")
-        Path file;
-
-        @Option(names = {"-n", "--namespace"}, required = true, description = "the target namespace")
-        String namespace;
-
-        @Option(names = {"-c", "--coordinator"},
-                description = "coordinator gRPC host:port (default: $WIGGLE_COORDINATOR_URL, else localhost:8099)")
-        String coordinator;
-
-        @Override
-        public Integer call() {
-            Blueprint<Map<String, Object>> bp;
-            try {
-                bp = WorkflowYaml.load(file);
-            } catch (Exception e) {
-                System.err.println("invalid: " + describe(e));
-                return 1;
-            }
-            final String target;
-            try {
-                target = Target.resolve(Target.Kind.COORDINATOR, coordinator);   // flag > env > saved coordinator > default
-            } catch (IllegalStateException e) {
-                System.err.println(e.getMessage());
-                return 2;
-            }
-            try (CellResolver resolver = resolver(target)) {
-                resolver.registerWorkflow(namespace, bp);
-                System.out.printf("allocated  %s  v%d  ->  namespace '%s'  (via %s)%n",
-                        bp.name(), bp.version(), namespace, target);
-                return 0;
-            } catch (Exception e) {
-                System.err.println("allocate failed (" + target + "): " + describe(e));
-                return 1;
-            }
-        }
     }
 
     @Command(name = "deallocate", mixinStandardHelpOptions = true,

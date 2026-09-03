@@ -16,12 +16,13 @@ public class TransactionWorker {
 
         WiggleClient client = new WiggleClient(url);
 
-        Blueprint<Transaction> blueprint = TransactionWorkflow.blueprint();
+        Blueprint blueprint = TransactionWorkflow.blueprint();
 
         Worker worker = new Worker(client, id, WorkerOptions.defaults()
                 .withConcurrency(concurrency)
                 .withLongPollWait(Duration.ofSeconds(10)))
-                .register(blueprint);
+                .register(blueprint)
+                .handlers(new AccountHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

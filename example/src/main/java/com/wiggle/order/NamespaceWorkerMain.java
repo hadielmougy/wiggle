@@ -21,7 +21,7 @@ public final class NamespaceWorkerMain {
         // Reach in-cluster cells from the host via WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its
         // port-forward), which CellResolver reads from the env; the lab's Forwards tab generates it.
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
-                w -> w.register(OrderFulfilment.blueprint())).start();
+                w -> w.register(OrderFulfilment.blueprint()).handlers(new OrderHandlers())).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

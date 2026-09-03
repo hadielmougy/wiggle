@@ -10,6 +10,8 @@ import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 /**
  * The state machine. Everything an instance does is expressed as tokens moving over
@@ -173,16 +175,48 @@ public final class WorkflowEngine {
 
     /** Leases up to {@code max} tasks for a worker. Returns immediately; long-polling lives in the HTTP layer. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis) {
+        return poll(workerId, queues, max, leaseMillis, 0);
+    }
+
+    public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline) {
         long now = System.currentTimeMillis();
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         long until = now + lease;
-        List<TaskActivation> out = storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, until));
-        if (!out.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
-                    + " claimed " + out.size() + " task(s): "
-                    + out.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
+        List<TaskActivation> tasks = new ArrayList<>();
+        try {
+            //TODO: get available tasks in memory first via exchange
+            /*
+            the problem is i don't want to block the thread here and I want at the same time to reduce database queries
+            but the issue is that either this thead or the ack thread must wait for sometime for the chance to meet eachother
+            which is what I don't want as well.
+            One ack thread must keep things in a buffer, but how to make that buffer same and never got lost
+            Ok: there must be another status in the database which means this token is buffered but it can get lost from memory
+            if the time expires reclaim it.
+
+            I don't think the idea is valid in itself. the problem that I always have to hit the database. so why would
+            I build a cefusticated implementation of in memory although I have to hit the database anyway. and plus if I
+            rely only on memory to fill the buffer, some tokens might not get the chance ever to get selected.
+            So, I will calculate the next token in ack but I will keep the database claim as is
+             */
+            tasks.addAll(storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, until)));
+        } catch (Exception e){
+            throw e;
         }
-        return out;
+        while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(Math.min(100, Math.max(1, deadline - System.currentTimeMillis())));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            tasks.addAll(storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, until)));
+        }
+        if (!tasks.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
+                    + " claimed " + tasks.size() + " task(s): "
+                    + tasks.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
+        }
+        return tasks;
     }
 
     private List<TaskActivation> claimActivations(Tx tx, String workerId, Set<String> queues,
@@ -238,8 +272,11 @@ public final class WorkflowEngine {
 
     /**
      * Completes a task. For TASK nodes {@code result} is shallow-merged into the instance
-     * context; for PREDICATE nodes it must carry a boolean under {@code "value"}.
+     * context (a null value deletes its key); for PREDICATE nodes it must carry a boolean under
+     * {@code "value"}.
      */
+
+    // TODO here I should calculate the next task
     public void complete(String taskId, String leaseOwner, Object result) {
         storage.inTxVoid(tx -> {
             LockedTask locked = lockTask(tx, taskId);
@@ -250,19 +287,19 @@ public final class WorkflowEngine {
             long now = System.currentTimeMillis();
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-            String next = routeCompletion(inst, node, result);
+            String next = routeCompletion(inst, t, node, result);
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, next, t.joinStack, t.payloadJson, now);
+            Token cont = newToken(inst, next, t.joinStack, stripCombineScratch(node, t.payloadJson), now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
     }
 
     /** Merges a task result (or routes a predicate) and returns the successor node id. */
-    private static String routeCompletion(Instance inst, Node node, Object result) {
+    private static String routeCompletion(Instance inst, Token t, Node node, Object result) {
         if (node.kind() != NodeKind.PREDICATE) {
-            mergeContext(inst, result);
+            applyStepResult(inst, t, result);
             LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
                     + " of instance " + inst.id + " done -> " + node.next());
             return node.next();
@@ -306,7 +343,7 @@ public final class WorkflowEngine {
      * leased straight back to the same worker (never exposed to {@code poll}); at the final step
      * (or a boundary) it is driven normally, releasing the worker.
      */
-    public AdvanceOutcome advanceRun(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
+    public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
         return storage.inTx(tx -> {
             LockedTask locked = lockTask(tx, startTaskId);
             Instance inst = locked.inst();
@@ -328,10 +365,10 @@ public final class WorkflowEngine {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
             requireReportedNode(node, step, current);
-            String next = routeReportedStep(inst, node, step);
+            String next = routeReportedStep(inst, current, node, step);
             settleToken(tx, current, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, next, current.joinStack, current.payloadJson, now);
+            Token cont = newToken(inst, next, current.joinStack, stripCombineScratch(node, current.payloadJson), now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
             if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
@@ -354,12 +391,12 @@ public final class WorkflowEngine {
         }
     }
 
-    private static String routeReportedStep(Instance inst, Node node, StepInput step) {
+    private static String routeReportedStep(Instance inst, Token t, Node node, StepInput step) {
         if (node.kind() == NodeKind.PREDICATE) {
             boolean value = step.predicateValue() != null && step.predicateValue();
             return GraphTraversal.successor(node, value);
         }
-        mergeContext(inst, step.merge());
+        applyStepResult(inst, t, step.merge());
         return node.next();
     }
 
@@ -679,7 +716,66 @@ public final class WorkflowEngine {
         }
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Reserved payload key tagging a token with its 0-based arm index inside the enclosing static
+     * fork. Its presence marks a token as running in an <em>isolated branch</em>: the branch's step
+     * results merge into its own payload overlay ({@link #applyStepResult}) instead of the shared
+     * context, so siblings never see each other's writes and there is no implicit merge. It is
+     * stripped before dispatch ({@link #dispatchContext}) and consumed at the join.
+     */
+    private static final String ARM_IDX = "__armIdx__";
+
+    /** True when {@code t} runs inside an isolated fork branch (its payload carries the arm tag). */
+    private static boolean inScopedBranch(Token t) {
+        return t.payloadJson != null && Json.parseObject(t.payloadJson).containsKey(ARM_IDX);
+    }
+
+    /** A combine aggregator carries its arm names (a JSON array) on the node's itemsKey -- a field
+     *  that round-trips through every store, unlike a TASK node's edge-derived branches (see
+     *  {@code Pipeline.addAggregator}). */
+    private static boolean isCombineNode(Node node) {
+        return node != null && node.kind() == NodeKind.TASK && node.itemsKey() != null;
+    }
+
+    /** The branch (arm) names a combine node keys its inputs by, in fork order. */
+    private static List<String> armNames(Node combineNode) {
+        return Json.asArray(Json.parse(combineNode.itemsKey())).stream().map(String::valueOf).toList();
+    }
+
+    /** Once a combine node has run, its per-arm scratch keys have served their purpose: drop them
+     *  from the continuation payload so they never leak downstream. A no-op for any other node. */
+    private static String stripCombineScratch(Node node, String payloadJson) {
+        if (!isCombineNode(node) || payloadJson == null) return payloadJson;
+        Map<String, Object> overlay = Json.parseObject(payloadJson);
+        if (overlay.keySet().removeAll(armNames(node))) return Json.write(overlay);
+        return payloadJson;
+    }
+
+    /** Applies a step result where it belongs: a branch's private overlay when scoped, else shared. */
+    private static void applyStepResult(Instance inst, Token t, Object result) {
+        if (inScopedBranch(t)) t.payloadJson = overlayMerge(t.payloadJson, result);
+        else mergeContext(inst, result);
+    }
+
+    /** Merges a step result into a branch's private overlay (same null-delete semantics as
+     *  {@link #mergeContext}), preserving the arm tag, and returns the new overlay JSON. */
+    private static String overlayMerge(String payloadJson, Object result) {
+        Map<String, Object> overlay = payloadJson == null
+                ? new LinkedHashMap<>() : Json.parseObject(payloadJson);
+        if (result instanceof Map) {
+            for (Map.Entry<?, ?> e : ((Map<?, ?>) result).entrySet()) {
+                String key = String.valueOf(e.getKey());
+                if (e.getValue() == null) overlay.remove(key);
+                else overlay.put(key, e.getValue());
+            }
+        } else if (result != null) {
+            Object arm = overlay.get(ARM_IDX);
+            overlay = Json.parseObject(Json.write(result));
+            if (arm != null) overlay.put(ARM_IDX, arm);
+        }
+        return Json.write(overlay);
+    }
+
     private static void mergeContext(Instance inst, Object result) {
         if (result == null) return;
         if (!(result instanceof Map)) {
@@ -687,7 +783,14 @@ public final class WorkflowEngine {
             return;
         }
         Map<String, Object> ctx = Json.parseObject(inst.contextJson);
-        ctx.putAll((Map<String, Object>) result);
+        // A null value deletes its key (the exact inverse of Json.shallowDiff, which emits removed
+        // keys as null); any other value overwrites. So a step that drops a field, or an aggregator
+        // clearing its scratch keys, actually removes them rather than leaving JSON nulls behind.
+        for (Map.Entry<?, ?> e : ((Map<?, ?>) result).entrySet()) {
+            String key = String.valueOf(e.getKey());
+            if (e.getValue() == null) ctx.remove(key);
+            else ctx.put(key, e.getValue());
+        }
         inst.contextJson = Json.write(ctx);
     }
 
@@ -709,7 +812,7 @@ public final class WorkflowEngine {
                 case SUB_WORKFLOW -> launchSubWorkflow(tx, inst, t, node, now);
                 case FORK -> spawnForkBranches(tx, inst, t, node, work, now);
                 case DYN_FORK -> spawnDynamicBranches(tx, inst, t, node, work, now);
-                case JOIN -> arriveAtJoin(tx, inst, t, node, work, now);
+                case JOIN -> arriveAtJoin(tx, def, inst, t, node, work, now);
                 case END -> finishAtEnd(tx, inst, t, node, work, now);
             };
             if (!keepDriving) return;
@@ -827,8 +930,11 @@ public final class WorkflowEngine {
         tx.updateToken(t);
         String group = t.id;   // unique per fork execution; the join finds the fork token by it
         String childStack = t.pushJoinStack(group);
-        for (String branchStart : node.branches()) {
-            Token child = newToken(inst, branchStart, childStack, t.payloadJson, now);
+        List<String> starts = node.branches();
+        for (int i = 0; i < starts.size(); i++) {
+            // Tag each branch with its arm index and give it a private context overlay, so its
+            // writes stay isolated from its siblings and the shared context until the combine.
+            Token child = newToken(inst, starts.get(i), childStack, branchScope(t.payloadJson, i), now);
             tx.insertToken(child);
             work.push(child);
         }
@@ -881,6 +987,15 @@ public final class WorkflowEngine {
         return true;
     }
 
+    /** A static-fork branch's initial payload: the fork token's payload (so nesting keeps the outer
+     *  scope) tagged with this branch's arm index, which marks it isolated. */
+    private static String branchScope(String basePayload, int armIndex) {
+        Map<String, Object> payload = basePayload == null
+                ? new LinkedHashMap<>() : Json.parseObject(basePayload);
+        payload.put(ARM_IDX, (long) armIndex);
+        return Json.write(payload);
+    }
+
     /** The child's payload: the fork token's own payload (nesting) plus its item and index. */
     private static String itemPayload(Token forkToken, Node node, Object item, int index) {
         Map<String, Object> payload = forkToken.payloadJson == null
@@ -894,7 +1009,7 @@ public final class WorkflowEngine {
         return definitions.graph(tx, inst.workflow, inst.version);
     }
 
-    private boolean arriveAtJoin(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+    private boolean arriveAtJoin(Tx tx, LazyGraph def, Instance inst, Token t, Node node, Deque<Token> work, long now) {
         String group = t.currentJoinGroup();
         int expected = expectedAt(node, group);
         TokenStatus before = t.status;
@@ -910,8 +1025,10 @@ public final class WorkflowEngine {
             return true;
         }
         consumeBarrier(tx, atBarrier, now);
-        // Restore the payload the branches started from, so nesting scopes correctly.
-        Token cont = newToken(inst, node.next(), t.popJoinStack(), forkPayload(tx, group), now);
+        // Restore the payload the branches started from, so nesting scopes correctly, then (for a
+        // combine fork) stage each isolated branch's result under its arm name for the aggregator.
+        String contPayload = combinePayload(def, node, atBarrier, forkPayload(tx, group));
+        Token cont = newToken(inst, node.next(), t.popJoinStack(), contPayload, now);
         tx.insertToken(cont);
         work.push(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -935,11 +1052,36 @@ public final class WorkflowEngine {
         return tx.findToken(forkTokenId).map(f -> f.payloadJson).orElse(null);
     }
 
-    /** The context a worker sees: the shared instance context with the token's payload overlaid. */
+    /**
+     * The continuation payload after a join. For a plain (forkEach) join it is just the restored
+     * base. For a combine fork -- the join's successor is a combine node carrying the arm names --
+     * each isolated branch's accumulated result is staged under its arm name on top of the base, so
+     * the aggregator can read them by name; the arm tag is dropped in the process.
+     */
+    private static String combinePayload(LazyGraph def, Node joinNode, List<Token> atBarrier, String basePayload) {
+        Node agg = def.node(joinNode.next());
+        if (!isCombineNode(agg)) return basePayload;
+        List<String> armNames = armNames(agg);
+        Map<String, Object> staged = basePayload == null
+                ? new LinkedHashMap<>() : Json.parseObject(basePayload);
+        for (Token bt : atBarrier) {
+            Map<String, Object> branch = bt.payloadJson == null
+                    ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
+            Object idx = branch.remove(ARM_IDX);
+            if (idx == null) continue;   // defensive: a token that never carried an arm tag
+            staged.put(armNames.get(((Number) idx).intValue()), branch);
+        }
+        return Json.write(staged);
+    }
+
+    /** The context a worker sees: the shared instance context with the token's payload overlaid
+     *  (minus the internal arm tag, which is engine bookkeeping, not user context). */
     private static Object dispatchContext(Instance inst, Token t) {
         if (t.payloadJson == null) return Json.parse(inst.contextJson);
         Map<String, Object> ctx = Json.parseObject(inst.contextJson);
-        ctx.putAll(Json.parseObject(t.payloadJson));
+        Map<String, Object> overlay = Json.parseObject(t.payloadJson);
+        overlay.remove(ARM_IDX);
+        ctx.putAll(overlay);
         return ctx;
     }
 

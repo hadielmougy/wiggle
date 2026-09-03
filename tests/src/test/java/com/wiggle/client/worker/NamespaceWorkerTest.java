@@ -36,15 +36,20 @@ class NamespaceWorkerTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint<Map<String, Object>> workflow() {
-        return Workflow.define("wf").step("a", c -> c).build();
+    private static Blueprint workflow() {
+        return Workflow.define("wf").step("a").build();
+    }
+
+    @com.wiggle.client.worker.Handlers("wf")
+    static final class WfHandlers {
+        public java.util.Map<String, Object> a(java.util.Map<String, Object> ctx) { return ctx; }
     }
 
     private static final Duration NEVER = Duration.ofHours(1);   // pin the auto-reconcile out of the way
 
     @Test @DisplayName("serves every active cell, and stops a cell's worker when it retires")
     void fanOutAcrossCellsAndRetire() throws Exception {
-        Blueprint<Map<String, Object>> bp = workflow();
+        Blueprint bp = workflow();
         try (WiggleServer a = new WiggleServer(config()).start();
              WiggleServer b = new WiggleServer(config()).start();
              WiggleClient ca = new WiggleClient(a.baseUrl());
@@ -55,7 +60,7 @@ class NamespaceWorkerTest {
 
             AtomicReference<List<String>> cells = new AtomicReference<>(List.of(a.baseUrl(), b.baseUrl()));
             try (NamespaceWorker nw = new NamespaceWorker(cells::get, WiggleClient::new, "w",
-                    WorkerOptions.defaults(), w -> w.register(bp))) {
+                    WorkerOptions.defaults(), w -> w.register(bp).handlers(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(a.baseUrl(), b.baseUrl()), nw.activeCells(), "one worker per active cell");
 
@@ -79,7 +84,7 @@ class NamespaceWorkerTest {
 
     @Test @DisplayName("wired through a real coordinator, it serves the namespace's resolved cell")
     void coordinatorWired() throws Exception {
-        Blueprint<Map<String, Object>> bp = workflow();
+        Blueprint bp = workflow();
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         CoordinatorService svc = new CoordinatorService(store);
         CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED);
@@ -94,7 +99,7 @@ class NamespaceWorkerTest {
                     com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
             CellResolver resolver = CellResolver.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
-            try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp))) {
+            try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp).handlers(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(cell.baseUrl()), nw.activeCells(), "resolved the namespace's one active cell");
                 assertEquals("COMPLETED", cc.awaitCompletion(cc.start("wf", Map.of()), Duration.ofSeconds(5)).status());

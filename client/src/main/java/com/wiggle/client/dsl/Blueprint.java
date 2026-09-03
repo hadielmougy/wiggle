@@ -1,22 +1,16 @@
 package com.wiggle.client.dsl;
 
-import com.wiggle.core.ContextCodec;
 import com.wiggle.core.WorkflowDefinition;
 
-import java.util.Map;
 import java.util.Set;
 
 /**
- * The output of {@code build()}: an immutable topology to register with the server,
- * plus the local handler table the worker dispatches against. One artifact, two
- * audiences -- which is why the DSL can be both the schema and the implementation.
+ * The output of {@code build()}: an immutable workflow topology (nodes, edges, kinds, queues, retry)
+ * to register with the server. It carries no step logic and no context type -- the graph is the
+ * whole artifact. Step implementations live in {@link com.wiggle.client.worker.Handlers @Handlers}
+ * classes bound on a worker and matched to the graph by name.
  */
-public record Blueprint<T>(WorkflowDefinition definition, Map<String, ActivityHandler> handlers,
-                           ContextCodec<T> codec) {
-
-    public Blueprint {
-        handlers = Map.copyOf(handlers);
-    }
+public record Blueprint(WorkflowDefinition definition) {
 
     public String name() { return definition.name(); }
 

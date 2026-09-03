@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -32,6 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HttpDashboardTest {
 
+    @Handlers("dash-done")
+    static final class DoneH {
+        public Map<String, Object> work(Map<String, Object> ctx) { return Map.of("result", "ok"); }
+    }
+
     private static int freePort() throws Exception {
         try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
     }
@@ -60,10 +66,10 @@ class HttpDashboardTest {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dash, Duration.ofSeconds(5), Duration.ofSeconds(10));
 
-        Blueprint<Map<String, Object>> done = Workflow.define("dash-done")
-                .step("work", ctx -> Map.of("result", "ok")).build();
-        Blueprint<Map<String, Object>> waiting = Workflow.define("dash-waiting")
-                .sleep("hold", Duration.ofSeconds(30)).step("after", ctx -> ctx).build();
+        Blueprint done = Workflow.define("dash-done")
+                .step("work").build();
+        Blueprint waiting = Workflow.define("dash-waiting")
+                .sleep("hold", Duration.ofSeconds(30)).step("after").build();
 
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
@@ -71,7 +77,7 @@ class HttpDashboardTest {
             String base = "http://localhost:" + server.dashboardPort();
             client.register(waiting);
 
-            try (Worker w = new Worker(client, "dash-worker").register(done)) {
+            try (Worker w = new Worker(client, "dash-worker").register(done).handlers(new DoneH())) {
                 w.start();
 
                 String completedId = client.start(done, Map.of("in", 1));
@@ -123,11 +129,11 @@ class HttpDashboardTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dash, Duration.ofSeconds(5), Duration.ofSeconds(10));
 
         // A graph exercising several node kinds so the diagram endpoint has edges to draw.
-        Blueprint<Map<String, Object>> bp = Workflow.define("dash-graph")
-                .step("submit", ctx -> ctx)
+        Blueprint bp = Workflow.define("dash-graph")
+                .step("submit")
                 .awaitSignal("approval", Duration.ofHours(1),
-                        b -> b.step("escalate", ctx -> ctx))
-                .step("finish", ctx -> ctx)
+                        b -> b.step("escalate"))
+                .step("finish")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config).start();

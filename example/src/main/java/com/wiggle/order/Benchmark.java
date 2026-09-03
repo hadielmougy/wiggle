@@ -51,7 +51,7 @@ public final class Benchmark {
         String jdbcPassword = env("WIGGLE_JDBC_PASSWORD", null);
 
         CountDownLatch done = new CountDownLatch(count);
-        Blueprint<Map<String, Object>> bp = linear("bench-linear", steps, mode, done);
+        Blueprint bp = linear("bench-linear", steps, mode);
 
         ServerConfig config = new ServerConfig(0, "bench", jdbcUrl, jdbcUser, jdbcPassword, 16,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
@@ -69,7 +69,8 @@ public final class Benchmark {
             long t0 = System.nanoTime();
             for (int i = 0; i < workers; i++) {
                 pool.add(new Worker(client, "bench-worker-" + i, WorkerOptions.defaults()
-                        .withConcurrency(concurrency).withLocalBatchSize(batch)).register(bp).start());
+                        .withConcurrency(concurrency).withLocalBatchSize(batch))
+                        .register(bp).handlers(new BenchHandlers(done)).start());
             }
             done.await();
             long t1 = System.nanoTime();
@@ -84,14 +85,25 @@ public final class Benchmark {
         }
     }
 
-    /** A linear chain of {@code steps} trivial same-queue map steps; the last one counts down. */
-    private static Blueprint<Map<String, Object>> linear(String name, int steps, ExecutionMode mode, CountDownLatch done) {
-        WorkflowStream<Map<String, Object>> s = Workflow.define(name).execution(mode);
-        for (int i = 0; i < steps; i++) {
-            boolean last = i == steps - 1;
-            s = s.step("s" + i, last ? ctx -> { done.countDown(); return ctx; } : ctx -> ctx);
+    /**
+     * A linear chain of {@code steps} trivial same-queue task steps ending in a {@code sink} step.
+     * The chain is pure topology; the logic lives in {@link BenchHandlers}. Every non-final step is
+     * named so it canonicalises to the single {@code hop} handler (the worker matches steps to handler
+     * methods by canonical name, ignoring punctuation), which lets one identity method serve a chain of
+     * any length; the final {@code sink} step is the only distinctly-named node, so it maps to its own
+     * handler and counts the instance down exactly once.
+     */
+    private static Blueprint linear(String name, int steps, ExecutionMode mode) {
+        WorkflowStream s = Workflow.define(name).execution(mode);
+        for (int i = 0; i < steps - 1; i++) {
+            s = s.step(hop(i));   // distinct raw name, all canonicalise to the "hop" handler
         }
-        return s.build();
+        return s.step("sink").build();
+    }
+
+    /** Distinct raw step names that all canonicalise to {@code hop} (punctuation is ignored on match). */
+    private static String hop(int i) {
+        return "hop" + "-".repeat(i);
     }
 
     private static String env(String key, String def) {

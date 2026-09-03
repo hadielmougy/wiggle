@@ -3,10 +3,11 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
-import com.wiggle.core.ContextCodec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.core.RecordMapper;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -23,27 +24,52 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Name-only handler binding ({@link Worker#handle}): a workflow's topology is registered once by an
- * author, and a worker that never saw the blueprint implements steps by (workflow, step) name. On
- * {@link Worker#start()} the worker reconciles its bindings against the server's registered graph --
- * discovering the queue each step polls and rejecting a mistyped name or wrong kind up front.
+ * Handler binding via {@link Handlers @Handlers} + {@link Worker#handlers(Object)}: a workflow's
+ * topology is registered once by an author, and a worker implements the steps with an annotated
+ * class whose method names match the steps and whose signatures define the kind (one param = input,
+ * {@code boolean} = gate, {@code void} = effect). On {@link Worker#start()} the worker reconciles its
+ * handlers against the server's registered graph -- discovering the queue each step polls and
+ * rejecting a signature that clashes with a node's kind up front.
  */
 class HandleBindingTest {
 
-    private static Map<String, Object> put(Object ctx, String k, Object v) {
-        Map<String, Object> n = new LinkedHashMap<>(Json.asObject(ctx));
+    private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
+        Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
         return n;
     }
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
-    private Blueprint<Map<String, Object>> authoredGraph() {
+    private Blueprint authoredGraph() {
         return Workflow.define("order-fulfilment")
-                .step("validate", c -> put(c, "status", "VALIDATED"))
-                .gate("in-stock", c -> ((Number) c.get("qty")).intValue() > 0)
-                .step("authorise", c -> put(c, "paymentRef", "auth-" + c.get("orderId")), "payments")
-                .effect("audit", c -> { /* side effect only */ })
+                .step("validate")
+                .gate("in-stock")
+                .step("authorise", "payments")
+                .effect("audit")
                 .build();
+    }
+
+    /** The step logic, bound to {@code order-fulfilment} by name; signatures define each step's kind. */
+    @Handlers("order-fulfilment")
+    static final class OrderImpl {
+        final AtomicReference<Object> audited;
+        OrderImpl(AtomicReference<Object> audited) { this.audited = audited; }
+        public Map<String, Object> validate(Map<String, Object> c) { return put(c, "status", "VALIDATED"); }
+        public boolean inStock(Map<String, Object> c) { return ((Number) c.get("qty")).intValue() > 0; }
+        public Map<String, Object> authorise(Map<String, Object> c) { return put(c, "paymentRef", "auth-" + c.get("orderId")); }
+        public void audit(Map<String, Object> c) { audited.set(c.get("paymentRef")); }
+    }
+
+    /** Binds a gate step (in the graph a PREDICATE) with a task signature -- a kind clash. */
+    @Handlers("order-fulfilment")
+    static final class BadKindImpl {
+        public Map<String, Object> inStock(Map<String, Object> c) { return c; }   // it's a PREDICATE in the graph
+    }
+
+    /** Handlers for a workflow that was never registered on the server. */
+    @Handlers("never-registered")
+    static final class OrphanImpl {
+        public Map<String, Object> step(Map<String, Object> c) { return c; }
     }
 
     private void withServer(BiConsumer<WiggleClient, WiggleServer> body) throws Exception {
@@ -57,17 +83,14 @@ class HandleBindingTest {
     }
 
     @Test
-    @DisplayName("a worker with no blueprint drives a full instance via handlers bound by name")
-    void nameOnlyBindingRunsToCompletion() throws Exception {
+    @DisplayName("a worker with no blueprint drives a full instance via @Handlers bound by name")
+    void handlersBindingRunsToCompletion() throws Exception {
         withServer((client, server) -> {
             client.register(authoredGraph());   // author registers topology only
 
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "impl-1")) {
-                impl.handle("order-fulfilment", "validate", c -> put(c, "status", "VALIDATED"))
-                    .handleGate("order-fulfilment", "in-stock", c -> ((Number) Json.asObject(c).get("qty")).intValue() > 0)
-                    .handle("order-fulfilment", "authorise", c -> put(c, "paymentRef", "auth-" + Json.asObject(c).get("orderId")))
-                    .handleEffect("order-fulfilment", "audit", c -> audited.set(Json.asObject(c).get("paymentRef")));
+                impl.handlers(new OrderImpl(audited));   // binds by name, no blueprint seen
                 impl.start();   // reconciles: validates names/kinds, discovers the "payments" queue too
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
@@ -83,29 +106,15 @@ class HandleBindingTest {
     }
 
     @Test
-    @DisplayName("binding a step name the graph does not have fails fast on start")
-    void unknownStepRejected() throws Exception {
-        withServer((client, server) -> {
-            client.register(authoredGraph());
-            try (Worker impl = new Worker(client, "impl-2")) {
-                impl.handle("order-fulfilment", "autorise", c -> c);   // typo
-                IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("no step 'autorise'"), e.getMessage());
-                assertTrue(e.getMessage().contains("available steps"), e.getMessage());
-            }
-        });
-    }
-
-    @Test
-    @DisplayName("binding a predicate step as a task (or vice versa) fails fast on start")
+    @DisplayName("a handler whose signature clashes with the node kind fails fast on start")
     void kindMismatchRejected() throws Exception {
         withServer((client, server) -> {
             client.register(authoredGraph());
             try (Worker impl = new Worker(client, "impl-3")) {
-                impl.handle("order-fulfilment", "in-stock", c -> c);   // it's a PREDICATE in the graph
+                impl.handlers(new BadKindImpl());   // inStock is a PREDICATE, bound as a task
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("is a PREDICATE"), e.getMessage());
-                assertTrue(e.getMessage().contains("handleGate"), e.getMessage());
+                assertTrue(e.getMessage().contains("in-stock"), e.getMessage());
+                assertTrue(e.getMessage().contains("boolean"), e.getMessage());
             }
         });
     }
@@ -115,39 +124,46 @@ class HandleBindingTest {
     void unregisteredWorkflowRejected() throws Exception {
         withServer((client, server) -> {
             try (Worker impl = new Worker(client, "impl-4")) {
-                impl.handle("never-registered", "step", c -> c);
+                impl.handlers(new OrphanImpl());
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
                 assertTrue(e.getMessage().contains("is not registered"), e.getMessage());
             }
         });
     }
 
-    /** A typed context — the same JSON on the wire, so it interoperates with dict/JSON handlers. */
+    /** A typed context -- the same JSON on the wire, so it interoperates with dict/JSON handlers. */
     public record Item(String id, int qty, String state) {}
+
+    /** Typed step logic: each method takes and returns the {@link Item} record (decoded via the codec). */
+    @Handlers("typed-wf")
+    static final class TypedImpl {
+        final AtomicReference<String> doneState;
+        TypedImpl(AtomicReference<String> doneState) { this.doneState = doneState; }
+        public Item check(Item i) { return new Item(i.id(), i.qty(), "CHECKED"); }
+        public boolean available(Item i) { return i.qty() > 0; }
+        public void done(Item i) { doneState.set(i.state()); }
+    }
 
     @Test
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
-    void typedNameOnlyBinding() throws Exception {
+    void typedHandlersBinding() throws Exception {
         withServer((client, server) -> {
-            ContextCodec<Item> codec = ContextCodec.records(Item.class);
-            client.register(Workflow.define("typed-wf", codec)
+            client.register(Workflow.define("typed-wf")
                     .step("check")
-                    .gate("available", i -> i.qty() > 0)
+                    .gate("available")
                     .effect("done")
                     .build());
 
             AtomicReference<String> doneState = new AtomicReference<>();
             try (Worker impl = new Worker(client, "typed-impl")) {
-                impl.handle("typed-wf", "check", codec, i -> new Item(i.id(), i.qty(), "CHECKED"))
-                    .handleGate("typed-wf", "available", codec, i -> i.qty() > 0)
-                    .handleEffect("typed-wf", "done", codec, i -> doneState.set(i.state()));
+                impl.handlers(new TypedImpl(doneState));
                 impl.start();
 
                 String id = client.start("typed-wf", Map.of("id", "x1", "qty", 3));
                 InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
 
                 assertEquals("COMPLETED", v.status(), "status");
-                Item out = codec.decode(v.context());
+                Item out = (Item) RecordMapper.fromJson(v.context(), Item.class);
                 assertEquals("CHECKED", out.state(), "typed handler updated the record");
                 assertEquals("CHECKED", doneState.get(), "typed effect saw the decoded record");
             }

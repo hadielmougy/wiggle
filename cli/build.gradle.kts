@@ -8,7 +8,6 @@ plugins {
 // server/storage dependencies. Not published to Maven Central.
 dependencies {
     implementation(project(":client"))
-    implementation("org.yaml:snakeyaml:${property("snakeyamlVersion")}")
     implementation("info.picocli:picocli:${property("picocliVersion")}")
 
     testImplementation(project(":server"))   // an in-memory WiggleServer for the register test

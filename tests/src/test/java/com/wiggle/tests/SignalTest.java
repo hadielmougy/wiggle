@@ -4,6 +4,7 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -39,6 +40,32 @@ class SignalTest {
         return n;
     }
 
+    @Handlers("sig-approve")
+    static final class ApproveH {
+        public Map<String, Object> after(Map<String, Object> c) { return put(c, "advanced", true); }
+    }
+
+    @Handlers("sig-wrong")
+    static final class WrongH {
+        public Map<String, Object> after(Map<String, Object> c) { return c; }
+    }
+
+    @Handlers("sig-escalate")
+    static final class EscalateH {
+        public Map<String, Object> escalate(Map<String, Object> c) { return put(c, "escalated", true); }
+        public Map<String, Object> after(Map<String, Object> c) { return put(c, "advanced", true); }
+    }
+
+    @Handlers("sig-timeout")
+    static final class TimeoutH {
+        public Map<String, Object> after(Map<String, Object> c) { return c; }
+    }
+
+    @Handlers("sig-http")
+    static final class HttpH {
+        public Map<String, Object> after(Map<String, Object> c) { return put(c, "advanced", true); }
+    }
+
     private static ServerConfig config(int dashboardPort) {
         return new ServerConfig(0, "sig-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(300), 3, Duration.ofSeconds(20),
@@ -58,14 +85,14 @@ class SignalTest {
 
     @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
     void signalOverGrpc() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-approve")
+        Blueprint bp = Workflow.define("sig-approve")
                 .awaitSignal("approval")
-                .step("after", ctx -> put(ctx, "advanced", true))
+                .step("after")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w").register(bp)) {
+             Worker w = new Worker(client, "sig-w").register(bp).handlers(new ApproveH())) {
             w.start();
             String id = client.start(bp, Map.of("x", 1));
 
@@ -86,13 +113,13 @@ class SignalTest {
 
     @Test @DisplayName("signalling an instance that is not waiting for that name is a 409")
     void wrongSignalConflicts() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-wrong")
+        Blueprint bp = Workflow.define("sig-wrong")
                 .awaitSignal("expected")
-                .step("after", ctx -> ctx)
+                .step("after")
                 .build();
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w2").register(bp)) {
+             Worker w = new Worker(client, "sig-w2").register(bp).handlers(new WrongH())) {
             w.start();
             String id = client.start(bp, Map.of());
             awaitPending(server, 1);
@@ -106,15 +133,15 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline runs the escalation branch, then rejoins the flow")
     void deadlineEscalates() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-escalate")
+        Blueprint bp = Workflow.define("sig-escalate")
                 .awaitSignal("approval", Duration.ofMillis(250),
-                        b -> b.step("escalate", ctx -> put(ctx, "escalated", true)))
-                .step("after", ctx -> put(ctx, "advanced", true))
+                        b -> b.step("escalate"))
+                .step("after")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w3").register(bp)) {
+             Worker w = new Worker(client, "sig-w3").register(bp).handlers(new EscalateH())) {
             w.start();
             String id = client.start(bp, Map.of());   // never signalled; the deadline fires
 
@@ -128,14 +155,14 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline with no escalation fails the instance")
     void deadlineFails() throws Exception {
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-timeout")
+        Blueprint bp = Workflow.define("sig-timeout")
                 .awaitSignal("approval", Duration.ofMillis(250))
-                .step("after", ctx -> ctx)
+                .step("after")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w4").register(bp)) {
+             Worker w = new Worker(client, "sig-w4").register(bp).handlers(new TimeoutH())) {
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -148,14 +175,14 @@ class SignalTest {
         int dash;
         try (ServerSocket s = new ServerSocket(0)) { dash = s.getLocalPort(); }
 
-        Blueprint<Map<String, Object>> bp = Workflow.define("sig-http")
+        Blueprint bp = Workflow.define("sig-http")
                 .awaitSignal("sign-off")
-                .step("after", ctx -> put(ctx, "advanced", true))
+                .step("after")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config(dash)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w5").register(bp)) {
+             Worker w = new Worker(client, "sig-w5").register(bp).handlers(new HttpH())) {
             w.start();
             String id = client.start(bp, Map.of());
             awaitPending(server, 1);

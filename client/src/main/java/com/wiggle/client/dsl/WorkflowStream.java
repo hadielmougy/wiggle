@@ -7,200 +7,128 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 /**
- * A lazily-built workflow pipeline with a Stream-shaped API: intermediate operations
- * append nodes and return a stream, and the terminal {@link #build()} produces the
- * artifact. Nothing executes at definition time.
+ * A lazily-built workflow <em>topology</em> with a Stream-shaped API: intermediate operations append
+ * nodes and return the stream, and the terminal {@link #build()} produces the {@link Blueprint}.
+ * Nothing executes at definition time, and no step logic lives here -- every {@code step}/{@code
+ * gate}/{@code effect}/{@code combine} is just a named node. The implementations are bound
+ * separately on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes, matched to
+ * the graph by name; a method's signature there defines its input/output types (types may change
+ * from step to step, like {@code Stream.map}).
  *
  * <p>This class owns the graph's <em>shape</em> -- how nodes chain, branch, and rejoin -- while
- * {@link Pipeline} owns the graph's <em>storage</em> (nodes, handlers, ids, assembly). A stream
- * tracks its own "open ends" (nodes whose outgoing edge is not yet wired) and, for a branch,
- * the join it must fall back to; it asks the pipeline to create nodes and connect edges but
- * never touches the pipeline's collections.
- *
- * <p>One deliberate departure from {@code java.util.stream}: the context type does not
- * change from step to step. A workflow context is a durable document that survives
- * process restarts and is merged across parallel branches, so a single type for the
- * whole pipeline is what actually models the storage. {@code map} is therefore closer
- * to {@code UnaryOperator<T>} than to {@code Function<T,R>}.
+ * {@link Pipeline} owns its <em>storage</em>. A stream tracks its own "open ends" and, for a branch,
+ * the join it must fall back to.
  */
-public final class WorkflowStream<T> {
+public final class WorkflowStream {
 
     /** Which outgoing edge of a node an open end occupies. */
     private enum Edge { NEXT, ALT }
 
-    private final Pipeline<T> pipeline;
+    private final Pipeline pipeline;
     private final Consumer<String> startSink;
     /** Non-null when this stream is a fork branch: where a short-circuited branch must land. */
     private final String enclosingJoinId;
     private List<Edge> openSlots = new ArrayList<>();     // parallel arrays with openNodes
     private List<String> openNodes = new ArrayList<>();
     private String lastStepId;
+    /** True between {@link #fork} and its {@link ForkStage} choosing a combine; a build/nest with a
+     *  fork still pending is a forgotten {@code combine()} and is rejected. */
+    private boolean forkPending;
     private boolean consumed;
 
-    private WorkflowStream(Pipeline<T> pipeline, Consumer<String> startSink, String enclosingJoinId) {
+    private WorkflowStream(Pipeline pipeline, Consumer<String> startSink, String enclosingJoinId) {
         this.pipeline = pipeline;
         this.startSink = startSink;
         this.enclosingJoinId = enclosingJoinId;
     }
 
-    static <T> WorkflowStream<T> root(Pipeline<T> pipeline) {
-        return new WorkflowStream<>(pipeline, pipeline::startAt, null);
+    static WorkflowStream root(Pipeline pipeline) {
+        return new WorkflowStream(pipeline, pipeline::startAt, null);
     }
 
-    /**
-     * A name-only step: declares the topology node (default queue), with <em>no</em> inline handler.
-     * The step's logic is bound on the worker by name ({@code handle}/{@code registerHandlers}); a worker
-     * that claims it without a bound handler fails it fast (no silent no-op). See "name-only binding".
-     */
-    public WorkflowStream<T> step(String name) {
-        return wireStep(pipeline.addTaskNameOnly(name, null, null));
+    // ------------------------------------------------------ step / effect (both TASK nodes)
+
+    /** A task step; its handler is bound on the worker by {@code name}. */
+    public WorkflowStream step(String name) {
+        return wireStep(pipeline.addTask(name, null, null));
     }
 
-    /** A unit of work run on a worker: {@code fn}'s result becomes the new context. */
-    public WorkflowStream<T> step(String name, Activity<T> fn) {
-        return step(name, fn, (RetryPolicy) null, null);
+    /** A task step pinned to a dedicated {@code queue} (worker specialisation). */
+    public WorkflowStream step(String name, String queue) {
+        return wireStep(pipeline.addTask(name, null, queue));
     }
 
-    /**
-     * A unit of work run on a worker, with an explicit retry policy. Pass {@code retry} to
-     * govern how a thrown step is retried (exponential backoff by default); a {@code null}
-     * policy falls back to the workflow default.
-     */
-    public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry) {
-        return step(name, fn, retry, null);
+    /** A task step with an explicit retry policy. */
+    public WorkflowStream step(String name, RetryPolicy retry) {
+        return wireStep(pipeline.addTask(name, retry, null));
     }
 
-
-    /**
-     * A name-only step pinned to a dedicated {@code queue} (worker specialisation), with no inline
-     * handler -- bound on the worker by name. A {@code null}/blank queue uses the workflow default.
-     */
-    public WorkflowStream<T> step(String name, String queue) {
-        return wireStep(pipeline.addTaskNameOnly(name, null, queue));
+    /** A task step with both an explicit retry policy and a dedicated queue. */
+    public WorkflowStream step(String name, RetryPolicy retry, String queue) {
+        return wireStep(pipeline.addTask(name, retry, queue));
     }
 
-    /**
-     * A unit of work pinned to a dedicated {@code queue}, so only workers polling that queue run it
-     * (worker specialisation). A {@code null}/blank queue uses the workflow default.
-     */
-    public WorkflowStream<T> step(String name, Activity<T> fn, String queue) {
-        return step(name, fn, (RetryPolicy) null, queue);
+    /** Alias for {@link #step(String)} that reads well when sequencing ("do this, then that"). */
+    public WorkflowStream then(String name) {
+        return step(name);
     }
 
-    /** A unit of work with both an explicit retry policy and a dedicated queue. */
-    public WorkflowStream<T> step(String name, Activity<T> fn, RetryPolicy retry, String queue) {
-        Objects.requireNonNull(fn, "activity");
-        return wireStep(pipeline.addStep(name, fn, retry, queue));
+    /** An effect step (its handler returns void, leaving the context unchanged). Topologically a task. */
+    public WorkflowStream effect(String name) {
+        return wireStep(pipeline.addTask(name, null, null));
     }
 
-    /** Shared wiring for a worker step/effect node: attach it to the open edge and mark it the last step. */
-    private WorkflowStream<T> wireStep(String id) {
+    /** {@link #effect} pinned to a dedicated {@code queue}. */
+    public WorkflowStream effect(String name, String queue) {
+        return wireStep(pipeline.addTask(name, null, queue));
+    }
+
+    /** {@link #effect} with an explicit retry policy. */
+    public WorkflowStream effect(String name, RetryPolicy retry) {
+        return wireStep(pipeline.addTask(name, retry, null));
+    }
+
+    /** {@link #effect} with both an explicit retry policy and a dedicated queue. */
+    public WorkflowStream effect(String name, RetryPolicy retry, String queue) {
+        return wireStep(pipeline.addTask(name, retry, queue));
+    }
+
+    /** Shared wiring for a task node: attach it to the open edge and mark it the last step. */
+    private WorkflowStream wireStep(String id) {
         attach(id);
         lastStepId = id;
         return this;
     }
 
-    /** Alias for {@link #step} that reads well when sequencing ("do this, then that"). */
-    public WorkflowStream<T> then(String name, Activity<T> fn) {
-        return step(name, fn);
+    // ------------------------------------------------------ gate
+
+    /** A guard; its boolean handler is bound on the worker by {@code name}. */
+    public WorkflowStream gate(String name) {
+        return wireGate(pipeline.addGuard(name, null, null), name);
     }
 
-    /** Alias for {@link #step(String, Activity, RetryPolicy)}. */
-    public WorkflowStream<T> then(String name, Activity<T> fn, RetryPolicy retry) {
-        return step(name, fn, retry);
-    }
-
-    /** Alias for {@link #step(String, Activity, String)}. */
-    public WorkflowStream<T> then(String name, Activity<T> fn, String queue) {
-        return step(name, fn, queue);
-    }
-
-    /** Alias for {@link #step(String, Activity, RetryPolicy, String)}. */
-    public WorkflowStream<T> then(String name, Activity<T> fn, RetryPolicy retry, String queue) {
-        return step(name, fn, retry, queue);
-    }
-
-    /**
-     * A name-only effect: declares the topology node (default queue) with no inline handler -- bound on
-     * the worker by name. A worker that claims it without a bound handler fails it fast.
-     */
-    public WorkflowStream<T> effect(String name) {
-        return wireStep(pipeline.addTaskNameOnly(name, null, null));
-    }
-
-    /** Runs {@code fn} on a worker for its side effect only; the context is left unchanged. */
-    public WorkflowStream<T> effect(String name, SideEffect<T> fn) {
-        return effect(name, fn, (RetryPolicy) null, null);
-    }
-
-    /** {@link #effect} with an explicit retry policy; a {@code null} policy uses the workflow default. */
-    public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry) {
-        return effect(name, fn, retry, null);
-    }
-
-    /** {@link #effect} pinned to a dedicated {@code queue}; a {@code null}/blank queue uses the default. */
-    public WorkflowStream<T> effect(String name, SideEffect<T> fn, String queue) {
-        return effect(name, fn, (RetryPolicy) null, queue);
-    }
-
-    /** {@link #effect} with both an explicit retry policy and a dedicated queue. */
-    public WorkflowStream<T> effect(String name, SideEffect<T> fn, RetryPolicy retry, String queue) {
-        Objects.requireNonNull(fn, "side effect");
-        return wireStep(pipeline.addEffect(name, fn, retry, queue));
-    }
-
-    /** {@link #gate} whose guard uses the workflow's default retry policy. */
-    public WorkflowStream<T> gate(String name, Predicate<T> test) {
-        return gate(name, test, (RetryPolicy) null, null);
-    }
-
-
-    /**
-     * A name-only guard pinned to a dedicated {@code queue} (worker specialisation), with no inline
-     * predicate -- the predicate is bound on the worker by name. A worker that claims it without a bound
-     * predicate fails it fast (no silent always-true gate). A {@code null}/blank queue uses the default.
-     */
-    public WorkflowStream<T> gate(String name, String queue) {
-        return wireGate(pipeline.addGuardNameOnly(name, null, queue), name);
-    }
-
-    /** A name-only guard with an explicit retry policy and a dedicated {@code queue}; predicate bound by name. */
-    public WorkflowStream<T> gate(String name, RetryPolicy retry, String queue) {
-        return wireGate(pipeline.addGuardNameOnly(name, retry, queue), name);
+    /** {@link #gate} pinned to a dedicated {@code queue}. */
+    public WorkflowStream gate(String name, String queue) {
+        return wireGate(pipeline.addGuard(name, null, queue), name);
     }
 
     /** {@link #gate} with an explicit retry policy for the guard. */
-    public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry) {
-        return gate(name, test, retry, null);
+    public WorkflowStream gate(String name, RetryPolicy retry) {
+        return wireGate(pipeline.addGuard(name, retry, null), name);
     }
 
-    /** {@link #gate} evaluated on a dedicated {@code queue}; a {@code null}/blank queue uses the default. */
-    public WorkflowStream<T> gate(String name, Predicate<T> test, String queue) {
-        return gate(name, test, (RetryPolicy) null, queue);
-    }
-
-    /**
-     * A guard evaluated on a worker: the flow continues only while {@code test} holds. A false
-     * result ends the instance successfully with the termination reason {@code "gated:<name>"}
-     * -- the workflow equivalent of an empty stream, not an error.
-     *
-     * <p>Inside a fork branch the false path short-circuits to the enclosing join instead, so
-     * the branch still arrives at the barrier and its siblings are not stranded. A {@code null}
-     * retry policy uses the workflow default; a {@code null}/blank queue uses the default queue.
-     */
-    public WorkflowStream<T> gate(String name, Predicate<T> test, RetryPolicy retry, String queue) {
-        Objects.requireNonNull(test, "predicate");
-        return wireGate(pipeline.addGuard(name, test, retry, queue), name);
+    /** {@link #gate} with both an explicit retry policy and a dedicated queue. */
+    public WorkflowStream gate(String name, RetryPolicy retry, String queue) {
+        return wireGate(pipeline.addGuard(name, retry, queue), name);
     }
 
     /** Shared wiring for a guard node: attach it, route its false edge (to the enclosing join, else a
      *  {@code gated:<name>} end), and open the true edge. */
-    private WorkflowStream<T> wireGate(String id, String name) {
+    private WorkflowStream wireGate(String id, String name) {
         attach(id);
         if (enclosingJoinId != null) {
             pipeline.wireAlt(id, enclosingJoinId);
@@ -212,12 +140,14 @@ public final class WorkflowStream<T> {
         return this;
     }
 
+    // ------------------------------------------------------ sleep / signal / sub-workflow
+
     /** Server-side timer. No worker is occupied while the instance waits. */
-    public WorkflowStream<T> sleep(Duration duration) {
+    public WorkflowStream sleep(Duration duration) {
         return sleep("sleep-" + duration.toMillis() + "ms", duration);
     }
 
-    public WorkflowStream<T> sleep(String stepName, Duration duration) {
+    public WorkflowStream sleep(String stepName, Duration duration) {
         if (duration.isNegative()) throw new IllegalArgumentException("sleep duration must not be negative");
         attach(pipeline.addSleep(stepName, duration.toMillis()));
         lastStepId = null;
@@ -225,42 +155,33 @@ public final class WorkflowStream<T> {
     }
 
     /**
-     * Waits for the named signal from an external actor (a human, or another system) -- the flow
-     * then continues down the following step. No worker is held while it waits. Deliver it via
-     * {@code client.signal(instanceId, name, payload)}, the gRPC {@code SignalInstance} RPC, or
-     * the dashboard ({@code POST /api/instances/{id}/signal/{name}}); the payload merges into the
-     * context like a {@link #step}'s result.
+     * Waits for the named signal from an external actor -- the flow then continues down the following
+     * step. No worker is held while it waits; the payload merges into the context like a step result.
      */
-    public WorkflowStream<T> awaitSignal(String name) {
+    public WorkflowStream awaitSignal(String name) {
         return awaitSignal(name, null, null);
     }
 
-    /**
-     * A signal wait with a deadline. If the signal does not arrive within {@code timeout}, the
-     * instance fails with a timeout error. Use
-     * {@link #awaitSignal(String, Duration, UnaryOperator)} to escalate to a branch instead.
-     */
-    public WorkflowStream<T> awaitSignal(String name, Duration timeout) {
+    /** A signal wait with a deadline; on timeout the instance fails. */
+    public WorkflowStream awaitSignal(String name, Duration timeout) {
         return awaitSignal(name, timeout, null);
     }
 
     /**
-     * A signal wait with a deadline and an escalation branch: if the signal does not arrive
-     * within {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow
-     * after the wait (exactly one of delivery / escalation happens).
+     * A signal wait with a deadline and an escalation branch: if the signal does not arrive within
+     * {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow after the
+     * wait (exactly one of delivery / escalation happens).
      */
-    public WorkflowStream<T> awaitSignal(String name, Duration timeout,
-                                         UnaryOperator<WorkflowStream<T>> escalation) {
+    public WorkflowStream awaitSignal(String name, Duration timeout, UnaryOperator<WorkflowStream> escalation) {
         if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
         if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
         String id = pipeline.addSignal(name, timeout == null ? 0 : timeout.toMillis());
         attach(id);
-        // The delivery path (NEXT) is the open end; the escalation branch hangs off ALT.
         openAt(id, Edge.NEXT);
         lastStepId = null;
 
         if (escalation != null) {
-            Sub<T> esc = subStream(escalation, enclosingJoinId, "escalation branch of '" + name + "'");
+            Sub esc = subStream(escalation, enclosingJoinId, "escalation branch of '" + name + "'");
             pipeline.wireAlt(id, esc.start());
             openNodes.addAll(esc.tail().openNodes);
             openSlots.addAll(esc.tail().openSlots);
@@ -269,56 +190,74 @@ public final class WorkflowStream<T> {
     }
 
     /**
-     * Runs the workflow named {@code workflow} as a child instance: it starts with this
-     * instance's current context, and on completion its final context merges back here (a failed
-     * or cancelled child fails this instance). The child must be registered on the server; its
-     * latest version is used.
+     * Runs the workflow named {@code workflow} as a child instance: it starts with this instance's
+     * current context, and on completion its final context merges back here. The child must be
+     * registered on the server; its latest version is used.
      */
-    public WorkflowStream<T> subWorkflow(String name, String workflow) {
-        Objects.requireNonNull(workflow, "workflow");
+    public WorkflowStream subWorkflow(String name, String workflow) {
+        java.util.Objects.requireNonNull(workflow, "workflow");
         attach(pipeline.addSubWorkflow(name, workflow));
         lastStepId = null;
         return this;
     }
 
+    // ------------------------------------------------------ fork / combine
+
     /**
-     * Fans out into parallel branches and waits for all of them. Branches execute
-     * independently and may be picked up by different workers. Each step writes back
-     * only the context fields it actually changed, so branches touching different
-     * fields merge cleanly; if two branches write the same field, the later write wins.
+     * Fans out into parallel branches that run independently (possibly on different workers) and all
+     * join before the flow continues. Each branch runs on its <em>own isolated copy</em> of the
+     * context -- a branch's writes are invisible to its siblings and never touch the shared context
+     * -- so there is no implicit merge. The returned {@link ForkStage} requires a
+     * {@link ForkStage#combine combine}, whose worker handler receives every branch's result keyed by
+     * {@link Branch#name() name}. The fork leaves the stream with no open end, so a forgotten combine
+     * fails at {@code build()}.
      */
-    @SafeVarargs
-    public final WorkflowStream<T> fork(Branch<T>... branches) {
+    public ForkStage fork(Branch... branches) {
         if (branches.length < 2) throw new IllegalArgumentException("fork needs at least two branches");
-        String forkId = pipeline.addFork();
-        attach(forkId);
-
-        String joinId = pipeline.addJoin(branches.length);
-        List<String> starts = new ArrayList<>(branches.length);
-        for (Branch<T> branch : branches) {
-            starts.add(buildBranch(branch, joinId));
-        }
-        pipeline.setBranches(forkId, starts);
-
-        openAt(joinId, Edge.NEXT);
-        lastStepId = null;
-        return this;
+        forkPending = true;   // cleared only when the returned ForkStage's combine() runs
+        return new ForkStage(this, List.of(branches));
     }
 
     /**
-     * Runtime fan-out: when the instance reaches this node, the engine reads the list stored in
-     * the context under {@code itemsKey} and spawns one parallel branch per element, each running
-     * {@code body} with its element injected into the context under {@code itemKey} (and its
-     * position under {@code itemKey + "Index"}) -- visible only within that branch. All branches
-     * join before the flow continues; an empty or missing list skips straight through.
-     *
-     * <p>Branch writes merge into the shared context like a static {@link #fork}: last write to
-     * the same key wins, so per-element results belong under per-element keys (use the index).
+     * Builds an isolated fork with a mandatory combine node. Each branch is an independent
+     * sub-pipeline; the combine node carries the arm names so a worker's combine handler (or the
+     * default union) can key each branch's result by name. Reopens the stream at the combine node.
      */
-    public WorkflowStream<T> forkEach(String name, String itemsKey, String itemKey,
-                                      UnaryOperator<WorkflowStream<T>> body) {
-        Objects.requireNonNull(itemsKey, "itemsKey");
-        Objects.requireNonNull(itemKey, "itemKey");
+    void buildForkCombine(List<Branch> branches, String combineName) {
+        forkPending = false;
+        String forkId = pipeline.addFork();
+        attach(forkId);
+
+        String joinId = pipeline.addJoin(branches.size());
+        List<String> starts = new ArrayList<>(branches.size());
+        List<String> names = new ArrayList<>(branches.size());
+        for (Branch branch : branches) {
+            starts.add(buildBranch(branch, joinId));
+            names.add(branch.name());
+        }
+        pipeline.setBranches(forkId, starts);
+
+        String combineId = pipeline.addCombine(combineName, names, null, null);
+        pipeline.wireNext(joinId, combineId);   // JOIN -> combine
+        openAt(combineId, Edge.NEXT);           // reopen the stream after the combine node
+        lastStepId = combineId;
+    }
+
+    Pipeline pipeline() {
+        return pipeline;
+    }
+
+    /**
+     * Runtime fan-out: when the instance reaches this node, the engine reads the list stored in the
+     * context under {@code itemsKey} and spawns one parallel branch per element, each running
+     * {@code body} with its element injected under {@code itemKey} (and its position under
+     * {@code itemKey + "Index"}). All branches join before the flow continues; an empty list skips
+     * straight through. Branch writes merge into the shared context (last write wins), so per-element
+     * results belong under per-element keys (use the index).
+     */
+    public WorkflowStream forkEach(String name, String itemsKey, String itemKey, UnaryOperator<WorkflowStream> body) {
+        java.util.Objects.requireNonNull(itemsKey, "itemsKey");
+        java.util.Objects.requireNonNull(itemKey, "itemKey");
         String forkId = pipeline.addDynFork(name, itemsKey, itemKey);
         attach(forkId);
         String joinId = pipeline.addJoin(0);   // 0 = dynamic width, carried in the join group
@@ -331,18 +270,14 @@ public final class WorkflowStream<T> {
     }
 
     /**
-     * A do-while loop: runs {@code body} once, then evaluates {@code condition} on a worker;
-     * while it holds, the body runs again. Compiles to a plain cycle in the graph -- the
-     * condition is an ordinary predicate whose true edge points back at the body -- so it works
-     * identically under every execution mode (a local chain simply keeps iterating in-worker).
+     * A do-while loop: runs {@code body} once, then evaluates the guard named {@code conditionName}
+     * on a worker; while it holds, the body runs again. Compiles to a plain cycle in the graph, so it
+     * works identically under every execution mode.
      */
-    public WorkflowStream<T> doWhile(String conditionName, Predicate<T> condition,
-                                     UnaryOperator<WorkflowStream<T>> body) {
-        Objects.requireNonNull(condition, "condition");
-        Sub<T> body0 = subStream(body, enclosingJoinId, "doWhile body");
-        String condId = pipeline.addGuard(conditionName, condition, null, null);
+    public WorkflowStream doWhile(String conditionName, UnaryOperator<WorkflowStream> body) {
+        Sub body0 = subStream(body, enclosingJoinId, "doWhile body");
+        String condId = pipeline.addGuard(conditionName, null, null);
 
-        // Enter at the body; body tail feeds the condition; true loops, false continues onward.
         if (openNodes.isEmpty()) startSink.accept(body0.start()); else wireOpenEndsTo(body0.start());
         body0.tail().wireOpenEndsTo(condId);
         pipeline.wireNext(condId, body0.start());
@@ -352,40 +287,29 @@ public final class WorkflowStream<T> {
     }
 
     /**
-     * Exclusive choice -- a switch/case over the context. Each case's guard is evaluated in
-     * order and the first one to hold runs its branch; the rest are skipped. If no guard
-     * matches, control passes to an {@link Case#otherwise} branch when one is given, otherwise
-     * straight to the step after {@code choose}. Exactly one branch ever runs.
-     *
-     * <p>Unlike {@link #fork}, nothing runs in parallel and there is no join: it is a cascade
-     * of predicates, so a five-way choose costs at most five guard evaluations, short-circuiting
-     * at the first match.
+     * Exclusive choice -- a switch/case over the context. Each case's guard is evaluated in order and
+     * the first one to hold runs its branch; the rest are skipped. If no guard matches, control passes
+     * to an {@link Case#otherwise} branch when one is given, otherwise straight to the step after
+     * {@code choose}. Exactly one branch ever runs.
      */
-    @SafeVarargs
-    public final WorkflowStream<T> choose(Case<T>... cases) {
-        List<Case<T>> all = new ArrayList<>(cases.length);
+    public WorkflowStream choose(Case... cases) {
+        List<Case> all = new ArrayList<>(cases.length);
         Collections.addAll(all, cases);
         boolean hasDefault = validateChoose(all);
         int guards = hasDefault ? all.size() - 1 : all.size();
 
-        // Lay down the guard predicates first, so each false path can point at the next guard.
         String[] guardIds = new String[guards];
         for (int i = 0; i < guards; i++) {
-            Case<T> c = all.get(i);
-            guardIds[i] = pipeline.addGuard(c.name(), c.guard(), null, null);
+            guardIds[i] = pipeline.addGuard(all.get(i).name(), null, null);
         }
 
-        // Enter at the first guard, then take over the open-end bookkeeping ourselves.
         attach(guardIds[0]);
         openNodes = new ArrayList<>();
         openSlots = new ArrayList<>();
 
-        // Chain each guard's false path to the next guard.
         for (int i = 0; i < guards - 1; i++) {
             pipeline.wireAlt(guardIds[i], guardIds[i + 1]);
         }
-
-        // Each guard's true path runs its branch; the branch's open ends become the choose's.
         for (int i = 0; i < guards; i++) {
             collectCaseBranch(all.get(i), guardIds[i], Edge.NEXT);
         }
@@ -395,12 +319,12 @@ public final class WorkflowStream<T> {
         return this;
     }
 
-    private boolean validateChoose(List<Case<T>> cases) {
+    private boolean validateChoose(List<Case> cases) {
         if (cases.isEmpty()) throw new IllegalArgumentException("choose needs at least one case");
         for (int i = 0; i < cases.size() - 1; i++) {
-            if (cases.get(i).guard() == null) throw new IllegalArgumentException("otherwise() must be the last case");
+            if (!cases.get(i).guarded()) throw new IllegalArgumentException("otherwise() must be the last case");
         }
-        boolean hasDefault = cases.get(cases.size() - 1).guard() == null;
+        boolean hasDefault = !cases.get(cases.size() - 1).guarded();
         if (hasDefault && cases.size() == 1) {
             throw new IllegalArgumentException("choose needs at least one guarded case");
         }
@@ -408,7 +332,7 @@ public final class WorkflowStream<T> {
     }
 
     /** The last false path: a default branch, or an open end that skips the choose entirely. */
-    private void wireChooseFallthrough(List<Case<T>> cases, String[] guardIds, boolean hasDefault) {
+    private void wireChooseFallthrough(List<Case> cases, String[] guardIds, boolean hasDefault) {
         String lastGuard = guardIds[guardIds.length - 1];
         if (hasDefault) {
             collectCaseBranch(cases.get(cases.size() - 1), lastGuard, Edge.ALT);
@@ -419,58 +343,59 @@ public final class WorkflowStream<T> {
     }
 
     /** Builds one case's branch and wires the guard's {@code edge} to it, accumulating open ends. */
-    private void collectCaseBranch(Case<T> c, String guardId, Edge edge) {
-        Sub<T> branch = subStream(c.body(), enclosingJoinId, "case '" + c.name() + "'");
+    private void collectCaseBranch(Case c, String guardId, Edge edge) {
+        Sub branch = subStream(c.body(), enclosingJoinId, "case '" + c.name() + "'");
         wire(guardId, edge, branch.start());
         openNodes.addAll(branch.tail().openNodes);
         openSlots.addAll(branch.tail().openSlots);
     }
 
     /** Builds one fork branch as a sub-stream wired to the join; returns its start node id. */
-    private String buildBranch(Branch<T> branch, String joinId) {
-        Sub<T> built = subStream(branch.body(), joinId, "branch '" + branch.name() + "'");
+    private String buildBranch(Branch branch, String joinId) {
+        Sub built = subStream(branch.body(), joinId, "branch '" + branch.name() + "'");
         built.tail().wireOpenEndsTo(joinId);
         return built.start();
     }
 
     /** A built nested sub-stream: its first node ({@code start}) and its open-ended {@code tail}. */
-    private record Sub<U>(String start, WorkflowStream<U> tail) {}
+    private record Sub(String start, WorkflowStream tail) {}
 
     /**
      * Builds a nested sub-stream from {@code body} over the same pipeline, falling back to
      * {@code joinId} for any short-circuit. Throws with {@code what} if the body defines no steps.
      */
-    private Sub<T> subStream(UnaryOperator<WorkflowStream<T>> body, String joinId, String what) {
+    private Sub subStream(UnaryOperator<WorkflowStream> body, String joinId, String what) {
         String[] start = new String[1];
-        WorkflowStream<T> sub = new WorkflowStream<>(pipeline, id -> start[0] = id, joinId);
-        WorkflowStream<T> tail = body.apply(sub);
+        WorkflowStream sub = new WorkflowStream(pipeline, id -> start[0] = id, joinId);
+        WorkflowStream tail = body.apply(sub);
         if (start[0] == null) throw new IllegalArgumentException(what + " defines no steps");
-        return new Sub<>(start[0], tail);
+        if (tail.forkPending) throw new IllegalStateException(what + " has a fork(...) with no combine()");
+        return new Sub(start[0], tail);
     }
 
+    // ------------------------------------------------------ workflow-level settings / terminal
+
     /** Sets the queue used by every subsequently defined step (per-step {@code queue} overrides it). */
-    public WorkflowStream<T> defaultQueue(String queue) {
+    public WorkflowStream defaultQueue(String queue) {
         pipeline.defaultQueue(queue);
         return this;
     }
 
     /**
-     * Sets how this workflow's steps are driven (default {@link ExecutionMode#DEFAULT}, i.e. the
-     * server's configured default). The mode is part of the definition's content hash, so an
-     * in-flight instance keeps the mode it started on.
+     * Sets how this workflow's steps are driven (default {@link ExecutionMode#DEFAULT}). The mode is
+     * part of the definition's content hash, so an in-flight instance keeps the mode it started on.
      */
-    public WorkflowStream<T> execution(ExecutionMode mode) {
+    public WorkflowStream execution(ExecutionMode mode) {
         pipeline.executionMode(mode);
         return this;
     }
 
     /**
      * Marks the step just added as a checkpoint: under {@link ExecutionMode#LOCAL_ASYNC} the worker
-     * flushes its buffer to the server immediately after this step (committing it before running the
-     * next), narrowing the crash-replay window for a step you don't want re-run. A no-op under
-     * SERVER and LOCAL_SYNC, which already commit every step. Must directly follow a step.
+     * flushes its buffer to the server immediately after this step. A no-op under SERVER and
+     * LOCAL_SYNC. Must directly follow a step.
      */
-    public WorkflowStream<T> checkpoint() {
+    public WorkflowStream checkpoint() {
         if (lastStepId == null) {
             throw new IllegalStateException("checkpoint() must directly follow step(), effect() or gate()");
         }
@@ -478,8 +403,10 @@ public final class WorkflowStream<T> {
         return this;
     }
 
-    public Blueprint<T> build() {
+    public Blueprint build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
+        if (forkPending) throw new IllegalStateException(
+                "a fork(...) has no merge: follow it with combine(...) before build()");
         consumed = true;
         wireOpenEndsTo(pipeline.addEnd(null));
         return pipeline.build();

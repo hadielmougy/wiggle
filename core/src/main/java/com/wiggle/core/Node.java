@@ -78,6 +78,10 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey);
     }
 
+    public Node withItemsKey(String k) {
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected, success, reason, k, itemKey);
+    }
+
     public boolean isWorkerDispatched() {
         return kind == NodeKind.TASK || kind == NodeKind.PREDICATE;
     }

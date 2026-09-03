@@ -26,7 +26,7 @@ public final class GreetStart {
         String name = args.length > 0 ? args[0] : "ada";
 
         try (CellResolver resolver = CellResolver.coordinator(coord, Tls.Options.DISABLED, null)) {
-            Blueprint<Map<String, Object>> bp = GreetFlow.blueprint();
+            Blueprint bp = GreetFlow.blueprint();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             String instanceId = resolver.clientForNamespace(ns).start(bp, Map.<String, Object>of("name", name));
             System.out.println("started " + bp.name() + " in namespace '" + ns + "' -> " + instanceId);

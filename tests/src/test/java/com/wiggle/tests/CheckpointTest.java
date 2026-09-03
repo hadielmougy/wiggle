@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
@@ -29,6 +30,24 @@ class CheckpointTest {
         return n;
     }
 
+    @Handlers("cp-flush")
+    static final class FlushH {
+        final CountDownLatch bRunning, releaseB;
+        FlushH(CountDownLatch bRunning, CountDownLatch releaseB) { this.bRunning = bRunning; this.releaseB = releaseB; }
+        public Map<String, Object> a(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
+        public Map<String, Object> b(Map<String, Object> ctx) { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); }
+        public Map<String, Object> c(Map<String, Object> ctx) { return put(ctx, "c", 3L); }
+    }
+
+    @Handlers("cp-nobuf")
+    static final class NobufH {
+        final CountDownLatch bRunning, releaseB;
+        NobufH(CountDownLatch bRunning, CountDownLatch releaseB) { this.bRunning = bRunning; this.releaseB = releaseB; }
+        public Map<String, Object> a(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
+        public Map<String, Object> b(Map<String, Object> ctx) { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); }
+        public Map<String, Object> c(Map<String, Object> ctx) { return put(ctx, "c", 3L); }
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(0, "cp-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -38,10 +57,10 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        Blueprint<Map<String, Object>> plain = Workflow.define("cp")
-                .step("a", ctx -> ctx).step("b", ctx -> ctx).build();
-        Blueprint<Map<String, Object>> checked = Workflow.define("cp")
-                .step("a", ctx -> ctx).checkpoint().step("b", ctx -> ctx).build();
+        Blueprint plain = Workflow.define("cp")
+                .step("a").step("b").build();
+        Blueprint checked = Workflow.define("cp")
+                .step("a").checkpoint().step("b").build();
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
         assertEquals(1, checked.definition().checkpoints().size(), "one checkpoint recorded");
@@ -56,16 +75,16 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint<Map<String, Object>> bp = Workflow.define("cp-flush")
+        Blueprint bp = Workflow.define("cp-flush")
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a", ctx -> put(ctx, "a", 1L)).checkpoint()
-                .step("b", ctx -> { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); })
-                .step("c", ctx -> put(ctx, "c", 3L))
+                .step("a").checkpoint()
+                .step("b")
+                .step("c")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w").register(bp)) {
+             Worker w = new Worker(client, "cp-w").register(bp).handlers(new FlushH(bRunning, releaseB))) {
             w.start();
             String id = client.start(bp, Map.of());
 
@@ -90,16 +109,16 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint<Map<String, Object>> bp = Workflow.define("cp-nobuf")
+        Blueprint bp = Workflow.define("cp-nobuf")
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a", ctx -> put(ctx, "a", 1L))   // no checkpoint
-                .step("b", ctx -> { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); })
-                .step("c", ctx -> put(ctx, "c", 3L))
+                .step("a")   // no checkpoint
+                .step("b")
+                .step("c")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w2").register(bp)) {
+             Worker w = new Worker(client, "cp-w2").register(bp).handlers(new NobufH(bRunning, releaseB))) {
             w.start();
             String id = client.start(bp, Map.of());
 

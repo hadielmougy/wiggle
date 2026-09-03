@@ -10,24 +10,18 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * The accumulating build model behind the {@link WorkflowStream} DSL: it owns the graph's
- * nodes, their edges, the worker-side activity handlers, the queue set, and the workflow-level
- * settings, and it assembles them into an immutable {@link Blueprint} on {@link #build()}.
- *
- * <p>All state is private. Callers never see the collections; they add nodes through the
- * intention-revealing {@code addXxx} methods (each returns the new node's id), connect them
- * with {@link #wireNext}/{@link #wireAlt}, and read nothing back. A task/effect/guard is added
- * as one atomic operation that registers its handler, reserves its name, and records its queue
- * together, so the node and its handler can never drift apart.
+ * The accumulating build model behind the {@link WorkflowStream} DSL: it owns the graph's nodes and
+ * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
+ * {@link Blueprint} on {@link #build()}. The blueprint is pure topology -- no step logic -- so this
+ * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
+ * on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes.
  */
-final class Pipeline<T> {
+final class Pipeline {
 
     private final String name;
-    private final ContextCodec<T> codec;
     private final RetryPolicy defaultRetry;
 
     private final Map<String, Node> nodes = new LinkedHashMap<>();
-    private final Map<String, ActivityHandler> handlers = new LinkedHashMap<>();
     private final Set<String> queues = new LinkedHashSet<>();
     private final Set<String> stepNames = new LinkedHashSet<>();
     private final Set<String> checkpoints = new LinkedHashSet<>();
@@ -37,10 +31,9 @@ final class Pipeline<T> {
     private ExecutionMode executionMode = ExecutionMode.DEFAULT;
     private int counter;
 
-    Pipeline(String name, ContextCodec<T> codec, RetryPolicy defaultRetry) {
+    Pipeline(String name, RetryPolicy defaultRetry) {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("workflow name is required");
         this.name = name;
-        this.codec = codec;
         this.defaultRetry = defaultRetry == null ? RetryPolicy.forever() : defaultRetry;
         this.defaultQueue = name;
     }
@@ -55,96 +48,39 @@ final class Pipeline<T> {
     /** Marks an already-added step as a checkpoint (see {@link WorkflowStream#checkpoint()}). */
     void markCheckpoint(String nodeId) { checkpoints.add(nodeId); }
 
-    /** A task node: {@code fn}'s result is diffed against the context and merged back. */
-    String addStep(String name, Activity<T> fn, RetryPolicy retry, String queue) {
-        return addWorkerTask(
-                name,
-                json -> {
-                    try {
-                        return Json.shallowDiff(json, codec.encode(fn.apply(codec.decode(json))));
-                    } finally {
-                        ContextVersion.clear();
-                    }
-                },
-                retry, queue);
-    }
-
-    /** A task node run for its side effect only; the context is left unchanged. */
-    String addEffect(String name, SideEffect<T> fn, RetryPolicy retry, String queue) {
-        return addWorkerTask(
-                name,
-                json -> {
-                    try {
-                        fn.accept(codec.decode(json));
-                        return null;
-                    } finally {
-                        ContextVersion.clear();
-                    }
-                },
-                retry, queue);
-    }
-
-    /** A predicate node evaluated on a worker; its handler returns a {@link Boolean}. */
-    String addGuard(String name, Predicate<T> test, RetryPolicy retry, String queue) {
-        return addWorkerPredicate(
-                name,
-                json -> {
-                    try {
-                        return test.test(codec.decode(json));
-                    } finally {
-                        ContextVersion.clear();
-                    }
-                },
-                retry, queue);
-    }
-
     /** The step's own queue, or the workflow default when none is given. */
     private String queueOr(String queue) { return queue == null || queue.isBlank() ? defaultQueue : queue; }
 
-    private String addWorkerPredicate(String name, ActivityHandler handler, RetryPolicy retry, String queue) {
-        String q = queueOr(queue);
-        queues.add(q);
-        NodeDraft draft = NodeDraft.predicate(name, registerActivity(name, handler), q, retryOr(retry));
-        return add(draft);
-    }
-
-    private String addWorkerTask(String name, ActivityHandler handler, RetryPolicy retry, String queue) {
-        String q = queueOr(queue);
-        queues.add(q);
-        NodeDraft draft = NodeDraft.task(name, registerActivity(name, handler), q, retryOr(retry));
-        return add(draft);
-    }
-
-    /** Reserves the step name, registers its handler, and returns the derived activity id. */
-    private String registerActivity(String name, ActivityHandler handler) {
-        reserveName(name);
-        String activity = this.name + "#" + name;
-        handlers.put(activity, handler);
-        return activity;
-    }
-
-    /** Reserves the step name and returns its activity id, binding <em>no</em> handler. The topology
-     *  and queue are declared here; the handler is bound on the worker by name (handle/registerHandlers).
-     *  A worker that claims this step without a bound handler fails it fast -- there is no silent no-op. */
+    /** Reserves the step name and returns its activity id; the handler is bound on the worker by name. */
     private String reserveActivity(String name) {
         reserveName(name);
         return this.name + "#" + name;
     }
 
-    /** A worker task node with no baked handler (name-only). Used by {@code step(name[, queue])} and
-     *  {@code effect(name[, queue])}; the handler is bound on the worker by name. */
-    String addTaskNameOnly(String name, RetryPolicy retry, String queue) {
+    /** A worker task node (step/effect); its handler is bound on the worker by name. */
+    String addTask(String name, RetryPolicy retry, String queue) {
         String q = queueOr(queue);
         queues.add(q);
         return add(NodeDraft.task(name, reserveActivity(name), q, retryOr(retry)));
     }
 
-    /** A predicate node with no baked handler (name-only). Used by {@code gate(name[, retry], queue)};
-     *  the guard is bound on the worker by name. */
-    String addGuardNameOnly(String name, RetryPolicy retry, String queue) {
+    /** A worker predicate node (gate / choose guard / do-while condition); bound on the worker by name. */
+    String addGuard(String name, RetryPolicy retry, String queue) {
         String q = queueOr(queue);
         queues.add(q);
         return add(NodeDraft.predicate(name, reserveActivity(name), q, retryOr(retry)));
+    }
+
+    /**
+     * The mandatory merge node after a fork's join. It is a task node bound by name like any other,
+     * but it carries the fork's arm names (a JSON array) on its {@code itemsKey} -- a field that
+     * round-trips through every store -- so the engine can stage each isolated branch's result under
+     * its name for the combine handler, and strip those scratch keys afterward.
+     */
+    String addCombine(String name, List<String> branchNames, RetryPolicy retry, String queue) {
+        String id = addTask(name, retry, queue);
+        nodes.put(id, nodes.get(id).withItemsKey(Json.write(List.copyOf(branchNames))));
+        return id;
     }
 
     /** A server-side timer. Sleep names are not required to be unique (nothing addresses them). */
@@ -190,17 +126,17 @@ final class Pipeline<T> {
     }
 
     /**
-     * Assembles the accumulated nodes into a validated, content-addressed {@link Blueprint}.
-     * The caller ({@link WorkflowStream#build()}) has already appended the terminal end node and
-     * wired every open edge to it.
+     * Assembles the accumulated nodes into a validated, content-addressed {@link Blueprint}. The
+     * caller ({@link WorkflowStream#build()}) has already appended the terminal end node and wired
+     * every open edge to it.
      */
-    Blueprint<T> build() {
+    Blueprint build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);
-        return new Blueprint<>(def, handlers, codec);
+        return new Blueprint(def);
     }
 
     private Set<String> copyOf(Set<String> set) {

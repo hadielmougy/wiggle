@@ -9,7 +9,6 @@ import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -28,12 +27,6 @@ import java.util.Map;
  */
 public final class DashboardSeed {
 
-    private static Map<String, Object> put(Map<String, Object> c, String k, Object v) {
-        Map<String, Object> n = new LinkedHashMap<>(c);
-        n.put(k, v);
-        return n;
-    }
-
     public static void main(String[] args) throws Exception {
         // Default the dashboard on (the whole point of this tool) unless the caller set a port.
         if (System.getProperty("wiggle.dashboard.port") == null && System.getenv("WIGGLE_DASHBOARD_PORT") == null) {
@@ -41,31 +34,35 @@ public final class DashboardSeed {
         }
         ServerConfig config = ServerConfig.fromEnvironment();
 
-        Blueprint<Map<String, Object>> kyc = Workflow.define("kyc-checks")
-                .step("verify-id", ctx -> put(ctx, "idOk", true))
-                .step("risk-score", ctx -> put(ctx, "risk", 12))
+        Blueprint kyc = Workflow.define("kyc-checks")
+                .step("verify-id")
+                .step("risk-score")
                 .build();
 
-        Blueprint<Map<String, Object>> onboarding = Workflow.define("onboarding")
-                .step("create-account", ctx -> put(ctx, "accountId", "acc-42"))
+        Blueprint onboarding = Workflow.define("onboarding")
+                .step("create-account")
                 .fork(
-                        Branch.of("send-welcome", b -> b.step("welcome", ctx -> put(ctx, "welcomed", true))),
-                        Branch.of("provision", b -> b.step("provision-hw", ctx -> put(ctx, "provisioned", true))))
+                        Branch.of("send-welcome", b -> b.step("welcome")),
+                        Branch.of("provision", b -> b.step("provision-hw")))
+                .combine("merge")
                 .subWorkflow("run-kyc", "kyc-checks")
                 .awaitSignal("manager-approval", Duration.ofHours(48),
-                        b -> b.step("auto-escalate", ctx -> put(ctx, "escalated", true)))
-                .step("activate", ctx -> put(ctx, "active", true))
+                        b -> b.step("auto-escalate"))
+                .step("activate")
                 .build();
 
-        Blueprint<Map<String, Object>> report = Workflow.define("nightly-report")
-                .step("gather", ctx -> put(ctx, "rows", 128))
-                .step("render", ctx -> put(ctx, "done", true))
+        Blueprint report = Workflow.define("nightly-report")
+                .step("gather")
+                .step("render")
                 .build();
 
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "seed-worker")
-                     .register(onboarding).register(kyc).register(report)) {
+                     .register(onboarding).register(kyc).register(report)
+                     .handlers(new OnboardingHandlers())
+                     .handlers(new KycHandlers())
+                     .handlers(new NightlyReportHandlers())) {
             client.register(kyc);
             client.register(report);
             worker.start();

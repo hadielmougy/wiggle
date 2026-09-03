@@ -162,63 +162,90 @@ The image is the control plane + dashboard only; run **workers** as separate pro
 
 ## 5. Authoring workflows
 
+A definition is pure **topology** — named nodes and their wiring, no logic and no context type.
+`build()` returns a `Blueprint` (just the graph):
+
 ```java
-Blueprint<Order> orders = Workflow.define("order-fulfilment", ContextCodec.records(Order.class))
-        .step("validate", Orders::validate)
-        .gate("in-stock", o -> o.quantity() > 0)
+Blueprint orders = Workflow.define("order-fulfilment")
+        .step("validate")
+        .gate("in-stock")
         .fork(
-                Branch.of("payment",  s -> s.step("authorise", Pay::authorise, RetryPolicy.exponential(5, ofMillis(100)))
-                                            .step("capture",   Pay::capture)),
-                Branch.of("shipping", s -> s.step("reserve", Stock::reserve)
+                Branch.of("payment",  s -> s.step("authorise", RetryPolicy.exponential(5, ofMillis(100)))
+                                            .step("capture")),
+                Branch.of("shipping", s -> s.step("reserve")
                                             .sleep("await", ofMillis(300))
-                                            .step("label", Labels::print)))
-        .step("notify", Notifier::send)
+                                            .step("label")))
+        .combine("merge")   // fork always rejoins at a mandatory combine
+        .step("notify")
         .build();
 ```
 
+The step logic is a separate class annotated `@Handlers("<workflow-name>")`, bound on a worker by
+name. Each method whose name matches a step (case/style-insensitive, so `inStock` serves `in-stock`)
+is a handler; its signature defines the step — one parameter is the input (decoded from JSON), a
+`boolean` return is a gate, `void` is an effect, any other return is a task whose value becomes the
+next context (types may change from step to step, like `Stream.map`):
+
+```java
+@Handlers("order-fulfilment")
+class OrderHandlers {
+    public Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
+    public boolean inStock(Order o)   { return o.quantity() > 0; }        // gate
+    public Order   authorise(Order o) { return o.withPaymentRef(auth(o)); }
+    public Order   capture(Order o)   { return o.log("captured"); }
+    public Order   reserve(Order o)   { return o.withShipmentRef(reserve(o)); }
+    public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
+    public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
+}
+```
+
+Bind it on the worker with `new Worker(client, "w").register(orders).handlers(new OrderHandlers())`.
+A `combine` node (`merge`) with no method folds its branches with the default union.
+
 ### 5.1 Operations
+
+Every operation is topology only — it names a node; the matching `@Handlers` method supplies its logic.
 
 | Operation | Meaning |
 |---|---|
-| `step(name, fn)` / `step(name, fn, retry)` / `then(...)` | run `fn` on a worker; its result becomes the new context |
-| `effect(name, fn)` | run for a side effect; context unchanged |
-| `gate(name, pred)` | continue only while true; false ends the instance as `gated:<name>` |
+| `step(name)` / `step(name, retry)` / `then(...)` | run the step's handler on a worker; its result becomes the new context |
+| `effect(name)` | the handler runs for a side effect (a `void` method); context unchanged |
+| `gate(name)` | continue only while the guard handler returns true; false ends the instance as `gated:<name>` |
 | `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
-| `fork(branches…)` | run branches in parallel, then join |
+| `fork(branches…).combine(name)` | run branches in parallel on isolated context copies, then rejoin at the mandatory `combine` |
 | `forkEach(name, itemsKey, itemKey, body)` | runtime fan-out: one branch per element of the list at `itemsKey` |
-| `doWhile(name, cond, body)` | run `body`, then repeat while `cond` holds (at least once) |
+| `doWhile(name, body)` | run `body`, then repeat while the guard handler named `name` holds (at least once) |
 | `sleep(name, duration)` | server-side timer; holds no worker |
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
 | `subWorkflow(name, workflow)` | run another workflow as a child; result merges back, failure propagates |
-| `step(name, fn, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
+| `step(name, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
 | `execution(mode)` | set the execution mode (§6.4) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
 | `build()` | produce the `Blueprint` |
 
-`step`/`effect`/`gate` take an optional trailing `RetryPolicy`. The context type is fixed for the
-whole pipeline (a `map`-like `UnaryOperator<T>`), stored as either typed records
-(`ContextCodec.records(X.class)`) or JSON maps (`Workflow.defineJson(name)`).
+`step`/`effect`/`gate` take an optional trailing `RetryPolicy`. The context type is not fixed by the
+definition — each handler picks the type it works in by its signature (a typed record, or a
+`Map<String, Object>` for raw JSON), and a method may return a different type than it takes.
 
-**Evolving a record's schema.** `ContextCodec.records` stores fields directly, so adding, renaming,
-or retyping a field silently defaults/loses data — or fails to decode — for instances already
-in flight (the workflow *version* hashes only the graph topology, not the context type). Use
-`VersionedContextCodec` when a record needs to change over time: it wraps the context in a
-`{"_schema","_v","data"}` envelope and **upcasts** older data to the current shape on read, so
-steps only ever see the current record.
+**Evolving a record's schema.** A handler decodes the persisted JSON into its parameter type
+reflectively, so adding, renaming, or retyping a field silently defaults/loses data — or fails to
+decode — for instances already in flight (the workflow *version* hashes only the graph topology, not
+the context type). Opt into custom decoding with a `@Decode` method in the handler class: it takes the
+raw JSON (`Map<String, Object>`) and returns the current type, running instead of the default mapping
+wherever a step or combine parameter of that type is bound. It's the seam for schema-version upcasts
+or a bespoke codec:
 
 ```java
-var codec = VersionedContextCodec.builder(Order.class, /* current version */ 2)
-        .schema("order-fulfilment")
-        .upcast(1, m -> { m.putIfAbsent("currency", "USD"); return m; })   // v1 -> v2: default a new field
-        .build();
-Blueprint<Order> orders = Workflow.define("order-fulfilment", codec) …;
+@Handlers("order-fulfilment")
+class OrderHandlers {
+    @Decode
+    public Order load(Map<String, Object> raw) {     // upcast an older shape to the current Order
+        raw.putIfAbsent("currency", "USD");           // e.g. default a field added in a later version
+        return RecordMapper.fromJson(raw, Order.class);
+    }
+    // ... step methods, which now receive the upcast Order ...
+}
 ```
-
-Bare, pre-envelope contexts read as version 1, so existing instances upgrade transparently; on the
-next write an instance is re-stored at the current version. Inside a step, `ContextVersion.current()`
-returns the version the context was persisted at (for a durable origin marker, stamp it into `data`
-from an upcast). The example workflow (`example/.../OrderFulfilment.java`) uses this — `Order`
-gained `currency` at v2. See the README's "Evolving the context schema" for the full walkthrough.
 
 ### 5.2 Running instances
 
