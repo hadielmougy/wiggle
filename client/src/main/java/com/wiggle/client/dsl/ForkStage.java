@@ -3,7 +3,7 @@ package com.wiggle.client.dsl;
 import java.util.List;
 
 /**
- * The mandatory stage after a {@link WorkflowStream#fork}: the branches fanned out, each on its own
+ * The mandatory stage after a {@link WorkflowBuilder#fork}: the branches fanned out, each on its own
  * isolated copy of the context, and now must be rejoined by an explicit {@link #combine}. There is
  * no implicit merge -- a branch's writes never touch the shared context, so the only way a branch's
  * result reaches the flow is through the combine.
@@ -14,15 +14,15 @@ import java.util.List;
  * or, if no such method exists, the worker's default union (fold all arms). The fork left the stream
  * with no open end, so a forgotten combine also fails at {@code build()}.
  *
- * @see WorkflowStream#fork
+ * @see WorkflowBuilder#fork
  */
 public final class ForkStage {
 
-    private final WorkflowStream stream;
+    private final WorkflowBuilder stream;
     private final List<Branch> branches;
     private boolean combined;
 
-    ForkStage(WorkflowStream stream, List<Branch> branches) {
+    ForkStage(WorkflowBuilder stream, List<Branch> branches) {
         this.stream = stream;
         this.branches = branches;
     }
@@ -35,7 +35,7 @@ public final class ForkStage {
      * @param name the step name of the combine node (must be unique in the workflow)
      * @return the stream, reopened after the combine node
      */
-    public WorkflowStream combine(String name) {
+    public WorkflowBuilder combine(String name) {
         if (combined) throw new IllegalStateException("combine already applied to this fork");
         combined = true;
         stream.buildForkCombine(branches, name);
