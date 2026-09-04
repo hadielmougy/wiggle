@@ -33,11 +33,11 @@ public final class Workflow {
 
     private Workflow() {}
 
-    public static WorkflowStream define(String name) {
+    public static WorkflowBuilder define(String name) {
         return define(name, RetryPolicy.exponential(3, java.time.Duration.ofMillis(500)));
     }
 
-    public static WorkflowStream define(String name, RetryPolicy defaultRetry) {
-        return WorkflowStream.root(new Pipeline(name, defaultRetry));
+    public static WorkflowBuilder define(String name, RetryPolicy defaultRetry) {
+        return WorkflowBuilder.root(new Pipeline(name, defaultRetry));
     }
 }

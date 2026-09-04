@@ -2,7 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowStream;
+import com.wiggle.client.dsl.WorkflowBuilder;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -94,7 +94,7 @@ public final class Benchmark {
      * handler and counts the instance down exactly once.
      */
     private static Blueprint linear(String name, int steps, ExecutionMode mode) {
-        WorkflowStream s = Workflow.define(name).execution(mode);
+        WorkflowBuilder s = Workflow.define(name).execution(mode);
         for (int i = 0; i < steps - 1; i++) {
             s = s.step(hop(i));   // distinct raw name, all canonicalise to the "hop" handler
         }

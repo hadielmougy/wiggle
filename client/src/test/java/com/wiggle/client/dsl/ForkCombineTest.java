@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** {@link WorkflowStream#fork} with its mandatory {@link ForkStage#combine}: the topology it emits
+/** {@link WorkflowBuilder#fork} with its mandatory {@link ForkStage#combine}: the topology it emits
  *  (an isolated fork rejoined by a combine node that carries the arm names). The combine's merge
  *  logic is a worker concern, exercised end-to-end in the engine tests. */
 class ForkCombineTest {
@@ -71,7 +71,7 @@ class ForkCombineTest {
 
     @Test
     void combineIsMandatory_forgottenCombineFailsBuild() {
-        WorkflowStream stream = Workflow.define("t").step("prep");
+        WorkflowBuilder stream = Workflow.define("t").step("prep");
         stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, stream::build);
@@ -81,7 +81,7 @@ class ForkCombineTest {
 
     @Test
     void combineTwiceThrows() {
-        WorkflowStream stream = Workflow.define("t").step("prep");
+        WorkflowBuilder stream = Workflow.define("t").step("prep");
         ForkStage stage = stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
         stage.combine("m");
         assertThrows(IllegalStateException.class, () -> stage.combine("m2"));

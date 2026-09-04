@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link Pipeline}, the package-private graph builder behind the DSL. These
- * drive its API directly (rather than through {@link WorkflowStream}) so each responsibility --
+ * drive its API directly (rather than through {@link WorkflowBuilder}) so each responsibility --
  * id assignment, name uniqueness, edge wiring, queue tracking, and the validation/content-versioning
  * done by {@link Pipeline#build()} -- is checked in isolation. The pipeline builds pure topology now:
  * it declares named nodes (task/guard/combine/...) with retry and queue, but no step logic.

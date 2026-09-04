@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowStream;
+import com.wiggle.client.dsl.WorkflowBuilder;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.WiggleClient;
@@ -55,7 +55,7 @@ public final class Scenarios {
         return w.start();
     }
 
-    private static WorkflowStream json(String name) {
+    private static WorkflowBuilder json(String name) {
         return Workflow.define(name);
     }
 
