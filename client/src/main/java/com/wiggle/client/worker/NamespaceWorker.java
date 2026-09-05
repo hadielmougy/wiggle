@@ -1,6 +1,6 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.WiggleConnection;
+import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 
 import java.time.Duration;
@@ -21,7 +21,8 @@ import java.util.function.Supplier;
  * cell</em> and reconciling that set over time. Cells of a namespace have disjoint databases, so a
  * single worker polling one cell would only ever see that cell's work; this fans polling out across
  * every cell the coordinator reports active (OPEN or DRAINING) and drops a cell's worker when it
- * retires (T12). With no coordinator it degrades to a single worker against the static target.
+ * retires (T12). For a standalone (non-sharded) server, use a plain {@link Worker} against
+ * {@code WiggleConnection.direct(url).client()} instead.
  *
  * <p>Node-level HA <em>within</em> a cell is a separate concern: a cell is one logical endpoint (its
  * members share a database, so polling one is enough); this reconciles at the <em>cell</em> level.
@@ -61,9 +62,9 @@ public final class NamespaceWorker implements AutoCloseable {
         this.configurator = configurator;
     }
 
-    /** Coordinator-wired: serve {@code namespace}'s active cells, resolved through {@code resolver}. */
-    public NamespaceWorker(WiggleConnection resolver, String namespace, String workerId, Consumer<Worker> configurator) {
-        this(() -> resolver.activeCellTargets(namespace), WiggleClient::new,
+    /** Coordinator-wired: serve {@code namespace}'s active cells, resolved through {@code connection}. */
+    public NamespaceWorker(CoordinatedConnection connection, String namespace, String workerId, Consumer<Worker> configurator) {
+        this(() -> connection.activeCellTargets(namespace), WiggleClient::new,
                 workerId, WorkerOptions.defaults(), configurator);
     }
 

@@ -1,5 +1,6 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
@@ -98,7 +99,7 @@ class NamespaceWorkerTest {
             svc.doOpenEpoch("orders", java.util.List.of(
                     com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
-            WiggleConnection resolver = WiggleConnection.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
+            CoordinatedConnection resolver = WiggleConnection.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
             try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp).handlers(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(cell.baseUrl()), nw.activeCells(), "resolved the namespace's one active cell");

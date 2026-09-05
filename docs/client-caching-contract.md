@@ -1,7 +1,7 @@
 # Client caching contract — how clients cache coordinator resolutions
 
 What a wiggle client is allowed (and required) to cache from the coordinator, and why each of the three
-resolution surfaces caches differently. This is the conceptual reference for `client/WiggleConnection` and a
+resolution surfaces caches differently. This is the conceptual reference for `client/CoordinatedConnection` and a
 spec every client implementation must honour (the Java client and the vendored-proto Python client
 alike). For the placement model these resolutions read, see [sharding-and-epochs.md](sharding-and-epochs.md).
 
@@ -15,7 +15,7 @@ alike). For the placement model these resolutions read, see [sharding-and-epochs
 
 There is no single "resolve and cache" rule — the three calls have deliberately different policies.
 
-| Surface | `WiggleConnection` entry point | Coordinator RPC | Cached? | Refresh trigger |
+| Surface | `CoordinatedConnection` entry point | Coordinator RPC | Cached? | Refresh trigger |
 |---|---|---|---|---|
 | **New start** (by namespace) | `clientForNamespace` → `resolveNamespace` | `Resolve{namespace}` | **No** | every start re-resolves |
 | **Route existing instance** (by id) | `clientForInstance` → `resolveInstance` | `Resolve{instance_id}` | **Yes** — by `(ns, epoch, shard)`, TTL'd | TTL expiry or `invalidate()` |
@@ -67,7 +67,7 @@ mapping staleness. The client uses `max(1s, Endpoint.ttl_seconds)` — a coordin
 of 0 is floored to 1 s, never treated as "cache forever".
 
 ```java
-// WiggleConnection.resolveInstance
+// CoordinatedConnection.resolveInstance
 Cached c = byShard.get(key);
 if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();   // hit
 ResolveResponse r = coord.resolve(/* by instance_id */);
@@ -159,7 +159,7 @@ A conformant client **MUST NOT**:
 
 | Concept | Where |
 |---|---|
-| resolution + both caches | `client/src/main/java/com/wiggle/client/WiggleConnection.java` |
+| resolution + both caches | `client/src/main/java/com/wiggle/client/CoordinatedConnection.java` |
 | new-start spread (server side of §2) | `coordinator/runtime/**/CoordinatorApi.java` (`resolve` by namespace) |
 | id parse (epoch/shard for §3) | `core/src/main/java/com/wiggle/core/IdCodec.java` |
 | worker active-cell reconcile (§5) | `client/src/main/java/com/wiggle/client/worker/NamespaceWorker.java` |

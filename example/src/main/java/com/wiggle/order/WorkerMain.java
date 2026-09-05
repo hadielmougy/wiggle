@@ -23,7 +23,7 @@ public final class WorkerMain {
         int concurrency = Integer.parseInt(env("WIGGLE_WORKER_CONCURRENCY", "8"));
         int localBatch = Integer.parseInt(env("WIGGLE_LOCAL_BATCH_SIZE", "64"));   // LOCAL_ASYNC batch size
 
-        WiggleConnection wiggle = WiggleConnection.direct(url);
+        var wiggle = WiggleConnection.direct(url);
         Blueprint blueprint = OrderFulfilment.blueprint();
 
         Worker worker = new Worker(wiggle.client(), id, WorkerOptions.defaults()

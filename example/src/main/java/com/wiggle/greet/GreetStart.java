@@ -25,7 +25,7 @@ public final class GreetStart {
         String ns = env("WIGGLE_NAMESPACE", "ns1");
         String name = args.length > 0 ? args[0] : "ada";
 
-        try (WiggleConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null)) {
+        try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null)) {
             Blueprint bp = GreetFlow.blueprint();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             String instanceId = resolver.clientForNamespace(ns).start(bp, Map.<String, Object>of("name", name));
