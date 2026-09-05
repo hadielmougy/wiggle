@@ -245,6 +245,16 @@ public final class WorkflowBuilder {
     }
 
     /**
+     * Shorthand for {@link #forkEach(String, String, String, UnaryOperator)} that exposes each
+     * element under the same key as the list -- the element at {@code itemsKey} and its position at
+     * {@code itemsKey + "Index"}. Use the four-argument form when the branch needs a distinct element
+     * key (e.g. nested {@code forkEach}es that would otherwise shadow each other).
+     */
+    public WorkflowBuilder forkEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+        return forkEach(name, itemsKey, itemsKey, body);
+    }
+
+    /**
      * Runtime fan-out: when the instance reaches this node, the engine reads the list stored in the
      * context under {@code itemsKey} and spawns one parallel branch per element, each running
      * {@code body} with its element injected under {@code itemKey} (and its position under
