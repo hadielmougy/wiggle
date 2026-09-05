@@ -77,6 +77,11 @@ public final class CellResolver implements AutoCloseable {
         return new CellResolver(null, staticTarget, tls, null);
     }
 
+    /** No coordinator, no TLS: every call goes to {@code staticTarget}. The plain standalone entry point. */
+    public static CellResolver direct(String staticTarget) {
+        return new CellResolver(null, staticTarget, Tls.Options.DISABLED, null);
+    }
+
     /**
      * Override the address of every resolved cell before connecting -- a testing seam for when the
      * coordinator advertises an address unreachable from where the client runs (e.g. a Kubernetes pod IP,
@@ -87,6 +92,20 @@ public final class CellResolver implements AutoCloseable {
     public CellResolver withEndpointRewriter(EndpointRewriter rewriter) {
         this.endpointRewriter = rewriter == null ? EndpointRewriter.identity() : rewriter;
         return this;
+    }
+
+    /**
+     * The client for the single target in direct mode -- the zero-namespace entry point for a
+     * standalone (non-sharded) deployment: {@code CellResolver.direct(url).client()}. Fails under a
+     * coordinator, where there is no single cell; there, route by namespace or instance instead
+     * ({@link #clientForNamespace} / {@link #clientForInstance}).
+     */
+    public WiggleClient client() {
+        if (coordinatorUrl != null) {
+            throw new IllegalStateException("client() has no single target under a coordinator; "
+                    + "use clientForNamespace(namespace) or clientForInstance(id)");
+        }
+        return clientFor(staticTarget);
     }
 
     /** A client for the cell that hosts new instances of {@code namespace}. */

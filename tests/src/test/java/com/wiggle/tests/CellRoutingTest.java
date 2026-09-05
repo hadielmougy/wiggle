@@ -21,6 +21,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Phase 2 / T10 (Java SDK): the {@link CellResolver} routes {@code start} and operate-by-id to the
@@ -84,6 +86,28 @@ class CellRoutingTest {
             // same client instance is reused for operate-by-id in direct mode
             assertEquals("RUNNING", resolver.clientForInstance(id).instance(id).status());
             assertEquals(1, resolver.activeCellTargets("ignored").size());
+        }
+    }
+
+    @Test @DisplayName("direct().client() is the zero-namespace entry point for a standalone server")
+    void directClientEntryPoint() throws Exception {
+        try (WiggleServer cell = new WiggleServer(config()).start();
+             CellResolver wiggle = CellResolver.direct(cell.baseUrl())) {   // no-TLS overload
+            WiggleClient client = wiggle.client();
+            client.register(workflow());
+            String id = client.start("wf", Map.of());
+            assertNotNull(id);
+            assertEquals("RUNNING", client.instance(id).status());
+            // the same connection is reused; no namespace label needed
+            assertEquals(client, wiggle.client(), "client() returns the one cached client");
+        }
+    }
+
+    @Test @DisplayName("client() fails under a coordinator, where there is no single cell")
+    void clientRejectedUnderCoordinator() throws Exception {
+        try (CellResolver resolver = CellResolver.coordinator("127.0.0.1:1", Tls.Options.DISABLED, "eu")) {
+            IllegalStateException e = assertThrows(IllegalStateException.class, resolver::client);
+            assertTrue(e.getMessage().contains("clientForNamespace"), e.getMessage());
         }
     }
 }
