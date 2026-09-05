@@ -1,6 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.core.InstanceView;
 
 import java.math.BigDecimal;
@@ -11,7 +11,7 @@ import java.util.List;
 /**
  * Submits a batch of orders and waits for them. Usage: SubmitOrders [count].
  *
- * <p>Connecting starts from {@link CellResolver#direct(String)} -- the same entry point the sharded
+ * <p>Connecting starts from {@link WiggleConnection#direct(String)} -- the same entry point the sharded
  * {@link NamespaceSubmitter} uses via {@code coordinator(...)}; only the factory differs.
  */
 public final class SubmitOrders {
@@ -20,7 +20,7 @@ public final class SubmitOrders {
         String url = System.getenv().getOrDefault("WIGGLE_URL", "localhost:8080");
         int count = args.length > 0 ? Integer.parseInt(args[0]) : 1;
 
-        try (CellResolver wiggle = CellResolver.direct(url)) {
+        try (WiggleConnection wiggle = WiggleConnection.direct(url)) {
             var client = wiggle.client();
             // Registering here too means orders can be submitted before any worker exists;
             // they simply queue until one shows up.

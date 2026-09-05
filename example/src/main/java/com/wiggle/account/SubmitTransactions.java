@@ -1,12 +1,12 @@
 package com.wiggle.account;
 
-import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleConnection;
 
 public class SubmitTransactions {
 
     public static void main(String[] args) {
         String url = System.getenv().getOrDefault("WIGGLE_URL", "localhost:8080");
-        try (CellResolver wiggle = CellResolver.direct(url)) {
+        try (WiggleConnection wiggle = WiggleConnection.direct(url)) {
             var client = wiggle.client();
             client.register(TransactionWorkflow.blueprint());
 

@@ -1,6 +1,6 @@
 package com.wiggle.greet;
 
-import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.core.Tls;
 
@@ -25,7 +25,7 @@ public final class GreetStart {
         String ns = env("WIGGLE_NAMESPACE", "ns1");
         String name = args.length > 0 ? args[0] : "ada";
 
-        try (CellResolver resolver = CellResolver.coordinator(coord, Tls.Options.DISABLED, null)) {
+        try (WiggleConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null)) {
             Blueprint bp = GreetFlow.blueprint();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             String instanceId = resolver.clientForNamespace(ns).start(bp, Map.<String, Object>of("name", name));

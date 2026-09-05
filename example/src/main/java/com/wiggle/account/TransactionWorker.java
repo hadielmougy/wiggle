@@ -1,6 +1,6 @@
 package com.wiggle.account;
 
-import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -14,7 +14,7 @@ public class TransactionWorker {
         String id = env("WIGGLE_WORKER_ID", "worker-" + ProcessHandle.current().pid());
         int concurrency = Integer.parseInt(env("WIGGLE_WORKER_CONCURRENCY", "8"));
 
-        CellResolver wiggle = CellResolver.direct(url);
+        WiggleConnection wiggle = WiggleConnection.direct(url);
 
         Blueprint blueprint = TransactionWorkflow.blueprint();
 

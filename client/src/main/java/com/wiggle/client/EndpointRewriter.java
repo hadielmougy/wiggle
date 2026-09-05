@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Rewrites a resolved cell target ({@code host:port}) before {@link CellResolver} opens a channel to it.
+ * Rewrites a resolved cell target ({@code host:port}) before {@link WiggleConnection} opens a channel to it.
  * A testing seam: the coordinator may hand back an address only reachable inside the cluster (e.g. a
  * Kubernetes pod IP), while a client running outside must reach the cell through a tunnel (e.g. a
  * {@code kubectl port-forward} on {@code 127.0.0.1}). The default is identity, so production routing is

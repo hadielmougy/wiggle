@@ -1,6 +1,6 @@
 package com.wiggle.cli;
 
-import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.AllocatedWorkflow;
 import com.wiggle.proto.EpochRing;
@@ -85,8 +85,8 @@ public final class Wiggle implements Runnable {
 
     // ---- coordinator: allocate / deallocate flows to namespaces ----
 
-    private static CellResolver resolver(String coordinator) {
-        return CellResolver.coordinator(coordinator, Tls.Options.fromEnvironment(),
+    private static WiggleConnection resolver(String coordinator) {
+        return WiggleConnection.coordinator(coordinator, Tls.Options.fromEnvironment(),
                 System.getenv().getOrDefault("WIGGLE_REGION", ""));
     }
 
@@ -112,7 +112,7 @@ public final class Wiggle implements Runnable {
                 System.err.println(e.getMessage());
                 return 2;
             }
-            try (CellResolver resolver = resolver(target)) {
+            try (WiggleConnection resolver = resolver(target)) {
                 boolean removed = resolver.deregisterWorkflow(namespace, name);
                 System.out.println(removed
                         ? "deallocated  " + name + "  from namespace '" + namespace + "'"
@@ -144,7 +144,7 @@ public final class Wiggle implements Runnable {
                 System.err.println(e.getMessage());
                 return 2;
             }
-            try (CellResolver resolver = resolver(target)) {
+            try (WiggleConnection resolver = resolver(target)) {
                 var flows = resolver.listWorkflows(namespace);
                 if (flows.isEmpty()) {
                     System.out.println("namespace '" + namespace + "' has no allocated workflows");
@@ -204,7 +204,7 @@ public final class Wiggle implements Runnable {
                 System.err.println(e.getMessage());
                 return 2;
             }
-            try (CellResolver resolver = resolver(target)) {
+            try (WiggleConnection resolver = resolver(target)) {
                 Policy p = resolver.openEpoch(namespace, ring);
                 System.out.printf("opened epoch %d for namespace '%s'  (revision %d)  via %s%n",
                         p.getCurrentEpoch(), namespace, p.getRevision(), target);

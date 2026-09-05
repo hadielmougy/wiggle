@@ -339,13 +339,13 @@ batch; the win shows against a real database (fewer WAL fsyncs). Compare the mod
 A worker registers one or more blueprints and pulls work. Run as many as you like, in as
 many processes as you like — they share the load automatically.
 
-Connecting to a running deployment starts from **`CellResolver`**, the single entry point:
-`CellResolver.direct(url)` for one standalone server, `CellResolver.coordinator(url, tls, region)`
+Connecting to a running deployment starts from **`WiggleConnection`**, the single entry point:
+`WiggleConnection.direct(url)` for one standalone server, `WiggleConnection.coordinator(url, tls, region)`
 for a sharded namespace. Everything downstream is the same — swapping the factory is the only change
 to go distributed.
 
 ```java
-try (CellResolver wiggle = CellResolver.direct("localhost:8080")) {
+try (WiggleConnection wiggle = WiggleConnection.direct("localhost:8080")) {
     Worker worker = new Worker(wiggle.client(), "worker-1",
                     WorkerOptions.defaults()
                         .withConcurrency(16)                  // steps in flight at once
@@ -363,7 +363,7 @@ For a **sharded** namespace, swap in the coordinator factory and let a `Namespac
 worker out across the namespace's live cells:
 
 ```java
-try (CellResolver wiggle = CellResolver.coordinator("localhost:8099", Tls.Options.DISABLED, "us")) {
+try (WiggleConnection wiggle = WiggleConnection.coordinator("localhost:8099", Tls.Options.DISABLED, "us")) {
     NamespaceWorker worker = new NamespaceWorker(wiggle, "my-namespace", "worker-1",
             w -> w.register(orders).handlers(new OrderHandlers())).start();
     Runtime.getRuntime().addShutdownHook(new Thread(worker::close));
@@ -472,7 +472,7 @@ wiggle deallocate -w order-fulfilment -n orders   # stop fanning a workflow out 
   or download the archive from the release. (It's a JVM app; needs a recent JDK.)
 
 **Allocating** a workflow *to* a namespace is programmatic, not a CLI step: call
-`CellResolver.registerWorkflow(namespace, blueprint)` from your app so the coordinator fans it out to
+`WiggleConnection.registerWorkflow(namespace, blueprint)` from your app so the coordinator fans it out to
 the namespace's cells. See **[docs/sharding-and-epochs.md](docs/sharding-and-epochs.md)** for the
 cellular model.
 
@@ -480,7 +480,7 @@ cellular model.
 
 ## Starting and tracking instances
 
-The `client` here is a `WiggleClient` from the resolver — `CellResolver.direct(url).client()` for a
+The `client` here is a `WiggleClient` from the resolver — `WiggleConnection.direct(url).client()` for a
 standalone server, or `resolver.clientForNamespace(ns)` / `resolver.clientForInstance(id)` when a
 coordinator is routing a sharded namespace.
 

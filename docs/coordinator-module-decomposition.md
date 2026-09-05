@@ -69,7 +69,7 @@ cassandra : CassandraCoordinatorStore   deps: server (implements Storage) + :coo
 :coordinator:etcd  (later)  EtcdCoordinatorStore + lease leadership     deps: :coordinator:spi (+ etcd client)
 :coordinator:raft  (later)  RaftCoordinatorStore + raft leadership      deps: :coordinator:spi (+ Ratis)
 
-client    : CellResolver, NamespaceWorker   (unchanged, stays open)
+client    : WiggleConnection, NamespaceWorker   (unchanged, stays open)
 proto     : coordinator.proto                (unchanged)
 dist (app)                  composes: picks CELL or COORDINATOR bundle; wires a coordinator backend
                              deps: server, :coordinator:runtime, storage modules, coordinator:etcd/raft (optional)
@@ -101,7 +101,7 @@ children. (Optional: make `:coordinator:runtime` re-export a sensible default so
 | `server/.../coord` | **:coordinator:runtime** | `CoordinatorApi`, `CoordinatorReconciler`, `LiveCensus`, `CellDeployer` + `EmbeddedCellDeployer` + `ProcessCellDeployer`, `NamespaceProvisioner`, `SecretResolver`, `ReuseDbCoordinatorBackend` (new) |
 | `server/.../CoordinatorBundle` | **:coordinator:runtime** | `CoordinatorBundle` (built by a factory, not by `WiggleServer`) |
 | `jdbc` / `cassandra` | stay put | `JdbcCoordinatorStore` / `CassandraCoordinatorStore` — repoint imports to `:coordinator:spi` |
-| `client` | stays put | `CellResolver`, `NamespaceWorker` |
+| `client` | stays put | `WiggleConnection`, `NamespaceWorker` |
 
 **Package naming:** move the SPI to `com.wiggle.coordinator.spi` and the runtime to
 `com.wiggle.coordinator` (rename from `com.wiggle.server.coord`). This touches imports in `jdbc`,
@@ -164,5 +164,5 @@ backend is chosen by config in `dist`.
 
 Do steps **1–3 now** under the `coordinator/` umbrella — low-to-moderate risk, no behavior change, and a
 clean `CoordinatorBackend` seam so a consensus backend is a later adapter, not a rewrite. Keep `proto` +
-`CellResolver`/`NamespaceWorker` open. Defer `coordinator/etcd` + `coordinator/raft` until a concrete
+`WiggleConnection`/`NamespaceWorker` open. Defer `coordinator/etcd` + `coordinator/raft` until a concrete
 DB-free-control-plane need appears.
