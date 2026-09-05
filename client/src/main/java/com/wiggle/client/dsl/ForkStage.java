@@ -22,8 +22,8 @@ public final class ForkStage {
     private final List<Branch> branches;
     private boolean combined;
 
-    ForkStage(WorkflowBuilder stream, List<Branch> branches) {
-        this.stream = stream;
+    ForkStage(WorkflowBuilder sb, List<Branch> branches) {
+        this.stream = sb;
         this.branches = branches;
     }
 

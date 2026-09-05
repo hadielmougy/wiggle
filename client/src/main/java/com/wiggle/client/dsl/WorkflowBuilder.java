@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 /**
@@ -19,27 +20,40 @@ import java.util.function.UnaryOperator;
  * from step to step, like {@code Stream.map}).
  *
  * <p>This class owns the graph's <em>shape</em> -- how the operators chain, branch, and rejoin --
- * while {@link Pipeline} owns its <em>storage</em> (nodes, edges, assembly) and {@link GraphCursor}
- * tracks the dangling open ends and wires them. Each nested branch/case/loop is built by a child
- * builder over its own cursor.
+ * while {@link Pipeline} owns its <em>storage</em> (nodes, edges, assembly). It tracks the dangling
+ * "open ends" of the graph being built and wires them as new nodes attach (see the open-end
+ * bookkeeping at the bottom). Each nested branch/case/loop is built by a child builder that captures
+ * its own start node and falls back to an enclosing join for a short-circuit.
  */
 public final class WorkflowBuilder {
 
+    /** Which outgoing edge of a node an open end occupies. */
+    private enum Edge { NEXT, ALT }
+
+    /** A dangling edge: node {@code node}'s {@code edge} has no successor yet. */
+    private record OpenEnd(String node, Edge edge) {}
+
     private final Pipeline pipeline;
-    private final GraphCursor cursor;
+    /** What to do with the first node attached to this stream: the root reports the graph's entry
+     *  ({@code pipeline::startAt}); a branch captures it for its parent to wire in. */
+    private final Consumer<String> startSink;
+    /** Non-null when this stream is a branch: where a short-circuit (a false gate) must land. */
+    private final String enclosingJoinId;
+    private List<OpenEnd> openEnds = new ArrayList<>();
     private String lastStepId;
     /** True between {@link #fork} and its {@link ForkStage} choosing a combine; a build/nest with a
      *  fork still pending is a forgotten {@code combine()} and is rejected. */
     private boolean forkPending;
     private boolean consumed;
 
-    private WorkflowBuilder(GraphCursor cursor) {
-        this.cursor = cursor;
-        this.pipeline = cursor.pipeline();
+    private WorkflowBuilder(Pipeline pipeline, Consumer<String> startSink, String enclosingJoinId) {
+        this.pipeline = pipeline;
+        this.startSink = startSink;
+        this.enclosingJoinId = enclosingJoinId;
     }
 
     static WorkflowBuilder root(Pipeline pipeline) {
-        return new WorkflowBuilder(GraphCursor.root(pipeline));
+        return new WorkflowBuilder(pipeline, pipeline::startAt, null);
     }
 
     // ------------------------------------------------------ step / effect (both TASK nodes)
@@ -91,7 +105,7 @@ public final class WorkflowBuilder {
 
     /** Shared wiring for a task node: attach it to the open edge and mark it the last step. */
     private WorkflowBuilder wireStep(String id) {
-        cursor.attach(id);
+        attach(id);
         lastStepId = id;
         return this;
     }
@@ -121,11 +135,10 @@ public final class WorkflowBuilder {
     /** Shared wiring for a guard node: attach it, route its false edge (to the enclosing join, else a
      *  {@code gated:<name>} end), and open the true edge. */
     private WorkflowBuilder wireGate(String id, String name) {
-        cursor.attach(id);
-        String falseTarget = cursor.enclosingJoinId() != null
-                ? cursor.enclosingJoinId() : pipeline.addEnd("gated:" + name);
-        cursor.wireFalse(id, falseTarget);
-        cursor.openAtNext(id);
+        attach(id);
+        String falseTarget = enclosingJoinId != null ? enclosingJoinId : pipeline.addEnd("gated:" + name);
+        pipeline.wireAlt(id, falseTarget);
+        openAt(id, Edge.NEXT);
         lastStepId = id;
         return this;
     }
@@ -139,7 +152,7 @@ public final class WorkflowBuilder {
 
     public WorkflowBuilder sleep(String stepName, Duration duration) {
         if (duration.isNegative()) throw new IllegalArgumentException("sleep duration must not be negative");
-        cursor.attach(pipeline.addSleep(stepName, duration.toMillis()));
+        attach(pipeline.addSleep(stepName, duration.toMillis()));
         lastStepId = null;
         return this;
     }
@@ -166,13 +179,13 @@ public final class WorkflowBuilder {
         if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
         if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
         String id = pipeline.addSignal(name, timeout == null ? 0 : timeout.toMillis());
-        cursor.attach(id);
+        attach(id);
         lastStepId = null;
 
         if (escalation != null) {
-            Sub esc = subStream(escalation, cursor.enclosingJoinId(), "escalation branch of '" + name + "'");
-            cursor.wireFalse(id, esc.start());              // timeout path -> escalation branch
-            cursor.absorb(esc.tail().cursor);               // both the delivery and escalation ends stay open
+            Sub esc = subStream(escalation, enclosingJoinId, "escalation branch of '" + name + "'");
+            pipeline.wireAlt(id, esc.start());   // timeout path -> escalation branch
+            absorb(esc.tail());                  // both the delivery and escalation ends stay open
         }
         return this;
     }
@@ -184,7 +197,7 @@ public final class WorkflowBuilder {
      */
     public WorkflowBuilder subWorkflow(String name, String workflow) {
         java.util.Objects.requireNonNull(workflow, "workflow");
-        cursor.attach(pipeline.addSubWorkflow(name, workflow));
+        attach(pipeline.addSubWorkflow(name, workflow));
         lastStepId = null;
         return this;
     }
@@ -214,7 +227,7 @@ public final class WorkflowBuilder {
     void buildForkCombine(List<Branch> branches, String combineName) {
         forkPending = false;
         String forkId = pipeline.addFork();
-        cursor.attach(forkId);
+        attach(forkId);
 
         String joinId = pipeline.addJoin(branches.size());
         List<String> starts = new ArrayList<>(branches.size());
@@ -227,7 +240,7 @@ public final class WorkflowBuilder {
 
         String combineId = pipeline.addCombine(combineName, names, null, null);
         pipeline.wireNext(joinId, combineId);   // JOIN -> combine
-        cursor.openAtNext(combineId);           // reopen the stream after the combine node
+        openAt(combineId, Edge.NEXT);           // reopen the stream after the combine node
         lastStepId = combineId;
     }
 
@@ -243,12 +256,12 @@ public final class WorkflowBuilder {
         java.util.Objects.requireNonNull(itemsKey, "itemsKey");
         java.util.Objects.requireNonNull(itemKey, "itemKey");
         String forkId = pipeline.addDynFork(name, itemsKey, itemKey);
-        cursor.attach(forkId);
+        attach(forkId);
         String joinId = pipeline.addJoin(0);   // 0 = dynamic width, carried in the join group
         String templateStart = buildBranch(Branch.of(name, body), joinId);
         pipeline.setBranches(forkId, List.of(templateStart));
         pipeline.wireNext(forkId, joinId);     // followed directly when the list is empty
-        cursor.openAtNext(joinId);
+        openAt(joinId, Edge.NEXT);
         lastStepId = null;
         return this;
     }
@@ -259,13 +272,13 @@ public final class WorkflowBuilder {
      * works identically under every execution mode.
      */
     public WorkflowBuilder doWhile(String conditionName, UnaryOperator<WorkflowBuilder> body) {
-        Sub body0 = subStream(body, cursor.enclosingJoinId(), "doWhile body");
+        Sub body0 = subStream(body, enclosingJoinId, "doWhile body");
         String condId = pipeline.addGuard(conditionName, null, null);
 
-        cursor.routeInto(body0.start());              // enter the loop at the body's first node
-        body0.tail().cursor.wireOpenEndsTo(condId);   // body tail -> condition
-        pipeline.wireNext(condId, body0.start());     // condition true -> back to the body
-        cursor.openAtAlt(condId);                     // condition false -> onward
+        routeInto(body0.start());                // enter the loop at the body's first node
+        body0.tail().wireOpenEndsTo(condId);     // body tail -> condition
+        pipeline.wireNext(condId, body0.start()); // condition true -> back to the body
+        openAt(condId, Edge.ALT);                // condition false -> onward
         lastStepId = null;
         return this;
     }
@@ -287,8 +300,7 @@ public final class WorkflowBuilder {
             guardIds[i] = pipeline.addGuard(all.get(i).name(), null, null);
         }
 
-        cursor.attach(guardIds[0]);
-        cursor.clearOpenEnds();   // we thread the guards' edges ourselves below
+        routeInto(guardIds[0]);   // enter the first guard, leaving no open end -- we thread the edges below
 
         for (int i = 0; i < guards - 1; i++) {
             pipeline.wireAlt(guardIds[i], guardIds[i + 1]);   // guard false -> next guard
@@ -307,7 +319,7 @@ public final class WorkflowBuilder {
         for (int i = 0; i < cases.size() - 1; i++) {
             if (!cases.get(i).guarded()) throw new IllegalArgumentException("otherwise() must be the last case");
         }
-        boolean hasDefault = !cases.getLast().guarded();
+        boolean hasDefault = !cases.get(cases.size() - 1).guarded();
         if (hasDefault && cases.size() == 1) {
             throw new IllegalArgumentException("choose needs at least one guarded case");
         }
@@ -321,23 +333,23 @@ public final class WorkflowBuilder {
         if (hasDefault) {
             collectCaseBranch(cases.get(cases.size() - 1), lastGuard, false);
         } else {
-            cursor.addOpenEndAlt(lastGuard);
+            addOpenEndAlt(lastGuard);
         }
     }
 
     /** Builds one case's branch and wires the guard's edge ({@code guardTrue}? the true edge : the
      *  false edge) to it, accumulating the branch's open ends onto the choose. */
     private void collectCaseBranch(Case c, String guardId, boolean guardTrue) {
-        Sub branch = subStream(c.body(), cursor.enclosingJoinId(), "case '" + c.name() + "'");
-        if (guardTrue) cursor.wireTrue(guardId, branch.start());
-        else cursor.wireFalse(guardId, branch.start());
-        cursor.absorb(branch.tail().cursor);
+        Sub branch = subStream(c.body(), enclosingJoinId, "case '" + c.name() + "'");
+        if (guardTrue) pipeline.wireNext(guardId, branch.start());
+        else pipeline.wireAlt(guardId, branch.start());
+        absorb(branch.tail());
     }
 
     /** Builds one fork branch as a sub-stream wired to the join; returns its start node id. */
     private String buildBranch(Branch branch, String joinId) {
         Sub built = subStream(branch.body(), joinId, "branch '" + branch.name() + "'");
-        built.tail().cursor.wireOpenEndsTo(joinId);
+        built.tail().wireOpenEndsTo(joinId);
         return built.start();
     }
 
@@ -345,13 +357,13 @@ public final class WorkflowBuilder {
     private record Sub(String start, WorkflowBuilder tail) {}
 
     /**
-     * Builds a nested sub-stream from {@code body} over the same pipeline, its cursor falling back to
+     * Builds a nested sub-stream from {@code body} over the same pipeline, falling back to
      * {@code joinId} for any short-circuit and capturing the branch's start node. Throws with
      * {@code what} if the body defines no steps.
      */
     private Sub subStream(UnaryOperator<WorkflowBuilder> body, String joinId, String what) {
         String[] start = new String[1];
-        WorkflowBuilder sub = new WorkflowBuilder(GraphCursor.branch(pipeline, joinId, id -> start[0] = id));
+        WorkflowBuilder sub = new WorkflowBuilder(pipeline, id -> start[0] = id, joinId);
         WorkflowBuilder tail = body.apply(sub);
         if (start[0] == null) throw new IllegalArgumentException(what + " defines no steps");
         if (tail.forkPending) throw new IllegalStateException(what + " has a fork(...) with no combine()");
@@ -393,7 +405,49 @@ public final class WorkflowBuilder {
         if (forkPending) throw new IllegalStateException(
                 "a fork(...) has no merge: follow it with combine(...) before build()");
         consumed = true;
-        cursor.wireOpenEndsTo(pipeline.addEnd(null));
+        wireOpenEndsTo(pipeline.addEnd(null));
         return pipeline.build();
+    }
+
+    // ------------------------------------------------------ open-end bookkeeping
+
+    /** Appends {@code id}: routes any pending open ends into it (or reports it as the start), then
+     *  makes it the sole open end on its NEXT edge. */
+    private void attach(String id) {
+        routeInto(id);
+        openAt(id, Edge.NEXT);
+    }
+
+    /** Routes the current open ends into {@code id} -- or reports {@code id} as the stream's start when
+     *  there are none -- without opening a new end (for callers that then manage the set themselves). */
+    private void routeInto(String id) {
+        if (openEnds.isEmpty()) startSink.accept(id);
+        else wireOpenEndsTo(id);
+    }
+
+    /** Replaces the open-end set with the single {@code edge} of node {@code id}. */
+    private void openAt(String id, Edge edge) {
+        openEnds = new ArrayList<>(List.of(new OpenEnd(id, edge)));
+    }
+
+    /** Wires every open end to {@code target} and clears the set. */
+    private void wireOpenEndsTo(String target) {
+        for (OpenEnd end : openEnds) {
+            switch (end.edge()) {
+                case NEXT -> pipeline.wireNext(end.node(), target);
+                case ALT -> pipeline.wireAlt(end.node(), target);
+            }
+        }
+        openEnds = new ArrayList<>();
+    }
+
+    /** Adds {@code id}'s ALT edge as an additional open end (a guard's unmatched fall-through). */
+    private void addOpenEndAlt(String id) {
+        openEnds.add(new OpenEnd(id, Edge.ALT));
+    }
+
+    /** Absorbs another (sub-)builder's open ends into this one -- to merge branch/case/escalation tails. */
+    private void absorb(WorkflowBuilder other) {
+        openEnds.addAll(other.openEnds);
     }
 }
