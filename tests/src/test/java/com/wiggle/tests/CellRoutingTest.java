@@ -1,5 +1,7 @@
 package com.wiggle.tests;
 
+import com.wiggle.client.CoordinatedConnection;
+import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
@@ -21,12 +23,10 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Phase 2 / T10 (Java SDK): the {@link WiggleConnection} routes {@code start} and operate-by-id to the
- * cell the coordinator resolves, and falls back to a static target when no coordinator is configured.
+ * Phase 2 / T10 (Java SDK): a {@link CoordinatedConnection} routes {@code start} and operate-by-id to
+ * the cell the coordinator resolves; a {@link DirectConnection} is a plain single-server connection.
  */
 class CellRoutingTest {
 
@@ -54,7 +54,7 @@ class CellRoutingTest {
             svc.doOpenEpoch("acme", java.util.List.of(
                     com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
-            try (WiggleConnection resolver = WiggleConnection.coordinator("127.0.0.1:" + coord.port(),
+            try (CoordinatedConnection resolver = WiggleConnection.coordinator("127.0.0.1:" + coord.port(),
                     Tls.Options.DISABLED, "eu-west")) {
                 WiggleClient starter = resolver.clientForNamespace("acme");
                 starter.register(workflow());
@@ -75,24 +75,10 @@ class CellRoutingTest {
         }
     }
 
-    @Test @DisplayName("with no coordinator, the resolver is a pass-through to the static target")
-    void directFallback() throws Exception {
-        try (WiggleServer cell = new WiggleServer(config()).start();
-             WiggleConnection resolver = WiggleConnection.direct(cell.baseUrl(), Tls.Options.DISABLED)) {
-            WiggleClient client = resolver.clientForNamespace("ignored");
-            client.register(workflow());
-            String id = client.start("wf", Map.of());
-            assertNotNull(id);
-            // same client instance is reused for operate-by-id in direct mode
-            assertEquals("RUNNING", resolver.clientForInstance(id).instance(id).status());
-            assertEquals(1, resolver.activeCellTargets("ignored").size());
-        }
-    }
-
     @Test @DisplayName("direct().client() is the zero-namespace entry point for a standalone server")
     void directClientEntryPoint() throws Exception {
         try (WiggleServer cell = new WiggleServer(config()).start();
-             WiggleConnection wiggle = WiggleConnection.direct(cell.baseUrl())) {   // no-TLS overload
+             DirectConnection wiggle = WiggleConnection.direct(cell.baseUrl())) {   // no-TLS overload
             WiggleClient client = wiggle.client();
             client.register(workflow());
             String id = client.start("wf", Map.of());
@@ -100,14 +86,6 @@ class CellRoutingTest {
             assertEquals("RUNNING", client.instance(id).status());
             // the same connection is reused; no namespace label needed
             assertEquals(client, wiggle.client(), "client() returns the one cached client");
-        }
-    }
-
-    @Test @DisplayName("client() fails under a coordinator, where there is no single cell")
-    void clientRejectedUnderCoordinator() throws Exception {
-        try (WiggleConnection resolver = WiggleConnection.coordinator("127.0.0.1:1", Tls.Options.DISABLED, "eu")) {
-            IllegalStateException e = assertThrows(IllegalStateException.class, resolver::client);
-            assertTrue(e.getMessage().contains("clientForNamespace"), e.getMessage());
         }
     }
 }

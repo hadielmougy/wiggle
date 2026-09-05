@@ -14,7 +14,7 @@ public class TransactionWorker {
         String id = env("WIGGLE_WORKER_ID", "worker-" + ProcessHandle.current().pid());
         int concurrency = Integer.parseInt(env("WIGGLE_WORKER_CONCURRENCY", "8"));
 
-        WiggleConnection wiggle = WiggleConnection.direct(url);
+        var wiggle = WiggleConnection.direct(url);
 
         Blueprint blueprint = TransactionWorkflow.blueprint();
 

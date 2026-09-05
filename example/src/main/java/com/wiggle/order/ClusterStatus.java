@@ -8,7 +8,7 @@ public final class ClusterStatus {
 
     public static void main(String[] args) {
         String target = args.length > 0 ? args[0] : "localhost:8080";
-        try (WiggleConnection wiggle = WiggleConnection.direct(target)) {
+        try (var wiggle = WiggleConnection.direct(target)) {
             System.out.println(Json.write(wiggle.client().cluster()));
         }
     }

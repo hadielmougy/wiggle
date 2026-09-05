@@ -339,13 +339,14 @@ batch; the win shows against a real database (fewer WAL fsyncs). Compare the mod
 A worker registers one or more blueprints and pulls work. Run as many as you like, in as
 many processes as you like — they share the load automatically.
 
-Connecting to a running deployment starts from **`WiggleConnection`**, the single entry point:
-`WiggleConnection.direct(url)` for one standalone server, `WiggleConnection.coordinator(url, tls, region)`
-for a sharded namespace. Everything downstream is the same — swapping the factory is the only change
-to go distributed.
+Connecting to a running deployment starts from **`WiggleConnection`**, the single entry point. Each
+mode returns a type that exposes only its valid operations, so you can't call the wrong one:
+`WiggleConnection.direct(url)` gives a `DirectConnection` (`client()` — one server), and
+`WiggleConnection.coordinator(url, tls, region)` gives a `CoordinatedConnection` (resolve a namespace
+or instance to its cell, plus coordinator admin).
 
 ```java
-try (WiggleConnection wiggle = WiggleConnection.direct("localhost:8080")) {
+try (DirectConnection wiggle = WiggleConnection.direct("localhost:8080")) {
     Worker worker = new Worker(wiggle.client(), "worker-1",
                     WorkerOptions.defaults()
                         .withConcurrency(16)                  // steps in flight at once
@@ -359,11 +360,11 @@ try (WiggleConnection wiggle = WiggleConnection.direct("localhost:8080")) {
 }
 ```
 
-For a **sharded** namespace, swap in the coordinator factory and let a `NamespaceWorker` fan the same
+For a **sharded** namespace, use the coordinator factory and let a `NamespaceWorker` fan the same
 worker out across the namespace's live cells:
 
 ```java
-try (WiggleConnection wiggle = WiggleConnection.coordinator("localhost:8099", Tls.Options.DISABLED, "us")) {
+try (CoordinatedConnection wiggle = WiggleConnection.coordinator("localhost:8099", Tls.Options.DISABLED, "us")) {
     NamespaceWorker worker = new NamespaceWorker(wiggle, "my-namespace", "worker-1",
             w -> w.register(orders).handlers(new OrderHandlers())).start();
     Runtime.getRuntime().addShutdownHook(new Thread(worker::close));

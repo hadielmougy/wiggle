@@ -21,7 +21,7 @@ public final class GreetWorker {
         String ns = env("WIGGLE_NAMESPACE", "ns1");
         String id = env("WIGGLE_WORKER_ID", "greet-worker-" + ProcessHandle.current().pid());
 
-        WiggleConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null);
+        var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null);
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
                 w -> w.register(GreetFlow.blueprint()).handlers(new GreetHandlers())).start();
 

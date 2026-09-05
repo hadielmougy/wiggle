@@ -29,7 +29,7 @@ public final class NamespaceSubmitter {
         String ns = env("WIGGLE_NAMESPACE", "abc");
         int count = args.length > 0 ? Integer.parseInt(args[0]) : 100;
 
-        try (WiggleConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
+        try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
             Blueprint bp = OrderFulfilment.blueprint();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             // Cell addresses come from the coordinator as in-cluster pod IPs; to reach them from the host

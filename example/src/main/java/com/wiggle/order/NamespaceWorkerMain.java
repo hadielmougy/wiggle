@@ -17,7 +17,7 @@ public final class NamespaceWorkerMain {
         String ns = env("WIGGLE_NAMESPACE", "abc");
         String id = env("WIGGLE_WORKER_ID", "order-fulfilment");
 
-        WiggleConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "eu");
+        var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "eu");
         // Reach in-cluster cells from the host via WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its
         // port-forward), which WiggleConnection reads from the env; the lab's Forwards tab generates it.
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
