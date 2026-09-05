@@ -9,6 +9,8 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.core.Node;
+import com.wiggle.core.NodeKind;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.dist.WiggleStorageFactory;
@@ -141,6 +143,49 @@ class DynamicConstructsTest {
             return put(ctx, "len" + ctx.get("itemIndex"), (long) String.valueOf(ctx.get("item")).length());
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
+    }
+
+    /** The 3-arg shorthand: no distinct element key — each element is exposed under the items key. */
+    private static Blueprint fanOutShorthand(ExecutionMode mode) {
+        return Workflow.define("dyn-fan-short")
+                .execution(mode)
+                .forkEach("per-item", "items", b -> b
+                        .step("upper"))
+                .step("after")
+                .build();
+    }
+
+    @Handlers("dyn-fan-short")
+    static final class FanShortH {
+        public Map<String, Object> upper(Map<String, Object> ctx) {
+            return put(ctx, "out" + ctx.get("itemsIndex"), String.valueOf(ctx.get("items")).toUpperCase());
+        }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
+    }
+
+    @Test @DisplayName("forkEach shorthand builds a DYN_FORK whose element key defaults to the items key")
+    void shorthandDefaultsElementKeyToItemsKey() {
+        Node dyn = fanOutShorthand(ExecutionMode.SERVER).definition().nodes().values().stream()
+                .filter(n -> n.kind() == NodeKind.DYN_FORK)
+                .findFirst().orElseThrow(() -> new AssertionError("no DYN_FORK node"));
+        assertEquals("items", dyn.itemsKey(), "list key");
+        assertEquals("items", dyn.itemKey(), "shorthand names each element after the list");
+    }
+
+    @Test @DisplayName("forkEach shorthand fans out with each element exposed under the items key")
+    void fanOutShorthandOverItems() throws Exception {
+        for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC}) {
+            InstanceView v = run(fanOutShorthand(mode), new FanShortH(), Map.of("items", List.of("ab", "cde", "f")), null);
+            assertEquals("COMPLETED", v.status(), mode + " status");
+            Map<String, Object> ctx = Json.asObject(v.context());
+            assertEquals("AB", ctx.get("out0"), mode + " out0");
+            assertEquals("CDE", ctx.get("out1"), mode + " out1");
+            assertEquals("F", ctx.get("out2"), mode + " out2");
+            assertEquals(true, ctx.get("done"), mode + " continuation ran after the join");
+            assertEquals(List.of("ab", "cde", "f"), ctx.get("items"),
+                    mode + " the shared list survives; the per-branch element never overwrote it");
+            assertNull(ctx.get("itemsIndex"), mode + " the injected index never leaks into shared context");
+        }
     }
 
     @Test @DisplayName("forkEach fans out one branch per list element and merges the results")
