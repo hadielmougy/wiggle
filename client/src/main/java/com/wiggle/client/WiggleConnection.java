@@ -28,15 +28,21 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Routes client calls to the cell that owns a namespace or instance, via the coordinator's
- * {@code Resolve} / {@code ActiveCells}. Resolutions are cached by TTL and per-cell
- * {@link WiggleClient}s are reused. When no coordinator is configured it is a pass-through to a single
- * static target -- so existing (non-sharded) usage is unchanged (R1).
+ * The single client-side entry point for reaching Wiggle. Two modes, one downstream API:
+ * <ul>
+ *   <li>{@link #direct(String) direct} -- one standalone server. {@link #client()} returns the
+ *       connection to it; no namespaces, no routing.</li>
+ *   <li>{@link #coordinator coordinator} -- a sharded namespace. Client calls are routed to the cell
+ *       that owns a namespace or instance via the coordinator's {@code Resolve} / {@code ActiveCells};
+ *       resolutions are cached by TTL and per-cell {@link WiggleClient}s are reused.</li>
+ * </ul>
+ * Going from standalone to sharded is a one-line factory swap -- everything after
+ * (register / start / await) is the same {@link WiggleClient} API.
  *
  * <p>Instance routing is directory-free: an instance id carries its namespace ({@link IdCodec}), so
  * {@link #clientForInstance} resolves by namespace without any per-instance lookup.
  */
-public final class CellResolver implements AutoCloseable {
+public final class WiggleConnection implements AutoCloseable {
 
     private final String coordinatorUrl;         // null in direct (no-coordinator) mode
     private final String staticTarget;           // used in direct mode
@@ -53,7 +59,7 @@ public final class CellResolver implements AutoCloseable {
 
     private record Cached(Endpoint endpoint, long expiryNanos) {}
 
-    private CellResolver(String coordinatorUrl, String staticTarget, Tls.Options tls, String callerRegion) {
+    private WiggleConnection(String coordinatorUrl, String staticTarget, Tls.Options tls, String callerRegion) {
         this.coordinatorUrl = coordinatorUrl;
         this.staticTarget = staticTarget;
         this.tls = tls == null ? Tls.Options.DISABLED : tls;
@@ -68,13 +74,18 @@ public final class CellResolver implements AutoCloseable {
     }
 
     /** Coordinator-routed: resolve every call through the coordinator at {@code coordinatorUrl}. */
-    public static CellResolver coordinator(String coordinatorUrl, Tls.Options tls, String callerRegion) {
-        return new CellResolver(coordinatorUrl, null, tls, callerRegion);
+    public static WiggleConnection coordinator(String coordinatorUrl, Tls.Options tls, String callerRegion) {
+        return new WiggleConnection(coordinatorUrl, null, tls, callerRegion);
     }
 
     /** No coordinator: every call goes to {@code staticTarget} (today's behaviour). */
-    public static CellResolver direct(String staticTarget, Tls.Options tls) {
-        return new CellResolver(null, staticTarget, tls, null);
+    public static WiggleConnection direct(String staticTarget, Tls.Options tls) {
+        return new WiggleConnection(null, staticTarget, tls, null);
+    }
+
+    /** No coordinator, no TLS: every call goes to {@code staticTarget}. The plain standalone entry point. */
+    public static WiggleConnection direct(String staticTarget) {
+        return new WiggleConnection(null, staticTarget, Tls.Options.DISABLED, null);
     }
 
     /**
@@ -84,9 +95,23 @@ public final class CellResolver implements AutoCloseable {
      * rewriter is loaded from {@code wiggle.endpointRewrite} / {@code WIGGLE_ENDPOINT_REWRITE}. See
      * {@link EndpointRewriter}.
      */
-    public CellResolver withEndpointRewriter(EndpointRewriter rewriter) {
+    public WiggleConnection withEndpointRewriter(EndpointRewriter rewriter) {
         this.endpointRewriter = rewriter == null ? EndpointRewriter.identity() : rewriter;
         return this;
+    }
+
+    /**
+     * The client for the single target in direct mode -- the zero-namespace entry point for a
+     * standalone (non-sharded) deployment: {@code WiggleConnection.direct(url).client()}. Fails under a
+     * coordinator, where there is no single cell; there, route by namespace or instance instead
+     * ({@link #clientForNamespace} / {@link #clientForInstance}).
+     */
+    public WiggleClient client() {
+        if (coordinatorUrl != null) {
+            throw new IllegalStateException("client() has no single target under a coordinator; "
+                    + "use clientForNamespace(namespace) or clientForInstance(id)");
+        }
+        return clientFor(staticTarget);
     }
 
     /** A client for the cell that hosts new instances of {@code namespace}. */

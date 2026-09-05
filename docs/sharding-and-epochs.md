@@ -37,7 +37,7 @@ Consequences that surprise people:
   an `OpenEpoch` names its cells — before that, register succeeds but the node is on *standby* (mints
   nothing), and `Resolve` **fails closed** with `NamespaceNotReadyException` (gRPC `FAILED_PRECONDITION`).
   There is no implicit/inferred cell and no whole-roster fallback. To run without a coordinator at all,
-  use `CellResolver.direct` — a single static target, legacy ids, no cells or sharding.
+  use `WiggleConnection.direct` — a single static target, legacy ids, no cells or sharding.
 
 ---
 
@@ -279,6 +279,6 @@ No id is ever rewritten and no instance data is moved.
 | register / resolve / openEpoch / fingerprint guard | `coordinator/runtime/**/CoordinatorService.java` (gRPC adapter: `CoordinatorApi.java`) |
 | drain → retire lifecycle (census-driven) | `coordinator/runtime/**/CoordinatorReconciler.java` |
 | ring persisted as JSON (backend-independent) | `coordinator/spi/**/EpochCodec.java` |
-| client-side resolution & caching of the above | `client/**/CellResolver.java` — see [client-caching-contract.md](client-caching-contract.md) |
+| client-side resolution & caching of the above | `client/**/WiggleConnection.java` — see [client-caching-contract.md](client-caching-contract.md) |
 | storage fingerprint | `server/**/store/Storage.java`, `jdbc/**/JdbcStorage.java`, `cassandra/**/CassandraStorage.java` |
 | node ⇄ coordinator link (applies placement) | `dist/**/coord/HttpCoordinatorLink.java` |

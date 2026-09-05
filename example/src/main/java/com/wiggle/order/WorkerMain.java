@@ -1,7 +1,7 @@
 package com.wiggle.order;
 
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 
@@ -10,6 +10,10 @@ import java.time.Duration;
 /**
  * A standalone worker process. Run as many as you like against the same server; each
  * one pulls only as much work as it has free capacity.
+ *
+ * <p>Connecting starts from {@link WiggleConnection} -- the single entry point: {@code direct(url)} for a
+ * standalone server (here), {@code coordinator(...)} for a sharded namespace (see
+ * {@link NamespaceWorkerMain}). Swapping the factory is the only change to go distributed.
  */
 public final class WorkerMain {
 
@@ -19,10 +23,10 @@ public final class WorkerMain {
         int concurrency = Integer.parseInt(env("WIGGLE_WORKER_CONCURRENCY", "8"));
         int localBatch = Integer.parseInt(env("WIGGLE_LOCAL_BATCH_SIZE", "64"));   // LOCAL_ASYNC batch size
 
-        WiggleClient client = new WiggleClient(url);
+        WiggleConnection wiggle = WiggleConnection.direct(url);
         Blueprint blueprint = OrderFulfilment.blueprint();
 
-        Worker worker = new Worker(client, id, WorkerOptions.defaults()
+        Worker worker = new Worker(wiggle.client(), id, WorkerOptions.defaults()
                         .withConcurrency(concurrency)
                         .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
@@ -31,7 +35,7 @@ public final class WorkerMain {
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();
-            client.close();
+            wiggle.close();
         }));
 
         worker.start();

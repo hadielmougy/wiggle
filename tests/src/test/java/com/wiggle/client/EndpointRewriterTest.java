@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** The CellResolver endpoint-rewrite seam: map an in-cluster address to a reachable one for testing. */
+/** The WiggleConnection endpoint-rewrite seam: map an in-cluster address to a reachable one for testing. */
 class EndpointRewriterTest {
 
     @Test @DisplayName("empty/blank spec is identity")

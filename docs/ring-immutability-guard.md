@@ -70,7 +70,7 @@ Genesis is not an exception to police: the first `OpenEpoch` on an empty policy 
   `currentEpoch + 1`, marks the previous epoch `DRAINING`, and CAS-guards on `revision`.
 
 Because no client ever shipped a `SetRing` call, this is a clean removal rather than a deprecation — no
-compatibility window, no guarded no-op to carry. The CLI / `CellResolver.openEpoch` remain the sanctioned
+compatibility window, no guarded no-op to carry. The CLI / `WiggleConnection.openEpoch` remain the sanctioned
 reshard entry point; no new operator surface. A published epoch's ring is now immutable *by
 construction*: nothing in the wire contract can express "edit this ring."
 
@@ -125,4 +125,4 @@ removing it breaks nothing. Done in one change: proto + coordinator + tests + do
 | coordinator gRPC surface (no `SetRing`) | `proto/src/main/proto/coordinator.proto`, `CoordinatorApi.java` |
 | the misroute this seals off | [sharding-and-epochs.md](sharding-and-epochs.md) §7 (`cellFor` modulo-wrap) |
 | drain → retire (status, still mutable) | `coordinator/runtime/**/CoordinatorReconciler.java` |
-| operator entry point (unchanged) | `client/**/CellResolver.openEpoch`, `wiggle open-epoch` CLI |
+| operator entry point (unchanged) | `client/**/WiggleConnection.openEpoch`, `wiggle open-epoch` CLI |

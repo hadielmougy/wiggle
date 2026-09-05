@@ -1,6 +1,6 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.CellResolver;
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
 
 import java.time.Duration;
@@ -62,7 +62,7 @@ public final class NamespaceWorker implements AutoCloseable {
     }
 
     /** Coordinator-wired: serve {@code namespace}'s active cells, resolved through {@code resolver}. */
-    public NamespaceWorker(CellResolver resolver, String namespace, String workerId, Consumer<Worker> configurator) {
+    public NamespaceWorker(WiggleConnection resolver, String namespace, String workerId, Consumer<Worker> configurator) {
         this(() -> resolver.activeCellTargets(namespace), WiggleClient::new,
                 workerId, WorkerOptions.defaults(), configurator);
     }

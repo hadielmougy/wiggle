@@ -1,7 +1,7 @@
 # Client caching contract — how clients cache coordinator resolutions
 
 What a wiggle client is allowed (and required) to cache from the coordinator, and why each of the three
-resolution surfaces caches differently. This is the conceptual reference for `client/CellResolver` and a
+resolution surfaces caches differently. This is the conceptual reference for `client/WiggleConnection` and a
 spec every client implementation must honour (the Java client and the vendored-proto Python client
 alike). For the placement model these resolutions read, see [sharding-and-epochs.md](sharding-and-epochs.md).
 
@@ -15,7 +15,7 @@ alike). For the placement model these resolutions read, see [sharding-and-epochs
 
 There is no single "resolve and cache" rule — the three calls have deliberately different policies.
 
-| Surface | `CellResolver` entry point | Coordinator RPC | Cached? | Refresh trigger |
+| Surface | `WiggleConnection` entry point | Coordinator RPC | Cached? | Refresh trigger |
 |---|---|---|---|---|
 | **New start** (by namespace) | `clientForNamespace` → `resolveNamespace` | `Resolve{namespace}` | **No** | every start re-resolves |
 | **Route existing instance** (by id) | `clientForInstance` → `resolveInstance` | `Resolve{instance_id}` | **Yes** — by `(ns, epoch, shard)`, TTL'd | TTL expiry or `invalidate()` |
@@ -67,7 +67,7 @@ mapping staleness. The client uses `max(1s, Endpoint.ttl_seconds)` — a coordin
 of 0 is floored to 1 s, never treated as "cache forever".
 
 ```java
-// CellResolver.resolveInstance
+// WiggleConnection.resolveInstance
 Cached c = byShard.get(key);
 if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();   // hit
 ResolveResponse r = coord.resolve(/* by instance_id */);
@@ -113,7 +113,7 @@ pickup matters; lengthen it to cut coordinator load.
 
 ## 6. Two caches, don't conflate them
 
-`CellResolver` holds **two** independent maps:
+`WiggleConnection` holds **two** independent maps:
 
 | Map | Keyed by | Bounds | Lifetime |
 |---|---|---|---|
@@ -128,7 +128,7 @@ Resolution answers "which target?"; `clientFor(target)` then returns a reused `W
 
 ## 7. Direct mode (no coordinator)
 
-With no `coordinatorUrl`, `CellResolver` is a pass-through to one `staticTarget`: no resolution, no
+With no `coordinatorUrl`, `WiggleConnection` is a pass-through to one `staticTarget`: no resolution, no
 caching, no invalidation. This keeps existing single-cell (non-sharded) usage unchanged (R1). Everything
 above applies only in coordinator mode.
 
@@ -159,7 +159,7 @@ A conformant client **MUST NOT**:
 
 | Concept | Where |
 |---|---|
-| resolution + both caches | `client/src/main/java/com/wiggle/client/CellResolver.java` |
+| resolution + both caches | `client/src/main/java/com/wiggle/client/WiggleConnection.java` |
 | new-start spread (server side of §2) | `coordinator/runtime/**/CoordinatorApi.java` (`resolve` by namespace) |
 | id parse (epoch/shard for §3) | `core/src/main/java/com/wiggle/core/IdCodec.java` |
 | worker active-cell reconcile (§5) | `client/src/main/java/com/wiggle/client/worker/NamespaceWorker.java` |
