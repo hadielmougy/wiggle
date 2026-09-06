@@ -53,21 +53,24 @@ final class DispatchNotifier {
 
     /**
      * Blocks until one of {@code queues} is signaled past its count in {@code since}, or the timeout
-     * elapses — whichever comes first. Returns early on a relevant signal; otherwise waits out the
-     * timeout (the caller's fallback-poll budget).
+     * elapses — whichever comes first. Returns {@code true} if it woke on a relevant signal (work
+     * arrived), {@code false} if it waited out the timeout (the caller's fallback-poll budget) — the
+     * caller uses that to decide whether to linger for a batch.
      */
-    void awaitChange(Set<String> queues, Map<String, Long> since, long timeoutMillis) {
-        if (timeoutMillis <= 0) return;
+    boolean awaitChange(Set<String> queues, Map<String, Long> since, long timeoutMillis) {
+        if (timeoutMillis <= 0) return false;
         long deadline = System.currentTimeMillis() + timeoutMillis;
         lock.lock();
         try {
             while (!advanced(queues, since)) {
                 long remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0) return;
+                if (remaining <= 0) return false;
                 changed.await(remaining, TimeUnit.MILLISECONDS);
             }
+            return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return false;
         } finally {
             lock.unlock();
         }
