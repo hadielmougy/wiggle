@@ -69,7 +69,8 @@ a woken poller runs **one** `claimTasks` (unchanged, still the atomic arbiter).
   queues advances past the snapshot, or the timeout elapses. Per-queue versioning avoids spurious
   cross-queue wakeups; snapshot-before-claim closes the lost-wakeup race.
 - `WorkflowEngine.poll` — snapshots signal counts, claims, and if empty `awaitChange`s (capped by a
-  `FALLBACK_POLL_MILLIS` = 100 ms safety net) instead of the old `Thread.sleep(≤100ms)` busy-loop.
+  `fallbackPollMillis` = `WIGGLE_FALLBACK_POLL_MILLIS`, default 100 ms, a safety net) instead of the old
+  `Thread.sleep(≤100ms)` busy-loop.
 - `parkAtWorkerStep` records the parked queue in a per-transaction thread-local; the `tx` / `txVoid`
   wrappers around each mutating entry point (`start`, `complete`, `advance`, `signal`, timer/signal/
   reclaim sweeps, `fail`, schedule fire) flush those queues to `notifier.signal(...)` **after the
@@ -88,7 +89,8 @@ latency; left at 100 ms to strictly not regress today's cadence.)
 **Batching (linger).** Wake-on-produce is edge-triggered, so on its own it claims eagerly — as little as
 one token per poll — which under load means more, smaller `claimTasks` round trips than the old
 accumulate-then-batch busy-poll (a latency-for-throughput trade). To recover batching, after a wake the
-poll lingers up to `DISPATCH_LINGER_MILLIS` (default 5 ms, bounded by the poll deadline) so a burst of
+poll lingers up to `dispatchLingerMillis` (`WIGGLE_DISPATCH_LINGER_MILLIS`, default 5 ms, bounded by the
+poll deadline) so a burst of
 concurrently-produced tokens is drained in one claim of up to `max`. It only lingers when the worker
 asked for more than one task (it has spare capacity to batch) and only after a real signal (not the
 fallback timeout); `0` disables it. This does **not** reduce the *number* of steps that round-trip in
