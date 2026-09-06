@@ -54,52 +54,87 @@ def dns_name(prefix: str, value: str) -> str:
 
 
 # ---- editable pod tunables ----------------------------------------------------------------------
-# The operational config the UI lets you see/edit and apply (→ pod redeploy). Each spec is
-# {key: WIGGLE_* env, label, kind: int|float|bool|enum, default (None = server default), help,
-# choices? (enum)}. Structural env the lab wires itself -- JDBC URL/user/pass, ports, cell id,
-# namespace, coordinator URL, advertise host, region -- is deliberately NOT here and stays locked.
+# Every operational config the UI shows/edits and applies (→ pod redeploy), by raw WIGGLE_* env name.
+# Each spec: {key, kind: int|float|bool|enum, default (the server's own default, shown as the current
+# value when unset), help, choices? (enum), pin? (always emit even at default)}. Structural env the lab
+# wires itself -- JDBC URL/user/pass, ports, cell id, namespace, coordinator URL, advertise host,
+# region, TLS -- is deliberately NOT here and stays locked.
+#
+# Emit model: a var is written to the pod only when it's a `pin` (the lab's own baseline, e.g. a snappy
+# 200ms poll) or when the user overrides its default; otherwise it's left off so the server uses its own
+# default. `default` values mirror ServerConfig.fromEnvironment (and the two dispatch fields on
+# WorkflowEngine), so the UI shows the true effective value for every knob.
 
 LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]
 
 CELL_TUNABLES = [
-    {"key": "WIGGLE_POLL_INTERVAL_MILLIS", "label": "Poll interval (ms)", "kind": "int", "default": 200,
-     "help": "Leader housekeeping / dispatch loop cadence."},
-    {"key": "WIGGLE_HOUSEKEEPING_BATCH", "label": "Housekeeping batch", "kind": "int", "default": 500,
-     "help": "Max timers/signals/reclaims swept per housekeeping pass."},
-    {"key": "WIGGLE_LEASE_MILLIS", "label": "Task lease (ms)", "kind": "int", "default": None,
+    # Lab baselines -- pinned so a fresh cell keeps the snappy dev cadence (server defaults are 1000/100).
+    {"key": "WIGGLE_POLL_INTERVAL_MILLIS", "kind": "int", "default": 200, "pin": True,
+     "help": "Housekeeping / dispatch loop cadence. Lab default 200 (server default 1000)."},
+    {"key": "WIGGLE_HOUSEKEEPING_BATCH", "kind": "int", "default": 500, "pin": True,
+     "help": "Max timers/signals/reclaims swept per pass. Lab default 500 (server default 100)."},
+    # In-memory dispatch (WorkflowEngine reads these from env; see docs/in-memory-dispatch.md).
+    {"key": "WIGGLE_DISPATCH_LINGER_MILLIS", "kind": "int", "default": 5,
+     "help": "Wake-on-produce batch linger; 0 = claim immediately (more, smaller round trips)."},
+    {"key": "WIGGLE_FALLBACK_POLL_MILLIS", "kind": "int", "default": 100,
+     "help": "Long-poll fallback re-claim interval (bounds cross-node dispatch latency)."},
+    # Engine tunables (ServerConfig).
+    {"key": "WIGGLE_LEASE_MILLIS", "kind": "int", "default": 30000,
      "help": "How long a claimed task may run before it becomes reclaimable."},
-    {"key": "WIGGLE_HEARTBEAT_INTERVAL_MILLIS", "label": "Heartbeat interval (ms)", "kind": "int",
-     "default": None, "help": "Node heartbeat cadence for liveness / leader election."},
-    {"key": "WIGGLE_MISSED_HEARTBEATS", "label": "Missed heartbeats", "kind": "int", "default": None,
+    {"key": "WIGGLE_HEARTBEAT_INTERVAL_MILLIS", "kind": "int", "default": 5000,
+     "help": "Node heartbeat cadence for liveness / leader election."},
+    {"key": "WIGGLE_MISSED_HEARTBEATS", "kind": "int", "default": 3,
      "help": "Missed heartbeats before a node is considered dead."},
-    {"key": "WIGGLE_LONGPOLL_MAX_MILLIS", "label": "Long-poll max (ms)", "kind": "int", "default": None,
+    {"key": "WIGGLE_LONGPOLL_MAX_MILLIS", "kind": "int", "default": 20000,
      "help": "Upper bound the server holds a worker long-poll open."},
-    {"key": "WIGGLE_RETENTION_MILLIS", "label": "Retention (ms)", "kind": "int", "default": None,
+    {"key": "WIGGLE_RETENTION_MILLIS", "kind": "int", "default": 86_400_000,
      "help": "How long terminal instances are kept before purge."},
-    {"key": "WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS", "label": "Queue-lag check (ms)", "kind": "int",
-     "default": None, "help": "How often queue lag is sampled."},
-    {"key": "WIGGLE_QUEUE_LAG_WARN_MILLIS", "label": "Queue-lag warn (ms)", "kind": "int", "default": None,
+    {"key": "WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS", "kind": "int", "default": 5000,
+     "help": "How often queue lag is sampled."},
+    {"key": "WIGGLE_QUEUE_LAG_WARN_MILLIS", "kind": "int", "default": 10000,
      "help": "Queue lag above this logs a warning."},
-    {"key": "WIGGLE_JDBC_POOL_SIZE", "label": "JDBC pool size", "kind": "int", "default": None,
+    {"key": "WIGGLE_JDBC_POOL_SIZE", "kind": "int", "default": 10,
      "help": "Max DB connections in the cell's pool."},
-    {"key": "WIGGLE_MEMORY_SHEDDING_ENABLED", "label": "Memory shedding", "kind": "bool", "default": None,
+    # Memory-pressure load shedding (ServerConfig.Memory).
+    {"key": "WIGGLE_MEMORY_SHEDDING_ENABLED", "kind": "bool", "default": False,
      "help": "Shed a fraction of polls under heap pressure."},
-    {"key": "WIGGLE_MEMORY_THRESHOLD", "label": "Memory threshold (0-1)", "kind": "float", "default": None,
+    {"key": "WIGGLE_MEMORY_THRESHOLD", "kind": "float", "default": 0.90,
      "help": "Heap utilisation at which shedding starts."},
-    {"key": "WIGGLE_MEMORY_REJECT_RATIO", "label": "Memory reject ratio (0-1)", "kind": "float",
-     "default": None, "help": "Fraction of polls shed once over threshold."},
-    {"key": "WIGGLE_LOG_LEVEL", "label": "Log level", "kind": "enum", "default": None, "choices": LOG_LEVELS,
-     "help": "Server log verbosity."},
+    {"key": "WIGGLE_MEMORY_REJECT_RATIO", "kind": "float", "default": 0.10,
+     "help": "Fraction of polls shed once over threshold."},
+    {"key": "WIGGLE_MEMORY_RETRY_MILLIS", "kind": "int", "default": 2000,
+     "help": "Hold-off hint returned to a shed poll."},
+    {"key": "WIGGLE_MEMORY_RETRY_JITTER_MILLIS", "kind": "int", "default": 0,
+     "help": "Random jitter added to the shed-poll hold-off."},
+    {"key": "WIGGLE_LOG_LEVEL", "kind": "enum", "default": "INFO", "choices": LOG_LEVELS,
+     "help": "File log level (only takes effect with WIGGLE_LOG_FILE set)."},
 ]
 
 COORD_TUNABLES = [
-    {"key": "WIGGLE_LOG_LEVEL", "label": "Log level", "kind": "enum", "default": None, "choices": LOG_LEVELS,
-     "help": "Coordinator log verbosity."},
+    {"key": "WIGGLE_LOG_LEVEL", "kind": "enum", "default": "INFO", "choices": LOG_LEVELS,
+     "help": "Coordinator file log level (only with WIGGLE_LOG_FILE). The coordinator runs the control "
+             "plane, not the engine, so it has no engine tunables."},
 ]
 
 
-def resolve_tunables(specs: list[dict], overrides: dict | None) -> dict:
-    """The effective {env: value} for a tunable spec set: an override when given, else the spec default.
-    ``None`` values are kept here and dropped later by the manifest env builder (⇒ server default)."""
+def defaults(specs: list[dict]) -> dict:
+    """The default (effective) value of every tunable -- what the UI shows when a var is unset."""
+    return {s["key"]: s.get("default") for s in specs}
+
+
+def to_env(specs: list[dict], overrides: dict | None) -> dict:
+    """The {env: value} to actually put on the pod: pinned baselines always, plus any user overrides.
+    Anything else is omitted so the server falls back to its own default. ``None`` values are dropped."""
     overrides = overrides or {}
-    return {s["key"]: overrides.get(s["key"], s.get("default")) for s in specs}
+    out = {}
+    for s in specs:
+        key = s["key"]
+        if key in overrides:
+            value = overrides[key]
+        elif s.get("pin"):
+            value = s.get("default")
+        else:
+            continue
+        if value is not None:
+            out[key] = value
+    return out

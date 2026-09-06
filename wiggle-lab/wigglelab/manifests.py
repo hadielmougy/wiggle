@@ -89,7 +89,7 @@ def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE,
             }),
             # Operational tunables from the UI (thin for the coordinator -- it runs CoordinatorServer,
             # not the engine); unset ones fall back to server defaults.
-            *_env(C.resolve_tunables(C.COORD_TUNABLES, tunables)),
+            *_env(C.to_env(C.COORD_TUNABLES, tunables)),
         ],
         "volumeMounts": [{"name": "coord-data", "mountPath": C.COORD_DATA_DIR}],
         "readinessProbe": {"tcpSocket": {"port": C.COORD_GRPC_PORT},
@@ -177,7 +177,7 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
             }),
             # Operational tunables from the UI (poll interval + housekeeping default here); unset ones
             # are dropped by _env ⇒ the server falls back to its own defaults.
-            *_env(C.resolve_tunables(C.CELL_TUNABLES, tunables)),
+            *_env(C.to_env(C.CELL_TUNABLES, tunables)),
         ],
         "readinessProbe": {"tcpSocket": {"port": C.CELL_GRPC_PORT},
                            "initialDelaySeconds": 4, "periodSeconds": 3},

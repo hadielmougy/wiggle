@@ -28,14 +28,26 @@ public final class WorkflowEngine {
 
     /** How long a long-poll waits between fallback DB claims when no local wake-on-produce arrives.
      *  Same-node production wakes a poller immediately; this bounds the latency for cross-node
-     *  production (and any missed signal). */
-    private static final long FALLBACK_POLL_MILLIS = 100;
+     *  production (and any missed signal). Overridable via {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
+    private final long fallbackPollMillis = envLong("WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
     /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
      *  is drained in one batched claim instead of a round trip per token. Trades up to this much
      *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
-     *  applies when the worker asked for more than one task (it has spare capacity to batch). */
-    private static final long DISPATCH_LINGER_MILLIS = 5;
+     *  applies when the worker asked for more than one task (it has spare capacity to batch).
+     *  Overridable via {@code WIGGLE_DISPATCH_LINGER_MILLIS}. */
+    private final long dispatchLingerMillis = envLong("WIGGLE_DISPATCH_LINGER_MILLIS", 5);
+
+    /** A non-negative long from {@code env}, or {@code def} if unset/blank/unparseable. */
+    private static long envLong(String env, long def) {
+        String v = System.getenv(env);
+        if (v == null || v.isBlank()) return def;
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
 
     private final Storage storage;
     private final DefinitionRegistry definitions;
@@ -249,7 +261,7 @@ public final class WorkflowEngine {
         List<TaskActivation> tasks = claimNow(workerId, queues, max, lease);
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
             long remaining = deadline - System.currentTimeMillis();
-            boolean signaled = notifier.awaitChange(queues, since, Math.min(FALLBACK_POLL_MILLIS, remaining));
+            boolean signaled = notifier.awaitChange(queues, since, Math.min(fallbackPollMillis, remaining));
             // A signal means a burst may be arriving; let a little more land so one claim batches it
             // (fewer round trips under load) rather than claiming a single token eagerly.
             if (signaled && max > 1) lingerForBatch(deadline);
@@ -272,11 +284,11 @@ public final class WorkflowEngine {
         return storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, now + lease));
     }
 
-    /** Coalesce a burst: wait up to {@link #DISPATCH_LINGER_MILLIS} (bounded by the poll deadline) so
+    /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
      *  concurrently-produced tokens are claimed together instead of one per round trip. */
-    private static void lingerForBatch(long deadline) {
-        if (DISPATCH_LINGER_MILLIS <= 0) return;
-        long budget = Math.min(DISPATCH_LINGER_MILLIS, deadline - System.currentTimeMillis());
+    private void lingerForBatch(long deadline) {
+        if (dispatchLingerMillis <= 0) return;
+        long budget = Math.min(dispatchLingerMillis, deadline - System.currentTimeMillis());
         if (budget <= 0) return;
         try {
             Thread.sleep(budget);

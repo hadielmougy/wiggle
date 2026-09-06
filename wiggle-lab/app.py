@@ -44,36 +44,40 @@ def action(label: str, fn, *args, spinner: str | None = None, **kwargs):
 
 
 def render_tunables(specs: list[dict], current: dict, key_prefix: str, cols: int = 2) -> dict:
-    """Render editable widgets for a tunable spec set, seeded from `current` (env values, as strings).
-    Returns the chosen {WIGGLE_*: value}; an empty/"(default)" field is omitted ⇒ the server's own
-    default is used. Values coming back from live pod env are strings, so seeding tolerates str inputs."""
+    """Render one widget per tunable, labelled by its raw WIGGLE_* env name and seeded with its current
+    value (the live pod value if set, else the server default shown for reference). Returns only the
+    values the user set away from the default -- those become pod env; everything else stays the
+    server's own default. `current` holds live env values (strings)."""
     out: dict = {}
     columns = st.columns(cols)
     for i, s in enumerate(specs):
         col = columns[i % cols]
-        cur = current.get(s["key"])
-        wkey = f"{key_prefix}-{s['key']}"
-        kind_ = s["kind"]
+        key, default, kind_ = s["key"], s.get("default"), s["kind"]
+        cur = current.get(key)
+        wkey = f"{key_prefix}-{key}"
         if kind_ in ("int", "float"):
-            raw = col.text_input(s["label"], value="" if cur is None else str(cur), key=wkey,
-                                 help=s["help"], placeholder="server default").strip()
-            if raw:
-                try:
-                    out[s["key"]] = int(raw) if kind_ == "int" else float(raw)
-                except ValueError:
-                    col.error(f"{s['label']}: not a {kind_}")
+            seed = cur if cur not in (None, "") else ("" if default is None else str(default))
+            raw = col.text_input(key, value=str(seed), key=wkey, help=s["help"]).strip()
+            if raw == "":
+                continue
+            try:
+                val = int(raw) if kind_ == "int" else float(raw)
+            except ValueError:
+                col.error(f"{key}: not a {kind_}")
+                continue
+            if val != default:
+                out[key] = val
         elif kind_ == "bool":
-            opts = ["(default)", "true", "false"]
-            idx = 0 if cur is None else (1 if str(cur).lower() == "true" else 2)
-            pick = col.selectbox(s["label"], opts, index=idx, key=wkey, help=s["help"])
-            if pick != "(default)":
-                out[s["key"]] = pick == "true"
+            seed = (str(cur).lower() == "true") if cur is not None else bool(default)
+            val = col.checkbox(key, value=seed, key=wkey, help=s["help"])
+            if val != default:
+                out[key] = val
         elif kind_ == "enum":
-            opts = ["(default)"] + s["choices"]
-            idx = opts.index(cur) if cur in s["choices"] else 0
-            pick = col.selectbox(s["label"], opts, index=idx, key=wkey, help=s["help"])
-            if pick != "(default)":
-                out[s["key"]] = pick
+            choices = s["choices"]
+            seed = cur if cur in choices else (default if default in choices else choices[0])
+            val = col.selectbox(key, choices, index=choices.index(seed), key=wkey, help=s["help"])
+            if val != default:
+                out[key] = val
     return out
 
 
