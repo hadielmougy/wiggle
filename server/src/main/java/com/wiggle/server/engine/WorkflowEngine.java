@@ -31,6 +31,12 @@ public final class WorkflowEngine {
      *  production (and any missed signal). */
     private static final long FALLBACK_POLL_MILLIS = 100;
 
+    /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
+     *  is drained in one batched claim instead of a round trip per token. Trades up to this much
+     *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
+     *  applies when the worker asked for more than one task (it has spare capacity to batch). */
+    private static final long DISPATCH_LINGER_MILLIS = 5;
+
     private final Storage storage;
     private final DefinitionRegistry definitions;
     private final long defaultLeaseMillis;
@@ -243,7 +249,10 @@ public final class WorkflowEngine {
         List<TaskActivation> tasks = claimNow(workerId, queues, max, lease);
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
             long remaining = deadline - System.currentTimeMillis();
-            notifier.awaitChange(queues, since, Math.min(FALLBACK_POLL_MILLIS, remaining));
+            boolean signaled = notifier.awaitChange(queues, since, Math.min(FALLBACK_POLL_MILLIS, remaining));
+            // A signal means a burst may be arriving; let a little more land so one claim batches it
+            // (fewer round trips under load) rather than claiming a single token eagerly.
+            if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.getAsBoolean()) return List.of();   // worker gone -- leave the work for a live one
             since = notifier.snapshot(queues);
             tasks = claimNow(workerId, queues, max, lease);
@@ -261,6 +270,19 @@ public final class WorkflowEngine {
     private List<TaskActivation> claimNow(String workerId, Set<String> queues, int max, long lease) {
         long now = System.currentTimeMillis();
         return storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, now + lease));
+    }
+
+    /** Coalesce a burst: wait up to {@link #DISPATCH_LINGER_MILLIS} (bounded by the poll deadline) so
+     *  concurrently-produced tokens are claimed together instead of one per round trip. */
+    private static void lingerForBatch(long deadline) {
+        if (DISPATCH_LINGER_MILLIS <= 0) return;
+        long budget = Math.min(DISPATCH_LINGER_MILLIS, deadline - System.currentTimeMillis());
+        if (budget <= 0) return;
+        try {
+            Thread.sleep(budget);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private List<TaskActivation> claimActivations(Tx tx, String workerId, Set<String> queues,

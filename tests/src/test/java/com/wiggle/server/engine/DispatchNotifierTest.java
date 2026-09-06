@@ -26,7 +26,8 @@ class DispatchNotifierTest {
         n.signal(Set.of("orders"));                      // work parked between snapshot and await
 
         long start = System.currentTimeMillis();
-        n.awaitChange(queues, since, 5_000);             // must not wait: version already advanced past `since`
+        boolean signaled = n.awaitChange(queues, since, 5_000);   // must not wait: already advanced past `since`
+        assertTrue(signaled, "reported a signal, not a timeout");
         assertTrue(System.currentTimeMillis() - start < 1_000, "returned promptly, did not block on the timeout");
     }
 
@@ -58,7 +59,8 @@ class DispatchNotifierTest {
         n.signal(Set.of("payments"));     // different queue
 
         long start = System.currentTimeMillis();
-        n.awaitChange(mine, since, 150);  // no relevant signal -> must wait out the timeout
+        boolean signaled = n.awaitChange(mine, since, 150);  // no relevant signal -> must wait out the timeout
+        assertFalse(signaled, "reported a timeout, not a signal");
         assertTrue(System.currentTimeMillis() - start >= 120, "waited the timeout rather than returning early");
     }
 
@@ -69,7 +71,8 @@ class DispatchNotifierTest {
         Map<String, Long> since = n.snapshot(queues);
 
         long start = System.currentTimeMillis();
-        n.awaitChange(queues, since, 150);
+        boolean signaled = n.awaitChange(queues, since, 150);
+        assertFalse(signaled, "timed out, no signal");
         assertTrue(System.currentTimeMillis() - start >= 120, "waited ~the timeout");
     }
 }
