@@ -1,8 +1,12 @@
 package com.wiggle.order;
 
+import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
+import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Tls;
 import com.wiggle.client.worker.NamespaceWorker;
+
+import java.time.Duration;
 
 /**
  * A coordinator-routed worker. Unlike {@link WorkerMain}, which binds to a single server,
@@ -20,8 +24,16 @@ public final class NamespaceWorkerMain {
         var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "eu");
         // Reach in-cluster cells from the host via WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its
         // port-forward), which WiggleConnection reads from the env; the lab's Forwards tab generates it.
-        NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
-                w -> w.register(OrderFulfilment.blueprint()).handlers(new OrderHandlers())).start();
+        WorkerOptions opts = WorkerOptions.defaults()
+                .withConcurrency(100)                       // steps in flight, per cell
+                .withLongPollWait(Duration.ofSeconds(10));
+        NamespaceWorker worker = new NamespaceWorker(
+                () -> resolver.activeCellTargets(ns),          // cellSource
+                WiggleClient::new,                         // clientFactory (same as the convenience ctor)
+                id,
+                opts,
+                w -> w.register(OrderFulfilment.blueprint()).handlers(new OrderHandlers())
+        ).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

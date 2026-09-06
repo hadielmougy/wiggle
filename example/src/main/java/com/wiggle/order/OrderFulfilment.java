@@ -27,7 +27,7 @@ public final class OrderFulfilment {
     }
 
     public static Blueprint blueprint() {
-        return Workflow.define("order-fulfilment").execution(ExecutionMode.SERVER)
+        return Workflow.define("order-fulfilment").execution(ExecutionMode.LOCAL_ASYNC)
 
                 .step("validate")
 
@@ -43,7 +43,7 @@ public final class OrderFulfilment {
                         Branch.of("shipping", s -> s
                                 .step("reserve-stock")
                                 // A server-side timer: no worker is held while we wait.
-                                .sleep("await-warehouse", Duration.ofMillis(100))
+                                //.sleep("await-warehouse", Duration.ofMillis(100))
                                 .step("print-label")))
 
                 // The payment and shipping arms change disjoint fields, so the default union folds

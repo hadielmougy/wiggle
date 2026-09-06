@@ -9,7 +9,7 @@ plugins {
 
 allprojects {
     group = "io.github.hadielmougy"
-    version = "2.1.6"
+    version = "2.1.7"
 
     repositories {
         mavenCentral()

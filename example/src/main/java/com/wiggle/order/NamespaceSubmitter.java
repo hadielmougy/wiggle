@@ -27,7 +27,7 @@ public final class NamespaceSubmitter {
     public static void main(String[] args) throws Exception {
         String coord = env("WIGGLE_COORDINATOR_URL", "127.0.0.1:18099");
         String ns = env("WIGGLE_NAMESPACE", "abc");
-        int count = args.length > 0 ? Integer.parseInt(args[0]) : 100;
+        int count = args.length > 0 ? Integer.parseInt(args[0]) : 1000;
 
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
             Blueprint bp = OrderFulfilment.blueprint();
@@ -37,20 +37,22 @@ public final class NamespaceSubmitter {
             // port-forward). WiggleConnection picks it up from the env by default -- the lab's Forwards tab
             // generates the exact value. Without it, every start would land on one forwarded cell.
 
+            long start = System.currentTimeMillis();
             List<String> ids = new ArrayList<>(count);
             for (int i = 0; i < count; i++) {
                 Order order = Order.of("A-" + (2000 + i), "customer-" + i, 1 + (i % 3),
                         new BigDecimal("100.00").add(BigDecimal.valueOf(i)));
                 ids.add(resolver.clientForNamespace(ns).start(bp, order));
-                Thread.sleep(10);
             }
+
             System.out.println("submitted " + count + " orders to namespace '" + ns + "' via coordinator " + coord);
 
             for (String id : ids) {
                 InstanceView v = resolver.clientForInstance(id).awaitCompletion(id, Duration.ofMinutes(2));
-                System.out.println("  " + id + "  " + v.status()
-                        + (v.error() == null ? "" : "  " + v.error()));
+                //System.out.println("  " + id + "  " + v.status() + (v.error() == null ? "" : "  " + v.error()));
             }
+            long end = System.currentTimeMillis() - start;
+            System.out.println(end / 1000);
         } catch (Exception e) {
             e.printStackTrace();
         }
