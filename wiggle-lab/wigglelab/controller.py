@@ -30,6 +30,8 @@ class Lab:
     def __init__(self):
         self.pf = PortForwards()
         self.policies: dict[str, dict] = {}
+        self.cell_config: dict[str, dict] = {}   # cell -> {WIGGLE_*: value} applied to that cell
+        self.coord_config: dict = {}             # {WIGGLE_*: value} applied to the coordinator
         self.recording: Recording | None = None
         self._load_state()
 
@@ -68,13 +70,34 @@ class Lab:
     # ---- persisted policy cache ----
     def _load_state(self):
         try:
-            self.policies = json.loads(STATE_FILE.read_text()).get("policies", {})
+            state = json.loads(STATE_FILE.read_text())
         except (OSError, json.JSONDecodeError):
-            self.policies = {}
+            state = {}
+        self.policies = state.get("policies", {})
+        self.cell_config = state.get("cell_config", {})
+        self.coord_config = state.get("coord_config", {})
 
     def _save_state(self):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps({"policies": self.policies}, indent=2))
+        STATE_FILE.write_text(json.dumps({
+            "policies": self.policies,
+            "cell_config": self.cell_config,
+            "coord_config": self.coord_config,
+        }, indent=2))
+
+    # ---- live container env (source of truth for "current config" in the UI) ----
+    def _live_env(self, selector: str, resource: str = "deployment") -> dict[str, str]:
+        """The first container's literal env (name -> value) from the running spec, or {} if absent.
+        Only ``value`` env entries are returned (valueFrom fieldRefs like POD_IP are skipped)."""
+        items = k8s.get_json(resource, selector).get("items", [])
+        if not items:
+            return {}
+        conts = items[0].get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        env = {}
+        for e in (conts[0].get("env", []) if conts else []):
+            if "value" in e:
+                env[e["name"]] = e["value"]
+        return env
 
     # ---- prerequisites / cluster lifecycle ----
     def prereqs(self) -> dict[str, bool]:
@@ -112,7 +135,7 @@ class Lab:
 
     # ---- coordinator ----
     @record
-    def deploy_coordinator(self, size: int = C.COORD_DEFAULT_GROUP_SIZE):
+    def deploy_coordinator(self, size: int = C.COORD_DEFAULT_GROUP_SIZE, tunables: dict | None = None):
         """(Re)deploy the coordinator as one Ratis group of ``size`` pods (a StatefulSet behind a headless
         Service). Every pod serves the same replicated store, so a client reaching any pod sees consistent
         state. Redeploying deletes the old group and re-forms a fresh one (emptyDir stores start empty),
@@ -127,7 +150,16 @@ class Lab:
             self._wait(lambda: not self.pods(role="coordinator"), 120, "old coordinator removed")
             self.policies.clear()
             self._save_state()
-        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests(size))).check()
+        self.coord_config = {k: v for k, v in (tunables or {}).items() if v is not None}
+        self._save_state()
+        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests(size, self.coord_config))).check()
+
+    def coordinator_config(self) -> dict:
+        """The coordinator's current tunables for the UI: live pod env wins, else the persisted config."""
+        keys = {s["key"] for s in C.COORD_TUNABLES}
+        env = self._live_env("wiggle-lab/role=coordinator", resource="statefulset")
+        live = {k: v for k, v in env.items() if k in keys}
+        return live or dict(self.coord_config)
 
     def coordinator_ready(self) -> bool:
         return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coordinator"))
@@ -246,10 +278,51 @@ class Lab:
         return r.out if r.ok else (r.err.strip() or r.out.strip() or "(no output)")
 
     @record
-    def create_cell(self, cell: str, namespace: str, replicas: int = 1, region: str = ""):
+    def create_cell(self, cell: str, namespace: str, replicas: int = 1, region: str = "",
+                    tunables: dict | None = None):
+        self._apply_cell(cell, namespace, replicas, region, tunables)
+
+    def _apply_cell(self, cell: str, namespace: str, replicas: int, region: str, tunables: dict | None):
+        """(Re)apply a cell's DB + node manifests. Persisting the tunables and re-applying updates the
+        Deployment spec, so k8s rolls the pods with the new config."""
         self.ensure_namespace()
-        docs = manifests.cell_db_manifests(cell) + manifests.cell_manifests(cell, namespace, replicas, region)
+        self.cell_config[cell] = {k: v for k, v in (tunables or {}).items() if v is not None}
+        self._save_state()
+        docs = (manifests.cell_db_manifests(cell)
+                + manifests.cell_manifests(cell, namespace, replicas, region, self.cell_config[cell]))
         k8s.apply(manifests.to_yaml(docs)).check()
+
+    @record
+    def update_cell_config(self, cell: str, tunables: dict):
+        """Apply edited config to an existing cell and redeploy it, keeping its namespace/replicas/region.
+        Region isn't a label, so it is read back from the running spec's env."""
+        c = next((x for x in self.cells() if x["cell"] == cell), None)
+        if c is None:
+            raise RuntimeError(f"unknown cell '{cell}'")
+        env = self._live_env(f"wiggle-lab/role=cell,wiggle-lab/cell={cell}")
+        self._apply_cell(cell, c["namespace"], int(c["desired"]) or 1, env.get("WIGGLE_REGION", ""), tunables)
+
+    def cell_config(self, cell: str) -> dict:
+        """The cell's current tunables for the UI: live pod env wins (source of truth), else the persisted
+        config, filtered to the editable keys."""
+        keys = {s["key"] for s in C.CELL_TUNABLES}
+        env = self._live_env(f"wiggle-lab/role=cell,wiggle-lab/cell={cell}")
+        live = {k: v for k, v in env.items() if k in keys}
+        return live or dict(self.cell_config.get(cell, {}))
+
+    def all_cell_configs(self) -> dict[str, dict]:
+        """Live tunables for every cell in one kubectl call (so the Cells tab doesn't read per-cell each
+        render). Falls back to persisted config for any cell whose live env can't be read."""
+        keys = {s["key"] for s in C.CELL_TUNABLES}
+        out: dict[str, dict] = {}
+        for it in k8s.get_json("deployment", "wiggle-lab/role=cell").get("items", []):
+            cell = it.get("metadata", {}).get("labels", {}).get("wiggle-lab/cell")
+            if not cell:
+                continue
+            conts = it.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            env = {e["name"]: e["value"] for e in (conts[0].get("env", []) if conts else []) if "value" in e}
+            out[cell] = {k: v for k, v in env.items() if k in keys} or dict(self.cell_config.get(cell, {}))
+        return out
 
     @record
     def scale_cell(self, cell: str, replicas: int):

@@ -51,3 +51,55 @@ def dns_name(prefix: str, value: str) -> str:
     """A DNS-1123 safe resource name, e.g. ('cell', 'cellA') -> 'cell-cella'."""
     safe = "".join(c if (c.isalnum() or c == "-") else "-" for c in value.lower()).strip("-")
     return f"{prefix}-{safe}"
+
+
+# ---- editable pod tunables ----------------------------------------------------------------------
+# The operational config the UI lets you see/edit and apply (→ pod redeploy). Each spec is
+# {key: WIGGLE_* env, label, kind: int|float|bool|enum, default (None = server default), help,
+# choices? (enum)}. Structural env the lab wires itself -- JDBC URL/user/pass, ports, cell id,
+# namespace, coordinator URL, advertise host, region -- is deliberately NOT here and stays locked.
+
+LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]
+
+CELL_TUNABLES = [
+    {"key": "WIGGLE_POLL_INTERVAL_MILLIS", "label": "Poll interval (ms)", "kind": "int", "default": 200,
+     "help": "Leader housekeeping / dispatch loop cadence."},
+    {"key": "WIGGLE_HOUSEKEEPING_BATCH", "label": "Housekeeping batch", "kind": "int", "default": 500,
+     "help": "Max timers/signals/reclaims swept per housekeeping pass."},
+    {"key": "WIGGLE_LEASE_MILLIS", "label": "Task lease (ms)", "kind": "int", "default": None,
+     "help": "How long a claimed task may run before it becomes reclaimable."},
+    {"key": "WIGGLE_HEARTBEAT_INTERVAL_MILLIS", "label": "Heartbeat interval (ms)", "kind": "int",
+     "default": None, "help": "Node heartbeat cadence for liveness / leader election."},
+    {"key": "WIGGLE_MISSED_HEARTBEATS", "label": "Missed heartbeats", "kind": "int", "default": None,
+     "help": "Missed heartbeats before a node is considered dead."},
+    {"key": "WIGGLE_LONGPOLL_MAX_MILLIS", "label": "Long-poll max (ms)", "kind": "int", "default": None,
+     "help": "Upper bound the server holds a worker long-poll open."},
+    {"key": "WIGGLE_RETENTION_MILLIS", "label": "Retention (ms)", "kind": "int", "default": None,
+     "help": "How long terminal instances are kept before purge."},
+    {"key": "WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS", "label": "Queue-lag check (ms)", "kind": "int",
+     "default": None, "help": "How often queue lag is sampled."},
+    {"key": "WIGGLE_QUEUE_LAG_WARN_MILLIS", "label": "Queue-lag warn (ms)", "kind": "int", "default": None,
+     "help": "Queue lag above this logs a warning."},
+    {"key": "WIGGLE_JDBC_POOL_SIZE", "label": "JDBC pool size", "kind": "int", "default": None,
+     "help": "Max DB connections in the cell's pool."},
+    {"key": "WIGGLE_MEMORY_SHEDDING_ENABLED", "label": "Memory shedding", "kind": "bool", "default": None,
+     "help": "Shed a fraction of polls under heap pressure."},
+    {"key": "WIGGLE_MEMORY_THRESHOLD", "label": "Memory threshold (0-1)", "kind": "float", "default": None,
+     "help": "Heap utilisation at which shedding starts."},
+    {"key": "WIGGLE_MEMORY_REJECT_RATIO", "label": "Memory reject ratio (0-1)", "kind": "float",
+     "default": None, "help": "Fraction of polls shed once over threshold."},
+    {"key": "WIGGLE_LOG_LEVEL", "label": "Log level", "kind": "enum", "default": None, "choices": LOG_LEVELS,
+     "help": "Server log verbosity."},
+]
+
+COORD_TUNABLES = [
+    {"key": "WIGGLE_LOG_LEVEL", "label": "Log level", "kind": "enum", "default": None, "choices": LOG_LEVELS,
+     "help": "Coordinator log verbosity."},
+]
+
+
+def resolve_tunables(specs: list[dict], overrides: dict | None) -> dict:
+    """The effective {env: value} for a tunable spec set: an override when given, else the spec default.
+    ``None`` values are kept here and dropped later by the manifest env builder (⇒ server default)."""
+    overrides = overrides or {}
+    return {s["key"]: overrides.get(s["key"], s.get("default")) for s in specs}

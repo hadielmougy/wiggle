@@ -43,6 +43,40 @@ def action(label: str, fn, *args, spinner: str | None = None, **kwargs):
         return None
 
 
+def render_tunables(specs: list[dict], current: dict, key_prefix: str, cols: int = 2) -> dict:
+    """Render editable widgets for a tunable spec set, seeded from `current` (env values, as strings).
+    Returns the chosen {WIGGLE_*: value}; an empty/"(default)" field is omitted ⇒ the server's own
+    default is used. Values coming back from live pod env are strings, so seeding tolerates str inputs."""
+    out: dict = {}
+    columns = st.columns(cols)
+    for i, s in enumerate(specs):
+        col = columns[i % cols]
+        cur = current.get(s["key"])
+        wkey = f"{key_prefix}-{s['key']}"
+        kind_ = s["kind"]
+        if kind_ in ("int", "float"):
+            raw = col.text_input(s["label"], value="" if cur is None else str(cur), key=wkey,
+                                 help=s["help"], placeholder="server default").strip()
+            if raw:
+                try:
+                    out[s["key"]] = int(raw) if kind_ == "int" else float(raw)
+                except ValueError:
+                    col.error(f"{s['label']}: not a {kind_}")
+        elif kind_ == "bool":
+            opts = ["(default)", "true", "false"]
+            idx = 0 if cur is None else (1 if str(cur).lower() == "true" else 2)
+            pick = col.selectbox(s["label"], opts, index=idx, key=wkey, help=s["help"])
+            if pick != "(default)":
+                out[s["key"]] = pick == "true"
+        elif kind_ == "enum":
+            opts = ["(default)"] + s["choices"]
+            idx = opts.index(cur) if cur in s["choices"] else 0
+            pick = col.selectbox(s["label"], opts, index=idx, key=wkey, help=s["help"])
+            if pick != "(default)":
+                out[s["key"]] = pick
+    return out
+
+
 def _build_image():
     """Stream the docker build to the server console; raise on non-zero exit."""
     code = 0
@@ -90,7 +124,7 @@ with st.sidebar:
         if st.button("③ Deploy coordinator", use_container_width=True, disabled=not img,
                      help="Deploys a Ratis group; redeploying re-forms it fresh (wipes nodes/epochs/policies)."):
             action("Deploy coordinator", lab.deploy_coordinator,
-                   st.session_state.get("coord_size", C.COORD_DEFAULT_GROUP_SIZE))
+                   st.session_state.get("coord_size", C.COORD_DEFAULT_GROUP_SIZE), lab.coord_config)
             st.rerun()
         with st.expander("🗄 disk"):
             st.caption("Postgres `initdb` fails with \"No space left on device\" when the node fills — "
@@ -229,6 +263,7 @@ with cells_tab:
 
     st.divider()
     st.subheader("Manage cells")
+    cell_cfgs = lab.all_cell_configs() if cells else {}   # one kubectl for all cells' live config
     for c in cells:
         cell = c["cell"]
         with st.container(border=True):
@@ -248,6 +283,15 @@ with cells_tab:
             if h6.button("Remove", key=f"rm-{cell}"):
                 action(f"Remove cell {cell}", lab.remove_cell, cell)
                 st.rerun()
+            with st.expander("⚙️ Config"):
+                st.caption("Operational tuning applied as pod env. Blank = server default. "
+                           "**Apply & redeploy** rolls this cell's pods with the new config.")
+                with st.form(f"cellcfg-{cell}"):
+                    values = render_tunables(C.CELL_TUNABLES, cell_cfgs.get(cell, {}), f"cellcfg-{cell}")
+                    if st.form_submit_button("Apply & redeploy"):
+                        action(f"Update config for {cell}", lab.update_cell_config, cell, values,
+                               spinner="Re-applying cell manifest (pods will roll)…")
+                        st.rerun()
 
 # ---- Placement ----
 with placement:
@@ -435,12 +479,20 @@ with coord_tab:
     chosen = s2.selectbox("size", opts, index=opts.index(cur) if cur in opts else 1,
                           key="coord-size-sel", label_visibility="collapsed")
     st.session_state["coord_size"] = chosen
-    if s3.button("Deploy", key="coord-deploy-btn", help="(re)form the group at this size — fresh state"):
-        action(f"Deploy coordinator group ({chosen})", lab.deploy_coordinator, int(chosen))
-        st.rerun()
     st.caption("One replicated Ratis group — any pod serves consistent state. The peer list is fixed, so "
                "it is not dynamically scalable: choose a size (odd for a majority); redeploying re-forms it "
                "fresh.")
+    with st.form("coordcfg"):
+        st.caption("Coordinator config (applied on deploy). It runs the control plane, not the engine, "
+                   "so it has few knobs. **Deploy re-forms the group fresh** (store wiped).")
+        coord_vals = render_tunables(C.COORD_TUNABLES, lab.coordinator_config(), "coordcfg", cols=3)
+        if st.form_submit_button(f"Deploy group ({chosen}) with this config"):
+            action(f"Deploy coordinator group ({chosen})", lab.deploy_coordinator, int(chosen), coord_vals,
+                   spinner="Re-forming the Ratis group…")
+            st.rerun()
+    if s3.button("Deploy", key="coord-deploy-btn", help="(re)form the group at this size — fresh state"):
+        action(f"Deploy coordinator group ({chosen})", lab.deploy_coordinator, int(chosen), lab.coord_config)
+        st.rerun()
     if cpods:
         st.dataframe([{"pod": p["name"], "phase": p["phase"], "ready": "✅" if p["ready"] else "⏳",
                        "restarts": p["restarts"]} for p in cpods], use_container_width=True, hide_index=True)

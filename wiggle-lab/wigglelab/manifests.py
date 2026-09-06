@@ -56,7 +56,8 @@ def namespace_manifest() -> dict:
             "metadata": {"name": C.K8S_NAMESPACE, "labels": {"app.kubernetes.io/part-of": C.PART_OF}}}
 
 
-def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE) -> list[dict]:
+def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE,
+                          tunables: dict | None = None) -> list[dict]:
     """A single Apache Ratis group of ``size`` coordinator pods, as a StatefulSet behind a headless
     Service. Every pod serves the CellCoordinator gRPC (8099) backed by the SAME replicated store, so a
     client reaching any pod sees consistent state -- unlike independent single-member coordinators.
@@ -86,6 +87,9 @@ def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE) -> list[dict]:
                 "WIGGLE_PORT": C.COORD_GRPC_PORT,
                 "WIGGLE_COORD_STORE": store_uri,
             }),
+            # Operational tunables from the UI (thin for the coordinator -- it runs CoordinatorServer,
+            # not the engine); unset ones fall back to server defaults.
+            *_env(C.resolve_tunables(C.COORD_TUNABLES, tunables)),
         ],
         "volumeMounts": [{"name": "coord-data", "mountPath": C.COORD_DATA_DIR}],
         "readinessProbe": {"tcpSocket": {"port": C.COORD_GRPC_PORT},
@@ -148,7 +152,8 @@ def cell_db_manifests(cell: str) -> list[dict]:
     return [_deployment(name, labels, 1, container), _service(name, labels, C.DB_PORT, C.DB_PORT)]
 
 
-def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "") -> list[dict]:
+def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
+                   tunables: dict | None = None) -> list[dict]:
     name = C.dns_name("cell", cell)
     db = C.dns_name("db", cell)
     labels = C.labels("cell", cell=cell, namespace=namespace)
@@ -158,6 +163,7 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "") -
         "env": [
             _node_name_env(),
             _pod_ip_env(),
+            # Structural env the lab wires itself (never user-editable).
             *_env({
                 "WIGGLE_PORT": C.CELL_GRPC_PORT,
                 "WIGGLE_DASHBOARD_PORT": C.CELL_DASHBOARD_PORT,
@@ -168,9 +174,10 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "") -
                 "WIGGLE_NAMESPACE": namespace,
                 "WIGGLE_COORDINATOR_URL": f"coordinator:{C.COORD_GRPC_PORT}",
                 "WIGGLE_REGION": region or None,
-                "WIGGLE_POLL_INTERVAL_MILLIS": 200,
-                "WIGGLE_HOUSEKEEPING_BATCH": 500,
             }),
+            # Operational tunables from the UI (poll interval + housekeeping default here); unset ones
+            # are dropped by _env ⇒ the server falls back to its own defaults.
+            *_env(C.resolve_tunables(C.CELL_TUNABLES, tunables)),
         ],
         "readinessProbe": {"tcpSocket": {"port": C.CELL_GRPC_PORT},
                            "initialDelaySeconds": 4, "periodSeconds": 3},
