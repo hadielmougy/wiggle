@@ -7,8 +7,10 @@ dependencies {
     // Only the single-JVM Demo needs the server on its classpath.
     implementation(project(":server"))
     // So the benchmark can run against a real database (WIGGLE_JDBC_URL) to show LOCAL_ASYNC's
-    // commit-batching win; brings the StorageProvider SPI + Postgres/H2 drivers at runtime.
-    runtimeOnly(project(":postgres"))
+    // commit-batching win. Storage is an explicit StorageFactory (no ServiceLoader), so Benchmark
+    // wires JdbcStorage + a dialect itself -- these must be on the compile classpath.
+    implementation(project(":jdbc"))
+    implementation(project(":postgres"))
 }
 
 application {

@@ -47,6 +47,9 @@ public final class Worker implements AutoCloseable {
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
+    /** Signalled whenever a task finishes, so a saturated poll loop resumes the moment capacity frees
+     *  instead of napping a fixed idle-backoff (which used to gate throughput to one wave per nap). */
+    private final Object capacityFreed = new Object();
     private ExecutorService executor;
     private ScheduledExecutorService heartbeats;
     private Thread pollThread;
@@ -355,11 +358,15 @@ public final class Worker implements AutoCloseable {
     }
 
     private void pollOnce() {
-        int free = options.concurrency() - inFlight.get();
-        if (free <= 0) {
-            sleep(options.idleBackoff().toMillis());
+        if (options.concurrency() - inFlight.get() <= 0) {
+            // Saturated: wait for a task to finish (signalled below), not a fixed nap. A fixed nap
+            // gated throughput to one concurrency-sized wave per idle-backoff, because fast steps all
+            // finished while the poll thread was still asleep.
+            awaitCapacity(options.idleBackoff().toMillis());
             return;
         }
+        int free = options.concurrency() - inFlight.get();
+        long polledAt = System.currentTimeMillis();
         PollResult result = client.poll(workerId, servedQueues(), free,
                 options.lease().toMillis(), options.longPollWait().toMillis());
         List<TaskActivation> tasks = result.tasks();
@@ -369,15 +376,38 @@ public final class Worker implements AutoCloseable {
                 // The server is shedding under load (memory pressure); honour its hold-off hint.
                 LOG.log(System.Logger.Level.WARNING, "poll shed by server under load; backing off " + shedFor + "ms");
                 sleep(shedFor);
-            } else {
-                // Normal empty poll -- no work available right now. Not an error; just idle.
-                LOG.log(System.Logger.Level.DEBUG, () -> "poll returned no work; idle backoff");
+            } else if (System.currentTimeMillis() - polledAt < MIN_LONG_POLL_MILLIS) {
+                // The server answered instantly instead of holding the long-poll open (old server, or
+                // waitMillis clamped to 0): back off so an idle worker doesn't spin.
+                LOG.log(System.Logger.Level.DEBUG, () -> "empty short poll; idle backoff");
                 sleep(options.idleBackoff().toMillis());
             }
+            // else: the server held the long-poll to its deadline and found nothing -- re-poll
+            // immediately; the server-side long-poll (with wake-on-produce) IS the idle wait.
             return;
         }
         for (TaskActivation task : tasks) {
             submit(task);
+        }
+    }
+
+    /** An empty poll that returns faster than this didn't long-poll server-side; back off client-side. */
+    private static final long MIN_LONG_POLL_MILLIS = 5;
+
+    /** Parks until a task slot frees (or {@code maxWaitMillis} as a safety net). */
+    private void awaitCapacity(long maxWaitMillis) {
+        long deadline = System.currentTimeMillis() + maxWaitMillis;
+        synchronized (capacityFreed) {
+            while (running.get() && options.concurrency() - inFlight.get() <= 0) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) return;
+                try {
+                    capacityFreed.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
         }
     }
 
@@ -388,6 +418,9 @@ public final class Worker implements AutoCloseable {
                 execute(task);
             } finally {
                 inFlight.decrementAndGet();
+                synchronized (capacityFreed) {
+                    capacityFreed.notifyAll();   // resume a saturated poll loop immediately
+                }
             }
         });
     }
