@@ -85,6 +85,16 @@ catches cross-node production and any missed signal. No correctness change — t
 arbiter. (Raising `FALLBACK_POLL_MILLIS` would further cut idle-poll QPS at the cost of cross-node
 latency; left at 100 ms to strictly not regress today's cadence.)
 
+**Batching (linger).** Wake-on-produce is edge-triggered, so on its own it claims eagerly — as little as
+one token per poll — which under load means more, smaller `claimTasks` round trips than the old
+accumulate-then-batch busy-poll (a latency-for-throughput trade). To recover batching, after a wake the
+poll lingers up to `DISPATCH_LINGER_MILLIS` (default 5 ms, bounded by the poll deadline) so a burst of
+concurrently-produced tokens is drained in one claim of up to `max`. It only lingers when the worker
+asked for more than one task (it has spare capacity to batch) and only after a real signal (not the
+fallback timeout); `0` disables it. This does **not** reduce the *number* of steps that round-trip in
+SERVER mode — that is what LOCAL_ASYNC chaining (§4 handback / local batch) is for; linger only makes
+each poll carry more work.
+
 **Properties**
 
 - No node affinity, no routing, no protocol change.

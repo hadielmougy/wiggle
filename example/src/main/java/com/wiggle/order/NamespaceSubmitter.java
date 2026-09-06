@@ -27,7 +27,7 @@ public final class NamespaceSubmitter {
     public static void main(String[] args) throws Exception {
         String coord = env("WIGGLE_COORDINATOR_URL", "127.0.0.1:18099");
         String ns = env("WIGGLE_NAMESPACE", "abc");
-        int count = args.length > 0 ? Integer.parseInt(args[0]) : 100;
+        int count = args.length > 0 ? Integer.parseInt(args[0]) : 1000;
 
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
             Blueprint bp = OrderFulfilment.blueprint();
