@@ -58,7 +58,7 @@ public final class Benchmark {
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
 
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = open(config, jdbcUrl);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
 
@@ -83,6 +83,16 @@ public final class Benchmark {
                     mode, jdbcUrl == null ? "in-memory" : "jdbc", steps, count, workers, concurrency, batch,
                     count / seconds, seconds, (long) count * steps / seconds);
         }
+    }
+
+    /** In-memory with no URL; else JdbcStorage with the dialect picked from the URL (postgres / h2).
+     *  Storage is an explicit factory (no ServiceLoader), so the benchmark wires it here. */
+    private static WiggleServer open(ServerConfig config, String jdbcUrl) throws Exception {
+        if (jdbcUrl == null) return new WiggleServer(config).start();
+        com.wiggle.jdbc.Dialect dialect = jdbcUrl.startsWith("jdbc:postgresql")
+                ? new com.wiggle.postgres.PostgresDialect() : new com.wiggle.postgres.H2Dialect();
+        return new WiggleServer(config, cfg -> new com.wiggle.jdbc.JdbcStorage(
+                cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), dialect)).start();
     }
 
     /**
