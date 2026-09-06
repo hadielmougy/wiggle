@@ -2,8 +2,11 @@
 
 A design for reducing task-dispatch latency (and idle DB load) by matching freshly-produced
 continuation tokens to waiting workers **in memory**, before — or instead of — a database claim, while
-keeping the database the source of truth. Written against the current engine; nothing here is
-implemented yet.
+keeping the database the source of truth.
+
+> **Status.** Layer 1 (§3, wake-on-produce) is **implemented** — see `DispatchNotifier` and the
+> `poll` / `tx` / `txVoid` / `parkAtWorkerStep` changes in `WorkflowEngine`. Layer 2 (§4) and the
+> active/passive path (§5) are design only.
 
 ---
 
@@ -53,17 +56,34 @@ and the producing node is *unknowable* (any node may have run the completing ste
 node." The only deterministic key that matches how workers subscribe is the **queue**. Route by queue,
 not by node.
 
-## 3. Layer 1 — Wake-on-produce (no routing; do this first)
+## 3. Layer 1 — Wake-on-produce (no routing; do this first) — *implemented*
 
 Replace the busy-poll with a **per-node waiter registry**: a map `queue → parked poll waiters`
-(condition variables / futures). When a continuation is parked `READY`, signal local waiters for that
-queue; a woken poller runs **one** `claimTasks` (unchanged, still the atomic arbiter).
+(condition variables). When a continuation is parked `READY`, signal local waiters for that queue;
+a woken poller runs **one** `claimTasks` (unchanged, still the atomic arbiter).
 
-**Touch points**
+**As built**
 
-- `WorkflowEngine.poll` (`:181-220`) — replace the `sleep`-loop with await-on-condition, keyed by the
-  polled queues, plus a short **fallback poll** (e.g. 250 ms) as a safety net.
-- `parkAtWorkerStep` (`:802-834`) — after setting a token `READY`, `signal(queue)` on the local registry.
+- `DispatchNotifier` — the per-node registry: `signal(queues)` bumps a per-queue version and wakes
+  waiters; `snapshot(queues)` + `awaitChange(queues, since, timeout)` block a poller until one of *its*
+  queues advances past the snapshot, or the timeout elapses. Per-queue versioning avoids spurious
+  cross-queue wakeups; snapshot-before-claim closes the lost-wakeup race.
+- `WorkflowEngine.poll` — snapshots signal counts, claims, and if empty `awaitChange`s (capped by a
+  `FALLBACK_POLL_MILLIS` = 100 ms safety net) instead of the old `Thread.sleep(≤100ms)` busy-loop.
+- `parkAtWorkerStep` records the parked queue in a per-transaction thread-local; the `tx` / `txVoid`
+  wrappers around each mutating entry point (`start`, `complete`, `advance`, `signal`, timer/signal/
+  reclaim sweeps, `fail`, schedule fire) flush those queues to `notifier.signal(...)` **after the
+  transaction commits**, so a woken poller always sees the committed `READY` row. Nesting defers to the
+  outermost scope so sub-workflow/parent resumes signal once, post-commit.
+- `poll` skips the claim if the caller's request is **cancelled** (`GrpcApi` passes the gRPC
+  `Context::isCancelled`). Instant wake can otherwise deliver a freshly-produced token to a poll whose
+  worker is mid-shutdown (its own drain woke it) — the token would be claimed then stranded until lease
+  expiry. Declining to claim for a gone caller leaves the work `READY` for a live worker.
+
+**Effect:** same-node dispatch latency drops from up to `FALLBACK_POLL_MILLIS` to ~0; the fallback still
+catches cross-node production and any missed signal. No correctness change — the DB claim stays the
+arbiter. (Raising `FALLBACK_POLL_MILLIS` would further cut idle-poll QPS at the cost of cross-node
+latency; left at 100 ms to strictly not regress today's cadence.)
 
 **Properties**
 

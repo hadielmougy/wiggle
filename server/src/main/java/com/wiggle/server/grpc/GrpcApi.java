@@ -278,7 +278,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
             long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
-            List<com.wiggle.core.TaskActivation> tasks = engine.poll(req.getWorkerId(), queues, max, lease, deadline);
+            // A cancelled call means the worker is gone (closed/dead); don't claim work it can't run.
+            io.grpc.Context ctx = io.grpc.Context.current();
+            List<com.wiggle.core.TaskActivation> tasks =
+                    engine.poll(req.getWorkerId(), queues, max, lease, deadline, ctx::isCancelled);
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                     + " returning " + tasks.size() + " task(s)");
             TaskList.Builder out = TaskList.newBuilder();

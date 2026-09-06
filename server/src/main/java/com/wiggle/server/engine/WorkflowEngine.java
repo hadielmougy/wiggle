@@ -26,10 +26,52 @@ public final class WorkflowEngine {
 
     private static final System.Logger LOG = System.getLogger(WorkflowEngine.class.getName());
 
+    /** How long a long-poll waits between fallback DB claims when no local wake-on-produce arrives.
+     *  Same-node production wakes a poller immediately; this bounds the latency for cross-node
+     *  production (and any missed signal). */
+    private static final long FALLBACK_POLL_MILLIS = 100;
+
     private final Storage storage;
     private final DefinitionRegistry definitions;
     private final long defaultLeaseMillis;
     private final java.util.function.Supplier<String> idMinter;
+
+    /** Wake-on-produce for long-polling workers (Layer 1; see docs/in-memory-dispatch.md). */
+    private final DispatchNotifier notifier = new DispatchNotifier();
+    /** Queues that had a token parked READY during the in-flight transaction, flushed to the notifier
+     *  after it commits. Set by {@link #parkAtWorkerStep}, drained by {@link #tx}/{@link #txVoid}. */
+    private final ThreadLocal<Set<String>> readyQueues = new ThreadLocal<>();
+
+    /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue that had a
+     *  token parked READY during it. Nesting is safe: an inner scope defers to the outermost. */
+    private <T> T tx(java.util.function.Function<Tx, T> body) {
+        Set<String> outer = readyQueues.get();
+        Set<String> mine = new HashSet<>();
+        readyQueues.set(mine);
+        T result;
+        try {
+            result = storage.inTx(body);
+        } finally {
+            readyQueues.set(outer);
+        }
+        if (outer != null) outer.addAll(mine);   // let the outermost scope signal, post its commit
+        else notifier.signal(mine);
+        return result;
+    }
+
+    /** {@link #tx} for a body with no return value. */
+    private void txVoid(java.util.function.Consumer<Tx> body) {
+        Set<String> outer = readyQueues.get();
+        Set<String> mine = new HashSet<>();
+        readyQueues.set(mine);
+        try {
+            storage.inTxVoid(body);
+        } finally {
+            readyQueues.set(outer);
+        }
+        if (outer != null) outer.addAll(mine);
+        else notifier.signal(mine);
+    }
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
@@ -60,7 +102,7 @@ public final class WorkflowEngine {
     public Optional<WorkflowDefinition> latestDefinition(String name) { return definitions.latest(name); }
 
     public String start(String workflow, Integer version, Object context, String correlationId) {
-        return storage.inTx(tx -> startInTx(tx, workflow, version, context, correlationId, null));
+        return tx(tx -> startInTx(tx, workflow, version, context, correlationId, null));
     }
 
     /** Starts an instance inside an existing transaction; {@code parentTokenId} links a sub-workflow. */
@@ -96,7 +138,7 @@ public final class WorkflowEngine {
     }
 
     public void cancel(String instanceId, String reason) {
-        List<String> children = storage.inTx(tx -> {
+        List<String> children = tx(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             if (inst.status != InstanceStatus.RUNNING) {
                 LOG.log(System.Logger.Level.DEBUG, () ->
@@ -179,44 +221,46 @@ public final class WorkflowEngine {
     }
 
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline) {
-        long now = System.currentTimeMillis();
-        long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
-        long until = now + lease;
-        List<TaskActivation> tasks = new ArrayList<>();
-        try {
-            //TODO: get available tasks in memory first via exchange
-            /*
-            the problem is i don't want to block the thread here and I want at the same time to reduce database queries
-            but the issue is that either this thead or the ack thread must wait for sometime for the chance to meet eachother
-            which is what I don't want as well.
-            One ack thread must keep things in a buffer, but how to make that buffer same and never got lost
-            Ok: there must be another status in the database which means this token is buffered but it can get lost from memory
-            if the time expires reclaim it.
+        return poll(workerId, queues, max, leaseMillis, deadline, () -> false);
+    }
 
-            I don't think the idea is valid in itself. the problem that I always have to hit the database. so why would
-            I build a cefusticated implementation of in memory although I have to hit the database anyway. and plus if I
-            rely only on memory to fill the buffer, some tokens might not get the chance ever to get selected.
-            So, I will calculate the next token in ack but I will keep the database claim as is
-             */
-            tasks.addAll(storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, until)));
-        } catch (Exception e){
-            throw e;
-        }
+    /**
+     * Long-polls for work. {@code cancelled} lets the caller (the gRPC layer) signal that the worker's
+     * request is gone -- a closing or dead worker whose call was cancelled -- so we do not claim a
+     * token for a worker that will never run it (which would only strand it until lease expiry). This
+     * matters with wake-on-produce: a signal can wake a parked poll the instant its worker is shutting
+     * down, and the freshly-produced token should go to a live worker instead.
+     */
+    public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline,
+                                     java.util.function.BooleanSupplier cancelled) {
+        long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
+        // Wake-on-produce (Layer 1): snapshot the signal counts BEFORE claiming so a token parked
+        // between our claim and our wait is never lost, then either claim it or block until a local
+        // completion signals one of our queues -- falling back to a periodic re-claim so cross-node
+        // production (and any missed signal) is still caught. The DB claim stays the arbiter.
+        if (cancelled.getAsBoolean()) return List.of();
+        Map<String, Long> since = notifier.snapshot(queues);
+        List<TaskActivation> tasks = claimNow(workerId, queues, max, lease);
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-            try {
-                Thread.sleep(Math.min(100, Math.max(1, deadline - System.currentTimeMillis())));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-            tasks.addAll(storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, until)));
+            long remaining = deadline - System.currentTimeMillis();
+            notifier.awaitChange(queues, since, Math.min(FALLBACK_POLL_MILLIS, remaining));
+            if (cancelled.getAsBoolean()) return List.of();   // worker gone -- leave the work for a live one
+            since = notifier.snapshot(queues);
+            tasks = claimNow(workerId, queues, max, lease);
         }
         if (!tasks.isEmpty()) {
+            List<TaskActivation> claimed = tasks;
             LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
-                    + " claimed " + tasks.size() + " task(s): "
-                    + tasks.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
+                    + " claimed " + claimed.size() + " task(s): "
+                    + claimed.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
         }
         return tasks;
+    }
+
+    /** One atomic DB claim attempt, with a lease that starts now (not at the poll's arrival). */
+    private List<TaskActivation> claimNow(String workerId, Set<String> queues, int max, long lease) {
+        long now = System.currentTimeMillis();
+        return storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, now + lease));
     }
 
     private List<TaskActivation> claimActivations(Tx tx, String workerId, Set<String> queues,
@@ -278,7 +322,7 @@ public final class WorkflowEngine {
 
     // TODO here I should calculate the next task
     public void complete(String taskId, String leaseOwner, Object result) {
-        storage.inTxVoid(tx -> {
+        txVoid(tx -> {
             LockedTask locked = lockTask(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
@@ -344,7 +388,7 @@ public final class WorkflowEngine {
      * (or a boundary) it is driven normally, releasing the worker.
      */
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
-        return storage.inTx(tx -> {
+        return tx(tx -> {
             LockedTask locked = lockTask(tx, startTaskId);
             Instance inst = locked.inst();
             long now = System.currentTimeMillis();
@@ -433,7 +477,7 @@ public final class WorkflowEngine {
      * {@code payload} merges into the context and the flow advances down the signal's path.
      */
     public void signal(String instanceId, String name, Object payload) {
-        storage.inTxVoid(tx -> {
+        txVoid(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             requireRunning(inst);
             Token t = tx.tokensOf(instanceId).stream()
@@ -466,7 +510,7 @@ public final class WorkflowEngine {
         int done = 0;
         for (Token token : due) {
             try {
-                storage.inTxVoid(tx -> action.apply(tx, token));
+                txVoid(tx -> action.apply(tx, token));
                 done++;
             } catch (RuntimeException e) {
                 LOG.log(System.Logger.Level.WARNING, what + " " + token.id + " failed: " + e);
@@ -559,7 +603,7 @@ public final class WorkflowEngine {
 
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
-        storage.inTxVoid(tx -> {
+        txVoid(tx -> {
             LockedTask locked = lockTask(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
@@ -676,7 +720,7 @@ public final class WorkflowEngine {
     }
 
     private boolean fireSchedule(Rows.Schedule sched, long now) {
-        return storage.inTx(tx -> {
+        return tx(tx -> {
             if (!tx.claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
             String id = startInTx(tx, sched.workflow, null, Json.parse(sched.contextJson),
                     "schedule:" + sched.id, null);
@@ -828,6 +872,8 @@ public final class WorkflowEngine {
         t.availableAt = now;
         t.updatedAt = now;
         tx.updateToken(t);
+        Set<String> ready = readyQueues.get();   // signalled post-commit by tx()/txVoid()
+        if (ready != null && node.queue() != null) ready.add(node.queue());
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                 + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
         return true;
