@@ -19,7 +19,6 @@ dependencies {
     implementation(project(":mysql"))
     implementation(project(":oracle"))
     implementation(project(":sqlserver"))
-    implementation(project(":cassandra"))
 }
 
 application {

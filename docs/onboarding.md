@@ -72,7 +72,6 @@ go through the migration runner (§7.4), never by editing an already-released mi
 | `mysql` | MySQL / MariaDB dialect | `wiggle-mysql` |
 | `oracle` | Oracle Database dialect | `wiggle-oracle` |
 | `sqlserver` | Microsoft SQL Server dialect | `wiggle-sqlserver` |
-| `cassandra` | partition-aware CQL store (lightweight transactions) | `wiggle-cassandra` |
 | `dist` | runnable standalone server bundling every backend (what the Docker image runs) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
@@ -433,11 +432,10 @@ No URL → in-memory (single node, dev/test). With one, the server builds its st
 `StorageFactory` — **no `ServiceLoader`**: the distribution's `WiggleStorageFactory` maps the URL
 scheme to a backend at runtime. The JDBC backends — PostgreSQL / H2 (`wiggle-postgres`),
 MySQL / MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`), SQL Server (`wiggle-sqlserver`) — share
-one HikariCP-pooled, dialect-aware store (`wiggle-jdbc`); Cassandra (`wiggle-cassandra`) is a
-separate, partition-aware CQL store. The `dist` module (the Docker image) bundles them all, so a
-single image serves any of `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:` / `jdbc:mariadb:`,
-`jdbc:oracle:`, `jdbc:sqlserver:` or `cassandra://`. Another database is a new module — no engine
-change.
+one HikariCP-pooled, dialect-aware store (`wiggle-jdbc`). The `dist` module (the Docker image)
+bundles them all, so a single image serves any of `jdbc:postgresql:`, `jdbc:h2:`,
+`jdbc:mysql:` / `jdbc:mariadb:`, `jdbc:oracle:` or `jdbc:sqlserver:`. Another database is a new
+module — no engine change.
 
 Embedding the server in your own JVM? Pass the factory explicitly, e.g.
 `new WiggleServer(config, cfg -> new JdbcStorage(cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(),

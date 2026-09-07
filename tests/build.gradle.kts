@@ -18,7 +18,6 @@ dependencies {
     testImplementation(project(":mysql"))
     testImplementation(project(":oracle"))
     testImplementation(project(":sqlserver"))
-    testImplementation(project(":cassandra"))
     // The dist module supplies the explicit WiggleStorageFactory used to run a WiggleServer against
     // a real database in tests (the same one the standalone image uses).
     testImplementation(project(":dist"))

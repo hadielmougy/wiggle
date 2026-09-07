@@ -11,7 +11,7 @@ directory-free routing and zero-migration rebalancing. Blast-radius isolation an
 - **Durable** — every instance is DB-backed: it survives restarts, retries, and worker death (lease-based recovery). Exactly-once dispatch, at-least-once execution.
 - **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals, timers, sub-workflows — a compiled graph, versioned by content hash. No workflow-code determinism to get wrong.
 - **Pull-based & polyglot** — workers ask for work over gRPC (no inbound connectivity, backpressure built in); idiomatic **Java, Go, and Python** workers interoperate on one server, dispatched by activity name. A coordinator-aware worker fans polling out across a namespace's active cells and shifts as they rebalance.
-- **Optional & lightweight** — the cell coordinator is opt-in: a single cluster runs unchanged without one, and the whole thing is a JAR plus a database (Postgres/MySQL/Oracle/SQL Server/Cassandra) — embeddable in your process, no Elasticsearch, no server mesh.
+- **Optional & lightweight** — the cell coordinator is opt-in: a single cluster runs unchanged without one, and the whole thing is a JAR plus a database (Postgres/MySQL/Oracle/SQL Server) — embeddable in your process, no Elasticsearch, no server mesh.
 
 In one picture — a single workflow instance whose steps run on **different services**, routed by each step's **queue**. The server keeps the durable state; each service just pulls the steps it serves (no broker, no service-to-service calls):
 
@@ -69,12 +69,10 @@ dependencies {
     implementation("io.github.hadielmougy:wiggle-postgres:2.1.7")   // PostgreSQL + H2 dialects
     runtimeOnly("org.postgresql:postgresql:42.7.4")
 
-    // Other backends are drop-in modules, each contributing a dialect (or, for Cassandra, its own
-    // partition-aware store):
+    // Other backends are drop-in modules, each contributing a dialect:
     //   io.github.hadielmougy:wiggle-mysql      + com.mysql:mysql-connector-j
     //   io.github.hadielmougy:wiggle-oracle     + com.oracle.database.jdbc:ojdbc11
     //   io.github.hadielmougy:wiggle-sqlserver  + com.microsoft.sqlserver:mssql-jdbc
-    //   io.github.hadielmougy:wiggle-cassandra  (cassandra:// URLs)
 }
 ```
 
@@ -680,11 +678,10 @@ lease recovery). Kill any node — including the leader — and the rest carry o
 > **Pluggable storage.** The server core knows nothing about any database; it builds its store from
 > an injected `StorageFactory` (an explicit switch on the URL — no `ServiceLoader`). PostgreSQL and
 > H2 (`wiggle-postgres`), MySQL/MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`) and SQL Server
-> (`wiggle-sqlserver`) all share one HikariCP-pooled, dialect-aware JDBC store (`wiggle-jdbc`);
-> **Cassandra** (`wiggle-cassandra`) is a separate, partition-aware store on the CQL driver
-> (lightweight transactions in place of row locks — see `cassandra/README.md`). The standalone
+> (`wiggle-sqlserver`) all share one HikariCP-pooled, dialect-aware JDBC store (`wiggle-jdbc`).
+> The standalone
 > distribution (`wiggle-dist`, what the Docker image runs) bundles **every** backend and picks one
-> from the URL scheme (`jdbc:…` or `cassandra://…`); with none set it runs in-memory. **One image,
+> from the URL scheme (`jdbc:…`); with none set it runs in-memory. **One image,
 > all databases** — you never build a per-database image. Supporting another database is a new
 > module — no changes to the engine core.
 
@@ -713,7 +710,7 @@ Everything has a sensible default; override via environment variable or system p
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `WIGGLE_PORT` | `8080` | gRPC port (`0` picks a free one) |
-| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set it to cluster on a database. `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:`, `jdbc:oracle:`, `jdbc:sqlserver:` or `cassandra://` — the engine is detected from the URL |
+| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set it to cluster on a database. `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:`, `jdbc:oracle:`, or `jdbc:sqlserver:` — the engine is detected from the URL |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | | database credentials |
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP maximum pool size |
 | `WIGGLE_LEASE_MILLIS` | `30000` | default task lease before a stalled step is reclaimed |

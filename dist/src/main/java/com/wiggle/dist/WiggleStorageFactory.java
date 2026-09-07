@@ -1,6 +1,5 @@
 package com.wiggle.dist;
 
-import com.wiggle.cassandra.CassandraStorage;
 import com.wiggle.jdbc.Dialect;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.mysql.MySqlDialect;
@@ -24,9 +23,6 @@ public final class WiggleStorageFactory implements StorageFactory {
     @Override public Storage create(ServerConfig config) {
         String url = config.jdbcUrl();
         if (url == null || url.isBlank()) return new InMemoryStorage();
-        if (url.startsWith("cassandra:")) {
-            return CassandraStorage.fromUrl(url, config.jdbcUser(), config.jdbcPassword());
-        }
         return new JdbcStorage(url, config.jdbcUser(), config.jdbcPassword(), config.jdbcPoolSize(), dialect(url));
     }
 
@@ -37,7 +33,7 @@ public final class WiggleStorageFactory implements StorageFactory {
         if (url.startsWith("jdbc:oracle:")) return new OracleDialect();
         if (url.startsWith("jdbc:sqlserver:")) return new SqlServerDialect();
         throw new IllegalArgumentException("no storage backend for URL '" + url
-                + "' -- expected jdbc:postgresql:, jdbc:h2:, jdbc:mysql:, jdbc:mariadb:, jdbc:oracle:, "
-                + "jdbc:sqlserver: or cassandra://");
+                + "' -- expected jdbc:postgresql:, jdbc:h2:, jdbc:mysql:, jdbc:mariadb:, jdbc:oracle: "
+                + "or jdbc:sqlserver:");
     }
 }
