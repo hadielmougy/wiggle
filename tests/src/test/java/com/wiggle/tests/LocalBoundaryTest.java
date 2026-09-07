@@ -4,6 +4,8 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -162,6 +164,14 @@ class LocalBoundaryTest {
         public Map<String, Object> l1(Map<String, Object> ctx) { return counted(runs, "l1", put(ctx, "left", "L")); }
         public Map<String, Object> l2(Map<String, Object> ctx) { return counted(runs, "l2", put(ctx, "left2", "L2")); }
         public Map<String, Object> r1(Map<String, Object> ctx) { return counted(runs, "r1", put(ctx, "right", "R")); }
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("left") Map<String, Object> left,
+                                         @Arm("right") Map<String, Object> right) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            if (left != null) out.putAll(left);
+            if (right != null) out.putAll(right);
+            return out;
+        }
         public Map<String, Object> after(Map<String, Object> ctx) { return counted(runs, "after", put(ctx, "joined", true)); }
     }
 

@@ -199,7 +199,10 @@ class OrderHandlers {
 ```
 
 Bind it on the worker with `new Worker(client, "w").register(orders).handlers(new OrderHandlers())`.
-A `combine` node (`merge`) with no method folds its branches with the default union.
+A `combine` node (`merge`) must have an explicit handler — a method taking `@Arm("branch")`
+parameters (each branch's result) plus an optional `@Context` parameter (the pre-fork context),
+whose return is the COMPLETE post-join context. There is no implicit fold: a combine served by no
+worker fails its task, and keys the handler does not return do not survive the join.
 
 ### 5.1 Operations
 

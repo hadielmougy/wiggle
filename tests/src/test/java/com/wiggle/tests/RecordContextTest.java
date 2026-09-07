@@ -4,6 +4,8 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
@@ -21,8 +23,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * A typed-record context driven through a live server and worker -- gates, forks, and the
- * shallow-diff branch merge all operating on typed records rather than JSON maps.
+ * A typed-record context driven through a live server and worker -- gates, forks, and an
+ * explicit typed combine all operating on typed records rather than JSON maps.
  * (The pure codec round-trip has its own scenario; this covers the record path end to end.)
  */
 class RecordContextTest {
@@ -56,6 +58,10 @@ class RecordContextTest {
         public boolean hasItems(Shipment s) { return s.items() > 0; }
         public Shipment label(Shipment s) { return s.withLabel("LBL-" + s.id()); }
         public Shipment invoice(Shipment s) { return s.withInvoice("INV-" + s.id()); }
+        public Shipment merge(@Context Shipment base, @Arm("labelling") Shipment labelling,
+                              @Arm("billing") Shipment billing) {
+            return base.withLabel(labelling.label()).withInvoice(billing.invoice());
+        }
         public Shipment dispatch(Shipment s) { return s.withStatus("DISPATCHED"); }
     }
 
