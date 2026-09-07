@@ -6,6 +6,7 @@ import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowBuilder;
 import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -72,6 +73,37 @@ class ForkIsolationTest {
         assertFalse(out.containsKey("dropped"), "the ignored branch left no trace: " + out);
     }
 
+    @Test @DisplayName("a combine's return REPLACES the context: keys it omits do not survive the join")
+    void combineReturnReplacesContext() throws Exception {
+        Blueprint bp = Workflow.define("replace-check")
+                .step("seed")
+                .fork(
+                        Branch.of("a", s -> s.step("a1")),
+                        Branch.of("b", s -> s.step("b1")))
+                .combine("pickOnly")
+                .build();
+
+        Map<String, Object> out = run(bp, new ReplaceH(), new LinkedHashMap<>(Map.of("preFork", "here")));
+
+        assertEquals(true, out.get("picked"), "the combine's own value lands");
+        assertFalse(out.containsKey("preFork"),
+                "a pre-fork key the combine did not return must NOT survive (no implicit old+new merge): " + out);
+    }
+
+    @Test @DisplayName("a combine with no handler fails the instance — there is no implicit union fold")
+    void combineWithoutHandlerFails() throws Exception {
+        Blueprint bp = Workflow.define("no-combine-handler")
+                .fork(
+                        Branch.of("x", s -> s.step("x1")),
+                        Branch.of("y", s -> s.step("y1")))
+                .combine("missing")
+                .build();
+
+        InstanceView v = runToTerminal(bp, new NoCombineH(), new LinkedHashMap<>());
+
+        assertEquals("FAILED", v.status(), "no default fold: the unserved combine must fail the instance");
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {
         Map<String, Object> next = new LinkedHashMap<>(ctx);
         next.put(key, value);
@@ -83,9 +115,11 @@ class ForkIsolationTest {
         public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "base", "B"); }
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
         public Map<String, Object> r(Map<String, Object> ctx) { return put(ctx, "shared", "from-right"); }
-        public Map<String, Object> decide(@Arm("left") Map<String, Object> left,
+        public Map<String, Object> decide(@Context Map<String, Object> base,
+                                          @Arm("left") Map<String, Object> left,
                                           @Arm("right") Map<String, Object> right) {
-            Map<String, Object> out = new LinkedHashMap<>();
+            // The return is the COMPLETE post-join context: base must be carried explicitly.
+            Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("shared", "chosen");
             out.put("sawLeft", left.get("shared"));
             out.put("sawRight", right.get("shared"));
@@ -101,6 +135,47 @@ class ForkIsolationTest {
             return new LinkedHashMap<>(keep);   // fold only "keep"; "drop" is discarded
         }
         public Map<String, Object> tail(Map<String, Object> ctx) { return ctx; }
+    }
+
+    @Handlers("replace-check")
+    static final class ReplaceH {
+        public Map<String, Object> seed(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1); }
+        public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1); }
+        public Map<String, Object> pickOnly(@Arm("a") Map<String, Object> a, @Arm("b") Map<String, Object> b) {
+            return new LinkedHashMap<>(Map.of("picked", true));   // deliberately drops the pre-fork context
+        }
+    }
+
+    @Handlers("no-combine-handler")
+    static final class NoCombineH {
+        public Map<String, Object> x1(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> y1(Map<String, Object> ctx) { return ctx; }
+        // no method for the "missing" combine -- and no default fold exists
+    }
+
+    /** Runs a single instance to a terminal state (COMPLETED or FAILED) and returns the view. */
+    private static InstanceView runToTerminal(Blueprint bp, Object handlers, Map<String, Object> input)
+            throws Exception {
+        String url = "jdbc:h2:mem:iso-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
+                0, "node-0", url, "sa", "", 8,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
+        try (com.wiggle.server.WiggleServer server =
+                     new com.wiggle.server.WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+            Worker w = new Worker(client, "w-0",
+                    WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
+            w.register(bp).handlers(handlers);
+            w.start();
+            try {
+                String id = client.start(bp, input);
+                return client.awaitCompletion(id, Duration.ofSeconds(30));
+            } finally {
+                w.close();
+            }
+        }
     }
 
     /** Runs a single instance to completion on a one-node in-memory H2 server and returns its context. */

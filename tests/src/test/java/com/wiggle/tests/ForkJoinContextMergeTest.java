@@ -4,6 +4,8 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -54,6 +56,14 @@ class ForkJoinContextMergeTest {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "tracking", "DHL"); }
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("payment") Map<String, Object> payment,
+                                         @Arm("shipping") Map<String, Object> shipping) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            if (payment != null) out.putAll(payment);
+            if (shipping != null) out.putAll(shipping);
+            return out;
+        }
         public Map<String, Object> notify(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
@@ -131,6 +141,9 @@ class ForkJoinContextMergeTest {
         public Parcel validate(Parcel p) { return p; }
         public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
         public Parcel label(Parcel p) { return p.withTracking("DHL"); }
+        public Parcel merge(@Context Parcel base, @Arm("payment") Parcel payment, @Arm("shipping") Parcel shipping) {
+            return base.withPayment(payment.payment()).withTracking(shipping.tracking());
+        }
         public Parcel notify(Parcel p) { return p; }
     }
 

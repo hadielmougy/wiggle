@@ -105,8 +105,9 @@ class ChooseFork {
 
 A case's guard is a `boolean` handler named for the case (`isLarge` ↔ `is-large`); the topology only
 names it. `choose` costs at most one guard evaluation per case, short-circuiting at the first match.
-A `fork` always ends in a `combine` — here `large-merge`, which has no handler method, so the two
-branches (a task and an effect, touching disjoint fields) fold with the default union.
+A `fork` always ends in a `combine` — here `large-merge`, whose explicit handler folds the
+`fraud-check` arm onto the pre-fork context and returns the complete post-join context (combines
+have no implicit fold; the effect arm contributes nothing).
 
 ## 3. `forkEach` + `defaultQueue` + a per-step queue
 
@@ -254,8 +255,8 @@ class Parent {
 The child starts with the parent's current context and its final context merges back on completion;
 a failed or cancelled child fails the parent. The child workflow (`cb-linear-gate` here) must already
 be registered on the server — `CookbookDemo` registers all eight blueprints before starting any
-instance for exactly this reason. The parent's own `merge` combine has no handler, so its two
-disjoint branches fold by union.
+instance for exactly this reason. The parent's own `merge` combine is an explicit
+handler folding the `provision` arm onto the pre-fork context (there is no implicit union).
 
 ## 7. `execution(LOCAL_ASYNC)` + `checkpoint` + `doWhile`
 

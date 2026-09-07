@@ -4,6 +4,8 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowBuilder;
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.WiggleClient;
@@ -63,6 +65,14 @@ public final class Scenarios {
         Map<String, Object> next = new LinkedHashMap<>(ctx);
         next.put(key, value);
         return next;
+    }
+
+    /** Explicit-combine helper: fold arm results onto the pre-fork context; the return is complete. */
+    @SafeVarargs
+    static Map<String, Object> fold(Map<String, Object> base, Map<String, Object>... arms) {
+        Map<String, Object> out = new LinkedHashMap<>(base);
+        for (Map<String, Object> arm : arms) if (arm != null) out.putAll(arm);
+        return out;
     }
 
 
@@ -155,6 +165,11 @@ public final class Scenarios {
             return put(ctx, "left", "L");
         }
         public Map<String, Object> fastRight(Map<String, Object> ctx) { return put(ctx, "right", "R"); }
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("left") Map<String, Object> left,
+                                         @Arm("right") Map<String, Object> right) {
+            return fold(base, left, right);   // explicit: the return is the complete post-join context
+        }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "joined", true); }
     }
 
@@ -187,6 +202,12 @@ public final class Scenarios {
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
         public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1L); }
         public Map<String, Object> c1(Map<String, Object> ctx) { return put(ctx, "c", 1L); }
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("a") Map<String, Object> a,
+                                         @Arm("b") Map<String, Object> b,
+                                         @Arm("c") Map<String, Object> c) {
+            return fold(base, a, b, c);
+        }
         public Map<String, Object> after(Map<String, Object> ctx) {
             afterCount.incrementAndGet();
             return ctx;
@@ -225,6 +246,16 @@ public final class Scenarios {
         public Map<String, Object> ib(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
         public Map<String, Object> innerAfter(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
         public Map<String, Object> or(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
+        public Map<String, Object> innerMerge(@Context Map<String, Object> base,
+                                              @Arm("inner-a") Map<String, Object> ia,
+                                              @Arm("inner-b") Map<String, Object> ib) {
+            return fold(base, ia, ib);
+        }
+        public Map<String, Object> outerMerge(@Context Map<String, Object> base,
+                                              @Arm("outer-left") Map<String, Object> left,
+                                              @Arm("outer-right") Map<String, Object> right) {
+            return fold(base, left, right);
+        }
         public Map<String, Object> outerAfter(Map<String, Object> ctx) { return put(ctx, "outerAfter", 1L); }
     }
 
@@ -257,6 +288,11 @@ public final class Scenarios {
         public boolean gate(Map<String, Object> ctx) { return false; }
         public Map<String, Object> skipped(Map<String, Object> ctx) { return put(ctx, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> ctx) { return put(ctx, "ran", true); }
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("gated") Map<String, Object> gated,
+                                         @Arm("other") Map<String, Object> other) {
+            return fold(base, gated, other);   // the gated arm ended early; its (empty) result folds harmlessly
+        }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", true); }
     }
 

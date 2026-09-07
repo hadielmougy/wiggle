@@ -1,7 +1,10 @@
 package com.wiggle.cookbook;
 
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -12,7 +15,8 @@ import static com.wiggle.cookbook.Cookbook.with;
  * method's name matches a step (case/style-insensitive, so {@code inStock} would serve {@code
  * in-stock}) and its signature defines the step: a {@code Map<String,Object>} in and out is a task, a
  * {@code boolean} return is a gate, {@code void} is an effect. Combine steps ({@code large-merge},
- * {@code merge}) have no method, so their branches fold with the default union.
+ * {@code merge}) are explicit methods: each folds its arms onto the pre-fork context and returns
+ * the complete post-join context (there is no implicit union).
  */
 public final class CookbookHandlers {
 
@@ -49,6 +53,12 @@ public final class CookbookHandlers {
         }
         public Map<String, Object> fastPath(Map<String, Object> ctx) {
             return with(ctx, "fraudChecked", false);
+        }
+        public Map<String, Object> largeMerge(@Context Map<String, Object> base,
+                                              @Arm("fraud-check") Map<String, Object> fraud) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            if (fraud != null) out.putAll(fraud);   // manager-notice is an effect: nothing to fold
+            return out;
         }
         public Map<String, Object> settle(Map<String, Object> ctx) {
             return with(ctx, "settled", true);
@@ -119,6 +129,12 @@ public final class CookbookHandlers {
         public void audit(Map<String, Object> ctx) {
             System.out.println("   [cookbook] provisioning audited");
         }
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("provision") Map<String, Object> provision) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            if (provision != null) out.putAll(provision);   // audit is an effect: nothing to fold
+            return out;
+        }
     }
 
     /** 7. cb-batched-loop. */
@@ -153,6 +169,12 @@ public final class CookbookHandlers {
         }
         public void notice(Map<String, Object> ctx) {
             System.out.println("   [cookbook] VIP order held briefly");
+        }
+        public Map<String, Object> largeMerge(@Context Map<String, Object> base,
+                                              @Arm("priority-pack") Map<String, Object> pack) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            if (pack != null) out.putAll(pack);   // priority-notice is an effect: nothing to fold
+            return out;
         }
         public Map<String, Object> packItem(Map<String, Object> item) {
             return with(item, "packed-" + item.get("itemIndex"), true);

@@ -108,8 +108,9 @@ public final class Worker implements AutoCloseable {
      *
      * <p>Matched against the registered graph on {@link #start()}: a name collision here, or a
      * signature that clashes with the graph node's kind, fails fast; a step with no matching method is
-     * simply served by no handler on this worker (logged), and a combine with no method folds its
-     * branches with the default union.
+     * simply served by no handler on this worker (logged). This includes combine nodes: there is no
+     * default fold — every combine must have an explicit handler on some worker, and its return is
+     * the complete post-join context.
      */
     public Worker handlers(Object handlerObject) {
         if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
@@ -205,8 +206,8 @@ public final class Worker implements AutoCloseable {
     /**
      * Resolves a {@link Handlers @Handlers} object against the registered graph, node by node: each
      * worker-dispatched step is bound to the method whose name matches (case/style-insensitive), its
-     * signature checked against the node's kind. A combine node with no matching method folds its
-     * branches with the default union; a step with no method is served by no handler here (logged);
+     * signature checked against the node's kind. A step (or combine) with no method is served by no
+     * handler here (logged) — combines have no default fold, so one must be bound on some worker;
      * a method matching no step is a helper (ignored).
      */
     private void matchHandlerSet(HandlerSet set) {
@@ -217,14 +218,13 @@ public final class Worker implements AutoCloseable {
             if (!node.isWorkerDispatched() || node.name() == null) continue;
             allSteps.add(node.name());
             Method m = set.byName().get(canonicalName(node.name()));
-            ActivityHandler handler;
-            if (m != null) {
-                handler = buildHandler(set, node, m);
-            } else if (isCombine(node)) {
-                handler = unionCombine(node);   // no combine method -> default: fold all arms
-            } else {
-                continue;                       // no handler on this worker for this step
+            if (m == null) {
+                // No handler on this worker for this step -- another worker may serve it. This
+                // includes combine nodes: there is NO default fold; a combine served by no worker
+                // fails its task at claim time ("no handler registered"), never merges implicitly.
+                continue;
             }
+            ActivityHandler handler = buildHandler(set, node, m);
             if (handlers.putIfAbsent(node.activity(), handler) != null) {
                 throw new IllegalStateException("duplicate handler for activity '" + node.activity() + "'");
             }
@@ -282,7 +282,8 @@ public final class Worker implements AutoCloseable {
 
     /** A combine method: each {@link Arm @Arm} parameter gets that branch's result decoded to its
      *  type, an optional {@link Context @Context} parameter gets the pre-fork context; the return
-     *  value is the merged context (staged arm keys are stripped by the engine afterward). */
+     *  value is the COMPLETE post-join context — the engine replaces the context with it (nothing
+     *  from before the join survives unless the handler returned it; staged arm keys are stripped). */
     private static ActivityHandler combineHandler(Node node, Method m, Object target, Map<Class<?>, Method> decoders) {
         List<String> arms = armNames(node);
         java.lang.reflect.Parameter[] params = m.getParameters();
@@ -305,21 +306,6 @@ public final class Worker implements AutoCloseable {
             }
             Object out = call(m, target, args);
             return out == null ? null : RecordMapper.toJson(out);
-        };
-    }
-
-    /** The default combine when no method matches: fold every branch's result into the context. */
-    private static ActivityHandler unionCombine(Node node) {
-        List<String> arms = armNames(node);
-        return ctx -> {
-            Map<String, Object> map = Json.asObject(ctx);
-            Map<String, Object> out = new LinkedHashMap<>();
-            for (String arm : arms) {
-                if (map.get(arm) instanceof Map<?, ?> branch) {
-                    branch.forEach((k, v) -> out.put(String.valueOf(k), v));
-                }
-            }
-            return out;
         };
     }
 

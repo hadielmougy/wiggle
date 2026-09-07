@@ -46,8 +46,8 @@ public final class OrderFulfilment {
                                 //.sleep("await-warehouse", Duration.ofMillis(100))
                                 .step("print-label")))
 
-                // The payment and shipping arms change disjoint fields, so the default union folds
-                // them (no combine handler needed).
+                // Combines are always explicit: OrderHandlers.merge folds the payment refs and the
+                // shipping labels onto the pre-fork order and returns the COMPLETE post-join context.
                 .combine("merge")
 
                 .step("notify")

@@ -354,9 +354,10 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Completes a task. For TASK nodes {@code result} is shallow-merged into the instance
-     * context (a null value deletes its key); for PREDICATE nodes it must carry a boolean under
-     * {@code "value"}.
+     * Completes a task. For plain TASK nodes {@code result} is shallow-merged into the instance
+     * context (a null value deletes its key); for a combine (aggregator) node the result REPLACES
+     * the context wholesale — the handler returns the complete post-join context; for PREDICATE
+     * nodes it must carry a boolean under {@code "value"}.
      */
 
     // TODO here I should calculate the next task
@@ -382,7 +383,7 @@ public final class WorkflowEngine {
     /** Merges a task result (or routes a predicate) and returns the successor node id. */
     private static String routeCompletion(Instance inst, Token t, Node node, Object result) {
         if (node.kind() != NodeKind.PREDICATE) {
-            applyStepResult(inst, t, result);
+            applyStepResult(inst, t, node, result);
             LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
                     + " of instance " + inst.id + " done -> " + node.next());
             return node.next();
@@ -479,7 +480,7 @@ public final class WorkflowEngine {
             boolean value = step.predicateValue() != null && step.predicateValue();
             return GraphTraversal.successor(node, value);
         }
-        applyStepResult(inst, t, step.merge());
+        applyStepResult(inst, t, node, step.merge());
         return node.next();
     }
 
@@ -834,10 +835,46 @@ public final class WorkflowEngine {
         return payloadJson;
     }
 
-    /** Applies a step result where it belongs: a branch's private overlay when scoped, else shared. */
-    private static void applyStepResult(Instance inst, Token t, Object result) {
+    /**
+     * Applies a step result where it belongs: a branch's private overlay when scoped, else shared.
+     * A plain task's result merges (a null value deletes its key); a <b>combine</b> node's result
+     * REPLACES the context wholesale — the handler's return is the complete post-join context, and
+     * nothing from before the join survives unless the handler returned it. There is deliberately
+     * no implicit fold of old and new contexts at a join.
+     */
+    private static void applyStepResult(Instance inst, Token t, Node node, Object result) {
+        if (isCombineNode(node)) { replaceCombineResult(inst, t, node, result); return; }
         if (inScopedBranch(t)) t.payloadJson = overlayMerge(t.payloadJson, result);
         else mergeContext(inst, result);
+    }
+
+    /**
+     * A combine's return IS the complete post-join context: it replaces (never merges into) the
+     * shared context — or, when the join sits inside an enclosing fork branch, that branch's
+     * overlay. The return is taken verbatim (an arm NAME may legitimately double as a data key, so
+     * nothing user-visible is stripped); only the internal arm tag is removed defensively. A null
+     * return leaves the context untouched.
+     */
+    private static void replaceCombineResult(Instance inst, Token t, Node node, Object result) {
+        if (result == null) return;
+        Object cleaned = result;
+        if (result instanceof Map<?, ?> m) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            m.forEach((k, v) -> out.put(String.valueOf(k), v));
+            out.remove(ARM_IDX);
+            cleaned = out;
+        }
+        if (inScopedBranch(t)) {
+            // A nested join inside an outer branch: the return becomes that branch's overlay (the
+            // outer combine still decides what ultimately lands in the shared context).
+            Object arm = Json.parseObject(t.payloadJson).get(ARM_IDX);
+            Map<String, Object> overlay = cleaned instanceof Map
+                    ? Json.asObject(cleaned) : Json.parseObject(Json.write(cleaned));
+            overlay.put(ARM_IDX, arm);
+            t.payloadJson = Json.write(overlay);
+        } else {
+            inst.contextJson = Json.write(cleaned);
+        }
     }
 
     /** Merges a step result into a branch's private overlay (same null-delete semantics as

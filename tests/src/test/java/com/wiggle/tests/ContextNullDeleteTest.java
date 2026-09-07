@@ -5,6 +5,7 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -78,9 +79,12 @@ class ContextNullDeleteTest {
     static final class TripH {
         public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
         public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
-        public Map<String, Object> merge(@Arm("air") Map<String, Object> air,
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         @Arm("air") Map<String, Object> air,
                                          @Arm("hotel") Map<String, Object> hotel) {
-            return Map.of("total", price(air) + price(hotel));
+            Map<String, Object> out = new LinkedHashMap<>(base);   // the return is the complete context
+            out.put("total", price(air) + price(hotel));
+            return out;
         }
     }
 
