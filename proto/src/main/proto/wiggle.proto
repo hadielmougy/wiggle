@@ -132,6 +132,8 @@ message ListInstancesRequest {
     optional string workflow = 1;
     optional string status = 2;
     int32 limit = 3;
+    // When set, return only instances started with this correlation id (business key lookup).
+    optional string correlation_id = 4;
 }
 
 message InstanceList {

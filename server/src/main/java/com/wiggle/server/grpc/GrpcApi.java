@@ -176,8 +176,11 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
             String status = req.hasStatus() ? req.getStatus() : null;
             int limit = req.getLimit() > 0 ? req.getLimit() : 50;
+            List<com.wiggle.core.InstanceView> views = req.hasCorrelationId()
+                    ? engine.findByCorrelation(req.getCorrelationId(), limit)
+                    : engine.list(workflow, status, limit);
             InstanceList.Builder out = InstanceList.newBuilder();
-            for (com.wiggle.core.InstanceView v : engine.list(workflow, status, limit)) out.addInstances(viewProto(v));
+            for (com.wiggle.core.InstanceView v : views) out.addInstances(viewProto(v));
             return out.build();
         });
     }

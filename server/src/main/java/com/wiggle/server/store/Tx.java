@@ -23,6 +23,8 @@ public interface Tx extends GraphStore {
     Optional<Instance> findInstance(String id);
     void updateInstance(Instance instance);
     List<Instance> listInstances(String workflow, InstanceStatus status, int limit);
+    /** Instances started with {@code correlationId} (a business key), newest first. */
+    List<Instance> findByCorrelation(String correlationId, int limit);
     int countInstances(InstanceStatus status);
 
     void insertToken(Token token);

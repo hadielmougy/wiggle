@@ -99,6 +99,19 @@ public final class WiggleClient implements AutoCloseable {
         return toInstanceView(detail.getInstance());
     }
 
+    /** Instances started with {@code correlationId} (a business key), newest first (default limit 50). */
+    public java.util.List<com.wiggle.core.InstanceView> findByCorrelation(String correlationId) {
+        return findByCorrelation(correlationId, 50);
+    }
+
+    public java.util.List<com.wiggle.core.InstanceView> findByCorrelation(String correlationId, int limit) {
+        InstanceList list = call(() -> stub.listInstances(ListInstancesRequest.newBuilder()
+                .setCorrelationId(correlationId).setLimit(limit).build()));
+        java.util.List<com.wiggle.core.InstanceView> out = new java.util.ArrayList<>();
+        for (InstanceView v : list.getInstancesList()) out.add(toInstanceView(v));
+        return out;
+    }
+
     public com.wiggle.core.InstanceView awaitCompletion(String instanceId, java.time.Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         com.wiggle.core.InstanceView v = instance(instanceId);
