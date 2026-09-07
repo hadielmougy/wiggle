@@ -1,5 +1,6 @@
 package com.wiggle.order;
 
+import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.dsl.Blueprint;
@@ -9,6 +10,8 @@ import com.wiggle.core.Tls;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -66,21 +69,20 @@ public final class RateCeilingBench {
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
             Blueprint bp = OrderFulfilment.blueprint();
             resolver.registerWorkflow(ns, bp);
-            WiggleClient client = resolver.clientForNamespace(ns);
 
             System.out.printf("rate-ceiling bench: coordinator=%s namespace=%s stage=%ds threads=%d rates=%s%n",
                     coord, ns, stageMillis / 1000, threads, java.util.Arrays.toString(rates));
             System.out.println("(a worker must be running; verdicts come from probe sojourn drift)\n");
 
-            drain(client, bp, "warm-up");
+            drain(resolver, ns, bp, "warm-up");
 
             List<StageResult> results = new ArrayList<>();
             int ceiling = -1;
             for (int rate : rates) {
-                StageResult r = stage(client, bp, rate, stageMillis, threads);
+                StageResult r = stage(resolver, ns, bp, rate, stageMillis, threads);
                 results.add(r);
                 System.out.println(format(r));
-                long drained = drain(client, bp, "after " + rate + "/s");
+                long drained = drain(resolver, ns, bp, "after " + rate + "/s");
                 if (!r.pass()) {
                     System.out.printf("   backlog at failure took %ds to drain%n", drained / 1000);
                     break;
@@ -90,9 +92,9 @@ public final class RateCeilingBench {
 
             if (ceiling > 0 && confirmMillis > 0) {
                 System.out.printf("%nconfirming %d/s over %ds…%n", ceiling, confirmMillis / 1000);
-                StageResult confirm = stage(client, bp, ceiling, confirmMillis, threads);
+                StageResult confirm = stage(resolver, ns, bp, ceiling, confirmMillis, threads);
                 System.out.println(format(confirm));
-                drain(client, bp, "after confirm");
+                drain(resolver, ns, bp, "after confirm");
                 if (!confirm.pass()) {
                     System.out.printf("%n== ceiling: UNSTABLE at %d/s over %ds — the sustainable rate is just below it ==%n",
                             ceiling, confirmMillis / 1000);
@@ -109,8 +111,12 @@ public final class RateCeilingBench {
         }
     }
 
-    /** Run one paced stage at {@code rate}/s and judge it by probe-sojourn drift. */
-    private static StageResult stage(WiggleClient client, Blueprint bp, int rate,
+    /**
+     * Run one paced stage at {@code rate}/s and judge it by probe-sojourn drift. Each start resolves
+     * the namespace afresh ({@code clientForNamespace} per call) — that per-start resolve is what
+     * spreads new instances across a multi-cell ring; a cached client would pin them to one cell.
+     */
+    private static StageResult stage(CoordinatedConnection resolver, String ns, Blueprint bp, int rate,
                                      long stageMillis, int threads) throws Exception {
         ConcurrentLinkedQueue<Long> submitNanos = new ConcurrentLinkedQueue<>();
         ConcurrentLinkedQueue<ProbeSample> probes = new ConcurrentLinkedQueue<>();
@@ -137,7 +143,7 @@ public final class RateCeilingBench {
                         Order order = Order.of("B-" + seq, "bench-" + seq, 1 + (int) (seq % 3),
                                 new BigDecimal("100.00"));
                         long s = System.nanoTime();
-                        client.start(bp, order);
+                        resolver.clientForNamespace(ns).start(bp, order);   // resolve per start -> spread
                         submitNanos.add(System.nanoTime() - s);
                     }
                 } catch (Exception e) {
@@ -157,7 +163,7 @@ public final class RateCeilingBench {
                 while (System.nanoTime() < endNanos) {
                     long atStage = (System.nanoTime() - t0) / 1_000_000;
                     probeFutures.add(probePool.submit(() ->
-                            probes.add(new ProbeSample(atStage, probeSojourn(client, bp)))));
+                            probes.add(new ProbeSample(atStage, probeSojourn(resolver, ns, bp)))));
                     Thread.sleep(PROBE_EVERY_MILLIS);
                 }
             } catch (InterruptedException ignored) { }
@@ -198,15 +204,16 @@ public final class RateCeilingBench {
         return new StageResult(rate, achieved, p50, p99, midMed, lastMed, ordered.size(), pass, note);
     }
 
-    /** Start one probe instance and poll it to a terminal state; -1 on timeout. */
-    private static long probeSojourn(WiggleClient client, Blueprint bp) {
+    /** Start one probe instance and poll it to a terminal state; -1 on timeout. The poll routes by the
+     *  instance id ({@code clientForInstance}), so it reads the cell that actually owns the probe. */
+    private static long probeSojourn(CoordinatedConnection resolver, String ns, Blueprint bp) {
         long s = System.nanoTime();
         try {
             Order order = Order.of("PROBE-" + s, "probe", 1, new BigDecimal("1.00"));
-            String id = client.start(bp, order);   // blueprint overload: encodes the record context
+            String id = resolver.clientForNamespace(ns).start(bp, order);
             long deadline = s + PROBE_TIMEOUT_MILLIS * 1_000_000L;
             while (System.nanoTime() < deadline) {
-                InstanceView v = client.instance(id);
+                InstanceView v = resolver.clientForInstance(id).instance(id);
                 if (v.isTerminal()) return (System.nanoTime() - s) / 1_000_000;
                 Thread.sleep(PROBE_POLL_MILLIS);
             }
@@ -216,26 +223,40 @@ public final class RateCeilingBench {
         return -1;
     }
 
+    private static final Map<String, WiggleClient> CELLS = new ConcurrentHashMap<>();
+
     /**
-     * Wait until the backlog is actually gone: the RUNNING count for the workflow stays small over two
-     * consecutive checks. (A fresh probe completing fast is NOT proof — dispatch isn't FIFO per
-     * instance, so a new instance's first step can jump ahead of older instances' queued branches.)
+     * Wait until the backlog is actually gone: the RUNNING count for the workflow — summed across
+     * every active cell of the namespace — stays small over two consecutive checks. (A fresh probe
+     * completing fast is NOT proof — dispatch isn't FIFO per instance, so a new instance's first step
+     * can jump ahead of older instances' queued branches.) The per-cell counts double as a check that
+     * the epoch ring actually spreads load across the cells.
      */
-    private static long drain(WiggleClient client, Blueprint bp, String label) throws Exception {
+    private static long drain(CoordinatedConnection resolver, String ns, Blueprint bp, String label)
+            throws Exception {
         long s = System.currentTimeMillis();
         int consecutive = 0;
-        int last = -1;
+        String perCell = "";
         while (System.currentTimeMillis() - s < DRAIN_TIMEOUT_MILLIS) {
-            last = client.listInstances(bp.name(), "RUNNING", 2000).size();
-            consecutive = last < 50 ? consecutive + 1 : 0;
+            int total = 0;
+            StringBuilder counts = new StringBuilder();
+            for (String target : resolver.activeCellTargets(ns)) {
+                WiggleClient c = CELLS.computeIfAbsent(target, t -> new WiggleClient(t, Tls.Options.DISABLED));
+                int n = c.listInstances(bp.name(), "RUNNING", 2000).size();
+                total += n;
+                if (counts.length() > 0) counts.append(", ");
+                counts.append(target).append('=').append(n);
+            }
+            perCell = counts.toString();
+            consecutive = total < 50 ? consecutive + 1 : 0;
             if (consecutive >= 2) {
                 long took = System.currentTimeMillis() - s;
-                System.out.printf("   drained (%s) in %.1fs — %d still running%n", label, took / 1000.0, last);
+                System.out.printf("   drained (%s) in %.1fs — running: %s%n", label, took / 1000.0, perCell);
                 return took;
             }
             Thread.sleep(2000);
         }
-        System.out.println("   DRAIN TIMEOUT (" + label + ") — " + last + "+ instances still RUNNING");
+        System.out.println("   DRAIN TIMEOUT (" + label + ") — still RUNNING: " + perCell);
         return DRAIN_TIMEOUT_MILLIS;
     }
 
