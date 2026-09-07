@@ -196,10 +196,15 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
     return [_deployment(name, labels, replicas, container), svc]
 
 
-def console_manifests(namespace: str, password: str | None = None) -> list[dict]:
+def console_manifests(namespace: str, password: str | None = None,
+                      viewer_password: str | None = None) -> list[dict]:
     """The standalone ops console (one image, WIGGLE_ROLE=console) for a namespace: a pure gRPC client
     of the coordinator that fans instance queries across the namespace's cells and serves the web UI on
-    8090. Runs in-cluster, so it reaches cell pod IPs directly -- no endpoint rewrite."""
+    8090. Runs in-cluster, so it reaches cell pod IPs directly -- no endpoint rewrite.
+
+    With no ``password`` the console is open (full access). Set ``password`` for an operator login;
+    ``viewer_password`` additionally enables a read-only account (can view, but not cancel/signal/schedule)
+    -- only meaningful alongside an operator password."""
     name = C.dns_name("console", namespace)
     labels = C.labels("console", namespace=namespace)
     container = {
@@ -211,6 +216,7 @@ def console_manifests(namespace: str, password: str | None = None) -> list[dict]
             "WIGGLE_NAMESPACE": namespace,
             "WIGGLE_DASHBOARD_PORT": C.CONSOLE_HTTP_PORT,
             "WIGGLE_DASHBOARD_PASSWORD": password or None,
+            "WIGGLE_DASHBOARD_VIEWER_PASSWORD": viewer_password or None,
         }),
         "readinessProbe": {"httpGet": {"path": "/healthz", "port": C.CONSOLE_HTTP_PORT},
                            "initialDelaySeconds": 4, "periodSeconds": 3},
