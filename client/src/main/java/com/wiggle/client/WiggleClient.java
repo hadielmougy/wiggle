@@ -99,6 +99,42 @@ public final class WiggleClient implements AutoCloseable {
         return toInstanceView(detail.getInstance());
     }
 
+    /** An instance plus its tokens (the {@code GetInstance} detail; {@link #instance} drops the tokens). */
+    public InstanceWithTokens instanceDetail(String instanceId) {
+        InstanceDetail detail = call(() -> stub.getInstance(
+                InstanceIdRequest.newBuilder().setInstanceId(instanceId).build()));
+        java.util.List<TokenInfo> tokens = new java.util.ArrayList<>();
+        for (Token t : detail.getTokensList()) {
+            tokens.add(new TokenInfo(t.getId(), t.getNodeId(), t.getKind(), t.getStatus(), t.getActivity(),
+                    t.getAttempt(), t.getAvailableAt(), t.hasLeaseOwner() ? t.getLeaseOwner() : null,
+                    t.hasLastError() ? t.getLastError() : null));
+        }
+        return new InstanceWithTokens(toInstanceView(detail.getInstance()), tokens);
+    }
+
+    /** The names of all registered workflows. */
+    public java.util.List<String> workflowNames() {
+        return call(() -> stub.listWorkflows(Empty.getDefaultInstance())).getWorkflowsList();
+    }
+
+    /** Lists instances filtered by {@code workflow} and/or {@code status} (either may be null), newest first. */
+    public java.util.List<com.wiggle.core.InstanceView> listInstances(String workflow, String status, int limit) {
+        ListInstancesRequest.Builder req = ListInstancesRequest.newBuilder().setLimit(limit);
+        if (workflow != null) req.setWorkflow(workflow);
+        if (status != null) req.setStatus(status);
+        InstanceList list = call(() -> stub.listInstances(req.build()));
+        java.util.List<com.wiggle.core.InstanceView> out = new java.util.ArrayList<>();
+        for (InstanceView v : list.getInstancesList()) out.add(toInstanceView(v));
+        return out;
+    }
+
+    /** An instance view plus the (proto-shaped) tokens driving it. */
+    public record InstanceWithTokens(com.wiggle.core.InstanceView instance, java.util.List<TokenInfo> tokens) {}
+
+    /** A token as carried on the wire (thinner than the server row: no queue/leaseExpires/updatedAt). */
+    public record TokenInfo(String id, String nodeId, String kind, String status, String activity,
+                            int attempt, long availableAt, String leaseOwner, String lastError) {}
+
     /** Instances started with {@code correlationId} (a business key), newest first (default limit 50). */
     public java.util.List<com.wiggle.core.InstanceView> findByCorrelation(String correlationId) {
         return findByCorrelation(correlationId, 50);

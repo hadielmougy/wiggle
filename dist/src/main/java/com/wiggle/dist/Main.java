@@ -29,6 +29,13 @@ public final class Main {
     public static void main(String[] args) throws Exception {
         Logging.configureFromEnv();   // opt-in file logging, before anything logs
 
+        // The ops console is a third role in the one image: a pure gRPC client + web UI, not a cell
+        // (no engine, no storage). It reads its own env (WIGGLE_URL / WIGGLE_COORDINATOR_URL + namespace).
+        if ("console".equalsIgnoreCase(System.getenv().getOrDefault("WIGGLE_ROLE", "cell").trim())) {
+            com.wiggle.console.ConsoleMain.main(args);
+            return;
+        }
+
         String coordinatorUrl = System.getenv("WIGGLE_COORDINATOR_URL");
         boolean coordinated = coordinatorUrl != null && !coordinatorUrl.isBlank();
         ConfigSource configSource = coordinated
@@ -55,9 +62,6 @@ public final class Main {
                 + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
         String logFile = System.getenv("WIGGLE_LOG_FILE");
         if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
-        if (server.dashboardPort() > 0) {
-            System.out.println("Dashboard at " + (tls ? "https" : "http") + "://localhost:" + server.dashboardPort());
-        }
 
         String cellId = System.getenv().getOrDefault("WIGGLE_CELL_ID", "");
         // A coordinator-role node runs no cell (no placement, no engine) -> no runtime to report.

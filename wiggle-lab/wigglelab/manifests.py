@@ -196,5 +196,28 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
     return [_deployment(name, labels, replicas, container), svc]
 
 
+def console_manifests(namespace: str, password: str | None = None) -> list[dict]:
+    """The standalone ops console (one image, WIGGLE_ROLE=console) for a namespace: a pure gRPC client
+    of the coordinator that fans instance queries across the namespace's cells and serves the web UI on
+    8090. Runs in-cluster, so it reaches cell pod IPs directly -- no endpoint rewrite."""
+    name = C.dns_name("console", namespace)
+    labels = C.labels("console", namespace=namespace)
+    container = {
+        "name": "console", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
+        "ports": [{"containerPort": C.CONSOLE_HTTP_PORT}],
+        "env": _env({
+            "WIGGLE_ROLE": "console",
+            "WIGGLE_COORDINATOR_URL": f"coordinator:{C.COORD_GRPC_PORT}",
+            "WIGGLE_NAMESPACE": namespace,
+            "WIGGLE_DASHBOARD_PORT": C.CONSOLE_HTTP_PORT,
+            "WIGGLE_DASHBOARD_PASSWORD": password or None,
+        }),
+        "readinessProbe": {"httpGet": {"path": "/healthz", "port": C.CONSOLE_HTTP_PORT},
+                           "initialDelaySeconds": 4, "periodSeconds": 3},
+    }
+    return [_deployment(name, labels, 1, container),
+            _service(name, labels, C.CONSOLE_HTTP_PORT, C.CONSOLE_HTTP_PORT)]
+
+
 def to_yaml(docs: list[dict]) -> str:
     return yaml.safe_dump_all(docs, sort_keys=False)

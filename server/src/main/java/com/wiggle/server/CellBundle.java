@@ -8,19 +8,17 @@ import com.wiggle.server.cluster.QueueLagMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.grpc.GrpcApi;
-import com.wiggle.server.http.DashboardAuth;
-import com.wiggle.server.http.HttpDashboard;
+import com.wiggle.server.http.HealthServer;
 import com.wiggle.server.store.Storage;
-import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.io.IOException;
 import java.util.function.Supplier;
 
 /**
  * The cell subsystems: the workflow engine, the clock-driven housekeeping, the
- * queue-lag monitor, the {@code WiggleControlPlane} gRPC API, and (optionally) the HTTP dashboard.
- * This is exactly the wiring {@link WiggleServer} used to hold inline; extracting it lets a
- * coordinator node skip all of it.
+ * queue-lag monitor, and the {@code WiggleControlPlane} gRPC API. This is exactly the wiring
+ * {@link WiggleServer} used to hold inline; extracting it lets a coordinator node skip all of it. The
+ * ops UI is a separate process (the {@code console} module), a pure gRPC client -- cells serve no web UI.
  */
 final class CellBundle implements ServerBundle {
 
@@ -28,13 +26,12 @@ final class CellBundle implements ServerBundle {
     private final Housekeeper housekeeper;
     private final QueueLagMonitor queueLagMonitor;
     private final GrpcApi api;
-    /** Null unless a dashboard port was configured. */
-    private final HttpDashboard dashboard;
+    /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
+    private final HealthServer health;
     /** Null for a standalone cell; the coordinator-managed placement otherwise. */
     private final CellPlacement placement;
 
-    CellBundle(ServerConfig config, Storage storage, ClusterManager cluster,
-               DashboardAuth dashboardAuth) throws IOException {
+    CellBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
         String ns = config.namespace();
         this.placement = ns == null || ns.isBlank() ? null : new CellPlacement();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
@@ -45,7 +42,8 @@ final class CellBundle implements ServerBundle {
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
                 config.tls(), config.memory());
-        this.dashboard = config.dashboardPort() <= 0 ? null : dashboard(config, dashboardAuth, engine, cluster);
+        // The dashboard moved to the console; the former dashboard port now serves only /healthz.
+        this.health = config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
     }
 
     /**
@@ -69,31 +67,21 @@ final class CellBundle implements ServerBundle {
     /** The coordinator-managed placement (epoch + owned shards); null for a standalone cell. */
     @Override public CellPlacement placement() { return placement; }
 
-    private static @NonNull HttpDashboard dashboard(ServerConfig config, DashboardAuth dashboardAuth,
-                                                    WorkflowEngine engine, ClusterManager cluster) throws IOException {
-        return dashboardAuth != null
-                ? new HttpDashboard(engine, cluster, config.dashboardPort(), dashboardAuth, config.tls())
-                : new HttpDashboard(engine, cluster, config.dashboardPort(),
-                        config.dashboardUser(), config.dashboardPassword(), config.tls());
-    }
-
     @Override public void start() {
         housekeeper.start();
         queueLagMonitor.start();
         api.start();
-        if (dashboard != null) dashboard.start();
+        if (health != null) health.start();
     }
 
     @Override public void close() {
-        if (dashboard != null) dashboard.close();
+        if (health != null) health.close();
         api.close();
         queueLagMonitor.close();
         housekeeper.close();
     }
 
     @Override public int port() { return api.port(); }
-
-    @Override public int dashboardPort() { return dashboard == null ? -1 : dashboard.port(); }
 
     @Override public WorkflowEngine engine() { return engine; }
 }

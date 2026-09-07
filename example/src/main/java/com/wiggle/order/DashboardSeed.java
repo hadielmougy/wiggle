@@ -75,7 +75,9 @@ public final class DashboardSeed {
             client.createCronSchedule("nightly-report", "0 3 * * *", Map.of("source", "cron"));
             client.createSchedule("kyc-checks", Duration.ofHours(6), Map.of("source", "timer"));
 
-            System.out.println("\nDashboard seeded — open http://localhost:" + server.dashboardPort());
+            System.out.println("\nData seeded on the server at " + server.baseUrl() + ".");
+            System.out.println("Explore it in the ops console (a separate process):");
+            System.out.println("    WIGGLE_URL=" + server.baseUrl() + " ./gradlew :console:run   ->   http://localhost:8090");
             System.out.println("Two 'onboarding' instances are parked on the 'manager-approval' signal.");
             System.out.println("Press Ctrl-C to stop.\n");
             Thread.currentThread().join();

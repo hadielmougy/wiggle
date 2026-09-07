@@ -35,11 +35,16 @@
 (defn signals       [] (GET "/api/signals"))
 (defn schedules     [] (GET "/api/schedules"))
 
-(defn instances [{:keys [workflow status limit]}]
-  (let [qs (cond-> []
-             (seq workflow) (conj (str "workflow=" (enc workflow)))
-             (seq status)   (conj (str "status=" (enc status)))
-             limit          (conj (str "limit=" limit)))]
+(defn instances [{:keys [workflow status limit search search-by]}]
+  ;; A non-empty search is an exact lookup by instance id or correlation key and takes over the query
+  ;; (workflow/status don't apply); otherwise it's the normal filtered listing.
+  (let [searching (seq (some-> search str/trim))
+        qs (cond-> []
+             searching            (conj (str (name (or search-by :correlation)) "=" (enc (str/trim search))))
+             (not searching)      (into (cond-> []
+                                          (seq workflow) (conj (str "workflow=" (enc workflow)))
+                                          (seq status)   (conj (str "status=" (enc status)))))
+             limit                (conj (str "limit=" limit)))]
     (GET (str "/api/instances" (when (seq qs) (str "?" (str/join "&" qs)))))))
 
 (defn instance [id] (GET (str "/api/instances/" (enc id))))

@@ -13,7 +13,8 @@
     :instances []
     :signals   []
     :schedules []
-    :filter    {:workflow "" :status "" :limit 100}
+    :filter    {:workflow "" :status "" :limit 100
+                :search "" :search-by :correlation}   ; free-text lookup by :correlation | :id
     :selected  nil                 ; selected instance id
     :detail    nil                 ; {:instance .. :tokens ..}
     :graph     nil                 ; {:name .. :nodes .. } for the diagram

@@ -39,6 +39,7 @@ main { padding: 16px 20px; }
 .panel > h2 .count { color: var(--fg); background: var(--panel2); border: 1px solid var(--line);
   border-radius: 999px; padding: 0 8px; font-size: 11px; }
 .toolbar { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+.toolbar .spacer { margin-left: auto; }
 .empty { padding: 24px 14px; color: var(--muted); }
 .error { padding: 12px 14px; color: var(--err); }
 

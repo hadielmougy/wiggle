@@ -2,7 +2,6 @@ package com.wiggle.server;
 
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.http.DashboardAuth;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
@@ -40,21 +39,12 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
-        this(config, storageFactory, null);
-    }
-
-    /**
-     * @param dashboardAuth a custom dashboard authenticator (e.g. SSO), or {@code null} to use the
-     *                      built-in admin-password login from {@link ServerConfig}.
-     */
-    public WiggleServer(ServerConfig config, StorageFactory storageFactory,
-                        DashboardAuth dashboardAuth) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
-        this.bundle = new CellBundle(config, storage, cluster, dashboardAuth);
+        this.bundle = new CellBundle(config, storage, cluster);
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
@@ -70,15 +60,11 @@ public final class WiggleServer implements AutoCloseable {
         bundle.start();
         LOG.log(System.Logger.Level.INFO, () -> "cell node '" + config.nodeName()
                 + "' started on port " + port()
-                + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc")
-                + (dashboardPort() > 0 ? ", dashboard: " + dashboardPort() : "") + ")");
+                + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc") + ")");
         return this;
     }
 
     public int port() { return bundle.port(); }
-
-    /** The dashboard's port, or {@code -1} if it is not enabled. */
-    public int dashboardPort() { return bundle.dashboardPort(); }
 
     /**
      * The address this node advertises to a coordinator (and, via Resolve, to clients). Defaults to
