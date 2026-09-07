@@ -8,11 +8,11 @@ import com.sun.net.httpserver.HttpsParameters;
 import com.sun.net.httpserver.HttpsServer;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
-import com.wiggle.server.cluster.ClusterManager;
-import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.Rows;
-import com.wiggle.server.store.Rows.ServerNode;
-import com.wiggle.server.store.Rows.Token;
+import com.wiggle.server.http.DashboardData.ClusterView;
+import com.wiggle.server.http.DashboardData.MemberView;
+import com.wiggle.server.http.DashboardData.ScheduleView;
+import com.wiggle.server.http.DashboardData.SignalView;
+import com.wiggle.server.http.DashboardData.TokenView;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -35,11 +35,12 @@ import static com.wiggle.server.http.DashboardHttp.sendText;
 
 /**
  * A small, dependency-free read-only web dashboard. It runs on the JDK's built-in
- * {@link HttpServer} and calls the in-process engine directly -- no gRPC hop, no proxy, no
- * build step. A single static page polls the JSON endpoints below.
+ * {@link HttpServer} and reads from a {@link DashboardData} -- in-process
+ * ({@code EngineDashboardData}) for an embedded cell, or gRPC-backed for the standalone ops console.
+ * A single static page polls the JSON endpoints below.
  *
  * <p>Every node can run its own dashboard; because they share the database, any node's view
- * is the whole system's. The endpoints are read-only except for cancelling an instance.
+ * is the whole system's. The endpoints are read-only except for cancelling/signalling an instance.
  *
  * <p><b>Access control is pluggable.</b> Authentication is delegated to a {@link DashboardAuth};
  * the default is {@link PasswordAuth} (a single admin account, by session cookie or HTTP Basic).
@@ -55,29 +56,16 @@ public final class HttpDashboard implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(HttpDashboard.class.getName());
 
     private final HttpServer http;
-    private final WorkflowEngine engine;
-    private final ClusterManager cluster;
+    private final DashboardData data;
     private final DashboardAuth auth;
 
-    public HttpDashboard(WorkflowEngine engine, ClusterManager cluster, int port) throws IOException {
-        this(engine, cluster, port, "admin", null, Tls.Options.DISABLED);
-    }
-
-    public HttpDashboard(WorkflowEngine engine, ClusterManager cluster, int port,
-                         String user, String password) throws IOException {
-        this(engine, cluster, port, user, password, Tls.Options.DISABLED);
-    }
-
     /** Uses the built-in {@link PasswordAuth}; use the {@link DashboardAuth} overload to plug in SSO etc. */
-    public HttpDashboard(WorkflowEngine engine, ClusterManager cluster, int port,
-                         String user, String password, Tls.Options tls) throws IOException {
-        this(engine, cluster, port, new PasswordAuth(user, password, tls.hasKeyStore()), tls);
+    public HttpDashboard(DashboardData data, int port, String user, String password, Tls.Options tls) throws IOException {
+        this(data, port, new PasswordAuth(user, password, tls.hasKeyStore()), tls);
     }
 
-    public HttpDashboard(WorkflowEngine engine, ClusterManager cluster, int port,
-                         DashboardAuth auth, Tls.Options tls) throws IOException {
-        this.engine = engine;
-        this.cluster = cluster;
+    public HttpDashboard(DashboardData data, int port, DashboardAuth auth, Tls.Options tls) throws IOException {
+        this.data = data;
         this.auth = auth;
         this.http = tls.hasKeyStore() ? httpsServer(port, tls) : HttpServer.create(new InetSocketAddress(port), 0);
         this.http.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
@@ -135,41 +123,38 @@ public final class HttpDashboard implements AutoCloseable {
         requireGet(ex);
         String[] parts = subPath(ex, "/api/workflows");
         if (parts.length == 0) {
-            sendJson(ex, 200, Map.of("workflows", engine.workflowNames()));
+            sendJson(ex, 200, Map.of("workflows", data.workflowNames()));
             return;
         }
         if (parts.length != 1) {
             sendError(ex, 404, "not found");
             return;
         }
-        var def = engine.latestDefinition(parts[0]).orElse(null);
-        if (def == null) sendError(ex, 404, "no such workflow");
-        else sendJson(ex, 200, def.toJson());
+        Object graph = data.workflowGraph(parts[0]).orElse(null);
+        if (graph == null) sendError(ex, 404, "no such workflow");
+        else sendJson(ex, 200, graph);
     }
 
     private void clusterView(HttpExchange ex) throws IOException {
         requireGet(ex);
-        long now = System.currentTimeMillis();
-        long deadAfter = cluster.deadAfterMillis();
+        ClusterView view = data.cluster();
         List<Object> members = new ArrayList<>();
-        for (ServerNode n : cluster.members()) {
-            members.add(memberMap(n, now, deadAfter));
-        }
+        for (MemberView n : view.members()) members.add(memberMap(n));
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("nodeId", cluster.nodeId());
-        out.put("leader", cluster.isLeader());
+        out.put("nodeId", view.nodeId());
+        out.put("leader", view.leader());
         out.put("members", members);
         sendJson(ex, 200, out);
     }
 
-    private static Map<String, Object> memberMap(ServerNode n, long now, long deadAfter) {
+    private static Map<String, Object> memberMap(MemberView n) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", n.id);
-        m.put("name", n.name);
-        m.put("workers", n.workers);
-        m.put("leader", n.leader);
-        m.put("alive", (now - n.lastHeartbeat) < deadAfter);
-        m.put("lastHeartbeat", n.lastHeartbeat);
+        m.put("id", n.id());
+        m.put("name", n.name());
+        m.put("workers", n.workers());
+        m.put("leader", n.leader());
+        m.put("alive", n.alive());
+        m.put("lastHeartbeat", n.lastHeartbeat());
         return m;
     }
 
@@ -196,7 +181,7 @@ public final class HttpDashboard implements AutoCloseable {
         String status = emptyToNull(q.get("status"));
         int limit = parseInt(q.get("limit"), 100);
         List<Object> list = new ArrayList<>();
-        for (InstanceView v : engine.list(workflow, status, limit)) list.add(instanceMap(v));
+        for (InstanceView v : data.listInstances(workflow, status, limit)) list.add(instanceMap(v));
         sendJson(ex, 200, Map.of("instances", list));
     }
 
@@ -206,7 +191,7 @@ public final class HttpDashboard implements AutoCloseable {
             return;
         }
         String reason = emptyToNull(query(ex.getRequestURI()).get("reason"));
-        engine.cancel(id, reason == null ? "cancelled from dashboard" : reason);
+        data.cancel(id, reason == null ? "cancelled from dashboard" : reason);
         sendJson(ex, 200, Map.of("ok", true));
     }
 
@@ -216,21 +201,21 @@ public final class HttpDashboard implements AutoCloseable {
             sendError(ex, 405, "POST required");
             return;
         }
-        engine.signal(id, name, readJsonBody(ex));
+        data.signal(id, name, readJsonBody(ex));
         sendJson(ex, 200, Map.of("ok", true));
     }
 
     private void instanceDetail(HttpExchange ex, String id) throws IOException {
         requireGet(ex);
-        InstanceView v = engine.instance(id).orElse(null);
-        if (v == null) {
+        DashboardData.InstanceDetail detail = data.instance(id).orElse(null);
+        if (detail == null) {
             sendError(ex, 404, "no such instance");
             return;
         }
         List<Object> tokens = new ArrayList<>();
-        for (Token t : engine.tokens(id)) tokens.add(tokenMap(t));
+        for (TokenView t : detail.tokens()) tokens.add(tokenMap(t));
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("instance", instanceMap(v));
+        out.put("instance", instanceMap(detail.instance()));
         out.put("tokens", tokens);
         sendJson(ex, 200, out);
     }
@@ -240,7 +225,7 @@ public final class HttpDashboard implements AutoCloseable {
         requireGet(ex);
         int limit = parseInt(query(ex.getRequestURI()).get("limit"), 200);
         List<Object> list = new ArrayList<>();
-        for (Token t : engine.pendingSignals(limit)) list.add(signalMap(t));
+        for (SignalView t : data.pendingSignals(limit)) list.add(signalMap(t));
         sendJson(ex, 200, Map.of("signals", list));
     }
 
@@ -257,7 +242,7 @@ public final class HttpDashboard implements AutoCloseable {
 
     private void listSchedules(HttpExchange ex) throws IOException {
         List<Object> list = new ArrayList<>();
-        for (Rows.Schedule sched : engine.schedules()) list.add(scheduleMap(sched));
+        for (ScheduleView sched : data.schedules()) list.add(scheduleMap(sched));
         sendJson(ex, 200, Map.of("schedules", list));
     }
 
@@ -266,10 +251,10 @@ public final class HttpDashboard implements AutoCloseable {
         String workflow = String.valueOf(body.get("workflow"));
         String id;
         if (body.get("cron") != null) {
-            id = engine.createCronSchedule(workflow, String.valueOf(body.get("cron")), body.get("context"));
+            id = data.createCronSchedule(workflow, String.valueOf(body.get("cron")), body.get("context"));
         } else {
             long everyMillis = ((Number) body.get("everyMillis")).longValue();
-            id = engine.createSchedule(workflow, java.time.Duration.ofMillis(everyMillis), body.get("context"));
+            id = data.createSchedule(workflow, java.time.Duration.ofMillis(everyMillis), body.get("context"));
         }
         sendJson(ex, 200, Map.of("id", id));
     }
@@ -279,7 +264,7 @@ public final class HttpDashboard implements AutoCloseable {
             sendError(ex, 404, "not found");
             return;
         }
-        engine.deleteSchedule(parts[0]);
+        data.deleteSchedule(parts[0]);
         sendJson(ex, 200, Map.of("ok", true));
     }
 
@@ -290,24 +275,24 @@ public final class HttpDashboard implements AutoCloseable {
         return rest.substring(1).split("/");
     }
 
-    private static Map<String, Object> signalMap(Token t) {
+    private static Map<String, Object> signalMap(SignalView t) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("instanceId", t.instanceId);
-        m.put("workflow", t.workflow);
-        m.put("signal", t.activity);               // the signal's name (set when parked)
-        m.put("deadline", t.availableAt);          // 0 = no deadline
-        m.put("createdAt", t.createdAt);
+        m.put("instanceId", t.instanceId());
+        m.put("workflow", t.workflow());
+        m.put("signal", t.signal());               // the signal's name (set when parked)
+        m.put("deadline", t.deadline());           // 0 = no deadline
+        m.put("createdAt", t.createdAt());
         return m;
     }
 
-    private static Map<String, Object> scheduleMap(Rows.Schedule s) {
+    private static Map<String, Object> scheduleMap(ScheduleView s) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", s.id);
-        m.put("workflow", s.workflow);
-        m.put("everyMillis", s.intervalMillis);
-        if (s.cron != null) m.put("cron", s.cron);
-        m.put("nextFireAt", s.nextFireAt);
-        m.put("createdAt", s.createdAt);
+        m.put("id", s.id());
+        m.put("workflow", s.workflow());
+        m.put("everyMillis", s.everyMillis());
+        if (s.cron() != null) m.put("cron", s.cron());
+        m.put("nextFireAt", s.nextFireAt());
+        m.put("createdAt", s.createdAt());
         return m;
     }
 
@@ -325,20 +310,20 @@ public final class HttpDashboard implements AutoCloseable {
         return m;
     }
 
-    private static Map<String, Object> tokenMap(Token t) {
+    private static Map<String, Object> tokenMap(TokenView t) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", t.id);
-        m.put("nodeId", t.nodeId);
-        m.put("kind", t.kind == null ? null : t.kind.name());
-        m.put("status", t.status == null ? null : t.status.name());
-        m.put("activity", t.activity);
-        m.put("queue", t.queue);
-        m.put("attempt", t.attempt);
-        m.put("availableAt", t.availableAt);
-        m.put("leaseOwner", t.leaseOwner);
-        m.put("leaseExpiresAt", t.leaseExpiresAt);
-        m.put("lastError", t.lastError);
-        m.put("updatedAt", t.updatedAt);
+        m.put("id", t.id());
+        m.put("nodeId", t.nodeId());
+        m.put("kind", t.kind());
+        m.put("status", t.status());
+        m.put("activity", t.activity());
+        m.put("queue", t.queue());
+        m.put("attempt", t.attempt());
+        m.put("availableAt", t.availableAt());
+        m.put("leaseOwner", t.leaseOwner());
+        m.put("leaseExpiresAt", t.leaseExpiresAt());
+        m.put("lastError", t.lastError());
+        m.put("updatedAt", t.updatedAt());
         return m;
     }
 

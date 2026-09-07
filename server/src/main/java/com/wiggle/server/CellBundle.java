@@ -9,6 +9,8 @@ import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.grpc.GrpcApi;
 import com.wiggle.server.http.DashboardAuth;
+import com.wiggle.server.http.DashboardData;
+import com.wiggle.server.http.EngineDashboardData;
 import com.wiggle.server.http.HttpDashboard;
 import com.wiggle.server.store.Storage;
 import org.checkerframework.checker.nullness.qual.NonNull;
@@ -71,9 +73,10 @@ final class CellBundle implements ServerBundle {
 
     private static @NonNull HttpDashboard dashboard(ServerConfig config, DashboardAuth dashboardAuth,
                                                     WorkflowEngine engine, ClusterManager cluster) throws IOException {
+        DashboardData data = new EngineDashboardData(engine, cluster);
         return dashboardAuth != null
-                ? new HttpDashboard(engine, cluster, config.dashboardPort(), dashboardAuth, config.tls())
-                : new HttpDashboard(engine, cluster, config.dashboardPort(),
+                ? new HttpDashboard(data, config.dashboardPort(), dashboardAuth, config.tls())
+                : new HttpDashboard(data, config.dashboardPort(),
                         config.dashboardUser(), config.dashboardPassword(), config.tls());
     }
 

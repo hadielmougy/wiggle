@@ -14,5 +14,6 @@ include(
     "dist",
     "example",
     "tests",
-    "cli"
+    "cli",
+    "console"
 )
