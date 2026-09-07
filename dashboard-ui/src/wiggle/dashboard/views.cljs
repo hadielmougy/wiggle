@@ -58,6 +58,7 @@
      (when (:required auth)
        [:div.account
         [:span.user (:user auth)]
+        (when (= (:role auth) "viewer") [:span.badge.readonly {:title "read-only access"} "read-only"])
         [:button.ghost {:on-click #(set! (.. js/window -location -href) "/logout")} "Log out"]])]))
 
 ;; ---------------------------------------------------------------- signal form
@@ -114,7 +115,7 @@
            [badge (:status i)]
            [:span.muted (:workflow i) " v" (:version i)]
            [:div.spacer {:style {:margin-left "auto"}}]
-           (when (= (:status i) "RUNNING")
+           (when (and (st/can-write?) (= (:status i) "RUNNING"))
              [:button.danger {:on-click #(act/cancel! (:id i) "cancelled from dashboard")} "cancel"])]
 
           (when (:error i) [:pre.err (:error i)])
@@ -131,7 +132,8 @@
             [:div {:style {:borderTop "1px solid var(--line)"}}
              [:div {:style {:padding "10px 14px 0" :color "var(--warn)"}}
               "waiting for signal " [:strong (:activity t)]]
-             [signal-form (:activity t) #(act/signal! (:id i) (:activity t) %)]])
+             (when (st/can-write?)
+               [signal-form (:activity t) #(act/signal! (:id i) (:activity t) %)])])
 
           [:h2 {:style {:padding "10px 14px 0" :margin 0 :fontSize 12 :color "var(--muted)"}} "Tokens"]
           (if (seq tokens)
@@ -301,11 +303,12 @@
           [:td (:workflow s)]
           [:td (if (:cron s) [:code (:cron s)] (u/every-str (:everyMillis s)))]
           [:td.muted (u/ts (:nextFireAt s)) " " [:span.muted "(" (u/in-secs (:nextFireAt s)) ")"]]
-          [:td.actions [:button.danger {:on-click #(act/delete-schedule! (:id s))} "delete"]]])]])])
+          [:td.actions (when (st/can-write?)
+                         [:button.danger {:on-click #(act/delete-schedule! (:id s))} "delete"])]])]])])
 
 (defn schedules-tab []
   [:div.cols
-   [schedule-form]
+   (when (st/can-write?) [schedule-form])
    [schedules-list]])
 
 ;; ---------------------------------------------------------------- signals tab
@@ -318,7 +321,8 @@
         [:td [:strong (:signal t)]] [:td (:workflow t)]
         [:td [:code (:instanceId t)]]
         [:td.muted (if (pos? (:deadline t)) (u/in-secs (:deadline t)) "—")]
-        [:td.actions [:button.primary {:on-click #(swap! open not)} (if @open "close" "deliver")]]]
+        [:td.actions (when (st/can-write?)
+                       [:button.primary {:on-click #(swap! open not)} (if @open "close" "deliver")])]]
        (when @open
          [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
                [signal-form (:signal t)

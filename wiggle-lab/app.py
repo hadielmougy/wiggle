@@ -422,7 +422,9 @@ with forwards:
     st.caption("The console is a per-namespace pod: a pure gRPC client of the coordinator that fans "
                "instance queries across the namespace's cells and serves the web UI. Deploy one per "
                "namespace, forward it, and open the link. (Cells no longer serve a dashboard — they "
-               "expose only a /healthz probe.)")
+               "expose only a /healthz probe.) Leave passwords blank for open access; set an **operator** "
+               "password to require login, and optionally a **viewer** password for a read-only account "
+               "(can view, but not cancel/signal/schedule).")
     all_ns = sorted({c["namespace"] for c in cells if c["namespace"]})
     consoles = {cn["namespace"]: cn for cn in lab.consoles()}
     if not all_ns:
@@ -434,10 +436,17 @@ with forwards:
         ready = deployed and cn["ready"] == cn["desired"] and cn["desired"] > 0
         k1.markdown(f"**{ns}** · {'✅ ready' if ready else ('⏳ pending' if deployed else '— not deployed —')}")
         if not deployed:
+            op = k2.text_input("operator password", key=f"console-op-{ns}", type="password",
+                               placeholder="operator password (blank = open access)",
+                               label_visibility="collapsed")
+            vw = k2.text_input("viewer password", key=f"console-vw-{ns}", type="password",
+                               placeholder="viewer password (read-only, optional)",
+                               label_visibility="collapsed")
+            if vw and not op:
+                k2.caption("⚠️ a viewer password needs an operator password too — it's ignored otherwise")
             if k3.button("Deploy", key=f"console-deploy-{ns}"):
-                action(f"Deploy console for {ns}", lab.deploy_console, ns)
+                action(f"Deploy console for {ns}", lab.deploy_console, ns, op or None, vw or None)
                 st.rerun()
-            k2.code("— not deployed —", language=None)
             continue
         addr = lab.console_target(ns)
         if addr:

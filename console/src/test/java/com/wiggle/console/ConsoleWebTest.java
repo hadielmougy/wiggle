@@ -42,6 +42,12 @@ class ConsoleWebTest {
         return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
     }
 
+    private static HttpResponse<String> post(HttpClient http, String url, String basic) throws Exception {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).POST(HttpRequest.BodyPublishers.noBody());
+        if (basic != null) b.header("Authorization", "Basic " + Base64.getEncoder().encodeToString(basic.getBytes()));
+        return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
     @Test @DisplayName("unauthenticated: the SPA API serves instances, detail, cancel, cluster, workflows")
     void apiUnauthenticated() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -69,7 +75,8 @@ class ConsoleWebTest {
 
                 assertTrue(get(http, base + "/api/cluster", null).body().contains("\"members\""), "cluster");
                 assertTrue(get(http, base + "/api/workflows", null).body().contains("wf"), "workflows");
-                assertEquals("{\"required\":false,\"user\":null}", get(http, base + "/api/auth", null).body());
+                assertEquals("{\"required\":false,\"user\":null,\"role\":\"operator\",\"canWrite\":true}",
+                        get(http, base + "/api/auth", null).body(), "open mode = full operator access");
 
                 HttpResponse<String> cancelled = http.send(HttpRequest.newBuilder(
                         URI.create(base + "/api/instances/" + a + "/cancel")).POST(HttpRequest.BodyPublishers.noBody())
@@ -109,6 +116,44 @@ class ConsoleWebTest {
                 HttpResponse<String> miss = get(http, base + "/api/instances?id=wfi_nope", null);
                 assertEquals(200, miss.statusCode());
                 assertEquals("{\"instances\":[]}", miss.body(), "unknown id -> empty list");
+            }
+        }
+    }
+
+    @Test @DisplayName("authorization: a read-only viewer can read but is 403'd on mutating calls")
+    void viewerIsReadOnly() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
+            WiggleClient c = conn.client();
+            c.register(wf());
+            String id = c.start("wf", Map.of(), null, null);
+
+            ConsoleAuth auth = new ConsoleAuth("admin", "op-pass", "viewer", "view-pass", false);
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+                    auth, 0, Tls.Options.DISABLED).start()) {
+                String base = "http://localhost:" + console.port();
+                HttpClient http = HttpClient.newHttpClient();
+                String cancel = base + "/api/instances/" + id + "/cancel";
+
+                // viewer: reads work, /api/auth advertises read-only, but a mutating POST is 403
+                assertEquals(200, get(http, base + "/api/instances", "viewer:view-pass").statusCode(), "viewer reads");
+                assertTrue(get(http, base + "/api/auth", "viewer:view-pass").body()
+                        .contains("\"role\":\"viewer\"") , "role advertised");
+                assertTrue(get(http, base + "/api/auth", "viewer:view-pass").body()
+                        .contains("\"canWrite\":false"), "viewer can't write");
+                assertEquals(403, post(http, cancel, "viewer:view-pass").statusCode(), "viewer cancel is forbidden");
+                assertTrue(get(http, base + "/api/instances/" + id, "viewer:view-pass").body().contains("RUNNING"),
+                        "instance untouched by the rejected cancel");
+
+                // operator: same call succeeds
+                assertTrue(get(http, base + "/api/auth", "admin:op-pass").body().contains("\"canWrite\":true"),
+                        "operator can write");
+                assertEquals(200, post(http, cancel, "admin:op-pass").statusCode(), "operator cancel works");
+                assertTrue(get(http, base + "/api/instances/" + id, "admin:op-pass").body().contains("CANCELLED"),
+                        "operator cancel took");
+
+                // wrong password authenticates as neither -> 401
+                assertEquals(401, get(http, base + "/api/instances", "viewer:nope").statusCode(), "bad creds rejected");
             }
         }
     }

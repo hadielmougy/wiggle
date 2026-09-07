@@ -40,3 +40,6 @@
   (toast! :err (or (ex-message e) (str e))))
 
 (defn set-filter! [k v] (swap! db assoc-in [:filter k] v))
+
+;; ---- authorization: true unless the server says this session is read-only (a viewer) ----
+(defn can-write? [] (get-in @db [:auth :canWrite] true))

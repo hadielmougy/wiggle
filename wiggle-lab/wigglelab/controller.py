@@ -381,9 +381,11 @@ class Lab:
 
     # ---- ops console (per-namespace pod: a gRPC client of the coordinator + the web UI) ----
     @record
-    def deploy_console(self, namespace: str, password: str | None = None):
+    def deploy_console(self, namespace: str, password: str | None = None,
+                       viewer_password: str | None = None):
         self.ensure_namespace()
-        k8s.apply(manifests.to_yaml(manifests.console_manifests(namespace, password or None))).check()
+        docs = manifests.console_manifests(namespace, password or None, viewer_password or None)
+        k8s.apply(manifests.to_yaml(docs)).check()
 
     @record
     def remove_console(self, namespace: str):

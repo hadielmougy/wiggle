@@ -10,24 +10,43 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The console's built-in auth: a single admin account by session cookie (from the {@code /login} form)
- * or HTTP Basic (for {@code curl}). With no password the console is unauthenticated. Ported from the
- * cell dashboard's {@code PasswordAuth} to the servlet API; sessions are per process.
+ * The console's built-in auth: an operator account and an optional read-only viewer account, by session
+ * cookie (from the {@code /login} form) or HTTP Basic (for {@code curl}). Authentication answers "who are
+ * you"; authorization is one bit — {@link Role#OPERATOR} may mutate (cancel / signal / schedules),
+ * {@link Role#VIEWER} is read-only. With no operator password the console is unauthenticated and every
+ * request is treated as an operator (open mode). Ported from the cell dashboard's {@code PasswordAuth} to
+ * the servlet API; sessions are per process.
  */
 final class ConsoleAuth {
 
     static final String SESSION_COOKIE = "wiggle_session";
     private static final long SESSION_TTL_MILLIS = 12 * 60 * 60 * 1000L;
 
+    /** Access level: OPERATOR has full read/write, VIEWER is read-only. */
+    enum Role { OPERATOR, VIEWER }
+
     private final String user;
     private final String password;
+    private final String viewerUser;
+    private final String viewerPassword;
     private final boolean secureCookies;
     private final SecureRandom random = new SecureRandom();
-    private final Map<String, Long> sessions = new ConcurrentHashMap<>();
+    private final Map<String, Session> sessions = new ConcurrentHashMap<>();
 
+    private record Session(long expiry, Role role) {}
+
+    /** Operator-only console (no read-only viewer account). */
     ConsoleAuth(String user, String password, boolean secureCookies) {
+        this(user, password, null, null, secureCookies);
+    }
+
+    ConsoleAuth(String user, String password, String viewerUser, String viewerPassword, boolean secureCookies) {
         this.user = user == null || user.isBlank() ? "admin" : user;
         this.password = password == null || password.isBlank() ? null : password;
+        this.viewerUser = viewerUser == null || viewerUser.isBlank() ? "viewer" : viewerUser;
+        // A viewer account only exists alongside operator auth; ignored in open mode.
+        this.viewerPassword = this.password == null || viewerPassword == null || viewerPassword.isBlank()
+                ? null : viewerPassword;
         this.secureCookies = secureCookies;
     }
 
@@ -39,16 +58,29 @@ final class ConsoleAuth {
         return password != null ? "Basic realm=\"Wiggle\", charset=\"UTF-8\"" : null;
     }
 
-    boolean authenticated(HttpServletRequest req) {
-        if (password == null) return true;   // unauthenticated mode
-        return validSession(req) || validBasic(req.getHeader("Authorization"));
+    /** The caller's role, or null if authentication is required and they aren't authenticated. */
+    Role role(HttpServletRequest req) {
+        if (password == null) return Role.OPERATOR;   // open mode: everyone is an operator
+        Role s = sessionRole(req);
+        return s != null ? s : basicRole(req.getHeader("Authorization"));
     }
 
-    /** On matching credentials, mints a session and returns the {@code Set-Cookie} value; else null. */
+    boolean authenticated(HttpServletRequest req) {
+        return role(req) != null;
+    }
+
+    /** Whether the caller may perform mutating operations (cancel / signal / schedule changes). */
+    boolean canWrite(HttpServletRequest req) {
+        return role(req) == Role.OPERATOR;
+    }
+
+    /** On matching credentials, mints a session bound to the matched role and returns the {@code
+     * Set-Cookie} value; else null. */
     String login(String u, String p) {
-        if (password == null || !eq(u, user) || !eq(p, password)) return null;
+        Role role = credentialRole(u, p);
+        if (role == null) return null;
         String token = newToken();
-        sessions.put(token, System.currentTimeMillis() + SESSION_TTL_MILLIS);
+        sessions.put(token, new Session(System.currentTimeMillis() + SESSION_TTL_MILLIS, role));
         return cookie(token, SESSION_TTL_MILLIS / 1000);
     }
 
@@ -59,13 +91,34 @@ final class ConsoleAuth {
 
     String expiredCookie() { return cookie("", 0); }
 
-    private boolean validSession(HttpServletRequest req) {
+    /** Which role these credentials authenticate as, or null if they match neither account. */
+    private Role credentialRole(String u, String p) {
+        if (password == null) return null;
+        if (eq(u, user) && eq(p, password)) return Role.OPERATOR;
+        if (viewerPassword != null && eq(u, viewerUser) && eq(p, viewerPassword)) return Role.VIEWER;
+        return null;
+    }
+
+    private Role basicRole(String header) {
+        if (header == null || !header.regionMatches(true, 0, "Basic ", 0, 6)) return null;
+        String decoded;
+        try {
+            decoded = new String(Base64.getDecoder().decode(header.substring(6).trim()), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException badBase64) {
+            return null;
+        }
+        int colon = decoded.indexOf(':');
+        if (colon < 0) return null;
+        return credentialRole(decoded.substring(0, colon), decoded.substring(colon + 1));
+    }
+
+    private Role sessionRole(HttpServletRequest req) {
         String token = sessionToken(req);
-        if (token == null) return false;
-        Long expiry = sessions.get(token);
-        if (expiry == null) return false;
-        if (expiry < System.currentTimeMillis()) { sessions.remove(token); return false; }
-        return true;
+        if (token == null) return null;
+        Session s = sessions.get(token);
+        if (s == null) return null;
+        if (s.expiry() < System.currentTimeMillis()) { sessions.remove(token); return null; }
+        return s.role();
     }
 
     private static String sessionToken(HttpServletRequest req) {
@@ -79,21 +132,6 @@ final class ConsoleAuth {
             }
         }
         return null;
-    }
-
-    private boolean validBasic(String header) {
-        if (header == null || !header.regionMatches(true, 0, "Basic ", 0, 6)) return false;
-        String decoded;
-        try {
-            decoded = new String(Base64.getDecoder().decode(header.substring(6).trim()), StandardCharsets.UTF_8);
-        } catch (IllegalArgumentException badBase64) {
-            return false;
-        }
-        int colon = decoded.indexOf(':');
-        if (colon < 0) return false;
-        boolean userOk = eq(decoded.substring(0, colon), user);
-        boolean passOk = eq(decoded.substring(colon + 1), password);
-        return userOk & passOk;
     }
 
     private String newToken() {
