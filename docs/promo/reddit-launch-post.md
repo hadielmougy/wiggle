@@ -71,10 +71,17 @@ execution model are the parts I'd most like challenged.
 
 ## Posting notes
 
-- **r/java** is the natural home — the body above is tuned for it. For **r/programming**, lead
-  with the design-choice angle (title 1) and trim the Maven line. **r/golang** / **r/Python**
-  only work reframed around the client ("Go workers for a Java-hosted workflow engine") — hold
-  those until a contributor asks.
+- **r/java** is the natural home — the body above is tuned for it, and library/project posts are
+  on-topic there. Also good fits: **r/opensource** (explicitly welcomes projects seeking
+  contributors — lead with the ask), **r/coolgithubprojects**, and a **Show HN** on Hacker News
+  (same body works nearly verbatim).
+- **Do NOT post this to r/programming** — "I made this" project/product demos are off-topic
+  there and will be removed. The way to reach that audience later is a technical *article*
+  submitted as a link — e.g. a deep-dive like "resharding without migrating data: consistent
+  hashing over epochs" or "durable workflows without replay determinism" — where the project is
+  the example, not the headline.
+- **r/golang** / **r/Python** only work reframed around the client ("Go workers for a Java-hosted
+  workflow engine") — hold those until a contributor asks.
 - The "what it doesn't do" section is load-bearing — Reddit rewards it, and it pre-empts the top
   critical comments.
 - Have the "why not Temporal?" reply ready ([why-not-temporal-reply.md](why-not-temporal-reply.md))
