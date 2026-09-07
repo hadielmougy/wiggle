@@ -137,10 +137,11 @@ class LocalSyncTest {
             String xNode = first.nodeId();
             String yNode = bp.definition().node(xNode).next();
 
-            // The worker buffered both steps and flushes them in a single final batch.
+            // The worker buffered both steps and flushes them in a single final batch. Each report
+            // carries the step's COMPLETE next context (a return replaces, never merges).
             WorkflowEngine.AdvanceOutcome out = engine.advance(first.taskId(), "w1", List.of(
                     new WorkflowEngine.StepInput(xNode, Map.of("x", 1L), null),
-                    new WorkflowEngine.StepInput(yNode, Map.of("y", 2L), null)), true);
+                    new WorkflowEngine.StepInput(yNode, Map.of("x", 1L, "y", 2L), null)), true);
 
             assertEquals("COMPLETED", out.instanceStatus(), "the batch drove the instance to completion");
             Map<String, Object> ctx = Json.asObject(engine.instance(id).orElseThrow().context());

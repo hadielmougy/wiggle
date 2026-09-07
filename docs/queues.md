@@ -61,7 +61,7 @@ The queue is compiled onto each node (`Node.queue`) and collected into the defin
 a plain string label — there is no broker to declare or provision; the label *is* the routing key.
 
 **Only worker steps are queued.** Tasks and predicates (gates) run on workers, so they carry a queue.
-`sleep`, `fork`/`forkEach`, `join`, `signal`, `sub-workflow`, and `end` are executed **server-side** and
+`sleep`, `fork`/`forEach`, `join`, `signal`, `sub-workflow`, and `end` are executed **server-side** and
 are never routed to a queue — see §5.
 
 ---

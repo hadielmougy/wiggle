@@ -172,7 +172,7 @@ public final class JdbcStorage implements Storage {
             new Migration(2, "index-token-throughput", """
             CREATE INDEX IF NOT EXISTS ix_token_throughput ON wf_token (kind, status, updated_at);
             """),
-            // Dynamic fan-out (forkEach): per-token branch payload, and the DYN_FORK node's
+            // Dynamic fan-out (forEach): per-token branch payload, and the DYN_FORK node's
             // items/item context keys. All nullable, so the change is rolling-deploy safe.
             new Migration(3, "dynamic-fanout", """
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS payload TEXT;

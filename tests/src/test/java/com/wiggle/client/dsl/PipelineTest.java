@@ -82,7 +82,7 @@ class PipelineTest {
         }
 
         @Test
-        @DisplayName("names are shared across step, guard, signal, sub-workflow and forkEach")
+        @DisplayName("names are shared across step, guard, signal, sub-workflow and forEach")
         void uniquenessSpansKinds() {
             assertThrows(IllegalArgumentException.class, () -> {
                 Pipeline p = pipeline();

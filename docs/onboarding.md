@@ -215,7 +215,7 @@ Every operation is topology only — it names a node; the matching `@Handlers` m
 | `gate(name)` | continue only while the guard handler returns true; false ends the instance as `gated:<name>` |
 | `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
 | `fork(branches…).combine(name)` | run branches in parallel on isolated context copies, then rejoin at the mandatory `combine` |
-| `forkEach(name, itemsKey, itemKey, body)` | runtime fan-out: one branch per element of the list at `itemsKey` |
+| `forEach(name, itemsKey, itemKey, body).combine(name)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`; the **mandatory** combine receives the pre-forEach context plus every item's final context as a `List`/`Set` (list input) or `Map` (map input) and returns the complete post-join context |
 | `doWhile(name, body)` | run `body`, then repeat while the guard handler named `name` holds (at least once) |
 | `sleep(name, duration)` | server-side timer; holds no worker |
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |

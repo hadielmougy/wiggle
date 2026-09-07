@@ -114,7 +114,7 @@ pending → the errors above / build error
 
 **4.5 checkpoint()** — marks the last step id as a checkpoint; valid only immediately after a
 step/effect/gate (`lastStepId != null`), else `IllegalStateException`. Track `lastStepId`; reset to
-null after sleep / signal / subWorkflow / fork / forkEach / doWhile / choose.
+null after sleep / signal / subWorkflow / fork / forEach / doWhile / choose.
 
 **4.6 build()** — reject double-build (`consumed`); reject `forkPending`; close the frontier into a
 fresh success END node; delegate to `Pipeline.build()`.
@@ -131,7 +131,7 @@ Entry: `Workflow.define(name)` / `define(name, RetryPolicy)` → `WorkflowBuilde
 | `awaitSignal(name)`; `(name,timeout)`; `(name,timeout,escalation)` (timeout<0 → IAE; escalation w/o timeout → IAE) | one SIGNAL (`sleepMillis` = timeout or 0). With escalation: build the escalation sub-stream; `signal.altNext` → escalation start | append; frontier = {signal.next} **plus** the escalation sub-stream's open ends (both stay open) |
 | `subWorkflow(name, workflow)` | one SUB_WORKFLOW (activity = child) | append; frontier = {next} |
 | `fork(Branch...)` (≥2 else IAE) → `ForkStage`; `ForkStage.combine(name)` → builder | FORK; JOIN(expected = #branches); each branch built as a sub-stream whose tail **closes into** the JOIN; `setBranches(fork, starts)`; a combine TASK with `itemsKey` = arm names; `JOIN.next` → combine | consume frontier into FORK; after branches, frontier = {combine.next} |
-| `forkEach(name, itemsKey, itemKey, body)` | DYN_FORK(itemsKey,itemKey); JOIN(expected = 0); one branch template built as sub-stream closing into JOIN; `setBranches(dynfork,[template])`; `dynfork.next` → JOIN (empty-list path) | consume frontier into DYN_FORK; frontier = {join.next} |
+| `forEach(name, itemsKey, itemKey, body).combine(c)` | DYN_FORK(itemsKey,itemKey); JOIN(expected = 0); one branch template built as sub-stream closing into JOIN; `setBranches(dynfork,[template])`; `dynfork.next` → JOIN (empty path skips the combine too); JOIN → combine TASK whose `itemsKey` is a JSON **string** (the scratch key the collected results stage under) | consume frontier into DYN_FORK; frontier = {combine.next} |
 | `doWhile(conditionName, body)` | body sub-stream; PREDICATE cond; `cond.next` → body start (loop); body tail closes into cond | enter body (frontier → body start); frontier = {cond.altNext (exit)} |
 | `choose(Case...)` — `Case.when(name, body)`, `Case.otherwise(name, body)` (otherwise must be last & not alone) | one PREDICATE per guarded case; `guard[i].altNext` → `guard[i+1]`; each `guard.next` → its case branch start; `otherwise.altNext` → its branch | enter first guard (frontier emptied); **accumulate** every case branch's open ends; if no `otherwise`, also keep the last guard's `altNext` open |
 | `defaultQueue(q)`, `execution(ExecutionMode)`, `checkpoint()` | workflow-level settings | — |

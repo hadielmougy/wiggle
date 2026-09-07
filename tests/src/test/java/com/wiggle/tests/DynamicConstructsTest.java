@@ -30,7 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The runtime-shaped constructs: {@code doWhile} (a graph cycle through a predicate) and
- * {@code forkEach} (fan-out whose width is a list in the context), across execution modes.
+ * {@code forEach} (fan-out whose width is a collection in the context; items run isolated and the
+ * mandatory combine collects their results), across execution modes.
  */
 class DynamicConstructsTest {
 
@@ -109,7 +110,7 @@ class DynamicConstructsTest {
         assertEquals(true, Json.asObject(v.context()).get("done"));
     }
 
-    // ----------------------------------------------------------------- forkEach
+    // ----------------------------------------------------------------- forEach
 
     @Handlers("dyn-loop-once")
     static final class LoopOnceH {
@@ -123,13 +124,15 @@ class DynamicConstructsTest {
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
-    /** Two-step branch: the second step proves the item payload survives along the branch. */
+    /** Two-step branch: the second step proves the item payload survives along the branch. Items
+     *  are isolated, so handlers need no index-namespacing; the combine assembles the final shape. */
     private static Blueprint fanOut(ExecutionMode mode) {
         return Workflow.define("dyn-fan")
                 .execution(mode)
-                .forkEach("per-item", "items", "item", b -> b
+                .forEach("per-item", "items", "item", b -> b
                         .step("upper")
                         .step("measure"))
+                .combine("collect")
                 .step("after")
                 .build();
     }
@@ -137,10 +140,19 @@ class DynamicConstructsTest {
     @Handlers("dyn-fan")
     static final class FanH {
         public Map<String, Object> upper(Map<String, Object> ctx) {
-            return put(ctx, "out" + ctx.get("itemIndex"), String.valueOf(ctx.get("item")).toUpperCase());
+            return put(ctx, "out", String.valueOf(ctx.get("item")).toUpperCase());
         }
         public Map<String, Object> measure(Map<String, Object> ctx) {
-            return put(ctx, "len" + ctx.get("itemIndex"), (long) String.valueOf(ctx.get("item")).length());
+            return put(ctx, "len", (long) String.valueOf(ctx.get("item")).length());
+        }
+        public Map<String, Object> collect(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                           List<Map<String, Object>> items) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            for (int i = 0; i < items.size(); i++) {
+                out.put("out" + i, items.get(i).get("out"));
+                out.put("len" + i, items.get(i).get("len"));
+            }
+            return out;
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
@@ -149,8 +161,9 @@ class DynamicConstructsTest {
     private static Blueprint fanOutShorthand(ExecutionMode mode) {
         return Workflow.define("dyn-fan-short")
                 .execution(mode)
-                .forkEach("per-item", "items", b -> b
+                .forEach("per-item", "items", b -> b
                         .step("upper"))
+                .combine("collect")
                 .step("after")
                 .build();
     }
@@ -158,12 +171,18 @@ class DynamicConstructsTest {
     @Handlers("dyn-fan-short")
     static final class FanShortH {
         public Map<String, Object> upper(Map<String, Object> ctx) {
-            return put(ctx, "out" + ctx.get("itemsIndex"), String.valueOf(ctx.get("items")).toUpperCase());
+            return put(ctx, "out", String.valueOf(ctx.get("items")).toUpperCase());
+        }
+        public Map<String, Object> collect(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                           List<Map<String, Object>> items) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            for (int i = 0; i < items.size(); i++) out.put("out" + i, items.get(i).get("out"));
+            return out;
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
-    @Test @DisplayName("forkEach shorthand builds a DYN_FORK whose element key defaults to the items key")
+    @Test @DisplayName("forEach shorthand builds a DYN_FORK whose element key defaults to the items key")
     void shorthandDefaultsElementKeyToItemsKey() {
         Node dyn = fanOutShorthand(ExecutionMode.SERVER).definition().nodes().values().stream()
                 .filter(n -> n.kind() == NodeKind.DYN_FORK)
@@ -172,7 +191,7 @@ class DynamicConstructsTest {
         assertEquals("items", dyn.itemKey(), "shorthand names each element after the list");
     }
 
-    @Test @DisplayName("forkEach shorthand fans out with each element exposed under the items key")
+    @Test @DisplayName("forEach shorthand fans out with each element exposed under the items key")
     void fanOutShorthandOverItems() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC}) {
             InstanceView v = run(fanOutShorthand(mode), new FanShortH(), Map.of("items", List.of("ab", "cde", "f")), null);
@@ -185,10 +204,11 @@ class DynamicConstructsTest {
             assertEquals(List.of("ab", "cde", "f"), ctx.get("items"),
                     mode + " the shared list survives; the per-branch element never overwrote it");
             assertNull(ctx.get("itemsIndex"), mode + " the injected index never leaks into shared context");
+            assertNull(ctx.get("per-item"), mode + " the collected-results scratch key is stripped");
         }
     }
 
-    @Test @DisplayName("forkEach fans out one branch per list element and merges the results")
+    @Test @DisplayName("forEach fans out one isolated branch per element; the combine collects the results")
     void fanOutOverItems() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC}) {
             InstanceView v = run(fanOut(mode), new FanH(), Map.of("items", List.of("ab", "cde", "f")), null);
@@ -205,7 +225,7 @@ class DynamicConstructsTest {
         }
     }
 
-    @Test @DisplayName("an empty or missing items list skips straight past the join")
+    @Test @DisplayName("an empty or missing collection skips the body AND the combine")
     void emptyListSkips() throws Exception {
         assertEquals(true, Json.asObject(
                 run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of("items", List.of()), null).context()).get("done"),
@@ -215,15 +235,67 @@ class DynamicConstructsTest {
                 "missing key");
     }
 
-    @Test @DisplayName("a non-list at the items key fails the instance with a clear error")
+    @Test @DisplayName("a map input fans out per entry; the combine receives a map keyed like the input")
+    void mapInputCollectsAsMap() throws Exception {
+        Blueprint bp = Workflow.define("dyn-fan-map")
+                .forEach("per-entry", "prices", "item", b -> b.step("tag"))
+                .combine("collect")
+                .step("after")
+                .build();
+        InstanceView v = run(bp, new MapFanH(),
+                new LinkedHashMap<>(Map.of("prices", new LinkedHashMap<>(Map.of("eu", 10L, "us", 12L)))), null);
+        assertEquals("COMPLETED", v.status());
+        Map<String, Object> ctx = Json.asObject(v.context());
+        assertEquals("eu:10", ctx.get("tagged-eu"), "map entry keyed result");
+        assertEquals("us:12", ctx.get("tagged-us"));
+        assertEquals(true, ctx.get("done"));
+    }
+
+    @Handlers("dyn-fan-map")
+    static final class MapFanH {
+        public Map<String, Object> tag(Map<String, Object> ctx) {
+            return Map.of("tag", ctx.get("itemKey") + ":" + ctx.get("item"));
+        }
+        public Map<String, Object> collect(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                           Map<String, Map<String, Object>> results) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            results.forEach((k, item) -> out.put("tagged-" + k, item.get("tag")));
+            return out;
+        }
+        public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
+    }
+
+    @Test @DisplayName("a Set combine parameter deduplicates identical item results")
+    void setParamDeduplicates() throws Exception {
+        Blueprint bp = Workflow.define("dyn-fan-set")
+                .forEach("per-item", "items", "item", b -> b.step("norm"))
+                .combine("collect")
+                .build();
+        InstanceView v = run(bp, new SetFanH(), Map.of("items", List.of("x", "x", "y")), null);
+        assertEquals("COMPLETED", v.status());
+        assertEquals(2L, Json.asObject(v.context()).get("distinct"), "duplicates collapse in a Set");
+    }
+
+    @Handlers("dyn-fan-set")
+    static final class SetFanH {
+        public Map<String, Object> norm(Map<String, Object> ctx) {
+            return Map.of("v", ctx.get("item"));   // the return REPLACES the item view: index gone
+        }
+        public Map<String, Object> collect(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                           java.util.Set<Map<String, Object>> results) {
+            return put(base, "distinct", (long) results.size());
+        }
+    }
+
+    @Test @DisplayName("a scalar at the items key fails the instance with a clear error")
     void nonListFails() throws Exception {
         InstanceView v = run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of("items", "oops"), null);
         assertEquals("FAILED", v.status());
-        assertTrue(v.error().contains("not a list"), v.error());
+        assertTrue(v.error().contains("not a list or map"), v.error());
         assertTrue(v.error().contains("items"), "names the offending key");
     }
 
-    @Test @DisplayName("forkEach round-trips through the JDBC store (payload column, graph columns)")
+    @Test @DisplayName("forEach round-trips through the JDBC store (payload column, graph columns)")
     void fanOutOnJdbc() throws Exception {
         String url = "jdbc:h2:mem:dyn-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         InstanceView v = run(fanOut(ExecutionMode.SERVER), new FanH(), Map.of("items", List.of("x", "yz")), url);

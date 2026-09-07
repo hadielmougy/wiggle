@@ -10,8 +10,8 @@ import java.util.List;
  *
  * <p>{@code combine} is topology only: it declares the combine node (by name) and records the arm
  * names. The merge itself is a handler bound on the worker -- a method named the same as the combine
- * whose {@link com.wiggle.client.worker.Arm @Arm} parameters receive each branch's typed result --
- * or, if no such method exists, the worker's default union (fold all arms). The fork left the stream
+ * whose {@link com.wiggle.client.worker.Arm @Arm} parameters receive each branch's typed result and
+ * whose return is the COMPLETE post-join context. There is no default fold. The fork left the stream
  * with no open end, so a forgotten combine also fails at {@code build()}.
  *
  * @see WorkflowBuilder#fork
@@ -29,8 +29,8 @@ public final class ForkStage {
 
     /**
      * The mandatory merge for the preceding fork. Declares the combine node named {@code name}; each
-     * branch's result is later handed to the matching worker handler keyed by branch name (or folded
-     * by the default union). Resumes the normal step flow at the combine node.
+     * branch's result is later handed to the matching worker handler keyed by branch name. Resumes
+     * the normal step flow at the combine node.
      *
      * @param name the step name of the combine node (must be unique in the workflow)
      * @return the stream, reopened after the combine node
