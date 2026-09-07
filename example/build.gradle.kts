@@ -69,3 +69,11 @@ tasks.register<JavaExec>("bench") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.Benchmark")
 }
+
+tasks.register<JavaExec>("rateCeiling") {
+    group = "application"
+    description = "Find the sustainable start-rate ceiling of a deployment (needs a running worker). " +
+            "Set WIGGLE_COORDINATOR_URL/WIGGLE_NAMESPACE/WIGGLE_ENDPOINT_REWRITE; tune BENCH_RATES etc."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.order.RateCeilingBench")
+}

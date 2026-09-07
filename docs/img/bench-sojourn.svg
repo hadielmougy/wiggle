@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" width="960" height="470" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Wiggle rate-ceiling benchmark — end-to-end completion latency over time at three offered rates</title>
+  <desc id="d">Probe sojourn (submit to COMPLETED) over a sustained-load stage. At 310 starts/sec latency stays flat around 4 seconds. At 320 it creeps to 13 seconds. At 330 the queue grows without bound: latency passes 38 seconds by t=38s and probes then exceed the 45-second timeout. Measured on a single cell on one laptop.</desc>
+
+  <text x="80" y="30" font-size="15" font-weight="700" fill="#1e2233">Where the queue starts to pile up — one cell, one laptop</text>
+  <text x="80" y="50" font-size="11.5" fill="#7c8296">probe sojourn (start → COMPLETED) during a sustained-load stage · order-fulfilment fork/join workflow</text>
+
+  <!-- grid + axes -->
+  <g stroke="#e3e6ee" stroke-width="1">
+    <line x1="80" y1="73"  x2="900" y2="73"/>
+    <line x1="80" y1="140" x2="900" y2="140"/>
+    <line x1="80" y1="207" x2="900" y2="207"/>
+    <line x1="80" y1="273" x2="900" y2="273"/>
+  </g>
+  <line x1="80" y1="340" x2="900" y2="340" stroke="#8a90a2" stroke-width="1.5"/>
+  <line x1="80" y1="66"  x2="80"  y2="340" stroke="#8a90a2" stroke-width="1.5"/>
+  <g font-size="10.5" fill="#7c8296" text-anchor="end">
+    <text x="72" y="344">0s</text>
+    <text x="72" y="277">10s</text>
+    <text x="72" y="211">20s</text>
+    <text x="72" y="144">30s</text>
+    <text x="72" y="77">40s</text>
+  </g>
+  <g font-size="10.5" fill="#7c8296" text-anchor="middle">
+    <text x="80"  y="358">0</text>
+    <text x="353" y="358">30s</text>
+    <text x="627" y="358">60s</text>
+    <text x="900" y="358">90s</text>
+  </g>
+  <text x="490" y="378" font-size="11" fill="#7c8296" text-anchor="middle">time into the stage</text>
+
+  <!-- probe timeout band -->
+  <line x1="80" y1="40" x2="900" y2="40" stroke="#d64545" stroke-width="1" stroke-dasharray="3 4"/>
+  <text x="898" y="34" font-size="10" fill="#d64545" text-anchor="end">probe timeout (45s)</text>
+
+  <!-- 310/s: sustained -->
+  <polyline fill="none" stroke="#2f9e63" stroke-width="2.5" stroke-linejoin="round"
+    points="80,337 98,330 116,329 135,325 153,321 171,318 189,318 208,318 226,316 244,317 262,316 280,312 299,308 317,309 335,307 353,308 372,309 390,309 408,312 426,313 444,315 463,316 481,312 499,313 517,313 536,314 554,314 572,314 590,315 608,318"/>
+
+  <!-- 320/s: marginal -->
+  <polyline fill="none" stroke="#e0a63a" stroke-width="2.5" stroke-linejoin="round"
+    points="80,338 98,330 116,325 135,321 153,318 171,313 189,307 208,302 226,297 244,294 262,295 280,294 299,291 317,283 335,277 353,272 372,267 390,268 408,266 426,262 444,254 463,253 481,253 499,253 517,248 536,244 554,250 572,253 590,258 608,269"/>
+
+  <!-- 330/s over 90s: collapse -->
+  <polyline fill="none" stroke="#d64545" stroke-width="2.5" stroke-linejoin="round"
+    points="80,335 98,327 116,323 135,319 153,316 171,312 189,296 208,283 226,277 244,278 262,273 280,269 299,259 317,256 335,239 353,184 372,159 390,144 408,121 426,85"/>
+  <polyline fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="5 4"
+    points="426,85 453,40"/>
+  <line x1="453" y1="40" x2="880" y2="40" stroke="#d64545" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="600" y="58" font-size="10.5" fill="#d64545">every probe times out — queue growing without bound</text>
+
+  <!-- series labels -->
+  <text x="620" y="322" font-size="12" font-weight="600" fill="#2f9e63">310/s — sustained (flat ≈4s)</text>
+  <text x="620" y="252" font-size="12" font-weight="600" fill="#e0a63a">320/s — marginal (creeping)</text>
+  <text x="330" y="150" font-size="12" font-weight="600" fill="#d64545">330/s — over the ceiling</text>
+
+  <!-- verdict box -->
+  <rect x="80" y="398" width="820" height="52" rx="9" fill="#f6f8fc" stroke="#aab0c0" stroke-width="1.2"/>
+  <text x="98" y="420" font-size="12.5" fill="#1e2233"><tspan font-weight="700">Ceiling ≈ 310 starts/sec sustained</tspan> — ≈2,400 durable step executions/sec through a single cell (one server node + one PostgreSQL).</text>
+  <text x="98" y="438" font-size="11" fill="#7c8296">At 300/s completion latency holds flat at ~2.2s over 60s. By 330/s arrivals outrun the cell and the backlog compounds. Scale past this by adding cells.</text>
+</svg>

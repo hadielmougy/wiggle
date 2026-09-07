@@ -38,8 +38,9 @@ serve its steps.
 [Deployment options](#2-deployment--running-options) ·
 [Java example](#3-example-in-java) ·
 [Architecture](#4-architecture) ·
-[Configuration](#5-configuration) ·
-[Roadmap](#6-roadmap) ·
+[Performance](#5-performance) ·
+[Configuration](#6-configuration) ·
+[Roadmap](#7-roadmap) ·
 [Docs & links](#docs--links)
 
 ---
@@ -345,7 +346,55 @@ workflows exercising every operator.
 
 ---
 
-## 5. Configuration
+## 5. Performance
+
+How much can **one cell on one laptop** take before the queue starts to pile up? We ramped the
+offered start rate against a real deployment (the kind-based lab cluster) and watched *probe
+sojourn* — the end-to-end time of a fresh instance from `start()` to `COMPLETED`. Flat sojourn
+means the cell is keeping up; monotonic growth means arrivals are outrunning it and backlog is
+compounding:
+
+![Probe sojourn over time at three offered rates: flat at 310/s, creeping at 320/s, unbounded growth past the 45s probe timeout at 330/s. Ceiling ≈ 310 starts/sec sustained on a single cell.](docs/img/bench-sojourn.svg)
+
+| offered rate | window | end-to-end latency | verdict |
+|---|---|---|---|
+| **300/s** | 60s | flat **≈2.2s** | ✅ sustained |
+| **310/s** | 60s | plateau ≈4s, stable | ✅ sustained |
+| 320/s | 60s | 10s → 13s, creeping | ⚠️ marginal |
+| 330/s | 90s | 0.8s → 38s, then probe timeouts | ❌ queue piling |
+| 340/s | 60s | 0.6s → 17s, monotonic | ❌ queue piling |
+
+**≈310 durable workflow starts/sec — ≈2,400 durable step executions/sec — through a single
+cell**, with submit latency at p50 ≈ 20ms / p99 < 100ms throughout. Each instance is the 8-step
+`order-fulfilment` fork/join workflow (validate → gate → 2 parallel branches → combine → notify →
+audit, `LOCAL_ASYNC` mode), every step durably committed to PostgreSQL.
+
+**Environment — deliberately modest, everything on one machine:**
+
+| | |
+|---|---|
+| Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
+| Cluster | kind (Kubernetes-in-Docker) inside a 10-CPU / 7.7 GB Docker Desktop VM |
+| Topology | 1 coordinator (Ratis) · **1 cell = 1 server node + PostgreSQL 16** · no pod resource limits |
+| Client side | submitter + 1 worker (`concurrency=100`) on the host, gRPC via `kubectl port-forward` |
+| Runtime | OpenJDK 21 |
+
+So the submitter, the worker, Kubernetes, the coordinator, the cell, and the database all
+shared those 10 cores — a floor, not a ceiling. And the whole point of the cellular model:
+when one cell's ceiling isn't enough, **add cells** — throughput scales by shard, not by
+tuning a single box.
+
+Reproduce it (the tool ships in the repo — it ramps rates, verifies drains between stages via
+live `RUNNING` counts, and judges each stage by sojourn drift):
+
+```bash
+WIGGLE_COORDINATOR_URL=… WIGGLE_NAMESPACE=… BENCH_RATES="300,320,340" \
+  ./gradlew :example:rateCeiling      # needs a running worker, e.g. NamespaceWorkerMain
+```
+
+---
+
+## 6. Configuration
 
 Everything defaults sensibly; override by environment variable (or the same-named system
 property). The tables below are the ones you'll actually touch — the **complete** reference,
@@ -400,11 +449,11 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
 > upgrades it to mTLS; the console adds operator/viewer authorization. TLS authenticates the
-> connection — per-RPC authorization is on the [roadmap](#6-roadmap).
+> connection — per-RPC authorization is on the [roadmap](#7-roadmap).
 
 ---
 
-## 6. Roadmap
+## 7. Roadmap
 
 Where it's going — the honest list:
 
