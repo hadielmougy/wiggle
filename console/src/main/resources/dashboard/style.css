@@ -73,6 +73,7 @@ td.actions { text-align: right; overflow: visible; }
 .badge.FAILED { color: var(--err); border-color: #6a2b2b; }
 .badge.CANCELLED { color: var(--warn); border-color: #5c4a24; }
 .badge.WAITING, .badge.AWAITING { color: var(--warn); border-color: #5c4a24; }
+.badge.readonly { color: var(--warn); border-color: #5c4a24; text-transform: uppercase; letter-spacing: .06em; }
 .muted { color: var(--muted); }
 pre { margin: 0; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; font-size: 12px;
   font-family: ui-monospace, monospace; background: var(--panel2); border-radius: 6px; }

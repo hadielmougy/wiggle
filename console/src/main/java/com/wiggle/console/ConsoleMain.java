@@ -45,8 +45,13 @@ public final class ConsoleMain {
         }
 
         int port = Integer.parseInt(env("WIGGLE_DASHBOARD_PORT", "8090"));
+        // Optional read-only account: set WIGGLE_DASHBOARD_VIEWER_PASSWORD to add a viewer that can see
+        // everything but can't cancel/signal/schedule. Only meaningful when the operator password is set.
         ConsoleAuth auth = new ConsoleAuth(env("WIGGLE_DASHBOARD_USER", "admin"),
-                env("WIGGLE_DASHBOARD_PASSWORD", null), tls.hasKeyStore());
+                env("WIGGLE_DASHBOARD_PASSWORD", null),
+                env("WIGGLE_DASHBOARD_VIEWER_USER", "viewer"),
+                env("WIGGLE_DASHBOARD_VIEWER_PASSWORD", null),
+                tls.hasKeyStore());
         DashboardData data = new GrpcDashboardData(backend);
         ConsoleServer server = new ConsoleServer(data, auth, port, tls).start();
 

@@ -61,9 +61,12 @@ public final class DashboardServlet extends HttpServlet {
     // ---- auth endpoints (open; the filter lets these through) ----
 
     private void authInfo(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        ConsoleAuth.Role role = auth.role(req);   // null if auth is required and the caller isn't authenticated
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("required", auth.required());
         out.put("user", auth.required() ? auth.user() : null);
+        out.put("role", role == null ? null : role.name().toLowerCase());
+        out.put("canWrite", role == ConsoleAuth.Role.OPERATOR);
         json(res, 200, out);
     }
 
