@@ -226,7 +226,7 @@ alone: **replicas of one cell** (share a `cellId`, must be allowed) vs **two dif
 databases, and instances would resolve to nodes that don't hold them).
 
 The discriminator is the **fingerprint**: a stable identity of the cell's shared storage
-(`Storage.fingerprint()` — hash of the JDBC URL, or the Cassandra keyspace; `null` for in-memory,
+(`Storage.fingerprint()` — hash of the JDBC URL; `null` for in-memory,
 which can't be shared across processes). It travels node → coordinator on register
 (`RegisteredNode.cell_fingerprint`) and is persisted per node (`CoordNode.cellFingerprint`).
 
@@ -280,5 +280,5 @@ No id is ever rewritten and no instance data is moved.
 | drain → retire lifecycle (census-driven) | `coordinator/runtime/**/CoordinatorReconciler.java` |
 | ring persisted as JSON (backend-independent) | `coordinator/spi/**/EpochCodec.java` |
 | client-side resolution & caching of the above | `client/**/CoordinatedConnection.java` — see [client-caching-contract.md](client-caching-contract.md) |
-| storage fingerprint | `server/**/store/Storage.java`, `jdbc/**/JdbcStorage.java`, `cassandra/**/CassandraStorage.java` |
+| storage fingerprint | `server/**/store/Storage.java`, `jdbc/**/JdbcStorage.java`|
 | node ⇄ coordinator link (applies placement) | `dist/**/coord/HttpCoordinatorLink.java` |

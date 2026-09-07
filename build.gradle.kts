@@ -47,7 +47,7 @@ subprojects {
 // RELEASING.md. Signing and Central-Portal credentials are read from properties or
 // environment variables and are never stored in the repository.
 
-val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "mysql", "oracle", "sqlserver", "cassandra")
+val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "mysql", "oracle", "sqlserver")
 
 val moduleDescriptions = mapOf(
     "core" to "Wiggle shared model: JSON, the compiled state-machine graph, retry policy, wire records.",
@@ -59,7 +59,6 @@ val moduleDescriptions = mapOf(
     "mysql" to "Wiggle MySQL storage: the MySQL/MariaDB dialect for multi-node clustering.",
     "oracle" to "Wiggle Oracle storage: the Oracle Database dialect for multi-node clustering.",
     "sqlserver" to "Wiggle SQL Server storage: the Microsoft SQL Server dialect for multi-node clustering.",
-    "cassandra" to "Wiggle Cassandra storage: a partition-correct, LWT-based store for multi-node clustering."
 )
 
 configure(subprojects.filter { it.name in publishedModules }) {
