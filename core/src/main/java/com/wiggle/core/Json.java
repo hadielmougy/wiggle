@@ -261,10 +261,12 @@ public final class Json {
      * Top-level keys of {@code after} whose values differ from {@code before}, with keys
      * that disappeared mapped to null.
      *
-     * This is what lets parallel branches share one context document: a branch writes
-     * back only what it actually changed, so two branches touching different fields
-     * merge cleanly instead of the slower one clobbering the faster one with its own
-     * stale copy of the whole object.
+     * This is the per-step wire delta: after a handler returns, the worker diffs the returned
+     * document against the one the step was given and ships only the changed keys (a null value
+     * is a tombstone the engine turns into a key removal). The engine applies the delta to
+     * whatever context the token owns -- a fork branch's isolated overlay, or the shared
+     * context for ordinary steps. It is NOT a cross-branch merge mechanism: fork branches are
+     * isolated and nothing reaches the shared context except what the mandatory combine returns.
      */
     public static Object shallowDiff(Object before, Object after) {
         if (!(before instanceof Map) || !(after instanceof Map)) return after;
