@@ -10,6 +10,7 @@ plugins {
 // assembled distribution carries them all.
 dependencies {
     implementation(project(":server"))
+    implementation(project(":console"))   // the ops console runs as WIGGLE_ROLE=console in the one image
     // The composition layer: it runs a cell (WiggleServer) OR a coordinator (CoordinatorServer), and
     // owns the one bridge that needs both -- EmbeddedCellDeployer (starts in-process cells). The
     // coordinator is a single standalone module (control plane + embedded Ratis+RocksDB store).

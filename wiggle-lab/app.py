@@ -417,20 +417,42 @@ with forwards:
             action(f"Forward {cell}", lab.forward_cell, cell)
             st.rerun()
 
-        # dashboard (HTTP) sub-row
-        dash = lab.dashboard_target(cell)
-        d1, d2, d3 = st.columns([2, 3, 1.3])
-        d1.caption("↳ dashboard")
-        if dash:
-            d2.markdown(f"[http://{dash}](http://{dash})")
-            if d3.button("Stop", key=f"dash-stop-{cell}"):
-                lab.stop_forward_cell_dashboard(cell)
+    st.divider()
+    st.markdown("**Ops console (web UI)**")
+    st.caption("The console is a per-namespace pod: a pure gRPC client of the coordinator that fans "
+               "instance queries across the namespace's cells and serves the web UI. Deploy one per "
+               "namespace, forward it, and open the link. (Cells no longer serve a dashboard — they "
+               "expose only a /healthz probe.)")
+    all_ns = sorted({c["namespace"] for c in cells if c["namespace"]})
+    consoles = {cn["namespace"]: cn for cn in lab.consoles()}
+    if not all_ns:
+        st.caption("No namespaces yet — create a cell first.")
+    for ns in all_ns:
+        cn = consoles.get(ns)
+        k1, k2, k3 = st.columns([2, 3, 1.3])
+        deployed = cn is not None
+        ready = deployed and cn["ready"] == cn["desired"] and cn["desired"] > 0
+        k1.markdown(f"**{ns}** · {'✅ ready' if ready else ('⏳ pending' if deployed else '— not deployed —')}")
+        if not deployed:
+            if k3.button("Deploy", key=f"console-deploy-{ns}"):
+                action(f"Deploy console for {ns}", lab.deploy_console, ns)
+                st.rerun()
+            k2.code("— not deployed —", language=None)
+            continue
+        addr = lab.console_target(ns)
+        if addr:
+            k2.markdown(f"[http://{addr}](http://{addr})")
+            if k3.button("Stop", key=f"console-stop-{ns}"):
+                lab.stop_forward_console(ns)
                 st.rerun()
         else:
-            d2.code("— not forwarded —", language=None)
-            if d3.button("Forward", key=f"dash-{cell}"):
-                action(f"Forward {cell} dashboard", lab.forward_cell_dashboard, cell)
+            k2.code("— not forwarded —", language=None)
+            if ready and k3.button("Forward", key=f"console-fw-{ns}"):
+                action(f"Forward console for {ns}", lab.forward_console, ns)
                 st.rerun()
+        if st.button("Remove", key=f"console-rm-{ns}"):
+            action(f"Remove console for {ns}", lab.remove_console, ns)
+            st.rerun()
 
     st.divider()
     st.markdown("**Client routing (multi-cell)**")

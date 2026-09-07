@@ -3,7 +3,6 @@ package com.wiggle.console;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.core.InstanceView;
-import com.wiggle.server.http.DashboardData;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -47,6 +46,20 @@ public final class GrpcDashboardData implements DashboardData {
         for (WiggleClient c : backend.cells()) {
             merged.addAll(c.listInstances(workflow, status, limit));
         }
+        return newestFirstCapped(merged, limit);
+    }
+
+    @Override public List<InstanceView> findByCorrelation(String correlationId, int limit) {
+        // The correlation key isn't the instance id, so we can't route to one cell -- fan the lookup
+        // across every active cell and merge, exactly like listInstances.
+        List<InstanceView> merged = new ArrayList<>();
+        for (WiggleClient c : backend.cells()) {
+            merged.addAll(c.findByCorrelation(correlationId, limit));
+        }
+        return newestFirstCapped(merged, limit);
+    }
+
+    private static List<InstanceView> newestFirstCapped(List<InstanceView> merged, int limit) {
         merged.sort(Comparator.comparingLong(InstanceView::createdAt).reversed());
         return merged.size() > limit ? new ArrayList<>(merged.subList(0, limit)) : merged;
     }

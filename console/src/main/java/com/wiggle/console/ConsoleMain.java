@@ -4,8 +4,6 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.core.Tls;
-import com.wiggle.server.http.DashboardData;
-import com.wiggle.server.http.HttpDashboard;
 
 /**
  * The standalone ops console: one binary that serves the dashboard SPA as a pure gRPC client, the same
@@ -47,15 +45,15 @@ public final class ConsoleMain {
         }
 
         int port = Integer.parseInt(env("WIGGLE_DASHBOARD_PORT", "8090"));
-        String user = env("WIGGLE_DASHBOARD_USER", "admin");
-        String password = env("WIGGLE_DASHBOARD_PASSWORD", null);
+        ConsoleAuth auth = new ConsoleAuth(env("WIGGLE_DASHBOARD_USER", "admin"),
+                env("WIGGLE_DASHBOARD_PASSWORD", null), tls.hasKeyStore());
         DashboardData data = new GrpcDashboardData(backend);
-        HttpDashboard dashboard = new HttpDashboard(data, port, user, password, tls).start();
+        ConsoleServer server = new ConsoleServer(data, auth, port, tls).start();
 
-        System.out.println("wiggle console on " + (tls.hasKeyStore() ? "https" : "http") + "://localhost:" + port
-                + "  ->  " + mode);
+        System.out.println("wiggle console on " + (tls.hasKeyStore() ? "https" : "http") + "://localhost:"
+                + server.port() + "  ->  " + mode);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            dashboard.close();
+            server.close();
             try { backend.close(); } catch (Exception ignored) { }
             try { connection.close(); } catch (Exception ignored) { }
         }));

@@ -379,21 +379,40 @@ class Lab:
     def stop_forward_cell(self, cell: str):
         self.pf.stop(f"cell:{cell}")
 
-    def _cell_dashboard_local_port(self, cell: str) -> int:
-        ids = [c["cell"] for c in self.cells()]
-        idx = ids.index(cell) if cell in ids else len(ids)
-        return C.CELL_DASHBOARD_LOCAL_PORT_BASE + idx
+    # ---- ops console (per-namespace pod: a gRPC client of the coordinator + the web UI) ----
+    @record
+    def deploy_console(self, namespace: str, password: str | None = None):
+        self.ensure_namespace()
+        k8s.apply(manifests.to_yaml(manifests.console_manifests(namespace, password or None))).check()
 
-    def forward_cell_dashboard(self, cell: str) -> str:
-        self.pf.ensure(f"dash:{cell}", C.dns_name("cell", cell), C.CELL_DASHBOARD_PORT,
-                       self._cell_dashboard_local_port(cell))
-        return self.pf.target(f"dash:{cell}") or ""
+    @record
+    def remove_console(self, namespace: str):
+        self.pf.stop(f"console:{namespace}")
+        k8s.delete_by_label(f"wiggle-lab/role=console,wiggle-lab/namespace={namespace}")
 
-    def stop_forward_cell_dashboard(self, cell: str):
-        self.pf.stop(f"dash:{cell}")
+    def consoles(self) -> list[dict]:
+        out = []
+        for d in k8s.deployments(selector="wiggle-lab/role=console"):
+            lb = d["labels"]
+            out.append({"namespace": lb.get("wiggle-lab/namespace", ""), "deployment": d["name"],
+                        "desired": d["desired"], "ready": d["ready"]})
+        return sorted(out, key=lambda c: c["namespace"])
 
-    def dashboard_target(self, cell: str) -> str | None:
-        return self.pf.target(f"dash:{cell}")
+    def _console_local_port(self, namespace: str) -> int:
+        ns = [c["namespace"] for c in self.consoles()]
+        idx = ns.index(namespace) if namespace in ns else len(ns)
+        return C.CONSOLE_LOCAL_PORT_BASE + idx
+
+    def forward_console(self, namespace: str) -> str:
+        self.pf.ensure(f"console:{namespace}", C.dns_name("console", namespace),
+                       C.CONSOLE_HTTP_PORT, self._console_local_port(namespace))
+        return self.pf.target(f"console:{namespace}") or ""
+
+    def stop_forward_console(self, namespace: str):
+        self.pf.stop(f"console:{namespace}")
+
+    def console_target(self, namespace: str) -> str | None:
+        return self.pf.target(f"console:{namespace}")
 
     def endpoint_rewrite_spec(self, namespace: str | None = None) -> str:
         """Build a WIGGLE_ENDPOINT_REWRITE value that maps each cell's live pod IP(s) to that cell's own

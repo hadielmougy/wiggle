@@ -19,8 +19,6 @@ interface ServerBundle {
     /** The gRPC port this node serves on. */
     int port();
 
-    /** The dashboard port, or {@code -1} if none. */
-    int dashboardPort();
 
     /** The workflow engine, for embedders/tests. Throws for roles that run no engine. */
     WorkflowEngine engine();

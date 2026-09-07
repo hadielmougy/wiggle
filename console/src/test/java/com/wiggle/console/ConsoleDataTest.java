@@ -15,7 +15,6 @@ import com.wiggle.server.WiggleServer;
 import com.wiggle.server.coord.CoordinatorApi;
 import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
-import com.wiggle.server.http.DashboardData;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -61,6 +60,11 @@ class ConsoleDataTest {
             assertEquals(4, data.listInstances("wf", "RUNNING", 100).size(), "filtered by workflow+status");
             assertTrue(data.workflowNames().contains("wf"), "workflow names");
 
+            List<InstanceView> byKey = data.findByCorrelation("cust-B", 100);
+            assertEquals(1, byKey.size(), "correlation lookup finds the one match");
+            assertEquals(target, byKey.get(0).id(), "correlation returns the right instance");
+            assertEquals(0, data.findByCorrelation("cust-none", 100).size(), "unknown correlation -> empty");
+
             DashboardData.InstanceDetail detail = data.instance(target).orElseThrow();
             assertEquals(target, detail.instance().id());
             assertFalse(detail.tokens().isEmpty(), "a READY token is present");
@@ -89,6 +93,7 @@ class ConsoleDataTest {
                 starter.register(wf());
                 String a = starter.start("wf", Map.of());
                 String b = starter.start("wf", Map.of());
+                String keyed = starter.start("wf", Map.of(), null, "cust-Z");
 
                 GrpcDashboardData data = new GrpcDashboardData(
                         new ConsoleBackend.Coordinated(conn, "acme", Tls.Options.DISABLED));
@@ -96,6 +101,9 @@ class ConsoleDataTest {
                 List<InstanceView> all = data.listInstances(null, null, 100);
                 assertTrue(all.stream().anyMatch(v -> v.id().equals(a))
                         && all.stream().anyMatch(v -> v.id().equals(b)), "fanned out to CellA");
+
+                List<InstanceView> byKey = data.findByCorrelation("cust-Z", 100);
+                assertTrue(byKey.stream().anyMatch(v -> v.id().equals(keyed)), "correlation fanned across cells");
 
                 assertEquals(a, data.instance(a).orElseThrow().instance().id(), "detail routed by id");
                 data.cancel(a, "from test");

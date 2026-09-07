@@ -151,20 +151,37 @@
 ;; ---------------------------------------------------------------- instances tab
 
 (defn instances-toolbar []
-  (let [f (:filter @db)]
+  (let [f (:filter @db)
+        searching (seq (:search f))]
     [:div.toolbar
-     [:select {:value (:workflow f)
+     [:select {:value (:workflow f) :disabled (boolean searching)
                :on-change #(do (st/set-filter! :workflow (.. % -target -value)) (act/load-instances!))}
       [:option {:value ""} "all workflows"]
       (for [w (:workflows @db)] ^{:key w} [:option {:value w} w])]
-     [:select {:value (:status f)
+     [:select {:value (:status f) :disabled (boolean searching)
                :on-change #(do (st/set-filter! :status (.. % -target -value)) (act/load-instances!))}
       [:option {:value ""} "all statuses"]
       (for [s ["RUNNING" "COMPLETED" "FAILED" "CANCELLED"]] ^{:key s} [:option {:value s} s])]
      [:input {:type "number" :min 1 :style {:width 80} :value (:limit f) :title "limit"
               :on-change #(do (st/set-filter! :limit (js/parseInt (.. % -target -value)))
                               (act/load-instances!))}]
-     [:button.ghost {:on-click act/load-instances!} "↻"]]))
+     ;; --- exact lookup by instance id or correlation (business) key ---
+     [:span.spacer]
+     [:select {:value (name (:search-by f)) :title "search field"
+               :on-change #(do (st/set-filter! :search-by (keyword (.. % -target -value)))
+                               (when searching (act/load-instances!)))}
+      [:option {:value "correlation"} "correlation id"]
+      [:option {:value "id"} "instance id"]]
+     [:input {:type "search" :style {:width 220}
+              :placeholder (if (= :id (:search-by f)) "instance id…" "correlation id…")
+              :value (:search f)
+              :on-change #(st/set-filter! :search (.. % -target -value))
+              :on-key-down #(when (= (.-key %) "Enter") (act/load-instances!))}]
+     [:button.ghost {:on-click act/load-instances! :title "search"} "🔍"]
+     (when searching
+       [:button.ghost {:title "clear search"
+                       :on-click #(do (st/set-filter! :search "") (act/load-instances!))} "✕"])
+     [:button.ghost {:on-click act/load-instances! :title "refresh"} "↻"]]))
 
 (defn instances-table []
   (let [{:keys [instances selected]} @db]

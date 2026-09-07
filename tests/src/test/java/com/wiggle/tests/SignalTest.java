@@ -170,41 +170,4 @@ class SignalTest {
         }
     }
 
-    @Test @DisplayName("the dashboard lists a pending signal and delivers it over HTTP")
-    void dashboardDeliversSignal() throws Exception {
-        int dash;
-        try (ServerSocket s = new ServerSocket(0)) { dash = s.getLocalPort(); }
-
-        Blueprint bp = Workflow.define("sig-http")
-                .awaitSignal("sign-off")
-                .step("after")
-                .build();
-
-        try (WiggleServer server = new WiggleServer(config(dash)).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w5").register(bp).handlers(new HttpH())) {
-            w.start();
-            String id = client.start(bp, Map.of());
-            awaitPending(server, 1);
-
-            HttpClient http = HttpClient.newHttpClient();
-            String base = "http://localhost:" + server.dashboardPort();
-
-            String signals = http.send(HttpRequest.newBuilder(URI.create(base + "/api/signals")).GET().build(),
-                    HttpResponse.BodyHandlers.ofString()).body();
-            assertTrue(signals.contains("sign-off"), "signal listed on the dashboard");
-            assertTrue(signals.contains(id), "with its instance");
-
-            HttpResponse<String> sent = http.send(HttpRequest.newBuilder(
-                            URI.create(base + "/api/instances/" + id + "/signal/sign-off"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString("{\"decision\":\"signed\"}")).build(),
-                    HttpResponse.BodyHandlers.ofString());
-            assertEquals(200, sent.statusCode());
-
-            InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
-            assertEquals("COMPLETED", v.status());
-            assertEquals("signed", Json.asObject(v.context()).get("decision"));
-        }
-    }
 }

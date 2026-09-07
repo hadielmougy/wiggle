@@ -111,28 +111,6 @@ class TlsTest {
         }
     }
 
-    // ---------------------------------------------------------------- HTTP dashboard
-
-    @Test @DisplayName("HTTPS dashboard: served over TLS, Basic auth still enforced, /healthz open")
-    void httpsDashboard() throws Exception {
-        int dash = freePort();
-        ServerConfig config = serverConfig(opts(serverKs, null), dash, "s3cret");
-        try (WiggleServer server = new WiggleServer(config).start()) {
-            String base = "https://localhost:" + server.dashboardPort();
-            HttpClient https = HttpClient.newBuilder().sslContext(clientSsl()).build();
-
-            HttpResponse<String> health = send(https, base + "/healthz", null);
-            assertEquals(200, health.statusCode(), "healthz open over HTTPS");
-            assertEquals("ok", health.body());
-
-            assertEquals(401, send(https, base + "/api/instances", null).statusCode(),
-                    "auth still enforced under TLS");
-            HttpResponse<String> authed = send(https, base + "/api/cluster", "admin:s3cret");
-            assertEquals(200, authed.statusCode());
-            assertTrue(authed.body().contains("\"members\""));
-        }
-    }
-
     // ---------------------------------------------------------------- helpers
 
     private static Tls.Options opts(Path keystore, Path truststore) {

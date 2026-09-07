@@ -1,4 +1,4 @@
-package com.wiggle.server.http;
+package com.wiggle.console;
 
 import com.wiggle.core.InstanceView;
 
@@ -21,6 +21,9 @@ public interface DashboardData {
     Optional<Object> workflowGraph(String name);
 
     List<InstanceView> listInstances(String workflow, String status, int limit);
+
+    /** Instances started with {@code correlationId} (a business key), newest first, capped at {@code limit}. */
+    List<InstanceView> findByCorrelation(String correlationId, int limit);
 
     Optional<InstanceDetail> instance(String id);
 
