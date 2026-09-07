@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 672" width="980" height="672" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Wiggle architecture — clients and workers, the optional cell coordinator, cells (namespace = own cluster + own database), and the ops console</title>
+  <desc id="d">Your services (Java/Go/Python clients and pull-based workers) talk gRPC to wiggle cells. Each namespace is a cell: its own server cluster and its own database. An optional coordinator — a Raft group over Ratis+RocksDB — places namespaces on cells by consistent hashing over epochs; instance ids carry their own routing. A standalone ops console (web UI) and a CLI operate the whole thing.</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a90a2"/>
+    </marker>
+    <marker id="arrAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c8922a"/>
+    </marker>
+  </defs>
+
+  <!-- ======================= band 1: your services ======================= -->
+  <rect x="24" y="36" width="600" height="130" rx="10" fill="none" stroke="#aab0c0" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="38" y="54" font-size="11" fill="#7c8296">your services</text>
+
+  <g stroke-width="1.5">
+    <rect x="44" y="68" width="172" height="76" rx="8" fill="#e7ecff" stroke="#5b6cff"/>
+    <rect x="238" y="68" width="182" height="76" rx="8" fill="#e3f6ea" stroke="#2f9e63"/>
+    <rect x="442" y="68" width="162" height="76" rx="8" fill="#e3f6ea" stroke="#2f9e63"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="130" y="90" font-size="13" font-weight="600" fill="#1e2233">Clients</text>
+    <text x="130" y="107" font-size="11" fill="#3c4257">Java · Go · Python</text>
+    <text x="130" y="122" font-size="10.5" fill="#7c8296">start · await · signal</text>
+
+    <text x="329" y="90" font-size="13" font-weight="600" fill="#1e2233">Workers</text>
+    <text x="329" y="107" font-size="11" fill="#3c4257">@Handlers · pull-based</text>
+    <text x="329" y="122" font-size="10.5" fill="#7c8296">gRPC long-poll, no inbound ports</text>
+
+    <text x="523" y="90" font-size="12.5" font-weight="600" fill="#1e2233">NamespaceWorker</text>
+    <text x="523" y="107" font-size="11" fill="#3c4257">fans polling across</text>
+    <text x="523" y="122" font-size="10.5" fill="#7c8296">a namespace's cells</text>
+  </g>
+
+  <!-- ======================= band 1b: operate ======================= -->
+  <rect x="648" y="36" width="308" height="130" rx="10" fill="none" stroke="#aab0c0" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="662" y="54" font-size="11" fill="#7c8296">operate</text>
+
+  <rect x="668" y="68" width="268" height="48" rx="8" fill="#f3e9ff" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="802" y="87" font-size="12.5" font-weight="600" fill="#1e2233" text-anchor="middle">Ops console — web UI :8090</text>
+  <text x="802" y="104" font-size="10.5" fill="#7c8296" text-anchor="middle">trace · cancel · signal · schedules · search</text>
+
+  <rect x="668" y="124" width="268" height="32" rx="8" fill="#f6f8fc" stroke="#aab0c0" stroke-width="1.5"/>
+  <text x="802" y="144" font-size="11" fill="#3c4257" text-anchor="middle">wiggle CLI — epochs · allocations</text>
+
+  <!-- ======================= resolve arrows into the coordinator ======================= -->
+  <path d="M420,166 L458,204" fill="none" stroke="#8a90a2" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arr)"/>
+  <text x="404" y="190" font-size="10.5" fill="#7c8296" font-style="italic" text-anchor="end">resolve: where is “orders” / this instance?</text>
+  <path d="M800,166 L648,204" fill="none" stroke="#8a90a2" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arr)"/>
+
+  <!-- ======================= coordinator ======================= -->
+  <rect x="270" y="206" width="440" height="118" rx="12" fill="#fffaf0" stroke="#e0a63a" stroke-width="1.5"/>
+  <text x="490" y="228" font-size="12.5" font-weight="600" fill="#1e2233" text-anchor="middle">cell coordinator — optional control plane · gRPC :8099</text>
+
+  <g fill="#fff3dd" stroke="#e0a63a" stroke-width="1.5">
+    <rect x="292" y="240" width="120" height="34" rx="7"/>
+    <rect x="430" y="240" width="120" height="34" rx="7"/>
+    <rect x="568" y="240" width="120" height="34" rx="7"/>
+  </g>
+  <g font-size="11" fill="#1e2233" text-anchor="middle">
+    <text x="352" y="261">coordinator-0</text>
+    <text x="490" y="261">coordinator-1</text>
+    <text x="628" y="261">coordinator-2</text>
+  </g>
+  <text x="490" y="296" font-size="10.5" fill="#7c8296" text-anchor="middle">Raft group (Apache Ratis + RocksDB) — no external store</text>
+  <text x="490" y="312" font-size="10.5" fill="#7c8296" text-anchor="middle">places namespaces on cells · consistent hashing over epochs · directory-free routing</text>
+
+  <!-- ======================= gRPC bus ======================= -->
+  <path d="M110,166 L110,364" fill="none" stroke="#c3c8d4" stroke-width="2"/>
+  <path d="M930,166 L930,364" fill="none" stroke="#c3c8d4" stroke-width="2"/>
+  <path d="M110,366 L930,366" fill="none" stroke="#c3c8d4" stroke-width="2"/>
+  <text x="188" y="358" font-size="11" fill="#7c8296">gRPC — start · signal · poll · settle · query</text>
+  <path d="M250,366 L250,390" fill="none" stroke="#8a90a2" stroke-width="1.7" marker-end="url(#arr)"/>
+  <path d="M730,366 L730,390" fill="none" stroke="#8a90a2" stroke-width="1.7" marker-end="url(#arr)"/>
+
+  <!-- coordinator to cells: placement -->
+  <path d="M350,324 L350,390" fill="none" stroke="#c8922a" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arrAmber)"/>
+  <path d="M630,324 L630,390" fill="none" stroke="#c8922a" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arrAmber)"/>
+  <text x="497" y="344" font-size="10.5" fill="#c8922a" text-anchor="middle">placement · heartbeats · epochs</text>
+
+  <!-- ======================= cell A ======================= -->
+  <rect x="24" y="392" width="452" height="232" rx="12" fill="#fbfcff" stroke="#aab0c0" stroke-width="1.5"/>
+  <text x="40" y="414" font-size="12.5" font-weight="600" fill="#1e2233">cell A — namespace “orders”</text>
+
+  <g fill="#e7ecff" stroke="#5b6cff" stroke-width="1.5">
+    <rect x="44" y="428" width="196" height="68" rx="8"/>
+    <rect x="256" y="428" width="196" height="68" rx="8"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="142" y="449" font-size="12.5" font-weight="600" fill="#1e2233">wiggle node</text>
+    <text x="142" y="465" font-size="10.5" fill="#3c4257">engine · gRPC :8080</text>
+    <text x="142" y="480" font-size="10.5" fill="#7c8296">leader: timers · recovery</text>
+
+    <text x="354" y="449" font-size="12.5" font-weight="600" fill="#1e2233">wiggle node</text>
+    <text x="354" y="465" font-size="10.5" fill="#3c4257">engine · gRPC :8080</text>
+    <text x="354" y="480" font-size="10.5" fill="#7c8296">leases · shared queue</text>
+  </g>
+  <path d="M142,496 L142,512" fill="none" stroke="#8a90a2" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M354,496 L354,512" fill="none" stroke="#8a90a2" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="44" y="514" width="408" height="52" rx="8" fill="#eef1f6" stroke="#8a90a2" stroke-width="1.5"/>
+  <text x="248" y="536" font-size="12" font-weight="600" fill="#1e2233" text-anchor="middle">PostgreSQL — the cell's own database</text>
+  <text x="248" y="553" font-size="10.5" fill="#7c8296" text-anchor="middle">also MySQL · Oracle · SQL Server · in-memory for dev</text>
+
+  <text x="250" y="594" font-size="10.5" fill="#7c8296" text-anchor="middle">ids carry their routing: <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">orders.e0.s3.01J…</tspan></text>
+
+  <!-- ======================= cell B ======================= -->
+  <rect x="504" y="392" width="452" height="232" rx="12" fill="#fbfcff" stroke="#aab0c0" stroke-width="1.5"/>
+  <text x="520" y="414" font-size="12.5" font-weight="600" fill="#1e2233">cell B — namespace “payments”</text>
+
+  <g fill="#e7ecff" stroke="#5b6cff" stroke-width="1.5">
+    <rect x="524" y="428" width="196" height="68" rx="8"/>
+    <rect x="736" y="428" width="196" height="68" rx="8"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="622" y="449" font-size="12.5" font-weight="600" fill="#1e2233">wiggle node</text>
+    <text x="622" y="465" font-size="10.5" fill="#3c4257">engine · gRPC :8080</text>
+    <text x="622" y="480" font-size="10.5" fill="#7c8296">leader: timers · recovery</text>
+
+    <text x="834" y="449" font-size="12.5" font-weight="600" fill="#1e2233">wiggle node</text>
+    <text x="834" y="465" font-size="10.5" fill="#3c4257">engine · gRPC :8080</text>
+    <text x="834" y="480" font-size="10.5" fill="#7c8296">leases · shared queue</text>
+  </g>
+  <path d="M622,496 L622,512" fill="none" stroke="#8a90a2" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M834,496 L834,512" fill="none" stroke="#8a90a2" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="524" y="514" width="408" height="52" rx="8" fill="#eef1f6" stroke="#8a90a2" stroke-width="1.5"/>
+  <text x="728" y="536" font-size="12" font-weight="600" fill="#1e2233" text-anchor="middle">PostgreSQL — the cell's own database</text>
+  <text x="728" y="553" font-size="10.5" fill="#7c8296" text-anchor="middle">disjoint from cell A — nothing shared</text>
+
+  <text x="730" y="594" font-size="10.5" fill="#7c8296" text-anchor="middle"><tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">payments.e2.s1.01J…</tspan> — epoch bumps reshard with zero migration</text>
+
+  <!-- ======================= caption ======================= -->
+  <text x="490" y="654" font-size="11.5" fill="#7c8296" text-anchor="middle">a namespace = a cell: its own database and its own cluster — blast-radius isolation. add cells to scale out, drain to retire. no shared store, no directory.</text>
+</svg>
