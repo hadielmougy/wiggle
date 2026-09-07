@@ -192,6 +192,11 @@ public final class WorkflowEngine {
         return storage.inTx(tx -> tx.listInstances(workflow, s, limit).stream().map(WorkflowEngine::view).toList());
     }
 
+    /** Instances started with {@code correlationId} (a business key), newest first. */
+    public List<InstanceView> findByCorrelation(String correlationId, int limit) {
+        return storage.inTx(tx -> tx.findByCorrelation(correlationId, limit).stream().map(WorkflowEngine::view).toList());
+    }
+
     public List<Token> tokens(String instanceId) {
         return storage.inTx(tx -> tx.tokensOf(instanceId));
     }

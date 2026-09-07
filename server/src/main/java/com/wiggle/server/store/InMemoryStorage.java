@@ -89,6 +89,15 @@ public final class InMemoryStorage implements Storage {
             instances.put(i.id, i.clone());
         }
 
+        @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
+            return instances.values().stream()
+                    .filter(i -> correlationId.equals(i.correlationId))
+                    .sorted(Comparator.comparingLong((Instance i) -> i.createdAt).reversed())
+                    .limit(limit)
+                    .map(Instance::clone)
+                    .toList();
+        }
+
         @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
             return instances.values().stream()
                     .filter(i -> workflow == null || workflow.equals(i.workflow))

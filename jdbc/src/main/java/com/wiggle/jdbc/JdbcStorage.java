@@ -134,6 +134,7 @@ public final class JdbcStorage implements Storage {
               revision       BIGINT       NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_instance_status ON wf_instance (status, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_instance_correlation ON wf_instance (correlation_id);
             CREATE TABLE IF NOT EXISTS wf_token (
               id             VARCHAR(64)  PRIMARY KEY,
               instance_id    VARCHAR(64)  NOT NULL,
@@ -562,6 +563,19 @@ public final class JdbcStorage implements Storage {
                 p.setString(4, i.contextJson); p.setLong(5, i.updatedAt); p.setString(6, i.id);
                 p.executeUpdate();
                 i.revision++;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
+            String sql = "SELECT * FROM wf_instance WHERE correlation_id=? ORDER BY created_at DESC LIMIT ?";
+            try (PreparedStatement p = ps(dialect.limit(sql))) {
+                p.setString(1, correlationId);
+                p.setInt(2, limit);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Instance> out = new ArrayList<>();
+                    while (rs.next()) out.add(readInstance(rs));
+                    return out;
+                }
             } catch (SQLException e) { throw wrap(e); }
         }
 

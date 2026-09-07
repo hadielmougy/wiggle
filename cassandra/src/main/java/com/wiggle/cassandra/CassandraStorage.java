@@ -314,6 +314,19 @@ public final class CassandraStorage implements Storage {
 
         @Override public void updateInstance(Instance i) { instBuf.put(i.id, i.clone()); }
 
+        @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
+            // Cassandra has no secondary index here: scan the recent-instance index and filter, matching
+            // listInstances' model (equality-search on the primary store is a JDBC-first feature).
+            List<Instance> out = new ArrayList<>();
+            for (Row r : session.execute(ps("SELECT id FROM instance_index WHERE bucket=0").bind())) {
+                findInstance(r.getString("id")).ifPresent(inst -> {
+                    if (correlationId.equals(inst.correlationId)) out.add(inst);
+                });
+            }
+            return out.stream().sorted(Comparator.comparingLong((Instance i) -> i.createdAt).reversed())
+                    .limit(limit).toList();
+        }
+
         @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
             List<Instance> out = new ArrayList<>();
             for (Row r : session.execute(ps("SELECT id FROM instance_index WHERE bucket=0").bind())) {
