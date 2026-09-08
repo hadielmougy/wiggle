@@ -257,29 +257,75 @@ public final class Worker implements AutoCloseable {
 
         Class<?> ret = m.getReturnType();
         boolean returnsBool = (ret == boolean.class || ret == Boolean.class);
+        Args args = splitArgs(node, m);   // one input parameter + an optional @Context parameter
         if (node.kind() == NodeKind.PREDICATE) {
-            if (!returnsBool || m.getParameterCount() != 1) {
+            if (!returnsBool) {
                 throw new IllegalStateException("gate '" + node.name() + "' handler '" + m.getName()
                         + "' must take the context and return boolean");
             }
-            Class<?> in = m.getParameterTypes()[0];
-            return ctx -> call(m, target, decode(ctx, in, target, decoders));
+            return ctx -> call(m, target, args.build(ctx, node, m, target, decoders));
         }
-        if (returnsBool || m.getParameterCount() != 1) {
+        if (returnsBool) {
             throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
                     + "' must take the context and return the next context (or void for an effect)");
         }
-        Class<?> in = m.getParameterTypes()[0];
         boolean effect = (ret == void.class || ret == Void.class);
         if (effect) {
-            return ctx -> { call(m, target, decode(ctx, in, target, decoders)); return null; };
+            return ctx -> { call(m, target, args.build(ctx, node, m, target, decoders)); return null; };
         }
         return ctx -> {
             // The return IS the next context: it is sent whole and REPLACES the previous value
             // server-side (no diff, no merge). A null return leaves the context untouched.
-            Object out = call(m, target, decode(ctx, in, target, decoders));
+            Object out = call(m, target, args.build(ctx, node, m, target, decoders));
             return out == null ? null : RecordMapper.toJson(out);
         };
+    }
+
+    /** A handler's parameter layout: the input's position and type, plus an optional @Context slot.
+     *  Either access style works — declare {@code @Context} to receive the frozen base as a
+     *  parameter, or call {@code Step.base()} inside the method; both read the same value. */
+    private record Args(int inputAt, Class<?> inputType, int contextAt, Class<?> contextType) {
+
+        Object[] build(Object ctx, Node node, Method m, Object target, Map<Class<?>, Method> decoders)
+                throws Exception {
+            Object[] out = new Object[contextAt < 0 ? 1 : 2];
+            out[inputAt] = decode(ctx, inputType, target, decoders);
+            if (contextAt >= 0) {
+                Map<String, Object> base;
+                try {
+                    base = Step.base();
+                } catch (IllegalStateException e) {
+                    throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
+                            + "' declares a @Context parameter, but this step has no base context — "
+                            + "@Context is only meaningful inside a forEach body (or a combine)", e);
+                }
+                out[contextAt] = decode(base, contextType, target, decoders);
+            }
+            return out;
+        }
+    }
+
+    /** Splits a handler's parameters into the single input + an optional @Context parameter. */
+    private static Args splitArgs(Node node, Method m) {
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        int inputAt = -1;
+        int contextAt = -1;
+        for (int i = 0; i < params.length; i++) {
+            if (params[i].isAnnotationPresent(Context.class)) {
+                if (contextAt >= 0) inputAt = -2;   // two @Context params: invalid
+                contextAt = i;
+            } else if (inputAt == -1) {
+                inputAt = i;
+            } else {
+                inputAt = -2;                        // two plain params: invalid
+            }
+        }
+        if (inputAt < 0 || params.length > 2) {
+            throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
+                    + "' must take the input (plus at most one @Context parameter for the frozen base)");
+        }
+        return new Args(inputAt, params[inputAt].getType(), contextAt,
+                contextAt < 0 ? null : params[contextAt].getType());
     }
 
     /**
@@ -304,6 +350,8 @@ public final class Worker implements AutoCloseable {
         java.lang.reflect.Parameter[] params = m.getParameters();
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
+            Map<String, Object> base = new LinkedHashMap<>(map);
+            arms.forEach(base::remove);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
                 java.lang.reflect.Parameter p = params[i];
@@ -311,15 +359,14 @@ public final class Worker implements AutoCloseable {
                 if (arm != null) {
                     args[i] = decode(map.get(arm.value()), p.getType(), target, decoders);
                 } else if (p.isAnnotationPresent(Context.class)) {
-                    Map<String, Object> base = new LinkedHashMap<>(map);
-                    arms.forEach(base::remove);
                     args[i] = decode(base, p.getType(), target, decoders);
                 } else {
                     throw new IllegalStateException("combine '" + node.name() + "' handler '" + m.getName()
                             + "' parameter " + i + " must be @Arm(\"branch\") or @Context");
                 }
             }
-            Object out = call(m, target, args);
+            // Both access styles work: the @Context parameter above, or Step.base() inside the method.
+            Object out = Step.withBase(base, () -> call(m, target, args));
             return out == null ? null : RecordMapper.toJson(out);
         };
     }
@@ -352,7 +399,10 @@ public final class Worker implements AutoCloseable {
                 throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
                         + m.getName() + "' needs a collection parameter (List/Set/Map) for the item results");
             }
-            Object out = call(m, target, args);
+            Map<String, Object> base = new LinkedHashMap<>(map);
+            base.remove(scratch);
+            // Both access styles work: a @Context parameter, or Step.base() inside the method.
+            Object out = Step.withBase(base, () -> call(m, target, args));
             return out == null ? null : RecordMapper.toJson(out);
         };
     }
@@ -521,7 +571,7 @@ public final class Worker implements AutoCloseable {
         Heartbeat lease = newHeartbeat(task.taskId(), task.leaseOwner());
         lease.start();
         Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId(),
-                task.baseContext(), task.itemIndex(), task.itemMapKey()));
+                task.baseContext(), task.baseContext() != null, task.itemIndex(), task.itemMapKey()));
         try {
             Object result = handler.invoke(task.context());
             lease.stop();   // the handler is done: no extension may race or trail the settle below
@@ -657,7 +707,7 @@ public final class Worker implements AutoCloseable {
 
         private Invocation invoke(ActivityHandler handler) {
             Step.begin(new Step.Info(attempt, node.name(), instanceId,
-                    baseContext, itemIndex, itemMapKey));
+                    baseContext, baseContext != null, itemIndex, itemMapKey));
             try {
                 return Invocation.ok(handler.invoke(ctx));
             } catch (PermanentActivityException e) {

@@ -20,11 +20,11 @@ import java.util.Map;
  */
 public final class Step {
 
-    /** Immutable snapshot of the running task's identity (plus forEach item scope, when present). */
+    /** Immutable snapshot of the running task's identity (plus base/item scope, when present). */
     public record Info(int attempt, String name, String instanceId,
-                       Object base, long itemIndex, String itemMapKey) {
+                       Object base, boolean itemScope, long itemIndex, String itemMapKey) {
         public Info(int attempt, String name, String instanceId) {
-            this(attempt, name, instanceId, null, 0, null);
+            this(attempt, name, instanceId, null, false, 0, null);
         }
     }
 
@@ -41,11 +41,23 @@ public final class Step {
     /** The workflow instance this task belongs to. */
     public static String instanceId() { return current().instanceId(); }
 
-    /** Inside a forEach item step: the frozen pre-forEach context, as a JSON map. Read-only —
-     *  an item can never write the base; only the combine's return reaches the shared context. */
+    /**
+     * The frozen base context, as a JSON map — available wherever a base exists, so handlers can
+     * take it ambiently instead of (or as well as) declaring a {@link Context @Context} parameter:
+     * <ul>
+     *   <li>inside a forEach item step — the pre-forEach context;</li>
+     *   <li>inside a fork combine — the pre-fork context (staged arm results excluded);</li>
+     *   <li>inside a forEach combine — the pre-forEach context (the collected results excluded).</li>
+     * </ul>
+     * Read-only by contract: writing it changes nothing; only a handler's return reaches the engine.
+     */
     public static Map<String, Object> base() {
-        Object b = requireItemScope().base();
-        return Json.asObject(b);
+        Info info = current();
+        if (info.base() == null) {
+            throw new IllegalStateException("Step.base() is only available inside a forEach item step "
+                    + "or a fork/forEach combine (elsewhere the context IS the handler's parameter)");
+        }
+        return Json.asObject(info.base());
     }
 
     /** {@link #base()} decoded into {@code type} (a record or map-compatible class). */
@@ -61,11 +73,23 @@ public final class Step {
 
     private static Info requireItemScope() {
         Info info = current();
-        if (info.base() == null) {
-            throw new IllegalStateException("Step.base()/itemIndex()/itemMapKey() are only available "
-                    + "inside a forEach item step (elsewhere the context IS the handler's parameter)");
+        if (!info.itemScope()) {
+            throw new IllegalStateException("Step.itemIndex()/itemMapKey() are only available inside "
+                    + "a forEach item step");
         }
         return info;
+    }
+
+    /** Runs {@code body} with the base swapped in (a combine wrapper exposing its computed base). */
+    static Object withBase(Object base, java.util.concurrent.Callable<Object> body) throws Exception {
+        Info prev = CURRENT.get();
+        CURRENT.set(new Info(prev.attempt(), prev.name(), prev.instanceId(), base, false,
+                prev.itemIndex(), prev.itemMapKey()));
+        try {
+            return body.call();
+        } finally {
+            CURRENT.set(prev);
+        }
     }
 
     /** The full snapshot, if a caller wants more than one field. */

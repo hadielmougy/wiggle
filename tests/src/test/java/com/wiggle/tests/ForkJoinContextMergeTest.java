@@ -56,10 +56,10 @@ class ForkJoinContextMergeTest {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "tracking", "DHL"); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("payment") Map<String, Object> payment,
+        /** Ambient style: the pre-fork base from Step.base() instead of a @Context parameter. */
+        public Map<String, Object> merge(@Arm("payment") Map<String, Object> payment,
                                          @Arm("shipping") Map<String, Object> shipping) {
-            Map<String, Object> out = new LinkedHashMap<>(base);
+            Map<String, Object> out = new LinkedHashMap<>(com.wiggle.client.worker.Step.base());
             if (payment != null) out.putAll(payment);
             if (shipping != null) out.putAll(shipping);
             return out;
