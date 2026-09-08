@@ -218,8 +218,10 @@ class DynamicConstructsTest {
 
     @Handlers("dyn-fan-map")
     static final class MapFanH {
-        public String tag(Long value) {                            // a scalar item, typed directly
-            return Step.itemMapKey() + ":" + value;                // the source key rides on Step
+        /** Two-param style: the frozen base as a @Context parameter instead of Step.base(). */
+        public String tag(@Context Map<String, Object> base, Long value) {
+            boolean sawBase = base.containsKey("prices");          // the full pre-forEach context
+            return Step.itemMapKey() + ":" + value + (sawBase ? "" : ":no-base");
         }
         public Map<String, Object> collect(@Context Map<String, Object> base,
                                            Map<String, String> results) {
@@ -244,8 +246,9 @@ class DynamicConstructsTest {
     @Handlers("dyn-fan-set")
     static final class SetFanH {
         public String norm(String item) { return item.toUpperCase(); }   // scalar in, scalar out
-        public Map<String, Object> collect(@Context Map<String, Object> base, Set<String> results) {
-            return put(base, "distinct", (long) results.size());
+        /** Ambient style: no @Context parameter — the base comes from Step.base() instead. */
+        public Map<String, Object> collect(Set<String> results) {
+            return put(Step.base(), "distinct", (long) results.size());
         }
     }
 
