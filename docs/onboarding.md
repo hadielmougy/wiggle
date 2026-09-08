@@ -3,9 +3,10 @@
 Everything a new contributor or operator needs: what Wiggle is, how to get it running, how to
 author workflows, and **every configuration option** in one place.
 
-- New to the code? Read **§1–§4**.
-- Writing a workflow? **§5**.
-- Deploying / tuning? **§6 (the full config reference)** and **§7**.
+- New to the code? Read **[§1](#1-what-wiggle-is)–[§4](#4-running-it)**.
+- Writing a workflow? **[§5](#5-authoring-workflows)**.
+- Deploying / tuning? **[§6 (the full config reference)](#6-configuration-reference)** and
+  **[§7](#7-operations)**.
 
 ---
 
@@ -43,7 +44,7 @@ Prerequisites:
 - **JDK 21+** (the Gradle toolchain pins language level 21).
 - The **Gradle wrapper** is committed (`./gradlew`); no local Gradle needed. If it's ever missing,
   regenerate once with `gradle wrapper --gradle-version 8.10`.
-- **Docker** only for the Postgres cluster demos (§4.3); nothing else needs it.
+- **Docker** only for the Postgres cluster demos ([§4.3](#43-a-cluster-on-postgres)); nothing else needs it.
 
 Dev loop:
 
@@ -55,7 +56,7 @@ Dev loop:
 ```
 
 Branch off `main`, keep changes focused, and run `./gradlew check` before pushing. Schema changes
-go through the migration runner (§7.4), never by editing an already-released migration.
+go through the migration runner ([§7.4](#74-schema-migrations)), never by editing an already-released migration.
 
 ---
 
@@ -78,7 +79,7 @@ go through the migration runner (§7.4), never by editing an already-released mi
 
 Published under group `io.github.hadielmougy`, version **2.1.8** (the runnable `dist` module is not
 published). The server core is database-agnostic; it builds its store from an injected
-`StorageFactory` and the backend is selected from the URL scheme (§7.2).
+`StorageFactory` and the backend is selected from the URL scheme ([§7.2](#72-storage-backends)).
 
 ---
 
@@ -114,7 +115,7 @@ scripts/kind-down.sh                   # tear down
 ### 4.4 As a container (Docker)
 
 The `Dockerfile` builds a standalone server image (dashboard + **every** storage backend bundled,
-picked from the URL scheme); it reads the same env vars as the JAR (§6). TLS is set the same way —
+picked from the URL scheme); it reads the same env vars as the JAR ([§6](#6-configuration-reference)). TLS is set the same way —
 `WIGGLE_TLS_KEYSTORE` + a mounted keystore.
 
 ```bash
@@ -154,7 +155,7 @@ The image is the control plane + dashboard only; run **workers** as separate pro
 | `:example:run` | `Demo` (embedded end-to-end) |
 | `:example:runWorker` | `WorkerMain` |
 | `:example:submitOrders -Pcount=N` | `SubmitOrders` |
-| `:example:bench` | `Benchmark` (throughput micro-benchmark, §6.6) |
+| `:example:bench` | `Benchmark` (throughput micro-benchmark, [§7.6](#76-benchmarking)) |
 | `:tests:run` | `Scenarios` (framework-free conformance) |
 
 ---
@@ -221,7 +222,7 @@ Every operation is topology only — it names a node; the matching `@Handlers` m
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
 | `subWorkflow(name, workflow)` | run another workflow as a child; result merges back, failure propagates |
 | `step(name, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
-| `execution(mode)` | set the execution mode (§6.4) |
+| `execution(mode)` | set the execution mode ([§6.4](#64-execution-modes)) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
 | `build()` | produce the `Blueprint` |
 
@@ -270,8 +271,8 @@ falling back to a default (`ServerConfig.fromEnvironment()`). So `-Dwiggle.port=
 `WIGGLE_PORT=9090` are equivalent. For the application distribution, pass JVM flags via the
 `WIGGLE_OPTS` (or `JAVA_OPTS`) environment variable that `bin/wiggle` honours.
 
-The **worker** is configured programmatically via `WorkerOptions` (§6.5); the `WIGGLE_*` worker
-variables in §6.7 are conventions of the *example* `WorkerMain`, not the client library.
+The **worker** is configured programmatically via `WorkerOptions` ([§6.5](#65-worker--workeroptions-programmatic)); the `WIGGLE_*` worker
+variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of the *example* `WorkerMain`, not the client library.
 
 ### 6.2 Server — core & storage
 
@@ -295,7 +296,7 @@ variables in §6.7 are conventions of the *example* `WorkerMain`, not the client
 | `WIGGLE_MISSED_HEARTBEATS` | `wiggle.heartbeat.missedBeforeDead` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `wiggle.retention.millis` | `86400000` | how long finished instances are kept before purge |
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
-| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog (§7.5) |
+| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog ([§7.5](#75-queue-lag-monitoring)) |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN once the backlog isn't draining within this budget |
 
 ### 6.4 Execution modes
@@ -476,7 +477,7 @@ for rolling deploys. Tables: `wf_definition`, `wf_graph_node`, `wf_graph_edge`, 
 
 The leader watches whether the dispatchable backlog is draining fast enough (backlog vs
 cluster-wide completion rate) and logs a `WARNING` when it isn't — a sign of too few workers, a
-stuck worker pool, or a slow step. Tune with the two `WIGGLE_QUEUE_LAG_*` knobs (§6.3).
+stuck worker pool, or a slow step. Tune with the two `WIGGLE_QUEUE_LAG_*` knobs ([§6.3](#63-server--engine-cluster--housekeeping)).
 
 ### 7.6 Benchmarking
 
