@@ -20,11 +20,12 @@ its handlers, runs one instance of each, and prints the resulting context.
 > (case/style-insensitive, so `isLarge` serves `is-large`). Each method's signature defines its step:
 > a `Map<String, Object>` in and out is a task, a `boolean` return is a gate, `void` is an effect.
 >
-> **A task returns the whole document, not just what it changed.** The engine shallow-diffs a
-> method's return value against the context it was given and merges only the keys that changed — so a
+> **A task's return REPLACES the context.** What a method returns is the complete next document —
+> keys it omits are gone (never left as JSON nulls), and nothing is merged with the old value — so a
 > handler must return the **full** context (see `with(...)` in the cookbook source), not just the
-> fields it touched. Returning a bare `Map.of("k", v)` tells the engine every other key was
-> deliberately cleared, and they come back as `null`.
+> fields it touched. Returning a bare `Map.of("k", v)` deliberately clears every other key.
+> (Exception: a `forEach` body handler's parameter and return are the ITEM's value, not the shared
+> context — see example 3.)
 
 ---
 

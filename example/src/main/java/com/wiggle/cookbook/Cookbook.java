@@ -17,12 +17,11 @@ import java.util.Map;
  * {@code docs/dsl-cookbook.md}, which explains what each one demonstrates and why. Run them
  * all with {@code ./gradlew :example:runCookbook} ({@link CookbookDemo}).
  *
- * <p>Every blueprint uses {@link Workflow#define}. A step's {@code fn} must return the
- * <b>whole</b> context, not just the fields it touched -- {@link #with} builds that full copy.
- * The engine then shallow-diffs the returned document against the one it was given and merges
- * only the keys that actually changed, so parallel branches that touch different fields merge
- * cleanly; returning a partial map (e.g. bare {@code Map.of("k", v)}) would tell the engine
- * every *other* key was deliberately cleared.
+ * <p>Every blueprint uses {@link Workflow#define}. A step's return REPLACES the context: it must
+ * be the <b>whole</b> next document, not just the fields it touched -- {@link #with} builds that
+ * full copy, and a partial map (e.g. bare {@code Map.of("k", v)}) deliberately clears every other
+ * key. Nothing merges implicitly anywhere: fork branches rejoin at an explicit combine handler,
+ * and a forEach body works on the ITEM's value (the base rides on {@code Step.base()}).
  */
 public final class Cookbook {
 
