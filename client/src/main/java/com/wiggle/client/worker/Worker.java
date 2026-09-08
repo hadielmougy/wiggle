@@ -520,7 +520,8 @@ public final class Worker implements AutoCloseable {
         }
         Heartbeat lease = newHeartbeat(task.taskId(), task.leaseOwner());
         lease.start();
-        Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId()));
+        Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId(),
+                task.baseContext(), task.itemIndex(), task.itemMapKey()));
         try {
             Object result = handler.invoke(task.context());
             lease.stop();   // the handler is done: no extension may race or trail the settle below
@@ -571,6 +572,10 @@ public final class Worker implements AutoCloseable {
         private final String leaseOwner;
         private final String instanceId;
         private final int maxBatch;
+        /** forEach item scope, frozen for the whole local chain (null outside an item body). */
+        private final Object baseContext;
+        private final long itemIndex;
+        private final String itemMapKey;
         private final List<WiggleClient.StepReport> buffer = new ArrayList<>();
         /** The token the server currently has leased to us; read by the heartbeat thread. */
         private volatile String serverTaskId;
@@ -586,6 +591,9 @@ public final class Worker implements AutoCloseable {
             this.serverTaskId = task.taskId();
             this.node = def.node(task.nodeId());
             this.ctx = task.context();
+            this.baseContext = task.baseContext();
+            this.itemIndex = task.itemIndex();
+            this.itemMapKey = task.itemMapKey();
             this.attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
         }
 
@@ -648,7 +656,8 @@ public final class Worker implements AutoCloseable {
         }
 
         private Invocation invoke(ActivityHandler handler) {
-            Step.begin(new Step.Info(attempt, node.name(), instanceId));
+            Step.begin(new Step.Info(attempt, node.name(), instanceId,
+                    baseContext, itemIndex, itemMapKey));
             try {
                 return Invocation.ok(handler.invoke(ctx));
             } catch (PermanentActivityException e) {

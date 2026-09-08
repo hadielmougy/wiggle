@@ -215,7 +215,7 @@ Every operation is topology only — it names a node; the matching `@Handlers` m
 | `gate(name)` | continue only while the guard handler returns true; false ends the instance as `gated:<name>` |
 | `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
 | `fork(branches…).combine(name)` | run branches in parallel on isolated context copies, then rejoin at the mandatory `combine` |
-| `forEach(name, itemsKey, itemKey, body).combine(name)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`; the **mandatory** combine receives the pre-forEach context plus every item's final context as a `List`/`Set` (list input) or `Map` (map input) and returns the complete post-join context |
+| `forEach(itemsKey, body).combine(name)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is at `Step.base()`, the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`. The **mandatory** combine receives `@Context` plus the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `forEach(name, itemsKey, body)` names the node explicitly |
 | `doWhile(name, body)` | run `body`, then repeat while the guard handler named `name` holds (at least once) |
 | `sleep(name, duration)` | server-side timer; holds no worker |
 | `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |

@@ -115,9 +115,9 @@ Runtime fan-out over a list, with one step in the branch pinned to a different w
 
 ```java
 Workflow.define("cb-foreach-queues").defaultQueue("cpu")
-    .forEach("charge-items", "items", "item", b -> b
-        // items run ISOLATED -- plain keys are fine; the mandatory combine collects
-        // each item's final context and assembles the summary explicitly.
+    .forEach("charge-items", "items", b -> b
+        // the element IS each item's context (Step.base()/Step.itemIndex() for the rest);
+        // the mandatory combine receives the collected final values.
         .step("price")
         .step("render-thumbnail", "gpu"))   // the queue arg pins just this step
     .step("summarise")
@@ -314,7 +314,7 @@ Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMo
                     .effect("notice")))
             .combine("large-merge")),
         Case.otherwise("standard", b -> b
-            .forEach("pack-items", "items", "item", body -> body
+            .forEach("pack-items", "items", body -> body
                 .step("pack-item"))))
     .awaitSignal("dock-clear", Duration.ofMillis(150),
         esc -> esc.effect("auto-clear"))

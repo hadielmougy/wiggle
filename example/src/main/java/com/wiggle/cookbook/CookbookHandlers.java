@@ -65,15 +65,15 @@ public final class CookbookHandlers {
         }
     }
 
-    /** 3. cb-foreach-queues. Items are isolated, so handlers write plain keys — no namespacing;
-     *  the combine receives every item's final context and assembles the summary explicitly. */
+    /** 3. cb-foreach-queues. The element IS each item's context: handlers take the item value
+     *  directly (its position via Step.itemIndex()), and the combine receives the final values. */
     @Handlers("cb-foreach-queues")
     public static final class ForeachQueues {
         public Map<String, Object> price(Map<String, Object> item) {
             return with(item, "priced", true);
         }
         public Map<String, Object> renderThumbnail(Map<String, Object> item) {
-            return with(item, "thumbnail", "thumb-" + item.get("itemIndex"));
+            return with(item, "thumbnail", "thumb-" + com.wiggle.client.worker.Step.itemIndex());
         }
         public Map<String, Object> collectItems(@Context Map<String, Object> base,
                                                 List<Map<String, Object>> items) {

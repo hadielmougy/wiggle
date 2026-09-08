@@ -245,39 +245,39 @@ public final class WorkflowBuilder {
     }
 
     /**
-     * Shorthand for {@link #forEach(String, String, String, UnaryOperator)} that exposes each
-     * element under the same key as the collection -- the element at {@code itemsKey} and its
-     * position at {@code itemsKey + "Index"}. Use the four-argument form when the body needs a
-     * distinct element key (e.g. nested {@code forEach}es that would otherwise shadow each other).
+     * Shorthand for {@link #forEach(String, String, UnaryOperator)} whose node name defaults to
+     * {@code itemsKey}. Use the named form when the same collection key is fanned over twice in one
+     * workflow (node names must be unique), or for a nicer label in the console diagram.
      */
-    public ForEachStage forEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
-        return forEach(name, itemsKey, itemsKey, body);
+    public ForEachStage forEach(String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+        return forEach(itemsKey, itemsKey, body);
     }
 
     /**
      * Runtime fan-out, {@code fork}'s dynamic twin: when the instance reaches this node, the engine
      * reads the collection stored in the context under {@code itemsKey} -- a list <em>or</em> a map
-     * -- and spawns one parallel branch per element, each running {@code body} on its own
-     * <em>isolated copy</em> of the context with the element injected under {@code itemKey} (its
-     * position under {@code itemKey + "Index"}, and, for a map, its key under
-     * {@code itemKey + "Key"}). Item writes never touch the shared context. The returned
+     * -- and spawns one parallel branch per element. <b>The element IS the item's context</b>: each
+     * body step receives the item's current value as its parameter (any JSON value, scalars
+     * included) and its return replaces that value. The frozen pre-forEach context is available
+     * inside the body via {@link com.wiggle.client.worker.Step#base() Step.base()} (read-only), and
+     * the element's position / source map key via {@code Step.itemIndex()} / {@code
+     * Step.itemMapKey()} -- nothing is ever injected under user keys. The returned
      * {@link ForEachStage} requires a {@link ForEachStage#combine combine}: the engine collects each
-     * item's final context -- a list ordered by index for a list input, a map keyed like the input
-     * for a map input -- and hands the collection to the combine handler together with the pre-fork
+     * item's final value -- a list ordered by index for a list input, a map keyed like the input for
+     * a map input -- and hands the collection to the combine handler together with the pre-forEach
      * context. An empty collection skips the body and the combine entirely.
      */
-    public ForEachStage forEach(String name, String itemsKey, String itemKey, UnaryOperator<WorkflowBuilder> body) {
+    public ForEachStage forEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
         java.util.Objects.requireNonNull(itemsKey, "itemsKey");
-        java.util.Objects.requireNonNull(itemKey, "itemKey");
         forkPending = true;   // cleared only when the returned ForEachStage's combine() runs
-        return new ForEachStage(this, name, itemsKey, itemKey, body);
+        return new ForEachStage(this, name, itemsKey, body);
     }
 
     /** Builds the forEach with its mandatory combine node. See {@link ForEachStage}. */
-    void buildForEachCombine(String name, String itemsKey, String itemKey,
+    void buildForEachCombine(String name, String itemsKey,
                              UnaryOperator<WorkflowBuilder> body, String combineName) {
         forkPending = false;
-        String forkId = pipeline.addDynFork(name, itemsKey, itemKey);
+        String forkId = pipeline.addDynFork(name, itemsKey, itemsKey);
         attach(forkId);
         String joinId = pipeline.addJoin(0);   // 0 = dynamic width, carried in the join group
         String templateStart = buildBranch(Branch.of(name, body), joinId);

@@ -317,8 +317,18 @@ public final class WorkflowEngine {
         if (inst == null || inst.status != InstanceStatus.RUNNING) return Optional.empty();
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
+        Object base = null;
+        long itemIndex = 0;
+        String itemMapKey = null;
+        if (isItemToken(t)) {
+            Map<String, Object> payload = Json.parseObject(t.payloadJson);
+            base = itemBaseContext(inst, t);
+            itemIndex = ((Number) payload.get(ARM_IDX)).longValue();
+            itemMapKey = payload.get(ITEM_MAP_KEY) == null ? null : String.valueOf(payload.get(ITEM_MAP_KEY));
+        }
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t), mode));
+                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t),
+                base, itemIndex, itemMapKey, mode));
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -815,8 +825,18 @@ public final class WorkflowEngine {
     }
 
     /** Internal bookkeeping on a forEach item token: the map key its element came from (map input
-     *  only). Stripped before dispatch and from the item's collected view, like {@link #ARM_IDX}. */
+     *  only). Never reaches user context, like {@link #ARM_IDX}. */
     private static final String ITEM_MAP_KEY = "__itemMapKey__";
+
+    /** A forEach item token's working value: the element itself (any JSON value, scalars included).
+     *  The item's branch context IS this value — item steps receive it as their context, their
+     *  return replaces it, and the join collects the final values for the combine. */
+    private static final String ITEM_VALUE = "__item__";
+
+    /** True when {@code t} is a forEach item token (its payload carries the item value slot). */
+    private static boolean isItemToken(Token t) {
+        return t.payloadJson != null && Json.parseObject(t.payloadJson).containsKey(ITEM_VALUE);
+    }
 
     /** A fork combine's itemsKey is a JSON ARRAY of arm names; a forEach combine's is a JSON STRING
      *  naming the scratch key its collected results are staged under. */
@@ -861,8 +881,16 @@ public final class WorkflowEngine {
     private static void applyStepResult(Instance inst, Token t, Node node, Object result) {
         if (isCombineNode(node)) { replaceCombineResult(inst, t, node, result); return; }
         if (result == null) return;
-        if (inScopedBranch(t)) t.payloadJson = overlayReplace(t.payloadJson, result);
-        else inst.contextJson = Json.write(dropNulls(result));
+        if (isItemToken(t)) {
+            // A forEach item step: the return replaces the ITEM's working value (base untouched).
+            Map<String, Object> payload = Json.parseObject(t.payloadJson);
+            payload.put(ITEM_VALUE, dropNulls(result));
+            t.payloadJson = Json.write(payload);
+        } else if (inScopedBranch(t)) {
+            t.payloadJson = overlayReplace(t.payloadJson, result);
+        } else {
+            inst.contextJson = Json.write(dropNulls(result));
+        }
     }
 
     /** A top-level null value means "this key is absent" — never persist literal JSON nulls. */
@@ -1152,18 +1180,15 @@ public final class WorkflowEngine {
         return Json.write(payload);
     }
 
-    /** The child's payload: the fork token's own payload (nesting) plus its item, index, and (for a
-     *  map input) source key — arm-tagged so the item runs ISOLATED, exactly like a fork branch. */
+    /** The child's payload: the fork token's own payload (nesting) plus the element as the item's
+     *  working value — arm-tagged so the item runs ISOLATED. Nothing is injected under user keys;
+     *  the element IS the item's context, and the base travels on the activation instead. */
     private static String itemPayload(Token forkToken, Node node, Object item, int index, String mapKey) {
         Map<String, Object> payload = forkToken.payloadJson == null
                 ? new LinkedHashMap<>() : Json.parseObject(forkToken.payloadJson);
         payload.put(ARM_IDX, (long) index);
-        payload.put(node.itemKey(), item);
-        payload.put(node.itemKey() + "Index", (long) index);
-        if (mapKey != null) {
-            payload.put(node.itemKey() + "Key", mapKey);
-            payload.put(ITEM_MAP_KEY, mapKey);
-        }
+        payload.put(ITEM_VALUE, item);
+        if (mapKey != null) payload.put(ITEM_MAP_KEY, mapKey);
         return Json.write(payload);
     }
 
@@ -1238,37 +1263,52 @@ public final class WorkflowEngine {
             }
             return Json.write(staged);
         }
-        // forEach: order item views by their arm index; key by the source map key when present.
+        // forEach: collect each item's FINAL VALUE, ordered by arm index; key by the source map
+        // key when the input was a map. The values are exactly what each item's last step returned.
         java.util.TreeMap<Long, Map<String, Object>> ordered = new java.util.TreeMap<>();
         boolean mapInput = false;
         for (Token bt : atBarrier) {
-            Map<String, Object> view = bt.payloadJson == null
+            Map<String, Object> payload = bt.payloadJson == null
                     ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
-            Object idx = view.remove(ARM_IDX);
+            Object idx = payload.get(ARM_IDX);
             if (idx == null) continue;
-            mapInput |= view.containsKey(ITEM_MAP_KEY);
-            ordered.put(((Number) idx).longValue(), view);
+            mapInput |= payload.containsKey(ITEM_MAP_KEY);
+            ordered.put(((Number) idx).longValue(), payload);
         }
         if (mapInput) {
             Map<String, Object> byKey = new LinkedHashMap<>();
-            for (Map<String, Object> view : ordered.values()) {
-                Object key = view.remove(ITEM_MAP_KEY);
-                byKey.put(String.valueOf(key), view);
+            for (Map<String, Object> payload : ordered.values()) {
+                byKey.put(String.valueOf(payload.get(ITEM_MAP_KEY)), payload.get(ITEM_VALUE));
             }
             staged.put(scratch, byKey);
         } else {
-            staged.put(scratch, new ArrayList<>(ordered.values()));
+            List<Object> values = new ArrayList<>(ordered.size());
+            for (Map<String, Object> payload : ordered.values()) values.add(payload.get(ITEM_VALUE));
+            staged.put(scratch, values);
         }
         return Json.write(staged);
     }
 
-    /** The context a worker sees: the shared instance context with the token's payload overlaid
-     *  (minus the internal arm tag, which is engine bookkeeping, not user context). */
+    /** The context a worker sees. For a forEach item token it is the ITEM's working value itself;
+     *  otherwise the shared instance context with the token's payload overlaid (minus the internal
+     *  bookkeeping keys). */
     private static Object dispatchContext(Instance inst, Token t) {
         if (t.payloadJson == null) return Json.parse(inst.contextJson);
+        Map<String, Object> overlay = Json.parseObject(t.payloadJson);
+        if (overlay.containsKey(ITEM_VALUE)) return overlay.get(ITEM_VALUE);
+        Map<String, Object> ctx = Json.parseObject(inst.contextJson);
+        overlay.remove(ARM_IDX);
+        ctx.putAll(overlay);
+        return ctx;
+    }
+
+    /** The frozen pre-forEach context an item step sees via {@code Step.base()}: the shared context
+     *  plus any enclosing fork-branch overlay the forEach was spawned inside (minus bookkeeping). */
+    private static Object itemBaseContext(Instance inst, Token t) {
         Map<String, Object> ctx = Json.parseObject(inst.contextJson);
         Map<String, Object> overlay = Json.parseObject(t.payloadJson);
         overlay.remove(ARM_IDX);
+        overlay.remove(ITEM_VALUE);
         overlay.remove(ITEM_MAP_KEY);
         ctx.putAll(overlay);
         return ctx;

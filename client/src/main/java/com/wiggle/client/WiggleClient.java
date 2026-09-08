@@ -310,6 +310,9 @@ public final class WiggleClient implements AutoCloseable {
                 t.getNodeId(), t.getStepName().isEmpty() ? null : t.getStepName(), t.getActivity(),
                 NodeKind.valueOf(t.getKind()), t.getAttempt(), t.getLeaseExpiresAt(), t.getLeaseOwner(),
                 t.hasContext() ? ProtoJson.fromValue(t.getContext()) : null,
+                t.hasBaseContext() ? ProtoJson.fromValue(t.getBaseContext()) : null,
+                t.getItemIndex(),
+                t.getItemMapKey().isEmpty() ? null : t.getItemMapKey(),
                 t.getExecutionMode().isEmpty()
                         ? com.wiggle.core.ExecutionMode.SERVER
                         : com.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()));

@@ -80,13 +80,14 @@ public final class Cookbook {
     }
 
     // ---------------------------------------------------------------------------------------
-    // 3. forEach + per-step queue -- dynamic fan-out with mixed worker pools. Items run isolated
-    //    (no namespacing needed); the mandatory combine collects each item's final context.
+    // 3. forEach + per-step queue -- dynamic fan-out with mixed worker pools. The element IS each
+    //    item's context (handlers take it directly; the base rides on Step.base()); the mandatory
+    //    combine receives the collected final values.
     // ---------------------------------------------------------------------------------------
     public static Blueprint forEachAcrossQueues() {
         return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
 
-                .forEach("charge-items", "items", "item", b -> b
+                .forEach("charge-items", "items", b -> b
                         .step("price")
                         // Only this step moves to the "gpu" queue; the workflow default stays "cpu".
                         .step("render-thumbnail", "gpu"))
@@ -191,7 +192,7 @@ public final class Cookbook {
                                                 .effect("notice"))).combine("large-merge")),
 
                         Case.otherwise("standard", b -> b
-                                .forEach("pack-items", "items", "item", body -> body
+                                .forEach("pack-items", "items", body -> body
                                         .step("pack-item"))
                                 .combine("collect-packed")))
 

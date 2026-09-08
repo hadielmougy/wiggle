@@ -3,10 +3,16 @@ package com.wiggle.core;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** A unit of work leased by a worker from the server. */
+/**
+ * A unit of work leased by a worker from the server. For a forEach item step, {@code context} is the
+ * ITEM's current value (any JSON value) and {@code baseContext} carries the frozen pre-forEach
+ * context (read-only for items; null for every other step). {@code itemIndex}/{@code itemMapKey}
+ * locate the element in its input collection.
+ */
 public record TaskActivation(String taskId, String instanceId, String workflow, int version,
                              String nodeId, String stepName, String activity, NodeKind kind,
                              int attempt, long leaseExpiresAt, String leaseOwner, Object context,
+                             Object baseContext, long itemIndex, String itemMapKey,
                              ExecutionMode executionMode) {
 
     public TaskActivation {
@@ -27,6 +33,11 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
         m.put("leaseExpiresAt", leaseExpiresAt);
         m.put("leaseOwner", leaseOwner);
         m.put("context", context);
+        if (baseContext != null) {
+            m.put("baseContext", baseContext);
+            m.put("itemIndex", itemIndex);
+            if (itemMapKey != null) m.put("itemMapKey", itemMapKey);
+        }
         m.put("executionMode", executionMode.name());
         return m;
     }
@@ -39,6 +50,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                 Json.reqStr(m, "activity"), NodeKind.valueOf(Json.reqStr(m, "kind")),
                 (int) Json.num(m, "attempt", 0), Json.num(m, "leaseExpiresAt", 0),
                 Json.str(m, "leaseOwner", null), m.get("context"),
+                m.get("baseContext"), Json.num(m, "itemIndex", 0), Json.str(m, "itemMapKey", null),
                 ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.SERVER.name())));
     }
 }
