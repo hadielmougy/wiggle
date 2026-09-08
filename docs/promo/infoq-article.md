@@ -1,6 +1,6 @@
 # Durable Workflows Without Replay: Treating the Workflow as Data, Not Code
 
-*The design of [Wiggle](https://github.com/hadielmougy/wiggle), an open-source workflow engine with cell-based sharding.*
+*The design of [Wiggle](https://wiggle.sh), an open-source workflow engine with cell-based sharding.*
 
 ## Key Takeaways
 
@@ -231,7 +231,8 @@ point at, name, and test.
 
 ---
 
-*Wiggle is Apache-2.0 licensed. The engine, the cell coordinator, the benchmark tooling, and
+*Wiggle is Apache-2.0 licensed. Docs, patterns, and benchmarks are at
+[wiggle.sh](https://wiggle.sh); the engine, the cell coordinator, the benchmark tooling, and
 idiomatic Go and Python clients are at
 [github.com/hadielmougy/wiggle](https://github.com/hadielmougy/wiggle). Contributions are
 welcome — the honest to-do list is in the README.*
