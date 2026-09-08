@@ -45,10 +45,16 @@ class RatisCoordinatorStoreTest {
 
     /** Boot a single-member Ratis coordinator store rooted at {@code dir} on an ephemeral port. */
     private static CoordinatorStore bootStore(Path dir) throws IOException {
-        int port;
-        try (ServerSocket s = new ServerSocket(0)) { port = s.getLocalPort(); }
-        String uri = "ratis://" + dir + "?peers=n0@127.0.0.1:" + port;
-        return new RatisCoordinatorStoreProvider(uri).coordinatorStore();
+        return new RatisCoordinatorStoreProvider(uri(dir, freePort())).coordinatorStore();
+    }
+
+    private static String uri(Path dir, int port) {
+        // snapshotEvery=8 so the auto-snapshot (flush + advance) path runs inside these tests too
+        return "ratis://" + dir + "?peers=n0@127.0.0.1:" + port + "&snapshotEvery=8";
+    }
+
+    private static int freePort() throws IOException {
+        try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
     }
 
     @Test @DisplayName("embedded Ratis store honours the CoordinatorStore contract")
@@ -173,6 +179,36 @@ class RatisCoordinatorStoreTest {
             assertEquals(0, er.ring().get(0).shard());
             assertEquals("cellB", er.ring().get(1).cellId());
             assertEquals(1, er.ring().get(1).shard());
+        }
+    }
+
+    @Test @DisplayName("a durable restart resumes from the persisted applied position with state intact")
+    @Timeout(120)
+    void durableRestart(@TempDir Path dir) throws Exception {
+        int port = freePort();
+        Map<Long, EpochRing> e0 = Map.of(0L, ring("cell-3", EpochStatus.OPEN));
+        Map<Long, EpochRing> e1 = Map.of(0L, ring("cell-3", EpochStatus.DRAINING), 1L, ring("cell-5", EpochStatus.OPEN));
+
+        // first life: a policy, a CAS bump, and enough roster writes to cross the snapshot cadence
+        try (CoordinatorStore store = new RatisCoordinatorStoreProvider(uri(dir, port)).coordinatorStore()) {
+            assertEquals(1, store.casPolicy("acme", 0, policy("acme", 0, e0)));
+            for (int i = 0; i < 24; i++) {
+                store.upsertNode(new CoordNode("n" + i, "acme", "cell", "grpc://h:" + i, "eu", "v", "fp", 1, 1_000 + i));
+            }
+            assertEquals(2, store.casPolicy("acme", 1, policy("acme", 1, e1)));
+            assertTrue(store.acquireLeadership("A", 1_000, 10_000));
+        }
+
+        // second life, same dir + port: the state machine must resume from RocksDB (its persisted
+        // applied position IS the snapshot info) — not from an empty state, not by double-applying.
+        try (CoordinatorStore store = new RatisCoordinatorStoreProvider(uri(dir, port)).coordinatorStore()) {
+            assertEquals(24, store.nodes("acme").size(), "the roster survived the restart");
+            CoordPolicy got = store.getPolicy("acme").orElseThrow();
+            assertEquals(2, got.revision(), "the CAS revision survived exactly (no lost or double apply)");
+            assertEquals(1, got.currentEpoch());
+            assertEquals(-1, store.casPolicy("acme", 1, policy("acme", 1, e1)), "a stale CAS still loses");
+            assertEquals(3, store.casPolicy("acme", 2, policy("acme", 1, e1)), "CAS continues from the restored revision");
+            assertFalse(store.acquireLeadership("B", 2_000, 10_000), "A's durable lease still fences B");
         }
     }
 

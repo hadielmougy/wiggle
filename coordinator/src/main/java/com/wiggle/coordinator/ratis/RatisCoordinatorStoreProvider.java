@@ -37,6 +37,8 @@ import java.util.UUID;
  *       {@code 127.0.0.1:10000}.</li>
  *   <li>{@code id} — which peer <em>this</em> process is; defaults to the first peer (correct for the
  *       single-member case, required to be set explicitly on each node of a real multi-node group).</li>
+ *   <li>{@code snapshotEvery} — take a state-machine snapshot (a RocksDB flush) after this many applied
+ *       entries so the Raft log stays bounded; default {@value #DEFAULT_SNAPSHOT_EVERY}.</li>
  * </ul>
  * Example (dev): {@code ratis:///var/lib/wiggle/coord}. Example (3-node):
  * {@code ratis:///var/lib/wiggle/coord?peers=n0@10.0.0.1:10000,n1@10.0.0.2:10000,n2@10.0.0.3:10000&id=n0}
@@ -48,6 +50,9 @@ public final class RatisCoordinatorStoreProvider implements CoordinatorStoreProv
             RaftGroupId.valueOf(UUID.fromString("d5b6f0a2-0000-4000-8000-c0ffeec0ffee"));
 
     private static final String DEFAULT_PEER_ADDRESS = "127.0.0.1:10000";
+
+    /** Snapshots are just a RocksDB flush, so a modest cadence keeps the Raft log small at ~no cost. */
+    private static final long DEFAULT_SNAPSHOT_EVERY = 4096;
 
     private final RaftServer server;   // this node's group member (null if this process is only a client)
     private final RaftClient client;
@@ -65,6 +70,14 @@ public final class RatisCoordinatorStoreProvider implements CoordinatorStoreProv
             RaftProperties props = new RaftProperties();
             org.apache.ratis.RaftConfigKeys.Rpc.setType(props, SupportedRpcType.GRPC);
             RaftServerConfigKeys.setStorageDir(props, List.of(new File(dataDir, "raft")));
+            // Read-index reads: without this, Ratis's default read option serves queries straight off a
+            // node that merely believes it is leader — the linearizability the store promises needs it.
+            RaftServerConfigKeys.Read.setOption(props, RaftServerConfigKeys.Read.Option.LINEARIZABLE);
+            // Snapshot = flush + advance the reported position (see CoordStateMachine); triggering it on
+            // an applied-entry cadence is what lets the Raft log compact instead of growing forever.
+            RaftServerConfigKeys.Snapshot.setAutoTriggerEnabled(props, true);
+            RaftServerConfigKeys.Snapshot.setAutoTriggerThreshold(props,
+                    Long.parseLong(q.getOrDefault("snapshotEvery", String.valueOf(DEFAULT_SNAPSHOT_EVERY))));
 
             boolean isMember = peers.stream().anyMatch(p -> p.getId().equals(selfId));
             this.server = isMember ? startServer(selfId, group, props, peers) : null;
@@ -82,6 +95,9 @@ public final class RatisCoordinatorStoreProvider implements CoordinatorStoreProv
         RaftServer server = RaftServer.newBuilder()
                 .setServerId(selfId)
                 .setGroup(group)
+                // RECOVER: reopen an existing data dir on restart, format a fresh one on first boot.
+                // (The builder's default is FORMAT, which refuses to start over existing storage.)
+                .setOption(org.apache.ratis.server.storage.RaftStorage.StartupOption.RECOVER)
                 .setProperties(props)
                 .setStateMachine(new CoordStateMachine())
                 .build();
