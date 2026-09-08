@@ -138,9 +138,10 @@ class Lab:
     def deploy_coordinator(self, size: int = C.COORD_DEFAULT_GROUP_SIZE, tunables: dict | None = None):
         """(Re)deploy the coordinator as one Ratis group of ``size`` pods (a StatefulSet behind a headless
         Service). Every pod serves the same replicated store, so a client reaching any pod sees consistent
-        state. Redeploying deletes the old group and re-forms a fresh one (emptyDir stores start empty),
-        wiping prior nodes/epochs/policies. A fixed peer list means it is not dynamically scalable — pick a
-        size at deploy time (odd for a majority)."""
+        state. Each pod keeps its Raft log + RocksDB on its own PVC, so a restarted or rescheduled pod
+        recovers its state. Redeploying still deletes the old group — PVCs included — and re-forms a
+        fresh one, wiping prior nodes/epochs/policies. A fixed peer list means it is not dynamically
+        scalable — pick a size at deploy time (odd for a majority)."""
         self.ensure_namespace()
         self.pf.stop("coordinator")
         existed = bool(self.pods(role="coordinator")) or bool(
@@ -148,6 +149,10 @@ class Lab:
         if existed:
             k8s.delete_by_label("wiggle-lab/role=coordinator")
             self._wait(lambda: not self.pods(role="coordinator"), 120, "old coordinator removed")
+            # The new StatefulSet reuses the same claim names; a terminating PVC must be fully gone
+            # first or the fresh pod would bind (and boot from) the old group's storage.
+            self._wait(lambda: not k8s.get_json("pvc", "wiggle-lab/role=coordinator").get("items"),
+                       120, "old coordinator storage removed")
             self.policies.clear()
             self._save_state()
         self.coord_config = {k: v for k, v in (tunables or {}).items() if v is not None}

@@ -107,11 +107,23 @@ def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE,
                 "metadata": {"labels": {**labels, "app": "coordinator"}},
                 "spec": {
                     "containers": [container],
-                    "volumes": [{"name": "coord-data", "emptyDir": {}}],
                     # Run as root so the embedded Ratis+RocksDB store can write its data dir on the volume.
                     "securityContext": {"runAsUser": 0, "runAsGroup": 0},
                 },
             },
+            # A PVC per pod (kind's local-path provisioner), NOT an emptyDir: the Raft log + RocksDB
+            # survive pod restarts AND reschedules, so a bounced coordinator recovers its state instead
+            # of booting blank (losing every policy/epoch/definition and breaking routing until someone
+            # re-provisions). The control-plane state is tiny; 1Gi is generous.
+            "volumeClaimTemplates": [{
+                "metadata": {"name": "coord-data", "labels": labels},
+                "spec": {"accessModes": ["ReadWriteOnce"],
+                         "resources": {"requests": {"storage": "1Gi"}}},
+            }],
+            # Deleting the StatefulSet (the lab's redeploy/teardown path) also deletes the PVCs, keeping
+            # the documented "redeploying re-forms the group" semantics — stale Raft storage must not
+            # leak into a redeploy with a different group size.
+            "persistentVolumeClaimRetentionPolicy": {"whenDeleted": "Delete", "whenScaled": "Delete"},
         },
     }
     # Headless Service: gives each pod stable DNS (coordinator-i.coordinator...) for the Raft peers, and
