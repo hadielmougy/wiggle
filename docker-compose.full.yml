@@ -1,10 +1,11 @@
-# A complete, batteries-included Wiggle environment: the released server backed by PostgreSQL,
-# with the web dashboard + admin login enabled and durable storage. TLS is intentionally left
-# OFF -- plain HTTP/gRPC, meant for a trusted network or local use. To secure transport, add the
-# WIGGLE_TLS_* variables and a mounted keystore (see the README "Transport security" section).
+# A complete, batteries-included Wiggle environment: the server backed by PostgreSQL, plus the
+# standalone ops console (same image, WIGGLE_ROLE=console) with admin login, and durable storage.
+# TLS is intentionally left OFF -- plain HTTP/gRPC, meant for a trusted network or local use. To
+# secure transport, add the WIGGLE_TLS_* variables and a mounted keystore (see the README
+# "Transport security" section).
 #
 #   docker compose -f docker-compose.full.yml up -d
-#   open http://localhost:8090        # sign in as admin / <WIGGLE_DASHBOARD_PASSWORD>
+#   open http://localhost:8090        # the console -- sign in as admin / <WIGGLE_DASHBOARD_PASSWORD>
 #   docker compose -f docker-compose.full.yml down          # stop  (add -v to wipe the DB)
 #
 # This is separate from the minimal ./docker-compose.yml (which is just Postgres for dev); it uses
@@ -45,17 +46,32 @@ services:
       WIGGLE_JDBC_PASSWORD: wiggle
       # --- gRPC control plane ---
       WIGGLE_PORT: "8080"
-      # --- web dashboard + admin login (change the password!) ---
-      WIGGLE_DASHBOARD_PORT: "8090"
-      WIGGLE_DASHBOARD_USER: admin
-      WIGGLE_DASHBOARD_PASSWORD: change-me
+      # --- /healthz probe (the web UI is the console service below) ---
+      WIGGLE_DASHBOARD_PORT: "8091"
       # --- TLS intentionally omitted (plaintext). To enable, set e.g.:
       #   WIGGLE_TLS_KEYSTORE: /certs/server.p12
       #   WIGGLE_TLS_KEYSTORE_PASSWORD: ...
       # and mount the keystore with a `volumes:` entry below.
     ports:
       - "8080:8080"                            # gRPC: clients & workers connect here
-      - "8090:8090"                            # web dashboard
+    restart: unless-stopped
+
+  console:
+    build: .
+    image: wiggle:local                        # same image; the role picks the console
+    depends_on:
+      - wiggle
+    environment:
+      WIGGLE_ROLE: console
+      WIGGLE_URL: wiggle:8080                  # direct mode: serve this one cluster
+      # --- console login (change the password!) ---
+      WIGGLE_DASHBOARD_PORT: "8090"
+      WIGGLE_DASHBOARD_USER: admin
+      WIGGLE_DASHBOARD_PASSWORD: change-me
+      # optional read-only account:
+      #   WIGGLE_DASHBOARD_VIEWER_PASSWORD: view-only
+    ports:
+      - "8090:8090"                            # the ops console web UI
     restart: unless-stopped
 
 volumes:
