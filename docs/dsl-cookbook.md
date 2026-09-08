@@ -377,4 +377,4 @@ still merge context correctly.
 | `execution(LOCAL_ASYNC)` / `execution(LOCAL_SYNC)` + `checkpoint` | 7, 8 |
 
 Not covered here: `RetryPolicy.forever()` / `.none()` (trivial variants of `.fixed`/`.exponential`)
-and `awaitSignal` without a timeout (see the README's [Signals](../README.md#signals-human--external-input) section).
+and `awaitSignal` without a timeout (see [Signals, sub-workflows and schedules](onboarding.md#73-signals-sub-workflows-and-schedules)).
