@@ -83,6 +83,18 @@ final class Pipeline {
         return id;
     }
 
+    /**
+     * The mandatory merge node after a forEach's join. Like a fork's combine it is a task bound by
+     * name, but its {@code itemsKey} is a JSON STRING (not an array): the scratch key the engine
+     * stages the collected item results under — a list ordered by item index, or a map keyed like
+     * the input when the items came from a map.
+     */
+    String addForEachCombine(String name, String scratchKey, RetryPolicy retry, String queue) {
+        String id = addTask(name, retry, queue);
+        nodes.put(id, nodes.get(id).withItemsKey(Json.write(scratchKey)));
+        return id;
+    }
+
     /** A server-side timer. Sleep names are not required to be unique (nothing addresses them). */
     String addSleep(String name, long millis) {
         return add(NodeDraft.sleep(name, millis));

@@ -317,8 +317,18 @@ public final class WorkflowEngine {
         if (inst == null || inst.status != InstanceStatus.RUNNING) return Optional.empty();
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
+        Object base = null;
+        long itemIndex = 0;
+        String itemMapKey = null;
+        if (isItemToken(t)) {
+            Map<String, Object> payload = Json.parseObject(t.payloadJson);
+            base = itemBaseContext(inst, t);
+            itemIndex = ((Number) payload.get(ARM_IDX)).longValue();
+            itemMapKey = payload.get(ITEM_MAP_KEY) == null ? null : String.valueOf(payload.get(ITEM_MAP_KEY));
+        }
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t), mode));
+                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t),
+                base, itemIndex, itemMapKey, mode));
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -354,10 +364,10 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Completes a task. For plain TASK nodes {@code result} is shallow-merged into the instance
-     * context (a null value deletes its key); for a combine (aggregator) node the result REPLACES
-     * the context wholesale — the handler returns the complete post-join context; for PREDICATE
-     * nodes it must carry a boolean under {@code "value"}.
+     * Completes a task. For TASK nodes (combines included) {@code result} REPLACES the context —
+     * the handler's return is the complete next context, sent whole by the worker; a null result
+     * leaves the context untouched. For PREDICATE nodes it must carry a boolean under
+     * {@code "value"}.
      */
 
     // TODO here I should calculate the next task
@@ -814,6 +824,27 @@ public final class WorkflowEngine {
         return t.payloadJson != null && Json.parseObject(t.payloadJson).containsKey(ARM_IDX);
     }
 
+    /** Internal bookkeeping on a forEach item token: the map key its element came from (map input
+     *  only). Never reaches user context, like {@link #ARM_IDX}. */
+    private static final String ITEM_MAP_KEY = "__itemMapKey__";
+
+    /** A forEach item token's working value: the element itself (any JSON value, scalars included).
+     *  The item's branch context IS this value — item steps receive it as their context, their
+     *  return replaces it, and the join collects the final values for the combine. */
+    private static final String ITEM_VALUE = "__item__";
+
+    /** True when {@code t} is a forEach item token (its payload carries the item value slot). */
+    private static boolean isItemToken(Token t) {
+        return t.payloadJson != null && Json.parseObject(t.payloadJson).containsKey(ITEM_VALUE);
+    }
+
+    /** A fork combine's itemsKey is a JSON ARRAY of arm names; a forEach combine's is a JSON STRING
+     *  naming the scratch key its collected results are staged under. */
+    private static String forEachScratchKey(Node combineNode) {
+        Object parsed = Json.parse(combineNode.itemsKey());
+        return parsed instanceof String s ? s : null;
+    }
+
     /** A combine aggregator carries its arm names (a JSON array) on the node's itemsKey -- a field
      *  that round-trips through every store, unlike a TASK node's edge-derived branches (see
      *  {@code Pipeline.addAggregator}). */
@@ -826,26 +857,48 @@ public final class WorkflowEngine {
         return Json.asArray(Json.parse(combineNode.itemsKey())).stream().map(String::valueOf).toList();
     }
 
-    /** Once a combine node has run, its per-arm scratch keys have served their purpose: drop them
-     *  from the continuation payload so they never leak downstream. A no-op for any other node. */
+    /** Once a combine node has run, its scratch keys have served their purpose: drop them (arm
+     *  names for a fork, the collected-results key for a forEach) from the continuation payload so
+     *  they never leak downstream. A no-op for any other node. */
     private static String stripCombineScratch(Node node, String payloadJson) {
         if (!isCombineNode(node) || payloadJson == null) return payloadJson;
         Map<String, Object> overlay = Json.parseObject(payloadJson);
-        if (overlay.keySet().removeAll(armNames(node))) return Json.write(overlay);
-        return payloadJson;
+        String scratch = forEachScratchKey(node);
+        boolean changed = scratch != null
+                ? overlay.remove(scratch) != null
+                : overlay.keySet().removeAll(armNames(node));
+        return changed ? Json.write(overlay) : payloadJson;
     }
 
     /**
      * Applies a step result where it belongs: a branch's private overlay when scoped, else shared.
-     * A plain task's result merges (a null value deletes its key); a <b>combine</b> node's result
-     * REPLACES the context wholesale — the handler's return is the complete post-join context, and
-     * nothing from before the join survives unless the handler returned it. There is deliberately
-     * no implicit fold of old and new contexts at a join.
+     * In every case the handler's return REPLACES the previous value — it is the complete next
+     * context, and keys it omits do not survive. There is deliberately no diff/merge of old and new
+     * anywhere in step execution; the only merges left are signal payloads and a sub-workflow's
+     * result folding back into its parent (external inputs, not step returns). A null return leaves
+     * the context untouched.
      */
     private static void applyStepResult(Instance inst, Token t, Node node, Object result) {
         if (isCombineNode(node)) { replaceCombineResult(inst, t, node, result); return; }
-        if (inScopedBranch(t)) t.payloadJson = overlayMerge(t.payloadJson, result);
-        else mergeContext(inst, result);
+        if (result == null) return;
+        if (isItemToken(t)) {
+            // A forEach item step: the return replaces the ITEM's working value (base untouched).
+            Map<String, Object> payload = Json.parseObject(t.payloadJson);
+            payload.put(ITEM_VALUE, dropNulls(result));
+            t.payloadJson = Json.write(payload);
+        } else if (inScopedBranch(t)) {
+            t.payloadJson = overlayReplace(t.payloadJson, result);
+        } else {
+            inst.contextJson = Json.write(dropNulls(result));
+        }
+    }
+
+    /** A top-level null value means "this key is absent" — never persist literal JSON nulls. */
+    private static Object dropNulls(Object result) {
+        if (!(result instanceof Map<?, ?> m)) return result;
+        Map<String, Object> out = new LinkedHashMap<>();
+        m.forEach((k, v) -> { if (v != null) out.put(String.valueOf(k), v); });
+        return out;
     }
 
     /**
@@ -877,25 +930,20 @@ public final class WorkflowEngine {
         }
     }
 
-    /** Merges a step result into a branch's private overlay (same null-delete semantics as
-     *  {@link #mergeContext}), preserving the arm tag, and returns the new overlay JSON. */
-    private static String overlayMerge(String payloadJson, Object result) {
-        Map<String, Object> overlay = payloadJson == null
-                ? new LinkedHashMap<>() : Json.parseObject(payloadJson);
-        if (result instanceof Map) {
-            for (Map.Entry<?, ?> e : ((Map<?, ?>) result).entrySet()) {
-                String key = String.valueOf(e.getKey());
-                if (e.getValue() == null) overlay.remove(key);
-                else overlay.put(key, e.getValue());
-            }
-        } else if (result != null) {
-            Object arm = overlay.get(ARM_IDX);
-            overlay = Json.parseObject(Json.write(result));
-            if (arm != null) overlay.put(ARM_IDX, arm);
-        }
+    /** Replaces a branch's private overlay with the step's return (the branch's complete new view),
+     *  preserving only the internal bookkeeping keys (arm tag; a forEach item's source map key). */
+    private static String overlayReplace(String payloadJson, Object result) {
+        Map<String, Object> prev = payloadJson == null ? Map.of() : Json.parseObject(payloadJson);
+        Map<String, Object> overlay = result instanceof Map
+                ? Json.asObject(dropNulls(result)) : Json.parseObject(Json.write(result));
+        if (prev.containsKey(ARM_IDX)) overlay.put(ARM_IDX, prev.get(ARM_IDX));
+        if (prev.containsKey(ITEM_MAP_KEY)) overlay.put(ITEM_MAP_KEY, prev.get(ITEM_MAP_KEY));
         return Json.write(overlay);
     }
 
+    /** The one remaining merge: EXTERNAL inputs folding into the context — a delivered signal's
+     *  payload and a completed sub-workflow's result. Step returns never come through here; they
+     *  replace ({@link #applyStepResult}). */
     private static void mergeContext(Instance inst, Object result) {
         if (result == null) return;
         if (!(result instanceof Map)) {
@@ -903,9 +951,7 @@ public final class WorkflowEngine {
             return;
         }
         Map<String, Object> ctx = Json.parseObject(inst.contextJson);
-        // A null value deletes its key (the exact inverse of Json.shallowDiff, which emits removed
-        // keys as null); any other value overwrites. So a step that drops a field, or an aggregator
-        // clearing its scratch keys, actually removes them rather than leaving JSON nulls behind.
+        // A null value deletes its key; any other value overwrites.
         for (Map.Entry<?, ?> e : ((Map<?, ?>) result).entrySet()) {
             String key = String.valueOf(e.getKey());
             if (e.getValue() == null) ctx.remove(key);
@@ -1074,38 +1120,54 @@ public final class WorkflowEngine {
      */
     private boolean spawnDynamicBranches(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
         Object items = Json.parseObject(inst.contextJson).get(node.itemsKey());
-        if (items != null && !(items instanceof List)) {
-            failInstance(tx, inst, "forkEach '" + node.name() + "': context key '" + node.itemsKey()
-                    + "' holds " + items.getClass().getSimpleName() + ", not a list", now);
+        if (items != null && !(items instanceof List) && !(items instanceof Map)) {
+            failInstance(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
+                    + "' holds " + items.getClass().getSimpleName() + ", not a list or map", now);
             return false;
         }
-        List<?> list = items == null ? List.of() : (List<?>) items;
+        List<?> elements;
+        List<String> mapKeys = null;   // non-null when iterating a map: the key each element came from
+        if (items instanceof Map<?, ?> m) {
+            mapKeys = new ArrayList<>(m.size());
+            List<Object> vals = new ArrayList<>(m.size());
+            for (Map.Entry<?, ?> e : m.entrySet()) { mapKeys.add(String.valueOf(e.getKey())); vals.add(e.getValue()); }
+            elements = vals;
+        } else {
+            elements = items == null ? List.of() : (List<?>) items;
+        }
         TokenStatus before = t.status;
         t.status = TokenStatus.DONE;
         t.kind = NodeKind.DYN_FORK;
         t.updatedAt = now;
         tx.updateToken(t);
-        if (list.isEmpty()) {
-            // Nothing to fan out over: continue directly past the paired join (node.next()).
-            Token cont = newToken(inst, def(tx, inst).node(node.next()).next(), t.joinStack, t.payloadJson, now);
+        if (elements.isEmpty()) {
+            // Nothing to fan out over: continue past the paired join AND its combine (there is
+            // nothing to collect, so the combine is skipped and the context is untouched).
+            LazyGraph def = def(tx, inst);
+            Node join = def.node(node.next());
+            Node after = def.node(join.next());
+            String next = isCombineNode(after) ? after.next() : join.next();
+            Token cont = newToken(inst, next, t.joinStack, t.payloadJson, now);
             tx.insertToken(cont);
             work.push(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (DYN_FORK) " + before + " -> DONE, empty '" + node.itemsKey()
-                    + "' skips the join");
+                    + "' skips the join and combine");
             return true;
         }
-        String group = t.id + "#" + list.size();   // fork token id + width, parsed back at the join
+        String group = t.id + "#" + elements.size();   // fork token id + width, parsed back at the join
         String childStack = t.pushJoinStack(group);
         String branchStart = node.branches().get(0);
-        for (int i = 0; i < list.size(); i++) {
-            Token child = newToken(inst, branchStart, childStack, itemPayload(t, node, list.get(i), i), now);
+        for (int i = 0; i < elements.size(); i++) {
+            String key = mapKeys == null ? null : mapKeys.get(i);
+            Token child = newToken(inst, branchStart, childStack, itemPayload(t, node, elements.get(i), i, key), now);
             tx.insertToken(child);
             work.push(child);
         }
+        int n = elements.size();
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (DYN_FORK) " + before + " -> DONE, spawned " + list.size()
-                + " branch(es) over '" + node.itemsKey() + "' in group " + group);
+                + node.name() + " (DYN_FORK) " + before + " -> DONE, spawned " + n
+                + " isolated branch(es) over '" + node.itemsKey() + "' in group " + group);
         return true;
     }
 
@@ -1118,12 +1180,15 @@ public final class WorkflowEngine {
         return Json.write(payload);
     }
 
-    /** The child's payload: the fork token's own payload (nesting) plus its item and index. */
-    private static String itemPayload(Token forkToken, Node node, Object item, int index) {
+    /** The child's payload: the fork token's own payload (nesting) plus the element as the item's
+     *  working value — arm-tagged so the item runs ISOLATED. Nothing is injected under user keys;
+     *  the element IS the item's context, and the base travels on the activation instead. */
+    private static String itemPayload(Token forkToken, Node node, Object item, int index, String mapKey) {
         Map<String, Object> payload = forkToken.payloadJson == null
                 ? new LinkedHashMap<>() : Json.parseObject(forkToken.payloadJson);
-        payload.put(node.itemKey(), item);
-        payload.put(node.itemKey() + "Index", (long) index);
+        payload.put(ARM_IDX, (long) index);
+        payload.put(ITEM_VALUE, item);
+        if (mapKey != null) payload.put(ITEM_MAP_KEY, mapKey);
         return Json.write(payload);
     }
 
@@ -1175,34 +1240,76 @@ public final class WorkflowEngine {
     }
 
     /**
-     * The continuation payload after a join. For a plain (forkEach) join it is just the restored
-     * base. For a combine fork -- the join's successor is a combine node carrying the arm names --
-     * each isolated branch's accumulated result is staged under its arm name on top of the base, so
-     * the aggregator can read them by name; the arm tag is dropped in the process.
+     * The continuation payload after a join, staging the branches' results for the mandatory
+     * combine. A fork combine (itemsKey = arm-name array) gets each branch's final view staged
+     * under its arm name. A forEach combine (itemsKey = a scratch-key string) gets the items'
+     * final views COLLECTED — a list ordered by item index, or, when the input was a map, a map
+     * keyed like the input — staged under that one scratch key. The arm tags are consumed.
      */
     private static String combinePayload(LazyGraph def, Node joinNode, List<Token> atBarrier, String basePayload) {
         Node agg = def.node(joinNode.next());
         if (!isCombineNode(agg)) return basePayload;
-        List<String> armNames = armNames(agg);
         Map<String, Object> staged = basePayload == null
                 ? new LinkedHashMap<>() : Json.parseObject(basePayload);
+        String scratch = forEachScratchKey(agg);
+        if (scratch == null) {
+            List<String> armNames = armNames(agg);
+            for (Token bt : atBarrier) {
+                Map<String, Object> branch = bt.payloadJson == null
+                        ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
+                Object idx = branch.remove(ARM_IDX);
+                if (idx == null) continue;   // defensive: a token that never carried an arm tag
+                staged.put(armNames.get(((Number) idx).intValue()), branch);
+            }
+            return Json.write(staged);
+        }
+        // forEach: collect each item's FINAL VALUE, ordered by arm index; key by the source map
+        // key when the input was a map. The values are exactly what each item's last step returned.
+        java.util.TreeMap<Long, Map<String, Object>> ordered = new java.util.TreeMap<>();
+        boolean mapInput = false;
         for (Token bt : atBarrier) {
-            Map<String, Object> branch = bt.payloadJson == null
+            Map<String, Object> payload = bt.payloadJson == null
                     ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
-            Object idx = branch.remove(ARM_IDX);
-            if (idx == null) continue;   // defensive: a token that never carried an arm tag
-            staged.put(armNames.get(((Number) idx).intValue()), branch);
+            Object idx = payload.get(ARM_IDX);
+            if (idx == null) continue;
+            mapInput |= payload.containsKey(ITEM_MAP_KEY);
+            ordered.put(((Number) idx).longValue(), payload);
+        }
+        if (mapInput) {
+            Map<String, Object> byKey = new LinkedHashMap<>();
+            for (Map<String, Object> payload : ordered.values()) {
+                byKey.put(String.valueOf(payload.get(ITEM_MAP_KEY)), payload.get(ITEM_VALUE));
+            }
+            staged.put(scratch, byKey);
+        } else {
+            List<Object> values = new ArrayList<>(ordered.size());
+            for (Map<String, Object> payload : ordered.values()) values.add(payload.get(ITEM_VALUE));
+            staged.put(scratch, values);
         }
         return Json.write(staged);
     }
 
-    /** The context a worker sees: the shared instance context with the token's payload overlaid
-     *  (minus the internal arm tag, which is engine bookkeeping, not user context). */
+    /** The context a worker sees. For a forEach item token it is the ITEM's working value itself;
+     *  otherwise the shared instance context with the token's payload overlaid (minus the internal
+     *  bookkeeping keys). */
     private static Object dispatchContext(Instance inst, Token t) {
         if (t.payloadJson == null) return Json.parse(inst.contextJson);
+        Map<String, Object> overlay = Json.parseObject(t.payloadJson);
+        if (overlay.containsKey(ITEM_VALUE)) return overlay.get(ITEM_VALUE);
+        Map<String, Object> ctx = Json.parseObject(inst.contextJson);
+        overlay.remove(ARM_IDX);
+        ctx.putAll(overlay);
+        return ctx;
+    }
+
+    /** The frozen pre-forEach context an item step sees via {@code Step.base()}: the shared context
+     *  plus any enclosing fork-branch overlay the forEach was spawned inside (minus bookkeeping). */
+    private static Object itemBaseContext(Instance inst, Token t) {
         Map<String, Object> ctx = Json.parseObject(inst.contextJson);
         Map<String, Object> overlay = Json.parseObject(t.payloadJson);
         overlay.remove(ARM_IDX);
+        overlay.remove(ITEM_VALUE);
+        overlay.remove(ITEM_MAP_KEY);
         ctx.putAll(overlay);
         return ctx;
     }

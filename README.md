@@ -67,7 +67,7 @@ are built into the model, not bolted on.
 - 💾 **Durable, honestly** — every instance is DB-backed. Exactly-once dispatch, at-least-once
   execution, lease-based recovery when a worker dies mid-step.
 - 🧭 **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals,
-  timers, sub-workflows, `doWhile`, `forkEach` — a compiled graph, versioned by content hash.
+  timers, sub-workflows, `doWhile`, `forEach` — a compiled graph, versioned by content hash.
   **No workflow-code determinism to get wrong**, because the workflow *is* data, not replayed code.
 - 🔌 **Pull-based & polyglot** — workers long-poll over gRPC: no inbound connectivity, no broker,
   backpressure built in. Idiomatic **Java, Go, and Python** workers interoperate on one server —

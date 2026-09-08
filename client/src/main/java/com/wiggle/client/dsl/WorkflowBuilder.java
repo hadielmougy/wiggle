@@ -221,8 +221,8 @@ public final class WorkflowBuilder {
 
     /**
      * Builds an isolated fork with a mandatory combine node. Each branch is an independent
-     * sub-pipeline; the combine node carries the arm names so a worker's combine handler (or the
-     * default union) can key each branch's result by name. Reopens the stream at the combine node.
+     * sub-pipeline; the combine node carries the arm names so a worker's combine handler can key
+     * each branch's result by name. Reopens the stream at the combine node.
      */
     void buildForkCombine(List<Branch> branches, String combineName) {
         forkPending = false;
@@ -245,35 +245,48 @@ public final class WorkflowBuilder {
     }
 
     /**
-     * Shorthand for {@link #forkEach(String, String, String, UnaryOperator)} that exposes each
-     * element under the same key as the list -- the element at {@code itemsKey} and its position at
-     * {@code itemsKey + "Index"}. Use the four-argument form when the branch needs a distinct element
-     * key (e.g. nested {@code forkEach}es that would otherwise shadow each other).
+     * Shorthand for {@link #forEach(String, String, UnaryOperator)} whose node name defaults to
+     * {@code itemsKey}. Use the named form when the same collection key is fanned over twice in one
+     * workflow (node names must be unique), or for a nicer label in the console diagram.
      */
-    public WorkflowBuilder forkEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
-        return forkEach(name, itemsKey, itemsKey, body);
+    public ForEachStage forEach(String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+        return forEach(itemsKey, itemsKey, body);
     }
 
     /**
-     * Runtime fan-out: when the instance reaches this node, the engine reads the list stored in the
-     * context under {@code itemsKey} and spawns one parallel branch per element, each running
-     * {@code body} with its element injected under {@code itemKey} (and its position under
-     * {@code itemKey + "Index"}). All branches join before the flow continues; an empty list skips
-     * straight through. Branch writes merge into the shared context (last write wins), so per-element
-     * results belong under per-element keys (use the index).
+     * Runtime fan-out, {@code fork}'s dynamic twin: when the instance reaches this node, the engine
+     * reads the collection stored in the context under {@code itemsKey} -- a list <em>or</em> a map
+     * -- and spawns one parallel branch per element. <b>The element IS the item's context</b>: each
+     * body step receives the item's current value as its parameter (any JSON value, scalars
+     * included) and its return replaces that value. The frozen pre-forEach context is available
+     * inside the body via {@link com.wiggle.client.worker.Step#base() Step.base()} (read-only), and
+     * the element's position / source map key via {@code Step.itemIndex()} / {@code
+     * Step.itemMapKey()} -- nothing is ever injected under user keys. The returned
+     * {@link ForEachStage} requires a {@link ForEachStage#combine combine}: the engine collects each
+     * item's final value -- a list ordered by index for a list input, a map keyed like the input for
+     * a map input -- and hands the collection to the combine handler together with the pre-forEach
+     * context. An empty collection skips the body and the combine entirely.
      */
-    public WorkflowBuilder forkEach(String name, String itemsKey, String itemKey, UnaryOperator<WorkflowBuilder> body) {
+    public ForEachStage forEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
         java.util.Objects.requireNonNull(itemsKey, "itemsKey");
-        java.util.Objects.requireNonNull(itemKey, "itemKey");
-        String forkId = pipeline.addDynFork(name, itemsKey, itemKey);
+        forkPending = true;   // cleared only when the returned ForEachStage's combine() runs
+        return new ForEachStage(this, name, itemsKey, body);
+    }
+
+    /** Builds the forEach with its mandatory combine node. See {@link ForEachStage}. */
+    void buildForEachCombine(String name, String itemsKey,
+                             UnaryOperator<WorkflowBuilder> body, String combineName) {
+        forkPending = false;
+        String forkId = pipeline.addDynFork(name, itemsKey, itemsKey);
         attach(forkId);
         String joinId = pipeline.addJoin(0);   // 0 = dynamic width, carried in the join group
         String templateStart = buildBranch(Branch.of(name, body), joinId);
         pipeline.setBranches(forkId, List.of(templateStart));
-        pipeline.wireNext(forkId, joinId);     // followed directly when the list is empty
-        openAt(joinId, Edge.NEXT);
-        lastStepId = null;
-        return this;
+        pipeline.wireNext(forkId, joinId);     // followed when the collection is empty (skips through)
+        String combineId = pipeline.addForEachCombine(combineName, name, null, null);
+        pipeline.wireNext(joinId, combineId);  // JOIN -> combine (the collected results' consumer)
+        openAt(combineId, Edge.NEXT);
+        lastStepId = combineId;
     }
 
     /**

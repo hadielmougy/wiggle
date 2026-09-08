@@ -80,17 +80,18 @@ public final class Cookbook {
     }
 
     // ---------------------------------------------------------------------------------------
-    // 3. forkEach + per-step queue -- dynamic fan-out with mixed worker pools.
+    // 3. forEach + per-step queue -- dynamic fan-out with mixed worker pools. The element IS each
+    //    item's context (handlers take it directly; the base rides on Step.base()); the mandatory
+    //    combine receives the collected final values.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint forkEachAcrossQueues() {
+    public static Blueprint forEachAcrossQueues() {
         return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
 
-                .forkEach("charge-items", "items", "item", b -> b
-                        // forkEach branches share one context, so a plain "priced" key would race
-                        // across items (last write wins) -- namespace by itemIndex instead.
+                .forEach("charge-items", "items", b -> b
                         .step("price")
                         // Only this step moves to the "gpu" queue; the workflow default stays "cpu".
                         .step("render-thumbnail", "gpu"))
+                .combine("collect-items")
 
                 .step("summarise")
                 .build();
@@ -167,7 +168,7 @@ public final class Cookbook {
     }
 
     // ---------------------------------------------------------------------------------------
-    // 8. Everything at once -- step, gate, choose, fork (retry + per-step queue branches), forkEach,
+    // 8. Everything at once -- step, gate, choose, fork (retry + per-step queue branches), forEach,
     //    sleep, awaitSignal + escalation, subWorkflow, doWhile, defaultQueue, and checkpoint,
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
@@ -191,9 +192,9 @@ public final class Cookbook {
                                                 .effect("notice"))).combine("large-merge")),
 
                         Case.otherwise("standard", b -> b
-                                // Namespaced by itemIndex for the same reason as example 3.
-                                .forkEach("pack-items", "items", "item", body -> body
-                                        .step("pack-item"))))
+                                .forEach("pack-items", "items", body -> body
+                                        .step("pack-item"))
+                                .combine("collect-packed")))
 
                 .awaitSignal("dock-clear", Duration.ofMillis(150),
                         esc -> esc.effect("auto-clear"))

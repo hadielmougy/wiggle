@@ -65,14 +65,24 @@ public final class CookbookHandlers {
         }
     }
 
-    /** 3. cb-foreach-queues. */
+    /** 3. cb-foreach-queues. The element IS each item's context: handlers take the item value
+     *  directly (its position via Step.itemIndex()), and the combine receives the final values. */
     @Handlers("cb-foreach-queues")
     public static final class ForeachQueues {
         public Map<String, Object> price(Map<String, Object> item) {
-            return with(item, "priced-" + item.get("itemIndex"), true);
+            return with(item, "priced", true);
         }
         public Map<String, Object> renderThumbnail(Map<String, Object> item) {
-            return with(item, "thumbnail-" + item.get("itemIndex"), "thumb-" + item.get("itemIndex"));
+            return with(item, "thumbnail", "thumb-" + com.wiggle.client.worker.Step.itemIndex());
+        }
+        public Map<String, Object> collectItems(@Context Map<String, Object> base,
+                                                List<Map<String, Object>> items) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            List<Object> thumbnails = new java.util.ArrayList<>();
+            for (Map<String, Object> item : items) thumbnails.add(item.get("thumbnail"));
+            out.put("thumbnails", thumbnails);
+            out.put("pricedCount", (long) items.size());
+            return out;
         }
         public Map<String, Object> summarise(Map<String, Object> ctx) {
             return with(ctx, "done", true);
@@ -177,7 +187,11 @@ public final class CookbookHandlers {
             return out;
         }
         public Map<String, Object> packItem(Map<String, Object> item) {
-            return with(item, "packed-" + item.get("itemIndex"), true);
+            return with(item, "packed", true);
+        }
+        public Map<String, Object> collectPacked(@Context Map<String, Object> base,
+                                                 List<Map<String, Object>> items) {
+            return with(base, "packedCount", (long) items.size());
         }
         public void autoClear(Map<String, Object> ctx) {
             System.out.println("   [cookbook] dock auto-cleared");

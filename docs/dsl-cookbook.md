@@ -109,15 +109,15 @@ A `fork` always ends in a `combine` — here `large-merge`, whose explicit handl
 `fraud-check` arm onto the pre-fork context and returns the complete post-join context (combines
 have no implicit fold; the effect arm contributes nothing).
 
-## 3. `forkEach` + `defaultQueue` + a per-step queue
+## 3. `forEach` + `defaultQueue` + a per-step queue
 
 Runtime fan-out over a list, with one step in the branch pinned to a different worker pool.
 
 ```java
 Workflow.define("cb-foreach-queues").defaultQueue("cpu")
-    .forkEach("charge-items", "items", "item", b -> b
-        // forkEach branches share one context, so a plain "priced" key would race across
-        // items (last write wins) -- namespace by itemIndex instead.
+    .forEach("charge-items", "items", b -> b
+        // the element IS each item's context (Step.base()/Step.itemIndex() for the rest);
+        // the mandatory combine receives the collected final values.
         .step("price")
         .step("render-thumbnail", "gpu"))   // the queue arg pins just this step
     .step("summarise")
@@ -295,7 +295,7 @@ commit every step.
 
 ## 8. Kitchen sink
 
-`step`, `gate`, `choose`, `fork` (with a retried, queue-pinned branch), `forkEach`, `sleep`,
+`step`, `gate`, `choose`, `fork` (with a retried, queue-pinned branch), `forEach`, `sleep`,
 `awaitSignal` with escalation, `subWorkflow`, `doWhile` with a `checkpoint`, and
 `defaultQueue` — one graph, every operator except the `fixed`/`forever` retry variants:
 
@@ -314,7 +314,7 @@ Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMo
                     .effect("notice")))
             .combine("large-merge")),
         Case.otherwise("standard", b -> b
-            .forkEach("pack-items", "items", "item", body -> body
+            .forEach("pack-items", "items", body -> body
                 .step("pack-item"))))
     .awaitSignal("dock-clear", Duration.ofMillis(150),
         esc -> esc.effect("auto-clear"))
@@ -352,7 +352,7 @@ class KitchenSink {
 
 This one is deliberately not idiomatic — a real workflow wouldn't cram every operator into a
 single graph. It exists as a stress test of the combination space and a single place to see how
-`choose`, `fork`, `forkEach`, `subWorkflow`, `awaitSignal`, and `doWhile` all wire together and
+`choose`, `fork`, `forEach`, `subWorkflow`, `awaitSignal`, and `doWhile` all wire together and
 still merge context correctly.
 
 ---
@@ -366,7 +366,7 @@ still merge context correctly.
 | `gate` | 1, 4, 8 |
 | `choose` / `Case.when` / `Case.otherwise` | 2, 5, 8 |
 | `fork` / `Branch` / `combine` | 2, 6, 8 |
-| `forkEach` | 3, 8 |
+| `forEach` | 3, 8 |
 | `doWhile` | 4, 7, 8 |
 | `sleep` | 8 |
 | `awaitSignal` (+ timeout, + escalation) | 5, 8 |

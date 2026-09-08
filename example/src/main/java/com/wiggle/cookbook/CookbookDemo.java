@@ -29,7 +29,7 @@ public final class CookbookDemo {
             // so it must be registered before either of those instances starts.
             Blueprint linearGate = Cookbook.linearWithGate();
             Blueprint chooseFork = Cookbook.chooseThenFork();
-            Blueprint forkEachQueues = Cookbook.forkEachAcrossQueues();
+            Blueprint forEachQueues = Cookbook.forEachAcrossQueues();
             Blueprint pollLoop = Cookbook.pollUntilReady();
             Blueprint approval = Cookbook.approvalWithEscalation();
             Blueprint parentChild = Cookbook.childCheckThenFork();
@@ -37,7 +37,7 @@ public final class CookbookDemo {
             Blueprint kitchenSink = Cookbook.kitchenSink();
 
             try (Worker worker = new Worker(client, "cookbook-worker")
-                    .register(linearGate).register(chooseFork).register(forkEachQueues)
+                    .register(linearGate).register(chooseFork).register(forEachQueues)
                     .register(pollLoop).register(approval).register(parentChild)
                     .register(batchedLoop).register(kitchenSink)
                     .handlers(new CookbookHandlers.LinearGate())
@@ -56,7 +56,7 @@ public final class CookbookDemo {
                 run(client, "2. choose + fork + retry", chooseFork,
                         Map.of("amount", 5000));
 
-                run(client, "3. forkEach + per-step queue", forkEachQueues,
+                run(client, "3. forEach + per-step queue", forEachQueues,
                         Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "B"), Map.of("sku", "C"))));
 
                 run(client, "4. doWhile + gate", pollLoop, Map.of("cancelled", false));

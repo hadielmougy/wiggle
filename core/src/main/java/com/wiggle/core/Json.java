@@ -257,29 +257,6 @@ public final class Json {
         return v instanceof Boolean b ? b : def;
     }
 
-    /**
-     * Top-level keys of {@code after} whose values differ from {@code before}, with keys
-     * that disappeared mapped to null.
-     *
-     * This is what lets parallel branches share one context document: a branch writes
-     * back only what it actually changed, so two branches touching different fields
-     * merge cleanly instead of the slower one clobbering the faster one with its own
-     * stale copy of the whole object.
-     */
-    public static Object shallowDiff(Object before, Object after) {
-        if (!(before instanceof Map) || !(after instanceof Map)) return after;
-        Map<String, Object> b = asObject(before);
-        Map<String, Object> a = asObject(after);
-        Map<String, Object> delta = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> e : a.entrySet()) {
-            if (!Objects.equals(e.getValue(), b.get(e.getKey()))) delta.put(e.getKey(), e.getValue());
-        }
-        for (String k : b.keySet()) {
-            if (!a.containsKey(k)) delta.put(k, null);
-        }
-        return delta;
-    }
-
     /** Deterministic serialisation: object keys sorted. Used for content-hash versioning. */
     public static String canonical(Object v) {
         return write(sort(v));

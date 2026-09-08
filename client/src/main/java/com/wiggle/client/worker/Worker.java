@@ -275,16 +275,31 @@ public final class Worker implements AutoCloseable {
             return ctx -> { call(m, target, decode(ctx, in, target, decoders)); return null; };
         }
         return ctx -> {
+            // The return IS the next context: it is sent whole and REPLACES the previous value
+            // server-side (no diff, no merge). A null return leaves the context untouched.
             Object out = call(m, target, decode(ctx, in, target, decoders));
-            return out == null ? null : Json.shallowDiff(ctx, RecordMapper.toJson(out));
+            return out == null ? null : RecordMapper.toJson(out);
         };
     }
 
-    /** A combine method: each {@link Arm @Arm} parameter gets that branch's result decoded to its
-     *  type, an optional {@link Context @Context} parameter gets the pre-fork context; the return
-     *  value is the COMPLETE post-join context — the engine replaces the context with it (nothing
-     *  from before the join survives unless the handler returned it; staged arm keys are stripped). */
+    /**
+     * A combine method; its return is the COMPLETE post-join context — the engine replaces the
+     * context with it (nothing from before the join survives unless the handler returned it, and
+     * staged scratch keys are stripped). Two flavors, told apart by the node's itemsKey:
+     * <ul>
+     *   <li><b>fork</b> (itemsKey = arm-name array): each {@link Arm @Arm} parameter gets that
+     *       branch's final context decoded to its type; an optional {@link Context @Context}
+     *       parameter gets the pre-fork context.</li>
+     *   <li><b>forEach</b> (itemsKey = a scratch-key string): one collection parameter receives
+     *       every item's final context — a {@code List} (ordered by item index) or {@code Set} for
+     *       a list input, or a {@code Map} keyed like the input for a map input — with elements
+     *       decoded to the collection's element type; an optional {@link Context @Context}
+     *       parameter gets the pre-forEach context.</li>
+     * </ul>
+     */
     private static ActivityHandler combineHandler(Node node, Method m, Object target, Map<Class<?>, Method> decoders) {
+        Object parsedKey = Json.parse(node.itemsKey());
+        if (parsedKey instanceof String scratch) return forEachCombineHandler(node, m, target, decoders, scratch);
         List<String> arms = armNames(node);
         java.lang.reflect.Parameter[] params = m.getParameters();
         return ctx -> {
@@ -307,6 +322,80 @@ public final class Worker implements AutoCloseable {
             Object out = call(m, target, args);
             return out == null ? null : RecordMapper.toJson(out);
         };
+    }
+
+    /** The forEach flavor: bind the staged collection (list or map of item results) plus @Context. */
+    private static ActivityHandler forEachCombineHandler(Node node, Method m, Object target,
+                                                         Map<Class<?>, Method> decoders, String scratch) {
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        return ctx -> {
+            Map<String, Object> map = Json.asObject(ctx);
+            Object staged = map.get(scratch);
+            Object[] args = new Object[params.length];
+            boolean itemsBound = false;
+            for (int i = 0; i < params.length; i++) {
+                java.lang.reflect.Parameter p = params[i];
+                if (p.isAnnotationPresent(Context.class)) {
+                    Map<String, Object> base = new LinkedHashMap<>(map);
+                    base.remove(scratch);
+                    args[i] = decode(base, p.getType(), target, decoders);
+                } else if (!itemsBound) {
+                    args[i] = decodeCollection(staged, p, target, decoders, node.name());
+                    itemsBound = true;
+                } else {
+                    throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
+                            + m.getName() + "' takes an optional @Context parameter and exactly one "
+                            + "collection parameter (List/Set/Map) for the item results");
+                }
+            }
+            if (!itemsBound) {
+                throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
+                        + m.getName() + "' needs a collection parameter (List/Set/Map) for the item results");
+            }
+            Object out = call(m, target, args);
+            return out == null ? null : RecordMapper.toJson(out);
+        };
+    }
+
+    /** Decodes the staged item results into the handler's declared collection type: a List keeps the
+     *  item order, a Set deduplicates (LinkedHashSet, order-preserving), a Map is keyed like the
+     *  input map. Elements decode to the collection's generic element type. */
+    private static Object decodeCollection(Object staged, java.lang.reflect.Parameter p,
+                                           Object target, Map<Class<?>, Method> decoders, String nodeName)
+            throws Exception {
+        Class<?> type = p.getType();
+        Class<?> elem = elementType(p);
+        if (Map.class.isAssignableFrom(type)) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            if (staged instanceof Map<?, ?> mm) {
+                for (Map.Entry<?, ?> e : mm.entrySet()) {
+                    out.put(String.valueOf(e.getKey()), decode(e.getValue(), elem, target, decoders));
+                }
+            }
+            return out;
+        }
+        List<Object> decoded = new java.util.ArrayList<>();
+        if (staged instanceof List<?> list) {
+            for (Object v : list) decoded.add(decode(v, elem, target, decoders));
+        } else if (staged instanceof Map<?, ?> mm) {   // map input bound to a List/Set param: values, in key order
+            for (Object v : mm.values()) decoded.add(decode(v, elem, target, decoders));
+        }
+        if (java.util.Set.class.isAssignableFrom(type)) return new java.util.LinkedHashSet<>(decoded);
+        if (List.class.isAssignableFrom(type) || type == Object.class || type == java.util.Collection.class) {
+            return decoded;
+        }
+        throw new IllegalStateException("forEach combine '" + nodeName + "': unsupported collection "
+                + "parameter type " + type.getName() + " (use List, Set, or Map)");
+    }
+
+    /** The collection parameter's element type from its generics; Object (raw maps) when unknown. */
+    private static Class<?> elementType(java.lang.reflect.Parameter p) {
+        if (p.getParameterizedType() instanceof java.lang.reflect.ParameterizedType pt) {
+            java.lang.reflect.Type[] args = pt.getActualTypeArguments();
+            java.lang.reflect.Type t = args[args.length - 1];   // List<T>/Set<T> -> T; Map<K,V> -> V
+            if (t instanceof Class<?> c) return c;
+        }
+        return Object.class;
     }
 
     /** Fetches the registered graph, waiting out a registration race up to {@code awaitRegistration}. */
@@ -431,7 +520,8 @@ public final class Worker implements AutoCloseable {
         }
         Heartbeat lease = newHeartbeat(task.taskId(), task.leaseOwner());
         lease.start();
-        Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId()));
+        Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId(),
+                task.baseContext(), task.itemIndex(), task.itemMapKey()));
         try {
             Object result = handler.invoke(task.context());
             lease.stop();   // the handler is done: no extension may race or trail the settle below
@@ -482,6 +572,10 @@ public final class Worker implements AutoCloseable {
         private final String leaseOwner;
         private final String instanceId;
         private final int maxBatch;
+        /** forEach item scope, frozen for the whole local chain (null outside an item body). */
+        private final Object baseContext;
+        private final long itemIndex;
+        private final String itemMapKey;
         private final List<WiggleClient.StepReport> buffer = new ArrayList<>();
         /** The token the server currently has leased to us; read by the heartbeat thread. */
         private volatile String serverTaskId;
@@ -497,6 +591,9 @@ public final class Worker implements AutoCloseable {
             this.serverTaskId = task.taskId();
             this.node = def.node(task.nodeId());
             this.ctx = task.context();
+            this.baseContext = task.baseContext();
+            this.itemIndex = task.itemIndex();
+            this.itemMapKey = task.itemMapKey();
             this.attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
         }
 
@@ -559,7 +656,8 @@ public final class Worker implements AutoCloseable {
         }
 
         private Invocation invoke(ActivityHandler handler) {
-            Step.begin(new Step.Info(attempt, node.name(), instanceId));
+            Step.begin(new Step.Info(attempt, node.name(), instanceId,
+                    baseContext, itemIndex, itemMapKey));
             try {
                 return Invocation.ok(handler.invoke(ctx));
             } catch (PermanentActivityException e) {
@@ -585,7 +683,7 @@ public final class Worker implements AutoCloseable {
             buffer.add(isPredicate
                     ? new WiggleClient.StepReport(node.id(), null, predicateValue)
                     : new WiggleClient.StepReport(node.id(), result, null));
-            if (!isPredicate) ctx = applyMerge(ctx, result);
+            if (!isPredicate) ctx = applyReplace(ctx, result);
             if (shouldFlush(handback) && !flushAndContinue(handback)) return false;
             node = next;
             attempt = 1;
@@ -635,14 +733,9 @@ public final class Worker implements AutoCloseable {
         static Invocation failed() { return new Invocation(false, null); }
     }
 
-    /** Mirrors the server's context merge: a map result is shallow-merged; anything else replaces. */
-    @SuppressWarnings("unchecked")
-    private static Object applyMerge(Object ctx, Object result) {
-        if (result == null) return ctx;
-        if (!(result instanceof Map) || !(ctx instanceof Map)) return result;
-        Map<String, Object> merged = new LinkedHashMap<>((Map<String, Object>) ctx);
-        merged.putAll((Map<String, Object>) result);
-        return merged;
+    /** Mirrors the server: a step's return REPLACES the context (null = unchanged, no merge). */
+    private static Object applyReplace(Object ctx, Object result) {
+        return result == null ? ctx : result;
     }
 
     /** A small pool: heartbeats are brief RPCs, so a handful of threads covers any concurrency. */

@@ -408,6 +408,11 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 .setLeaseOwner(t.leaseOwner())
                 .setExecutionMode(t.executionMode().name());
         if (t.context() != null) m.setContext(ProtoJson.toValue(t.context()));
+        if (t.baseContext() != null) {   // a forEach item step: deliver the frozen base alongside
+            m.setBaseContext(ProtoJson.toValue(t.baseContext()));
+            m.setItemIndex(t.itemIndex());
+            if (t.itemMapKey() != null) m.setItemMapKey(t.itemMapKey());
+        }
         return m.build();
     }
 

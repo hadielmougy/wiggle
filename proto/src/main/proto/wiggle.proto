@@ -207,6 +207,11 @@ message TaskActivation {
     string lease_owner = 11;
     google.protobuf.Value context = 12;
     string execution_mode = 13;   // SERVER | LOCAL_SYNC | LOCAL_ASYNC (already resolved by the server)
+    // Set only for a forEach item step: `context` is then the ITEM's current value (any JSON value,
+    // scalars included), and base_context is the frozen pre-forEach context (read-only for items).
+    google.protobuf.Value base_context = 14;
+    int64 item_index = 15;        // the item's position in the input collection
+    string item_map_key = 16;     // the item's source key, when the input collection was a map
 }
 
 message TaskList {
