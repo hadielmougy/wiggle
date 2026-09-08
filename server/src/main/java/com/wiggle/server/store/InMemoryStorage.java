@@ -19,6 +19,33 @@ public final class InMemoryStorage implements Storage {
 
     private final Map<String, Instance> instances = new ConcurrentHashMap<>();
     private final Map<String, Token> tokens = new ConcurrentHashMap<>();
+    /** Per-instance token index (id-ordered), so tokensOf/childInstanceIds/purge never scan the world. */
+    private final Map<String, NavigableMap<String, Token>> tokensByInstance = new ConcurrentHashMap<>();
+    /** Claimable tokens (READY task/predicate) ordered by (availableAt, id): claimTasks walks the
+     *  head instead of sorting every live token on every poll — the sort-per-poll this replaces was
+     *  ~90% of engine CPU in the embedded throughput benchmark. Guarded by the global lock. */
+    private final NavigableSet<Token> readyTasks = new TreeSet<>(
+            Comparator.comparingLong((Token t) -> t.availableAt).thenComparing(t -> t.id));
+
+    private static boolean claimable(Token t) {
+        return t.status == TokenStatus.READY && (t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE);
+    }
+
+    /** Registers the STORED copy in both indexes. Call with the object that lives in {@link #tokens}. */
+    private void indexToken(Token stored) {
+        tokensByInstance.computeIfAbsent(stored.instanceId, k -> new TreeMap<>()).put(stored.id, stored);
+        if (claimable(stored)) readyTasks.add(stored);
+    }
+
+    /** Removes the stored copy from both indexes; must run BEFORE its ordering fields change. */
+    private void unindexToken(Token stored) {
+        NavigableMap<String, Token> byId = tokensByInstance.get(stored.instanceId);
+        if (byId != null) {
+            byId.remove(stored.id);
+            if (byId.isEmpty()) tokensByInstance.remove(stored.instanceId);
+        }
+        readyTasks.remove(stored);
+    }
     private final Map<String, String> definitions = new ConcurrentHashMap<>();
     private final Map<String, Integer> latest = new ConcurrentHashMap<>();
     // Normalised graph rows, keyed by "name:version": one node id -> node, plus the entry node.
@@ -112,7 +139,11 @@ public final class InMemoryStorage implements Storage {
             return (int) instances.values().stream().filter(i -> i.status == status).count();
         }
 
-        @Override public void insertToken(Token t) { tokens.put(t.id, t.clone()); }
+        @Override public void insertToken(Token t) {
+            Token stored = t.clone();
+            tokens.put(stored.id, stored);
+            indexToken(stored);
+        }
 
         @Override public Optional<Token> findToken(String id) {
             Token t = tokens.get(id);
@@ -120,32 +151,35 @@ public final class InMemoryStorage implements Storage {
         }
 
         @Override public List<Token> tokensOf(String instanceId) {
-            return tokens.values().stream()
-                    .filter(t -> t.instanceId.equals(instanceId))
-                    .sorted(Comparator.comparing(t -> t.id))
-                    .map(Token::clone)
-                    .toList();
+            NavigableMap<String, Token> byId = tokensByInstance.get(instanceId);
+            if (byId == null) return List.of();
+            List<Token> out = new ArrayList<>(byId.size());
+            for (Token t : byId.values()) out.add(t.clone());   // TreeMap: already id-ordered
+            return out;
         }
 
-        @Override public void updateToken(Token t) { tokens.put(t.id, t.clone()); }
+        @Override public void updateToken(Token t) {
+            Token old = tokens.get(t.id);
+            if (old != null) unindexToken(old);
+            Token stored = t.clone();
+            tokens.put(stored.id, stored);
+            indexToken(stored);
+        }
 
         @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
             List<Token> claimed = new ArrayList<>();
-            tokens.values().stream()
-                    .filter(t -> t.status == TokenStatus.READY)
-                    .filter(t -> t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE)
-                    .filter(t -> t.availableAt <= now)
-                    .filter(t -> queues == null || queues.isEmpty() || queues.contains(t.queue))
-                    .sorted(Comparator.comparingLong((Token t) -> t.availableAt).thenComparing(t -> t.id))
-                    .limit(max)
-                    .forEach(t -> {
-                        Token live = tokens.get(t.id);
-                        live.status = TokenStatus.RUNNING;
-                        live.leaseOwner = workerId;
-                        live.leaseExpiresAt = leaseUntil;
-                        live.updatedAt = now;
-                        claimed.add(live.clone());
-                    });
+            Iterator<Token> it = readyTasks.iterator();
+            while (it.hasNext() && claimed.size() < max) {
+                Token live = it.next();
+                if (live.availableAt > now) break;   // ordered by availableAt: the rest are future
+                if (queues != null && !queues.isEmpty() && !queues.contains(live.queue)) continue;
+                it.remove();                          // READY -> RUNNING leaves the claimable index
+                live.status = TokenStatus.RUNNING;
+                live.leaseOwner = workerId;
+                live.leaseExpiresAt = leaseUntil;
+                live.updatedAt = now;
+                claimed.add(live.clone());
+            }
             return claimed;
         }
 
@@ -177,10 +211,8 @@ public final class InMemoryStorage implements Storage {
         }
 
         @Override public List<String> childInstanceIds(String parentInstanceId) {
-            Set<String> parentTokens = new LinkedHashSet<>();
-            for (Token t : tokens.values()) {
-                if (t.instanceId.equals(parentInstanceId)) parentTokens.add(t.id);
-            }
+            NavigableMap<String, Token> byId = tokensByInstance.get(parentInstanceId);
+            Set<String> parentTokens = byId == null ? Set.of() : byId.keySet();
             return instances.values().stream()
                     .filter(i -> i.parentTokenId != null && parentTokens.contains(i.parentTokenId))
                     .map(i -> i.id)
@@ -235,13 +267,14 @@ public final class InMemoryStorage implements Storage {
         }
 
         @Override public Rows.QueueDepth queueDepth(long now) {
-            List<Token> ready = tokens.values().stream()
-                    .filter(t -> t.status == TokenStatus.READY)
-                    .filter(t -> t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE)
-                    .filter(t -> t.availableAt <= now)
-                    .toList();
-            long oldest = ready.stream().mapToLong(t -> t.availableAt).min().orElse(0);
-            return new Rows.QueueDepth(ready.size(), oldest);
+            int count = 0;
+            long oldest = 0;
+            for (Token t : readyTasks) {              // ordered by availableAt
+                if (t.availableAt > now) break;
+                if (count == 0) oldest = t.availableAt;
+                count++;
+            }
+            return new Rows.QueueDepth(count, oldest);
         }
 
         @Override public int countProcessedSince(long since) {
@@ -282,7 +315,13 @@ public final class InMemoryStorage implements Storage {
                     .toList();
             victims.forEach(id -> {
                 instances.remove(id);
-                tokens.values().removeIf(t -> t.instanceId.equals(id));
+                NavigableMap<String, Token> byId = tokensByInstance.remove(id);
+                if (byId != null) {
+                    for (Token t : byId.values()) {
+                        tokens.remove(t.id);
+                        readyTasks.remove(t);
+                    }
+                }
             });
             return victims.size();
         }
