@@ -67,7 +67,7 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `core` | JSON, the compiled graph model, retry policy, execution mode, wire records | `wiggle-core` |
 | `proto` | the `WiggleControlPlane` gRPC service + generated stubs | `wiggle-proto` |
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
-| `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, dashboard, in-memory store, injected `StorageFactory` | `wiggle-server` |
+| `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
 | `postgres` | PostgreSQL + H2 dialects | `wiggle-postgres` |
 | `mysql` | MySQL / MariaDB dialect | `wiggle-mysql` |
@@ -114,15 +114,20 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds a standalone server image (dashboard + **every** storage backend bundled,
-picked from the URL scheme); it reads the same env vars as the JAR ([§6](#6-configuration-reference)). TLS is set the same way —
-`WIGGLE_TLS_KEYSTORE` + a mounted keystore.
+The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=cell ∣ coordinator ∣ console`,
+every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
+([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
+keystore.
 
 ```bash
-# run the released image, in-memory, secured dashboard
-docker run --rm -p 8080:8080 -p 8090:8090 -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.8
+# run the released image: an in-memory server (gRPC :8080, /healthz probe optional)
+docker run --rm -p 8080:8080 hadielmougy/wiggle:2.1.8
 
-# a complete stack: server + Postgres, dashboard login, durable volume, no TLS
+# the ops console against it (same image, different role) → http://localhost:8090
+docker run --rm -p 8090:8090 -e WIGGLE_ROLE=console -e WIGGLE_URL=host.docker.internal:8080 \
+  -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:2.1.8
+
+# a complete stack: server + Postgres + console with login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
 
 # build locally / publish multi-arch
@@ -130,8 +135,8 @@ docker build -t wiggle .
 scripts/docker-release.sh                             # buildx amd64+arm64, pushes to a registry
 ```
 
-The image is the control plane + dashboard only; run **workers** as separate processes against
-`:8080` (your app on `wiggle-client`, or `./gradlew :example:runWorker`).
+The image is the control plane (+ optional console role) only; run **workers** as separate
+processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:runWorker`).
 
 ### 4.5 Handy scripts
 
@@ -373,55 +378,61 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 
 ## 7. Operations
 
-### 7.1 Web dashboard
+### 7.1 The ops console (web UI)
 
-Off by default. Set `WIGGLE_DASHBOARD_PORT` to a port and open `http://localhost:<port>`. A
-ClojureScript + Reagent single-page app (source in `dashboard-ui/`, compiled into the server jar)
-with four tabs: **Instances** (filter, plus a live trace overlaying token status onto the workflow
-diagram, cancel, and inline signal delivery), **Workflows** (render any workflow's compiled graph
-as a diagram), **Schedules** (create interval/cron schedules and delete them), and **Signals**
-(deliver to instances waiting on a signal). Any node can run its own; each shows the whole system.
-`./gradlew :server:build` compiles the bundle automatically (needs Node; `-PskipDashboard` or a
-missing Node toolchain falls back to a built-in minimal page). Dev loop: `cd dashboard-ui &&
-npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a server on :8090).
+The web UI is the standalone **ops console** — the `console` module, a separate process that is a
+**pure gRPC client** (embedded Tomcat + servlets). Server/cell nodes serve **no UI**; a node's
+`WIGGLE_DASHBOARD_PORT` (default `0` = off) exposes only the **`/healthz`** probe for
+liveness/readiness checks.
 
-**Auth.** Set `WIGGLE_DASHBOARD_PASSWORD` to protect the dashboard and its JSON API against one
-admin account (`WIGGLE_DASHBOARD_USER`, default `admin`). Browsers get a `/login` form that sets a
-12h HttpOnly session cookie (`/logout` ends it); programmatic clients can use HTTP Basic auth
-instead. `/healthz`, `/login` and `/api/login` are always open. Unset = unauthenticated (warning at
-startup). Credentials are cleartext over plain HTTP, so serve over TLS for anything exposed; set the
-same credentials on every node (sessions are per-node, not shared).
+One binary, two modes, chosen by env:
 
-**Pluggable auth (SSO).** The password login is just the default `DashboardAuth` (`PasswordAuth`).
-Implement `com.wiggle.server.http.DashboardAuth` to replace it with anything -- OIDC/SSO, a header
-trusted from a reverse proxy, mTLS-only -- typically in a separate (private) module, and inject it:
+```bash
+# direct mode: one cluster
+WIGGLE_URL=localhost:8080 ./gradlew :console:run          # → http://localhost:8090
 
-```java
-new WiggleServer(config, storageFactory, myAuth).start();
+# coordinator mode: a whole sharded namespace (fan queries across its cells,
+# route cancel/signal to the owning cell by instance id)
+WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_NAMESPACE=orders ./gradlew :console:run
+
+# or via the Docker image
+WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
 ```
 
-The dashboard calls `authenticate(exchange)` on every guarded request; when it returns empty an API
-caller gets 401 (plus your `apiChallenge()`, if any) and a browser is redirected to your
-`loginLocation()`. Register your own open endpoints (login redirect, OAuth callback, logout) from
-`install(HttpServer)`, using the `DashboardHttp` helpers to read/write; expose fields to the SPA
-from `describe()` (merged into `GET /api/auth`). Only `/healthz` and `/api/auth` are dashboard-owned
-and always open. Since a browser is redirected to the IdP *before* the SPA loads, no frontend change
-is needed. See `PasswordAuth` as a worked example and `DashboardAuthTest` for the contract.
+The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
+has four tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
+overlaying token status onto the workflow diagram, cancel, inline signal delivery), **Workflows**
+(render any compiled graph), **Schedules** (create/delete interval and cron schedules), and
+**Signals**. `./gradlew :console:build` compiles the bundle automatically (needs Node;
+`-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
+npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
 
-| Env var | System property | Default | Meaning |
-|---|---|---|---|
-| `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | HTTP port for the dashboard |
-| `WIGGLE_DASHBOARD_PASSWORD` | `wiggle.dashboard.password` | *(unset)* | admin password; unset = unauthenticated |
-| `WIGGLE_DASHBOARD_USER` | `wiggle.dashboard.user` | `admin` | admin username |
+**Auth.** Set `WIGGLE_DASHBOARD_PASSWORD` to require login as the **operator** account
+(`WIGGLE_DASHBOARD_USER`, default `admin`). Optionally also set
+`WIGGLE_DASHBOARD_VIEWER_PASSWORD` for a **read-only viewer** account
+(`WIGGLE_DASHBOARD_VIEWER_USER`, default `viewer`): a viewer sees everything but any mutating call
+(cancel, signal, schedule — every non-GET `/api/*`) is rejected. Browsers get a `/login` form that
+sets an HttpOnly session cookie; programmatic clients can use HTTP Basic auth. Unset password =
+open access (warning at startup). Credentials travel cleartext over plain HTTP, so serve over TLS
+for anything exposed.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WIGGLE_URL` | `localhost:8080` | direct mode: the one cluster to serve |
+| `WIGGLE_COORDINATOR_URL` + `WIGGLE_NAMESPACE` (+ `WIGGLE_REGION`) | *(unset)* | coordinator mode |
+| `WIGGLE_DASHBOARD_PORT` | `8090` | console HTTP port |
+| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
+| `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
+| `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console + the client certs it presents to cells |
 
 ### 7.1a Transport security (TLS / mTLS)
 
-Opt-in and shared by the gRPC API and the HTTP dashboard. A **keystore** turns TLS on for both;
+Opt-in and shared by the gRPC API and the console's HTTP. A **keystore** turns TLS on for both;
 a **truststore** additionally requires client certificates (mTLS on the server) and presents a
 client certificate (on a worker/client). Unset ⇒ plaintext for both. Stores are PKCS12 by default;
 a `.jks` path is loaded as JKS. Clients/workers read the same variables. TLS secures the channel
 and (with mTLS) authenticates the peer, but it is **not authorization** — any trusted peer may call
-any RPC; layer the dashboard's Basic auth or an external gateway on top for role separation.
+any RPC; layer the console's login/Basic auth or an external gateway on top for role separation.
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
@@ -448,7 +459,7 @@ cfg.jdbcPoolSize(), new PostgresDialect()))` — you depend only on the storage 
 ### 7.3 Signals, sub-workflows and schedules
 
 `awaitSignal(name)` parks an instance until the named signal arrives; no worker is held. Deliver
-via `client.signal(instanceId, name, payload)` (gRPC), the dashboard's Pending-signals panel, or
+via `client.signal(instanceId, name, payload)` (gRPC), the console's Signals tab, or
 `POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
 `awaitSignal(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
 branch instead. Signals are not buffered -- an early delivery is a retryable conflict.
