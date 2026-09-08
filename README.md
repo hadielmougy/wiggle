@@ -269,8 +269,28 @@ class OrderHandlers {
     public Order   reserveStock(Order o) { return o.withShipmentRef("shp-" + o.orderId()); }
     public Order   printLabel(Order o)   { return o.withTrackingLabel("DHL-" + o.orderId()); }
     public Order   capture(Order o)      { return o.log("captured"); }
+    // The combine is mandatory and explicit: fold what each branch produced onto the pre-fork
+    // order and return the COMPLETE post-join context — nothing merges implicitly.
+    public Order   merge(@Context Order base, @Arm("payment") Order pay, @Arm("shipping") Order ship) {
+        return base.withPaymentRef(pay.paymentRef())
+                   .withShipmentRef(ship.shipmentRef()).withTrackingLabel(ship.trackingLabel());
+    }
     public Order   notify(Order o)       { return o.withStatus("FULFILLED"); }
 }
+```
+
+Dynamic fan-out is just as explicit — **the element is the item's context** (`forEach` maps
+elements the way `fork` transforms contexts):
+
+```java
+.forEach("items", b -> b.step("price"))     // one isolated branch per element — scalars included
+        .combine("collect")
+
+Priced price(LineItem line) {                       // the parameter IS the element
+    Order base = Step.base(Order.class);            // frozen pre-forEach context, read-only
+    return new Priced(line.sku(), base.rate() * line.amount());
+}
+Order collect(@Context Order base, List<Priced> priced) { /* you decide what lands */ }
 ```
 
 Run it from any process — different teams can serve different steps of the *same* flow, each

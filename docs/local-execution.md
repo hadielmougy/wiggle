@@ -134,7 +134,7 @@ service WiggleControlPlane {
 message StepResult {
     string node_id = 1;                       // node the worker executed (server validates the path)
     oneof outcome {
-        google.protobuf.Value merge = 2;      // TASK: shallow-diff to merge into context
+        google.protobuf.Value merge = 2;      // TASK: the step's complete next context (replaces)
         bool predicate_value = 3;             // PREDICATE: branch selector
         StepFailure failure = 4;              // the step threw
     }
