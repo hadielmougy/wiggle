@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wiggle — durable workflows, cellular by design</title>
+<meta name="description" content="Wiggle is an open-source durable workflow engine. Describe a process as a graph; Wiggle runs it as a durable state machine that survives crashes, waits for humans, retries failures — and shards itself across isolated cells.">
+<meta property="og:title" content="Wiggle — durable workflows, cellular by design">
+<meta property="og:description" content="A durable workflow engine with no replay and no determinism rules: the workflow is data, not code. One JAR plus a database; cellular sharding built in. Java, Go, and Python workers.">
+<meta property="og:url" content="https://wiggle.sh/">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%8C%80%3C/text%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0c0e14;
+  --bg2: #12151f;
+  --panel: #161a26;
+  --panel2: #1b2030;
+  --border: #262c3d;
+  --text: #dde2ee;
+  --muted: #8b93a7;
+  --accent: #5b6cff;
+  --accent2: #8b96ff;
+  --green: #2f9e63;
+  --amber: #e0a63a;
+  --code-bg: #10131c;
+  --kw: #c792ea; --str: #a5d68a; --typ: #82aaff; --com: #5b6478; --num: #f0a45d; --fn: #e8d381;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fafbfd; --bg2: #f1f3f8; --panel: #ffffff; --panel2: #f5f6fb;
+    --border: #dde1ec; --text: #21283b; --muted: #5d6579;
+    --code-bg: #f2f4fa;
+    --kw: #7c3aed; --str: #227a3c; --typ: #1d5cc9; --com: #8a91a5; --num: #b25a12; --fn: #8a6d00;
+  }
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+
+/* ---- nav ---- */
+nav {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+nav .wrap { display: flex; align-items: center; gap: 22px; height: 58px; }
+nav .logo { font-weight: 700; font-size: 19px; color: var(--text); display: flex; gap: 8px; align-items: center; }
+nav .links { margin-left: auto; display: flex; gap: 20px; font-size: 14.5px; }
+nav .links a { color: var(--muted); }
+nav .links a:hover { color: var(--text); text-decoration: none; }
+nav .gh {
+  color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 13px; font-weight: 600;
+}
+nav .gh:hover { border-color: var(--accent); }
+@media (max-width: 700px) { nav .links a:not(.gh) { display: none; } }
+
+/* ---- hero ---- */
+.hero { padding: 76px 0 30px; text-align: center; background:
+  radial-gradient(60% 45% at 50% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent); }
+.hero h1 { font-size: clamp(34px, 6vw, 54px); line-height: 1.12; letter-spacing: -0.02em; }
+.hero h1 .grad {
+  background: linear-gradient(100deg, var(--accent2), var(--accent) 55%, #38bdf8);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero .sub { margin: 20px auto 0; max-width: 680px; font-size: 18.5px; color: var(--muted); }
+.hero .sub strong { color: var(--text); font-weight: 600; }
+.cta { margin-top: 30px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.btn {
+  display: inline-block; padding: 11px 22px; border-radius: 9px; font-weight: 600; font-size: 15.5px;
+}
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent2); text-decoration: none; }
+.btn.ghost { border: 1px solid var(--border); color: var(--text); }
+.btn.ghost:hover { border-color: var(--accent); text-decoration: none; }
+.badges { margin-top: 22px; display: flex; gap: 9px; justify-content: center; flex-wrap: wrap; font-size: 12.5px; }
+.badge { border: 1px solid var(--border); color: var(--muted); border-radius: 99px; padding: 3px 12px; background: var(--panel); }
+.badge b { color: var(--text); font-weight: 600; }
+
+/* ---- code ---- */
+.codecard {
+  margin: 44px auto 0; max-width: 780px; text-align: left;
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 18px 50px -22px rgba(0,0,0,.55);
+  overflow: hidden;
+}
+.codecard .bar { display: flex; gap: 7px; padding: 12px 16px; border-bottom: 1px solid var(--border); align-items: center; }
+.codecard .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+.codecard .bar span { margin-left: 8px; color: var(--muted); font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; }
+pre { padding: 18px 20px; overflow-x: auto; font-size: 13.8px; line-height: 1.62; }
+pre .k { color: var(--kw); } pre .s { color: var(--str); } pre .t { color: var(--typ); }
+pre .c { color: var(--com); font-style: italic; } pre .n { color: var(--num); } pre .f { color: var(--fn); }
+.hero .after { margin: 26px auto 0; max-width: 640px; color: var(--muted); font-size: 15.5px; }
+.hero .after strong { color: var(--text); }
+
+/* ---- sections ---- */
+section { padding: 72px 0 8px; }
+section h2 { font-size: 30px; letter-spacing: -0.015em; margin-bottom: 10px; }
+section .lead { color: var(--muted); max-width: 720px; margin-bottom: 34px; font-size: 16.5px; }
+section .lead strong { color: var(--text); }
+
+/* why grid */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 880px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 13px; padding: 20px 20px 18px;
+}
+.card h3 { font-size: 16px; margin-bottom: 8px; }
+.card p { font-size: 14.2px; color: var(--muted); }
+.card p code { font-size: 12.6px; color: var(--text); background: var(--bg2); padding: 1px 5px; border-radius: 5px; }
+
+/* two-col code walkthrough */
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 880px) { .duo { grid-template-columns: 1fr; } }
+.duo .codecard { margin: 0; max-width: none; }
+.stepnote { color: var(--muted); font-size: 14.5px; margin: 10px 4px 22px; }
+.stepnote b { color: var(--text); }
+
+/* diagram / chart */
+.figure { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+.figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 6px; }
+.figure figcaption { margin-top: 12px; color: var(--muted); font-size: 13.5px; text-align: center; }
+
+/* numbers */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 26px 0; }
+@media (max-width: 700px) { .stats { grid-template-columns: 1fr; } }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 13px; padding: 20px; text-align: center; }
+.stat .big { font-size: 30px; font-weight: 700; color: var(--accent2); letter-spacing: -0.02em; }
+.stat .what { color: var(--muted); font-size: 13.8px; margin-top: 5px; }
+
+/* modes table */
+table { width: 100%; border-collapse: collapse; font-size: 14.6px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 13px; background: var(--panel); }
+th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+td b { color: var(--text); }
+td { color: var(--muted); }
+
+/* polyglot */
+.langs { display: flex; gap: 16px; flex-wrap: wrap; }
+.lang { flex: 1 1 220px; background: var(--panel); border: 1px solid var(--border); border-radius: 13px; padding: 18px 20px; }
+.lang h3 { font-size: 15.5px; }
+.lang p { font-size: 13.8px; color: var(--muted); margin-top: 6px; }
+
+/* quickstart */
+.quick pre { border-radius: 0; }
+.quick .codecard { max-width: none; margin-top: 0; }
+
+/* footer */
+footer { margin-top: 90px; border-top: 1px solid var(--border); padding: 34px 0 46px; color: var(--muted); font-size: 14px; }
+footer .cols { display: flex; gap: 48px; flex-wrap: wrap; }
+footer h4 { color: var(--text); font-size: 13.5px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: .05em; }
+footer ul { list-style: none; }
+footer li { margin: 5px 0; }
+footer a { color: var(--muted); }
+footer a:hover { color: var(--text); }
+footer .fin { margin-top: 34px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <a class="logo" href="#">🌀 wiggle</a>
+  <div class="links">
+    <a href="#how">How it works</a>
+    <a href="#cellular">Architecture</a>
+    <a href="#performance">Performance</a>
+    <a href="#quickstart">Quickstart</a>
+    <a href="https://github.com/hadielmougy/wiggle/tree/main/docs">Docs</a>
+    <a class="gh" href="https://github.com/hadielmougy/wiggle">GitHub&nbsp;↗</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <h1>Durable workflows,<br><span class="grad">cellular by design.</span></h1>
+  <p class="sub">Describe a process as a graph. Wiggle runs it as a <strong>durable state machine</strong>
+  that survives crashes, waits for humans, retries failures — and <strong>shards itself across isolated
+  cells</strong> when one database is no longer enough.</p>
+  <div class="cta">
+    <a class="btn primary" href="#quickstart">Get started</a>
+    <a class="btn ghost" href="https://github.com/hadielmougy/wiggle">Star on GitHub</a>
+  </div>
+  <div class="badges">
+    <span class="badge"><b>Apache-2.0</b></span>
+    <span class="badge">Java <b>21+</b></span>
+    <span class="badge">clients: <b>Java · Go · Python</b></span>
+    <span class="badge">Maven Central <b>io.github.hadielmougy</b></span>
+  </div>
+
+  <div class="codecard">
+    <div class="bar"><i></i><i></i><i></i><span>OrderWorkflow.java</span></div>
+<pre><span class="t">Blueprint</span> orders = <span class="t">Workflow</span>.<span class="f">define</span>(<span class="s">"order-fulfilment"</span>)
+        .<span class="f">step</span>(<span class="s">"validate"</span>)
+        .<span class="f">gate</span>(<span class="s">"in-stock"</span>)
+        .<span class="f">fork</span>(<span class="t">Branch</span>.<span class="f">of</span>(<span class="s">"payment"</span>,  s -&gt; s.<span class="f">step</span>(<span class="s">"authorise"</span>).<span class="f">step</span>(<span class="s">"capture"</span>)),
+              <span class="t">Branch</span>.<span class="f">of</span>(<span class="s">"shipping"</span>, s -&gt; s.<span class="f">step</span>(<span class="s">"reserve-stock"</span>).<span class="f">step</span>(<span class="s">"print-label"</span>)))
+        .<span class="f">combine</span>(<span class="s">"merge"</span>)
+        .<span class="f">step</span>(<span class="s">"notify"</span>)
+        .<span class="f">build</span>();</pre>
+  </div>
+  <p class="after">That's a <strong>complete, durable, parallel workflow</strong>. No YAML, no replay,
+  no determinism rules to memorize — a compiled graph the server owns, and plain Java (or Go, or Python)
+  methods that serve its steps.</p>
+</div></header>
+
+<section id="why"><div class="wrap">
+  <h2>Why teams pick it</h2>
+  <p class="lead">Durable execution without the replay tax, and a sharding model that treats
+  <strong>isolation as a first-class deployment primitive</strong> — not an afterthought.</p>
+  <div class="grid">
+    <div class="card"><h3>🧫 Cellular by design</h3>
+      <p>A namespace is a <em>cell</em>: its own database, its own cluster. A Raft coordinator places
+      instances by consistent hashing over <em>epochs</em>; the instance id carries its own routing
+      (<code>orders.e0.s3.01J…</code>). Grow by adding cells; resharding never migrates data.</p></div>
+    <div class="card"><h3>💾 Durable, honestly</h3>
+      <p>Every instance is DB-backed rows, not a call stack. Exactly-once dispatch, at-least-once
+      execution, lease-based recovery when a worker dies mid-step.</p></div>
+    <div class="card"><h3>🧭 State machine, not glue code</h3>
+      <p><code>step</code>, <code>gate</code>, <code>fork</code>, <code>choose</code>, timers, signals,
+      sub-workflows, <code>doWhile</code>, <code>forEach</code> — a compiled graph, versioned by content
+      hash. The workflow is <em>data</em>, not replayed code, so there is no determinism contract to get wrong.</p></div>
+    <div class="card"><h3>🔌 Pull-based &amp; polyglot</h3>
+      <p>Workers long-poll over gRPC: no inbound connectivity, no broker, backpressure built in.
+      Java, Go, and Python workers interoperate on one server — one instance, three languages.</p></div>
+    <div class="card"><h3>🪶 Lightweight &amp; embeddable</h3>
+      <p>One JAR plus a database (PostgreSQL, MySQL, Oracle, SQL Server — or in-memory for dev).
+      Embed the server in your JVM for tests. The coordinator is opt-in. No Elasticsearch, no sidecar
+      mesh, no mandatory Kubernetes.</p></div>
+    <div class="card"><h3>🖥 Operable from day one</h3>
+      <p>A web ops console with a live trace of every instance over the workflow diagram — cancel,
+      deliver signals, schedules, search by instance or correlation id. A CLI for the control plane.
+      Health probes and queue-lag monitoring built in.</p></div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <p class="lead"><strong>Topology and logic are separate.</strong> The graph is pure structure; handlers
+  are plain methods matched by name. A method's <em>signature</em> defines its step kind — a
+  <code>boolean</code> return is a gate, <code>void</code> is an effect, anything else is a task whose
+  return <em>replaces</em> the context. Nothing merges implicitly, ever.</p>
+  <div class="duo">
+    <div>
+      <div class="codecard"><div class="bar"><i></i><i></i><i></i><span>topology — what happens, in what order</span></div>
+<pre><span class="t">Blueprint</span> orders = <span class="t">Workflow</span>.<span class="f">define</span>(<span class="s">"order-fulfilment"</span>)
+    .<span class="f">step</span>(<span class="s">"validate"</span>)
+    .<span class="f">gate</span>(<span class="s">"in-stock"</span>)      <span class="c">// false ⇒ ends cleanly</span>
+    .<span class="f">fork</span>(
+        <span class="t">Branch</span>.<span class="f">of</span>(<span class="s">"payment"</span>, s -&gt; s
+            .<span class="f">step</span>(<span class="s">"authorise"</span>,
+                  <span class="t">RetryPolicy</span>.<span class="f">exponential</span>(<span class="n">5</span>, ofMillis(<span class="n">100</span>)))
+            .<span class="f">step</span>(<span class="s">"capture"</span>)),
+        <span class="t">Branch</span>.<span class="f">of</span>(<span class="s">"shipping"</span>, s -&gt; s
+            .<span class="f">step</span>(<span class="s">"reserve-stock"</span>)
+            .<span class="f">sleep</span>(<span class="s">"await-warehouse"</span>, ofMillis(<span class="n">300</span>))
+            .<span class="f">step</span>(<span class="s">"print-label"</span>)))
+    .<span class="f">combine</span>(<span class="s">"merge"</span>)       <span class="c">// isolated branches rejoin HERE</span>
+    .<span class="f">step</span>(<span class="s">"notify"</span>)
+    .<span class="f">build</span>();</pre></div>
+      <p class="stepnote"><b>Branches run on isolated context copies</b> — siblings can't see each
+      other's writes. The only way back to shared state is the explicit combine.</p>
+    </div>
+    <div>
+      <div class="codecard"><div class="bar"><i></i><i></i><i></i><span>logic — plain methods, matched by name</span></div>
+<pre><span class="k">@Handlers</span>(<span class="s">"order-fulfilment"</span>)
+<span class="k">class</span> <span class="t">OrderHandlers</span> {
+  <span class="t">Order</span>   <span class="f">validate</span>(<span class="t">Order</span> o)  { <span class="k">return</span> o.<span class="f">withStatus</span>(<span class="s">"VALIDATED"</span>); }
+  <span class="k">boolean</span> <span class="f">inStock</span>(<span class="t">Order</span> o)   { <span class="k">return</span> o.<span class="f">quantity</span>() &gt; <span class="n">0</span>; }
+  <span class="t">Order</span>   <span class="f">authorise</span>(<span class="t">Order</span> o) { <span class="k">return</span> o.<span class="f">withPaymentRef</span>(<span class="f">auth</span>(o)); }
+
+  <span class="c">// the combine is mandatory: fold the branches' results onto the</span>
+  <span class="c">// pre-fork base and return the COMPLETE post-join context</span>
+  <span class="t">Order</span> <span class="f">merge</span>(<span class="k">@Context</span> <span class="t">Order</span> base,
+              <span class="k">@Arm</span>(<span class="s">"payment"</span>)  <span class="t">Order</span> pay,
+              <span class="k">@Arm</span>(<span class="s">"shipping"</span>) <span class="t">Order</span> ship) {
+    <span class="k">return</span> base.<span class="f">withPaymentRef</span>(pay.<span class="f">paymentRef</span>())
+               .<span class="f">withShipmentRef</span>(ship.<span class="f">shipmentRef</span>());
+  }
+}</pre></div>
+      <p class="stepnote">Handlers can use clocks, randomness, any library — and be
+      <b>redeployed at will</b>. No replay means no history to stay compatible with.</p>
+    </div>
+  </div>
+  <p class="lead" style="margin-top:18px">Long-running reality is first-class: signal waits with
+  deadlines and escalation (<code>awaitSignal("manager-approval", ofHours(48), …)</code>), cron and
+  interval schedules with exactly-once firing across leader failover, sub-workflows, cancellation,
+  and dynamic fan-out where <strong>the element is the item's context</strong>.</p>
+</div></section>
+
+<section id="cellular"><div class="wrap">
+  <h2>Architecture</h2>
+  <p class="lead">Clients and pull-based workers speak gRPC to cells. Each cell is a complete
+  cluster with its own database; an optional <strong>Raft coordinator</strong> (embedded Ratis +
+  RocksDB — no external store) publishes shard→cell rings as <em>epochs</em>. New instances follow
+  the new ring; in-flight ones finish where they live — <strong>resharding never migrates data</strong>,
+  and any party can compute an instance's owning cell from its id alone.</p>
+  <figure class="figure">
+    <img src="img/architecture.svg" alt="Wiggle architecture: clients and workers talk gRPC to cells; each namespace is a cell with its own cluster and database; a Raft coordinator places namespaces on cells by consistent hashing over epochs; an ops console and CLI operate everything.">
+  </figure>
+</div></section>
+
+<section id="performance"><div class="wrap">
+  <h2>Performance</h2>
+  <p class="lead">Honest numbers from honest hardware — everything below measured on
+  <strong>one MacBook Pro</strong> (M2 Pro, 10 cores), methodology and tools in the repo.</p>
+  <div class="stats">
+    <div class="stat"><div class="big">91.8k</div><div class="what">durable step completions/sec —
+      engine embedded in one JVM (11,478 instances/sec, batched local chaining)</div></div>
+    <div class="stat"><div class="big">~300/s</div><div class="what">workflow starts sustained with
+      sub-second end-to-end latency — real kind cluster, PostgreSQL-backed cells</div></div>
+    <div class="stat"><div class="big">5.4s</div><div class="what">start-availability gap when the
+      coordinator is SIGKILL-ed under load — state recovers exactly; running work never notices</div></div>
+  </div>
+  <figure class="figure">
+    <img src="img/bench-sojourn.svg" alt="Probe sojourn over time: at 300 starts/sec latency settles below one second; at 340 the backlog compounds. Ceiling ≈ 300–340 starts/sec on one laptop.">
+    <figcaption>Probe sojourn (start → COMPLETED) while ramping offered load: flat means the cluster
+    keeps up; monotonic growth means backlog is compounding. All components shared the same 10 cores —
+    a floor, not a ceiling.</figcaption>
+  </figure>
+</div></section>
+
+<section id="deploy"><div class="wrap">
+  <h2>Start embedded, end sharded</h2>
+  <p class="lead">One codebase, four postures — <strong>without rewriting your workflows</strong>.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Mode</th><th>What it is</th><th>When</th></tr>
+    <tr><td><b>Embedded</b></td><td><code>WiggleServer</code> inside your JVM, in-memory store</td><td>dev, tests, single-process apps</td></tr>
+    <tr><td><b>Standalone</b></td><td>one node, gRPC <code>:8080</code>, in-memory or a database</td><td>small services, first deploy</td></tr>
+    <tr><td><b>Cluster</b></td><td>several nodes on one database — shared queue, leader runs timers/recovery</td><td>production, HA</td></tr>
+    <tr><td><b>Cellular</b></td><td>many cells (each its own DB + cluster) behind a coordinator</td><td>multi-tenant isolation, scale-out</td></tr>
+  </table></div>
+
+  <div class="langs" style="margin-top:34px">
+    <div class="lang"><h3>☕ Java</h3><p>The reference client: DSL, <code>@Handlers</code>, embedded
+      server for tests. Maven Central.</p></div>
+    <div class="lang"><h3>🐹 Go</h3><p><a href="https://github.com/hadielmougy/wiggle-go">wiggle-go</a> —
+      idiomatic structs-and-interfaces workers, same wire protocol.</p></div>
+    <div class="lang"><h3>🐍 Python</h3><p><a href="https://github.com/hadielmougy/wiggle-python">wiggle-python</a> —
+      decorator-free handler classes, contextvars step scope.</p></div>
+  </div>
+</div></section>
+
+<section id="quickstart" class="quick"><div class="wrap">
+  <h2>Quickstart</h2>
+  <p class="lead">The fastest end-to-end is one JVM: embedded server, one worker, one instance.</p>
+  <div class="duo">
+    <div class="codecard"><div class="bar"><i></i><i></i><i></i><span>build.gradle.kts</span></div>
+<pre><span class="f">implementation</span>(<span class="s">"io.github.hadielmougy:wiggle-client:2.1.8"</span>)
+<span class="f">implementation</span>(<span class="s">"io.github.hadielmougy:wiggle-server:2.1.8"</span>)  <span class="c">// embed for tests</span>
+<span class="f">implementation</span>(<span class="s">"io.github.hadielmougy:wiggle-postgres:2.1.8"</span>) <span class="c">// + your storage</span></pre></div>
+    <div class="codecard"><div class="bar"><i></i><i></i><i></i><span>or run the server as a container</span></div>
+<pre>docker run --rm -p <span class="n">8080</span>:<span class="n">8080</span> \
+  -e WIGGLE_JDBC_URL=jdbc:postgresql://db:<span class="n">5432</span>/wiggle \
+  -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
+  hadielmougy/wiggle:<span class="n">2.1.8</span></pre></div>
+  </div>
+  <div class="codecard" style="max-width:none;margin-top:18px"><div class="bar"><i></i><i></i><i></i><span>hello, durable world</span></div>
+<pre><span class="k">try</span> (<span class="t">WiggleServer</span> server = <span class="k">new</span> <span class="t">WiggleServer</span>(<span class="t">ServerConfig</span>.<span class="f">fromEnvironment</span>()).<span class="f">start</span>();
+     <span class="t">WiggleClient</span> client = <span class="k">new</span> <span class="t">WiggleClient</span>(server.<span class="f">baseUrl</span>());
+     <span class="t">Worker</span> worker = <span class="k">new</span> <span class="t">Worker</span>(client, <span class="s">"worker-1"</span>).<span class="f">register</span>(greet).<span class="f">handlers</span>(<span class="k">new</span> <span class="t">GreetHandlers</span>())) {
+    worker.<span class="f">start</span>();
+    <span class="t">String</span> id = client.<span class="f">start</span>(greet, <span class="t">Map</span>.<span class="f">of</span>(<span class="s">"name"</span>, <span class="s">"ada"</span>));
+    <span class="t">InstanceView</span> result = client.<span class="f">awaitCompletion</span>(id, ofSeconds(<span class="n">10</span>));   <span class="c">// → COMPLETED</span>
+}</pre></div>
+  <p class="stepnote" style="margin-top:16px">Then: <a href="https://github.com/hadielmougy/wiggle/blob/main/docs/onboarding.md">onboarding
+  + full configuration reference</a> · <a href="https://github.com/hadielmougy/wiggle/blob/main/docs/dsl-cookbook.md">the DSL cookbook</a>
+  (every operator, runnable) · <a href="presentation.html">the 5-minute slide tour</a>.</p>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="cols">
+    <div>
+      <h4>Project</h4>
+      <ul>
+        <li><a href="https://github.com/hadielmougy/wiggle">GitHub</a></li>
+        <li><a href="https://central.sonatype.com/artifact/io.github.hadielmougy/wiggle-client">Maven Central</a></li>
+        <li><a href="https://github.com/hadielmougy/wiggle/issues">Issues &amp; roadmap</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Docs</h4>
+      <ul>
+        <li><a href="https://github.com/hadielmougy/wiggle/blob/main/docs/onboarding.md">Onboarding &amp; configuration</a></li>
+        <li><a href="https://github.com/hadielmougy/wiggle/blob/main/docs/dsl-cookbook.md">DSL cookbook</a></li>
+        <li><a href="https://github.com/hadielmougy/wiggle/blob/main/docs/sharding-and-epochs.md">Sharding &amp; epochs</a></li>
+        <li><a href="https://github.com/hadielmougy/wiggle/blob/main/docs/queues.md">Queues</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Clients</h4>
+      <ul>
+        <li><a href="https://github.com/hadielmougy/wiggle">Java</a></li>
+        <li><a href="https://github.com/hadielmougy/wiggle-go">Go</a></li>
+        <li><a href="https://github.com/hadielmougy/wiggle-python">Python</a></li>
+      </ul>
+    </div>
+  </div>
+  <p class="fin">Apache-2.0 · built with care for processes that must not lose their place. · <b>wiggle.sh</b></p>
+</div></footer>
+
+</body>
+</html>
