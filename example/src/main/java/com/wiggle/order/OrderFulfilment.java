@@ -28,31 +28,18 @@ public final class OrderFulfilment {
 
     public static Blueprint blueprint() {
         return Workflow.define("order-fulfilment").execution(ExecutionMode.LOCAL_ASYNC)
-
                 .step("validate")
-
-                // A false guard ends the instance successfully, like an empty stream.
                 .gate("in-stock")
-
                 .fork(
                         Branch.of("payment", s -> s
-                                // A flaky downstream: the retry policy rides on the topology node.
                                 .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(100)))
                                 .step("capture")),
-
                         Branch.of("shipping", s -> s
                                 .step("reserve-stock")
-                                // A server-side timer: no worker is held while we wait.
-                                //.sleep("await-warehouse", Duration.ofMillis(100))
                                 .step("print-label")))
-
-                // Combines are always explicit: OrderHandlers.merge folds the payment refs and the
-                // shipping labels onto the pre-fork order and returns the COMPLETE post-join context.
                 .combine("merge")
-
                 .step("notify")
                 .effect("audit")
-
                 .build();
     }
 }
