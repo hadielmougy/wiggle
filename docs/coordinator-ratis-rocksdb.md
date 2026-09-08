@@ -103,19 +103,30 @@ the recommended long-term simplification.
 
 ---
 
-## 5. Snapshots & DR (what you now own)
+## 5. Snapshots & DR: RocksDB *is* the snapshot
 
-- **Snapshot** = a RocksDB `Checkpoint` taken at the last-applied Raft index, registered as a Ratis
-  `SnapshotInfo`. `takeSnapshot()` returns that index; the Raft log before it is compacted.
-- **Catch-up / new node** = Ratis ships the checkpoint via `InstallSnapshot`, then replays the tail of the
-  log. Adding/removing a coordinator node = a Ratis **reconfiguration** (`setConfiguration`).
-- **Backup** = copy a checkpoint directory (or add a follower and let it snapshot). This is the real new
-  operational surface — but the dataset is small, so a full snapshot is cheap.
+There is no checkpoint/copy step — the durable RocksDB under the state-machine dir is itself the
+snapshot, made exact by one invariant:
 
-> **Not yet wired:** `takeSnapshot()` writes the RocksDB checkpoint, but snapshot **install/restore** is
-> not hooked up, so a durable restart currently replays the log from the beginning. That is fine for a
-> single-member dev group; it must be finished before multi-node or long-lived deployments.
-> `CoordStateMachine` carries this caveat inline.
+- **The applied `TermIndex` commits in the same `WriteBatch` as every command's writes**
+  (`meta/applied`). RocksDB recovers to a batch boundary, so state and applied-position always agree —
+  even after a crash that loses an unsynced WAL suffix (each batch is `sync=false`; the Raft log simply
+  redelivers the lost entries from exactly the recovered position).
+- **Boot** reads `meta/applied` and reports it as the `SnapshotInfo`, so Ratis resumes applying at the
+  next index — a durable restart applies nothing it already holds (proved by the restart test), instead
+  of replaying the whole log.
+- **`takeSnapshot()`** = flush RocksDB (make everything applied so far durable in the SSTs) + advance the
+  reported snapshot position. It runs automatically every `snapshotEvery` applied entries (URI param,
+  default 4096), which is what lets Ratis purge the log; purge keeps the safe default (min of all peers'
+  commit index), so a lagging live follower never loses entries it still needs.
+- **Poison safety**: an undecodable command is applied as a deterministic `ok=false` reply (identical on
+  every replica) rather than a throw that would stall the `StateMachineUpdater`; a RocksDB fault, by
+  contrast, propagates — fail-stop beats diverging.
+- **Backup** = stop-copy the `rocksdb` dir (or add a follower). Seeding a **brand-new member** whose log
+  was already purged is the one manual step: copy the `rocksdb` dir before first start — snapshot *file
+  shipping* (`InstallSnapshot` with real files) is the remaining unwired piece, and the reported
+  `SnapshotInfo` deliberately lists no files until it lands.
+- Adding/removing a coordinator node = a Ratis **reconfiguration** (`setConfiguration`).
 
 ---
 
@@ -177,11 +188,11 @@ Server/Cassandra) — that decision is unchanged and unaffected.
 
 ## 8. Open questions
 
-- **Snapshot install/restore** — the concrete next task (see §5): wire Ratis `InstallSnapshot` +
-  restore-from-checkpoint so a durable restart doesn't replay the whole log. Required before multi-node.
-- **Read level for the reconciler.** It only runs on the leader; leader-local reads are fine and cheaper
-  than read-index. Client-facing resolves already go through the gRPC layer, not this store.
-- **Snapshot cadence** — by log size vs. applied-index interval (Ratis config).
+- **Snapshot file shipping** — restart/resume and log compaction are wired (§5); what remains is
+  `InstallSnapshot` with real files so a brand-new (or far-behind, post-purge) member seeds itself
+  without the manual rocksdb-dir copy. Needed before casual multi-node membership changes.
+- **Read level for the reconciler.** Reads are read-index linearizable now (`Read.Option.LINEARIZABLE`);
+  if coordinator read volume ever matters, the leader-only reconciler could drop to leader-local reads.
 - **Option A vs B** for leadership — shipped A, plan B.
-- **Multi-node ops** — membership changes (`setConfiguration`), peer/`id` wiring, and backup runbook, once
-  install/restore lands.
+- **Multi-node ops** — membership changes (`setConfiguration`), peer/`id` wiring, and backup runbook,
+  once file shipping lands.

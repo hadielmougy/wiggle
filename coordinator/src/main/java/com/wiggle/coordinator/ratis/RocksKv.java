@@ -1,6 +1,6 @@
 package com.wiggle.coordinator.ratis;
 
-import org.rocksdb.Checkpoint;
+import org.rocksdb.FlushOptions;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksIterator;
@@ -29,6 +29,7 @@ final class RocksKv implements AutoCloseable {
     static final String DEF = "def/";             // def/<ns>/<name>        -> definition blob
     static final String NS = "ns/";               // ns/<namespace>         -> namespace blob
     static final String LEADER = "leader";        // leader                 -> {holder, expiresAt}
+    static final String APPLIED = "meta/applied"; // meta/applied           -> {term, index} of the last applied entry
 
     private final RocksDB db;
     private final Options options;
@@ -99,9 +100,9 @@ final class RocksKv implements AutoCloseable {
         return out;
     }
 
-    /** RocksDB checkpoint at the current state -- the raw material for a Ratis snapshot (§5). */
-    void checkpointTo(String dir) {
-        try (Checkpoint cp = Checkpoint.create(db)) { cp.createCheckpoint(dir); }
+    /** Blocking memtable flush to SSTs -- makes everything written so far durable without the WAL (§5). */
+    void flush() {
+        try (FlushOptions fo = new FlushOptions().setWaitForFlush(true)) { db.flush(fo); }
         catch (Exception e) { throw new IllegalStateException(e); }
     }
 
@@ -115,7 +116,12 @@ final class RocksKv implements AutoCloseable {
     /** A prefix-scan entry. */
     record Kv(String key, String value) {}
 
-    /** A write batch; call {@link #commit()} once at the end of applyTransaction. */
+    /**
+     * A write batch; call {@link #commit()} once at the end of applyTransaction. sync=false is safe
+     * because the applied {@link #APPLIED} index rides in the same (atomic) batch: after a crash RocksDB
+     * recovers to a batch boundary, so state and applied-position agree, and the Raft log redelivers the
+     * lost suffix from exactly that position.
+     */
     final class Batch {
         private final WriteBatch wb = new WriteBatch();
         Batch put(String k, String v) { try { wb.put(bytes(k), bytes(v)); } catch (Exception e) { throw new IllegalStateException(e); } return this; }

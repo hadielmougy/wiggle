@@ -33,17 +33,27 @@ public final class RatisCoordinatorStore implements CoordinatorStore {
 
     // ---- submit a write to the log, or a linearizable read-query ----
     private CoordCommand.Result write(CoordCommand.Op op, Map<String, Object> args) {
+        CoordCommand.Result r;
         try {
             var reply = client.io().send(Message.valueOf(bs(new CoordCommand(op, args).encode())));
-            return CoordCommand.Result.decode(reply.getMessage().getContent().toByteArray());
+            r = CoordCommand.Result.decode(reply.getMessage().getContent().toByteArray());
         } catch (Exception e) { throw new IllegalStateException("ratis write " + op + " failed", e); }
+        return checked(op, r);
     }
 
     private CoordCommand.Result read(CoordCommand.Op op, Map<String, Object> args) {
+        CoordCommand.Result r;
         try {
             var reply = client.io().sendReadOnly(Message.valueOf(bs(new CoordCommand(op, args).encode())));
-            return CoordCommand.Result.decode(reply.getMessage().getContent().toByteArray());
+            r = CoordCommand.Result.decode(reply.getMessage().getContent().toByteArray());
         } catch (Exception e) { throw new IllegalStateException("ratis read " + op + " failed", e); }
+        return checked(op, r);
+    }
+
+    /** The state machine rejects (ok=false) rather than throws, so poison entries can't stall apply. */
+    private static CoordCommand.Result checked(CoordCommand.Op op, CoordCommand.Result r) {
+        if (!r.ok()) throw new IllegalStateException("coordinator " + op + " rejected: " + r.value());
+        return r;
     }
 
     // ---- policy (CAS-guarded) ----
