@@ -22,10 +22,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The engine merges a task result into the context with delete-on-null semantics (the inverse of
- * {@link com.wiggle.core.Json#shallowDiff}): a null value removes its key rather than persisting a
- * JSON null. Exercised end-to-end for a step that drops a field, and for a {@code fork}'s combine
- * clearing its per-branch scratch keys.
+ * A step's return REPLACES the context, so a key the handler drops is simply gone — never left
+ * behind as a lingering JSON null (top-level nulls in a return are dropped, not persisted).
+ * Exercised end-to-end for a step that drops a field, and for a {@code fork}'s combine whose
+ * per-branch scratch keys must stay out of the final context.
  */
 class ContextNullDeleteTest {
 
@@ -70,7 +70,7 @@ class ContextNullDeleteTest {
     static final class TrimH {
         public Map<String, Object> trim(Map<String, Object> ctx) {
             Map<String, Object> next = new LinkedHashMap<>(ctx);
-            next.remove("drop");            // shallowDiff emits drop -> null
+            next.remove("drop");            // the return replaces the context: drop is gone
             return next;
         }
     }
