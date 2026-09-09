@@ -32,11 +32,14 @@ public final class WorkflowEngine {
     private final long fallbackPollMillis = envLong("WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
     /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
-     *  10ms) and doubles its wait on every empty round up to the configured interval. Work produced
-     *  on ANOTHER node shortly after this one parks — the common case under steady load, where a
-     *  poller re-parks right before the next task lands — is discovered in the fast window instead
-     *  of a uniform [0, fallback) delay; a long-idle poll decays to the configured cadence, so the
-     *  idle DB cost is bounded. A notifier signal (local activity) resets the ramp to fast. */
+     *  10ms) and doubles its wait on every empty unsignaled round up to the configured interval.
+     *  Work produced on ANOTHER node shortly after this one parks — the common case under steady
+     *  load, where a poller re-parks right before the next task lands — is discovered in the fast
+     *  window instead of a uniform [0, fallback) delay. A notifier signal jumps the wait straight to
+     *  the configured interval: a signal proves the LOCAL wake path is covering this node, so fast
+     *  re-claims add DB load without adding discovery (an earlier reset-to-fast-on-signal kept polls
+     *  in fast mode on busy nodes and measurably cost ceiling throughput). Extra cost is therefore
+     *  ≤2 claims per park, independent of load. */
     private final boolean adaptiveFallbackPoll = Boolean.parseBoolean(
             System.getProperty("wiggle.adaptive.fallback",
                     System.getenv().getOrDefault("WIGGLE_ADAPTIVE_FALLBACK_POLL", "false")));
@@ -286,7 +289,9 @@ public final class WorkflowEngine {
             since = notifier.snapshot(queues);
             tasks = claimNow(workerId, queues, max, lease);
             if (adaptiveFallbackPoll) {
-                fallbackWait = signaled ? rampStart : Math.min(fallbackWait * 2, fallbackPollMillis);
+                // Signaled: local wake-on-produce covers this node — no point re-claiming fast.
+                // Unsignaled empty round: decay toward the configured interval (25 → 50 → cap).
+                fallbackWait = signaled ? fallbackPollMillis : Math.min(fallbackWait * 2, fallbackPollMillis);
             }
         }
         if (!tasks.isEmpty()) {
