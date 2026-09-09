@@ -40,13 +40,27 @@ final class HandlerBinder {
 
     private HandlerBinder() {}
 
-    /** An {@link Handlers @Handlers} object's inventory: its step methods keyed by canonical name,
-     *  and its {@link Decode @Decode} decoders keyed by decoded type. */
+    /** A handler source's inventory: its step methods keyed by canonical name, its
+     *  {@link Decode @Decode} decoders keyed by decoded type, and — for typed activities that
+     *  implement {@link Compensable} — the compensator method per step name. */
     record HandlerSet(String workflow, Object target, Map<String, Method> byName,
-                      Map<Class<?>, Method> decoders) {}
+                      Map<Class<?>, Method> decoders, Map<String, Method> compensators) {
+        HandlerSet(String workflow, Object target, Map<String, Method> byName,
+                   Map<Class<?>, Method> decoders) {
+            this(workflow, target, byName, decoders, Map.of());
+        }
+    }
 
-    /** One resolved binding: the executable wrapper plus where it plugs into the worker. */
-    record Binding(String activity, String step, String queue, ActivityHandler handler) {}
+    /** One resolved binding: the executable wrapper plus where it plugs into the worker.
+     *  {@code compensator} is non-null only for a typed activity implementing {@link Compensable};
+     *  it receives the post-step context snapshot (wired to the engine's compensation phase when
+     *  that lands — see docs/saga-compensation.md). */
+    record Binding(String activity, String step, String queue, ActivityHandler handler,
+                   ActivityHandler compensator) {
+        Binding(String activity, String step, String queue, ActivityHandler handler) {
+            this(activity, step, queue, handler, null);
+        }
+    }
 
     /** Everything {@link #bind} decided: the bindings, plus the steps this object doesn't serve
      *  (informational — another worker may serve them). */
@@ -115,9 +129,80 @@ final class HandlerBinder {
             }
             bindings.add(new Binding(node.activity(), node.name(),
                     node.queue() != null ? node.queue() : set.workflow(),
-                    buildHandler(set, node, m)));
+                    buildHandler(set, node, m),
+                    compensatorHandler(set, node)));
         }
         return new Result(List.copyOf(bindings), List.copyOf(unserved));
+    }
+
+    /** The compensator wrapper for a step, when its typed activity implements {@link Compensable}:
+     *  decodes the post-step snapshot into the method's parameter type and invokes it (an effect —
+     *  no return). Null when the step has no compensator. */
+    private static ActivityHandler compensatorHandler(HandlerSet set, Node node) {
+        Method comp = set.compensators().get(canonicalName(node.name()));
+        if (comp == null) return null;
+        return snapshot -> {
+            call(comp, set.target(), new Object[]{
+                    decode(snapshot, comp.getParameterTypes()[0], set.target(), set.decoders())});
+            return null;
+        };
+    }
+
+    /**
+     * Inventories one typed activity — an object implementing exactly one of {@link Activity},
+     * {@link GateActivity}, or {@link EffectActivity} — into a single-step {@link HandlerSet} bound
+     * to {@code workflow}. The step name is {@code nameOverride} when given, else the instance's
+     * {@code name()} (default: the class's simple name), matched under the same canonical folding
+     * as method names. If the instance also implements {@link Compensable}, its compensator method
+     * is inventoried alongside. {@link Decode @Decode} methods on the class are honoured.
+     */
+    static HandlerSet scanActivity(String workflow, Object typed, String nameOverride) {
+        if (typed == null) throw new IllegalArgumentException("activity instance is required");
+        int roles = (typed instanceof Activity ? 1 : 0) + (typed instanceof GateActivity ? 1 : 0)
+                + (typed instanceof EffectActivity ? 1 : 0);
+        if (roles != 1) {
+            throw new IllegalArgumentException(typed.getClass().getName() + " must implement exactly one of "
+                    + "Activity, GateActivity, EffectActivity (found " + roles + ")");
+        }
+        String primary = typed instanceof Activity ? "execute" : typed instanceof GateActivity ? "test" : "apply";
+        Method m = concreteMethod(typed, primary);
+        String name = nameOverride;
+        if (name == null || name.isBlank()) {
+            if (typed.getClass().isSynthetic() || typed.getClass().isAnonymousClass()) {
+                throw new IllegalArgumentException("a lambda or anonymous activity has no usable class "
+                        + "name — register it with an explicit name (activity/gate/effect overloads)");
+            }
+            try {
+                name = (String) typed.getClass().getMethod("name").invoke(typed);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("could not read name() of " + typed.getClass().getName(), e);
+            }
+        }
+        if (name == null || name.isBlank() || canonicalName(name).isEmpty()) {
+            throw new IllegalArgumentException(typed.getClass().getName() + " has no usable step name — "
+                    + "a lambda or anonymous class must be registered with an explicit name");
+        }
+        Map<Class<?>, Method> decoders = new LinkedHashMap<>();
+        for (Method dm : typed.getClass().getMethods()) {
+            if (dm.isAnnotationPresent(Decode.class)) { dm.setAccessible(true); decoders.put(dm.getReturnType(), dm); }
+        }
+        Map<String, Method> compensators = typed instanceof Compensable
+                ? Map.of(canonicalName(name), concreteMethod(typed, "compensate"))
+                : Map.of();
+        return new HandlerSet(workflow, typed, Map.of(canonicalName(name), m), decoders, compensators);
+    }
+
+    /** The concrete (non-bridge) single-parameter implementation of an interface method, with its
+     *  reified parameter type — what the decode machinery needs. */
+    private static Method concreteMethod(Object typed, String methodName) {
+        for (Method m : typed.getClass().getMethods()) {
+            if (!m.getName().equals(methodName) || m.isBridge() || m.isSynthetic()) continue;
+            if (m.getParameterCount() != 1) continue;
+            m.setAccessible(true);
+            return m;
+        }
+        throw new IllegalStateException(typed.getClass().getName() + " has no concrete " + methodName
+                + "(C) method");
     }
 
     /**
@@ -351,7 +436,8 @@ final class HandlerBinder {
     private static Object decode(Object json, Class<?> type, Object target, Map<Class<?>, Method> decoders) throws Exception {
         Method dec = decoders.get(type);
         if (dec != null) return call(dec, target, Json.asObject(json));
-        if (Map.class.isAssignableFrom(type)) return Json.asObject(json);
+        // Object = a type-erased lambda (activity/gate/effect registered by name): hand it the raw map.
+        if (type == Object.class || Map.class.isAssignableFrom(type)) return Json.asObject(json);
         return RecordMapper.fromJson(json, type);
     }
 

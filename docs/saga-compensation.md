@@ -51,31 +51,41 @@ any TASK node can carry a compensator.
 
 ---
 
-## 2. Handler's surface
+## 2. Handler's surface — typed activities with `Compensable`
 
-A compensator is an ordinary handler matched by name in the same `@Handlers` class — no new
-registration path. It receives the **snapshot context its forward step returned** and is an
-**effect** (`void`): a compensator undoes an external effect; it does not steer the forward flow
-(which has already failed).
+The compensator is not a separately-named handler: it is **a capability of the activity class**,
+via the typed registration model (`Activity` / `GateActivity` / `EffectActivity`, one class per
+step, matched by class name under the usual canonical folding). An activity that also implements
+`Compensable` carries its own undo — the code that does the thing and the code that undoes it live
+in one class, and the pairing is checked by the compiler (implements `Compensable` ⇒ the
+compensator exists; no stringly reference that can dangle):
 
 ```java
-@Handlers("order-fulfilment")
-class OrderHandlers {
-    public Order authorise(Order o) { return o.withAuthRef(gateway.auth(o)); }
-    public Order capture(Order o)   { return o.withPaymentRef(gateway.capture(o.authRef())); }
-
-    // compensators — receive the context AS THAT STEP LEFT IT, so authRef/paymentRef are present
-    public void voidAuthorisation(Order o) { gateway.voidAuth(o.authRef()); }
-    public void refund(Order o)            { gateway.refund(o.paymentRef()); }   // idempotent!
-    public void releaseStock(Order o)      { wms.release(o.shipmentRef()); }
+final class CapturePayment implements Activity<Order>, Compensable<Order> {
+    public Order execute(Order o)      { return o.withPaymentRef(gateway.capture(o.authRef())); }
+    public void  compensate(Order s)   { gateway.refund(s.paymentRef()); }   // idempotent!
 }
+
+worker.register(orders)
+      .activities(new CapturePayment(), new ReserveStock(), new InStock());
 ```
 
-Compensators are **at-least-once**, like every handler (a lease can expire and redeliver), so they
-must be idempotent — refund by the payment's idempotency key, not blindly. Same contract as forward
-steps; stated loudly because a double refund is worse than a double read.
+`compensate` receives the **snapshot context its forward step returned** (§4) — so `paymentRef`
+is guaranteed present regardless of what later steps replaced — and is an effect: it undoes an
+external side effect, never steers the (already failed) forward flow. Compensators are
+**at-least-once**, like every handler; they must be idempotent.
 
----
+**The topology stays the contract; the class provides the implementation.** A step is compensated
+on failure only if the workflow declares it (`.compensate()` on the step — a marker now, since the
+activity carries the code), because the *engine* must know compensability at completion time (to
+snapshot) and the declaration must fold into the content-hash version and show on the console. At
+bind time the pairing is verified **both ways**, failing fast:
+
+- step declared compensable, bound activity is not `Compensable` → bind error;
+- activity is `Compensable`, step not declared → bind error (a silent no-op undo is a lie).
+
+The `@Handlers` method-per-step style coexists on the same binder seam for concise flows and for
+combines; compensation requires the typed style, which is where per-step capabilities live.
 
 ## 3. Graph / data-model changes
 
