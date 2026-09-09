@@ -31,6 +31,16 @@ public final class WorkflowEngine {
      *  production (and any missed signal). Overridable via {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
     private final long fallbackPollMillis = envLong("WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
+    /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
+     *  10ms) and doubles its wait on every empty round up to the configured interval. Work produced
+     *  on ANOTHER node shortly after this one parks — the common case under steady load, where a
+     *  poller re-parks right before the next task lands — is discovered in the fast window instead
+     *  of a uniform [0, fallback) delay; a long-idle poll decays to the configured cadence, so the
+     *  idle DB cost is bounded. A notifier signal (local activity) resets the ramp to fast. */
+    private final boolean adaptiveFallbackPoll = Boolean.parseBoolean(
+            System.getProperty("wiggle.adaptive.fallback",
+                    System.getenv().getOrDefault("WIGGLE_ADAPTIVE_FALLBACK_POLL", "false")));
+
     /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
      *  is drained in one batched claim instead of a round trip per token. Trades up to this much
      *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
@@ -264,15 +274,20 @@ public final class WorkflowEngine {
         if (cancelled.getAsBoolean()) return List.of();
         Map<String, Long> since = notifier.snapshot(queues);
         List<TaskActivation> tasks = claimNow(workerId, queues, max, lease);
+        long rampStart = Math.max(10, fallbackPollMillis / 4);
+        long fallbackWait = adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
             long remaining = deadline - System.currentTimeMillis();
-            boolean signaled = notifier.awaitChange(queues, since, Math.min(fallbackPollMillis, remaining));
+            boolean signaled = notifier.awaitChange(queues, since, Math.min(fallbackWait, remaining));
             // A signal means a burst may be arriving; let a little more land so one claim batches it
             // (fewer round trips under load) rather than claiming a single token eagerly.
             if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.getAsBoolean()) return List.of();   // worker gone -- leave the work for a live one
             since = notifier.snapshot(queues);
             tasks = claimNow(workerId, queues, max, lease);
+            if (adaptiveFallbackPoll) {
+                fallbackWait = signaled ? rampStart : Math.min(fallbackWait * 2, fallbackPollMillis);
+            }
         }
         if (!tasks.isEmpty()) {
             List<TaskActivation> claimed = tasks;
