@@ -38,6 +38,28 @@ class HousekeeperTest {
                 .build();
     }
 
+    @Test @DisplayName("adaptive tick drains a backlog larger than one batch; fixed tick does not")
+    void adaptiveTickDrains() throws Exception {
+        try (Storage storage = new InMemoryStorage();
+             ClusterManager cluster = new ClusterManager(storage, "hk-d", 1, 5000, 3)) {
+            storage.migrate();
+            cluster.start();
+            WorkflowEngine engine = engine(storage);
+            Blueprint bp = sleeper(20);
+            engine.register(bp.definition());
+            for (int i = 0; i < 25; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
+            Thread.sleep(60);   // all 25 timers are now due; batch size below is 10
+
+            new Housekeeper(engine, cluster, Duration.ofMillis(100), Duration.ofHours(1), 10, false).tick();
+            int afterFixed = engine.poll("w1", bp.definition().workerQueues(), 100, null).size();
+            assertEquals(10, afterFixed, "the fixed sweep promotes at most one batch per tick");
+
+            new Housekeeper(engine, cluster, Duration.ofMillis(100), Duration.ofHours(1), 10, true).tick();
+            int afterAdaptive = engine.poll("w2", bp.definition().workerQueues(), 100, null).size();
+            assertEquals(15, afterAdaptive, "the adaptive sweep drains the remaining backlog in one tick");
+        }
+    }
+
     @Test @DisplayName("a leader tick fires due timers")
     void leaderTickFiresTimers() throws Exception {
         try (Storage storage = new InMemoryStorage();

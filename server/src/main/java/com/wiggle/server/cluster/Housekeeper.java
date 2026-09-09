@@ -21,6 +21,7 @@ public final class Housekeeper implements AutoCloseable {
     private final Duration pollInterval;
     private final Duration retention;
     private final int batchSize;
+    private final boolean adaptive;
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "wiggle-housekeeper");
@@ -30,11 +31,27 @@ public final class Housekeeper implements AutoCloseable {
 
     public Housekeeper(WorkflowEngine engine, ClusterManager cluster, Duration pollInterval,
                        Duration retention, int batchSize) {
+        this(engine, cluster, pollInterval, retention, batchSize,
+                Boolean.parseBoolean(System.getProperty("wiggle.adaptive.housekeeping",
+                        System.getenv().getOrDefault("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"))));
+    }
+
+    /**
+     * @param adaptive when true, a sweep that fills its batch runs again immediately (drain mode)
+     *                 instead of leaving the excess for the next tick. The signal is batch fullness
+     *                 -- every extra sweep is one that just proved it had work -- so the loop cannot
+     *                 spin idle, and the steady-state cost when nothing is due is unchanged. Without
+     *                 it, due work is promoted at most {@code batchSize} per tick, which caps timer /
+     *                 schedule / reclaim throughput at batch÷interval (~100/s on defaults).
+     */
+    public Housekeeper(WorkflowEngine engine, ClusterManager cluster, Duration pollInterval,
+                       Duration retention, int batchSize, boolean adaptive) {
         this.engine = engine;
         this.cluster = cluster;
         this.pollInterval = pollInterval;
         this.retention = retention;
         this.batchSize = batchSize;
+        this.adaptive = adaptive;
     }
 
     public void start() {
@@ -52,13 +69,26 @@ public final class Housekeeper implements AutoCloseable {
         }
         try {
             LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: leader running timers/leases/deadlines sweep");
-            int fired = engine.fireDueTimers(batchSize);
-            int reclaimed = engine.reclaimExpiredLeases(batchSize);
-            int escalated = engine.fireDueSignalDeadlines(batchSize);
-            int scheduled = engine.fireDueSchedules(batchSize);
-            LOG.log(System.Logger.Level.DEBUG, () -> "housekeeping tick: " + fired + " timers fired, "
-                    + reclaimed + " leases reclaimed, " + escalated + " signal deadlines fired, "
-                    + scheduled + " schedules fired");
+            int fired = 0, reclaimed = 0, escalated = 0, scheduled = 0, rounds = 0;
+            boolean anyFull;
+            do {
+                int f = engine.fireDueTimers(batchSize);
+                int r = engine.reclaimExpiredLeases(batchSize);
+                int e = engine.fireDueSignalDeadlines(batchSize);
+                int s = engine.fireDueSchedules(batchSize);
+                fired += f; reclaimed += r; escalated += e; scheduled += s; rounds++;
+                // Drain mode: a full batch means more work is (almost certainly) still due -- go
+                // again now rather than parking it for a whole tick. Bounded by real work: every
+                // extra round fired a full batch, so an idle system never loops.
+                anyFull = adaptive && (f >= batchSize || r >= batchSize || e >= batchSize || s >= batchSize);
+            } while (anyFull && cluster.isLeader() && !Thread.currentThread().isInterrupted());
+            int fFired = fired, fReclaimed = reclaimed, fEscalated = escalated, fScheduled = scheduled, fRounds = rounds;
+            if (rounds > 1) LOG.log(System.Logger.Level.INFO, () -> "housekeeping drain: " + fRounds
+                    + " rounds in one tick (" + fFired + " timers, " + fReclaimed + " leases, "
+                    + fEscalated + " deadlines, " + fScheduled + " schedules)");
+            else LOG.log(System.Logger.Level.DEBUG, () -> "housekeeping tick: " + fFired + " timers fired, "
+                    + fReclaimed + " leases reclaimed, " + fEscalated + " signal deadlines fired, "
+                    + fScheduled + " schedules fired");
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "housekeeping tick failed: " + e);
         }
