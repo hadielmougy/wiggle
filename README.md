@@ -418,6 +418,8 @@ The fallback ramp costs no throughput: with it enabled, the cluster still sustai
 ceiling (re-validated after fixing an early version that re-claimed fast on busy nodes and
 measurably ate the ceiling — the fix and its A/B are in the repo history).
 
+![Adaptive polling before/after: draining 2,000 due timers falls from 19.9s (100/sec, the batch-per-tick floor) to 1.18s (~1,700/sec); cross-node dispatch latency falls from p50 105ms / p99 117ms to p50 28ms / p99 39ms.](docs/img/bench-adaptive.svg)
+
 **Control-plane resiliency**, measured the hard way: SIGKILL the Raft coordinator mid-run at a
 paced 150 starts/sec — **9s to recovery with state byte-exact**, one contiguous **5.4s** gap on
 *new* starts (2.25% of 36,001), and running work never noticed (probe sojourns flat through the
