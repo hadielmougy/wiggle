@@ -5,19 +5,7 @@ import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.core.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;
-import com.wiggle.proto.ActiveCellsRequest;
-import com.wiggle.proto.ActiveCellsResponse;
-import com.wiggle.proto.AllocatedWorkflow;
-import com.wiggle.proto.CellCoordinatorGrpc;
-import com.wiggle.proto.DeregisterWorkflowRequest;
-import com.wiggle.proto.Endpoint;
-import com.wiggle.proto.ListWorkflowsRequest;
-import com.wiggle.proto.OpenEpochRequest;
-import com.wiggle.proto.Policy;
-import com.wiggle.proto.RegisterWorkflowRequest;
-import com.wiggle.proto.ResolveRequest;
-import com.wiggle.proto.ResolveResponse;
-import com.wiggle.proto.RingSlot;
+import com.wiggle.proto.*;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
@@ -87,11 +75,15 @@ public final class CoordinatedConnection implements AutoCloseable {
      *  the namespace (R23). */
     public void registerWorkflow(String namespace, Blueprint blueprint) {
         String json = Json.write(blueprint.definition().toJson());
-        coord.registerWorkflow(RegisterWorkflowRequest.newBuilder()
-                .setNamespace(namespace)
-                .setName(blueprint.name())
-                .setDefinition(ByteString.copyFromUtf8(json))
-                .build());
+        try {
+            coord.registerWorkflow(RegisterWorkflowRequest.newBuilder()
+                    .setNamespace(namespace)
+                    .setName(blueprint.name())
+                    .setDefinition(ByteString.copyFromUtf8(json))
+                    .build());
+        }  catch (Exception e) {
+            throw new WorkflowRegistrationException("Workflow can't be registered", e);
+        }
     }
 
     /**

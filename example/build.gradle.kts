@@ -70,6 +70,14 @@ tasks.register<JavaExec>("bench") {
     mainClass.set("com.wiggle.order.Benchmark")
 }
 
+tasks.register<JavaExec>("timerBench") {
+    group = "application"
+    description = "Timer-promotion throughput benchmark (housekeeping sweep). " +
+            "Set WIGGLE_ADAPTIVE_HOUSEKEEPING=true for the adaptive sweep; tune WIGGLE_BENCH_COUNT etc."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.order.TimerBench")
+}
+
 tasks.register<JavaExec>("namespaceWorker") {
     group = "application"
     description = "Runs the coordinator-routed namespace worker (one worker per active cell). " +
