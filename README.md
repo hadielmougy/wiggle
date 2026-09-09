@@ -406,20 +406,46 @@ combine → notify → audit, `LOCAL_ASYNC` mode), every step durably committed 
 | Client side | submitter + 1 worker (`concurrency=100` per cell) on the host, gRPC via `kubectl port-forward` |
 | Runtime | OpenJDK 21 |
 
+**Adaptive polling** (opt-in flags; each reacts to what the last poll observed — never to queue
+depth — so an idle system pays nothing):
+
+| what | fixed cadence | adaptive | flag |
+|---|---|---|---|
+| timer/schedule promotion under backlog (2,000 due timers, default 1s tick × batch 100) | 19.9s — **100 timers/sec**, pinned to the batch÷tick floor | **1.18s — ~1,700/sec** (10,000 due drain in 1.61s ≈ 6,200/sec) | `WIGGLE_ADAPTIVE_HOUSEKEEPING` |
+| cross-node dispatch latency (2-node cluster on one Postgres; submitter and the parked worker pinned to *different* nodes) | p50 **105ms** · p99 117ms | p50 **28ms** · p99 39ms | `WIGGLE_ADAPTIVE_FALLBACK_POLL` |
+
+The fallback ramp costs no throughput: with it enabled, the cluster still sustains the 300/s
+ceiling (re-validated after fixing an early version that re-claimed fast on busy nodes and
+measurably ate the ceiling — the fix and its A/B are in the repo history).
+
+**Control-plane resiliency**, measured the hard way: SIGKILL the Raft coordinator mid-run at a
+paced 150 starts/sec — **9s to recovery with state byte-exact**, one contiguous **5.4s** gap on
+*new* starts (2.25% of 36,001), and running work never noticed (probe sojourns flat through the
+kill). The coordinator is not in the execution path, and now it's measured, not asserted.
+
 Honest footnotes: the submitter, worker, Kubernetes, coordinator, cells, and databases all
 share those 10 cores — a floor, not a ceiling, and the reason two cells on *one* box measure
 the same as one (cells buy throughput on separate hardware; that's the point of the model).
+The same is true of nodes: an A/B run showed 2 nodes per cell on this single box does *not*
+raise the ceiling — nodes multiply availability and API capacity, never database throughput.
 And measured on **fresh databases** deliberately: after a day of accumulated benchmark history
-(~500k retained instances) the same setup showed ~2× the latency at 300/s — retention and
-purge cadence are part of capacity planning, not an afterthought.
+(~500k retained instances / ~900k token rows) the same setup showed ~2× the latency at 300/s —
+retention and purge cadence are part of capacity planning, not an afterthought.
 
-Reproduce both (the tools ship in the repo):
+Reproduce everything (the tools ship in the repo):
 
 ```bash
 ./gradlew :example:bench             # the embedded engine numbers (set WIGGLE_EXECUTION_MODE)
 
 WIGGLE_COORDINATOR_URL=… WIGGLE_NAMESPACE=… BENCH_RATES="300,340" \
   ./gradlew :example:rateCeiling     # the cluster ceiling (needs a running worker)
+
+./gradlew :example:timerBench        # timer promotion (WIGGLE_ADAPTIVE_HOUSEKEEPING=true to compare)
+
+WIGGLE_SUBMIT_URL=… WIGGLE_WORKER_URL=… \
+  ./gradlew :example:fallbackProbe   # cross-node dispatch latency (pin two nodes of one cluster)
+
+./gradlew :example:coordFailover     # coordinator SIGKILL under load (kill it mid-run)
 ```
 
 ---
