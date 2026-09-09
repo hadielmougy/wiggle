@@ -97,7 +97,7 @@ One codebase, four postures — start embedded, end sharded, **without rewriting
 
 | Mode | What it is | When |
 |---|---|---|
-| **Embedded** | `WiggleServer` inside your JVM, in-memory store | dev, tests, single-process apps |
+| **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store | dev, tests, single-process apps |
 | **Standalone server** | one node, gRPC `:8080`, in-memory or a database | small services, first deploy |
 | **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery | production, HA |
 | **Cellular (sharded)** | many cells (each its own DB + cluster) behind a **coordinator** | multi-tenant isolation, scale-out |
