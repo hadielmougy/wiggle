@@ -70,6 +70,14 @@ tasks.register<JavaExec>("bench") {
     mainClass.set("com.wiggle.order.Benchmark")
 }
 
+tasks.register<JavaExec>("fallbackProbe") {
+    group = "application"
+    description = "Cross-node dispatch latency probe: submit via one node, worker parked on another. " +
+            "Set WIGGLE_SUBMIT_URL / WIGGLE_WORKER_URL."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.order.FallbackProbe")
+}
+
 tasks.register<JavaExec>("timerBench") {
     group = "application"
     description = "Timer-promotion throughput benchmark (housekeeping sweep). " +
