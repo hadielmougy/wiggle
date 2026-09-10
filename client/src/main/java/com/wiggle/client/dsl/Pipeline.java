@@ -127,6 +127,9 @@ final class Pipeline {
     String addEnd(String reason) { return add(NodeDraft.end(true, reason)); }
 
     /** Points {@code from}'s primary (true / next) edge at {@code target}. */
+    /** Marks a guard as a doWhile loop condition with an iteration budget (-1 = engine default). */
+    void markLoop(String guardId, int budget) { nodes.put(guardId, nodes.get(guardId).withLoopBudget(budget)); }
+
     void wireNext(String from, String target) { nodes.put(from, nodes.get(from).withNext(target)); }
 
     /** Points {@code from}'s alternate (false / escalation) edge at {@code target}. */

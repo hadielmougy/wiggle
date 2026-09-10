@@ -295,8 +295,25 @@ public final class WorkflowBuilder {
      * works identically under every execution mode.
      */
     public WorkflowBuilder doWhile(String conditionName, UnaryOperator<WorkflowBuilder> body) {
+        return doWhile(conditionName, -1, body);   // -1: budgeted by the engine default
+    }
+
+    /**
+     * A doWhile with an explicit iteration budget: the loop may pass its condition at most
+     * {@code maxIterations} times; one more true evaluation FAILS the instance with a clear error
+     * (composing with compensation like any failure). Every doWhile is budgeted — the two-arg form
+     * uses the engine default ({@code WIGGLE_LOOP_MAX_ITERATIONS}, 10,000) — because an unbounded
+     * loop with a buggy condition is a self-inflicted denial of service: it hot-spins workers and
+     * the database and grows the instance's token rows without limit. A loop that legitimately
+     * needs more iterations says so here.
+     */
+    public WorkflowBuilder doWhile(String conditionName, int maxIterations, UnaryOperator<WorkflowBuilder> body) {
+        if (maxIterations == 0 || maxIterations < -1) {
+            throw new IllegalArgumentException("doWhile '" + conditionName + "' maxIterations must be positive");
+        }
         Sub body0 = subStream(body, enclosingJoinId, "doWhile body");
         String condId = pipeline.addGuard(conditionName, null, null);
+        pipeline.markLoop(condId, maxIterations);
 
         routeInto(body0.start());                // enter the loop at the body's first node
         body0.tail().wireOpenEndsTo(condId);     // body tail -> condition

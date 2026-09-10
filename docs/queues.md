@@ -202,3 +202,10 @@ even inside a local chain, a step on another queue crosses to another service. E
 | local-vs-handback decision | `core/**/GraphTraversal.java` (`classify`), `server/**/engine/WorkflowEngine.java` (`applyRun`) |
 | RPCs (`PollTasks`, `CompleteTask`, `AdvanceRun`, …) | `proto/src/main/proto/wiggle.proto` |
 | queues across sharded cells | `client/**/worker/NamespaceWorker.java` |
+
+---
+
+**Submitters need even less than workers.** Everything above is about *serving* steps; a service
+that only starts instances needs no Blueprint and no shared jar at all — `client.start("orders",
+context)` by name is the whole integration, with the context schema as the contract. See
+[onboarding §5.2](onboarding.md#52-running-instances).

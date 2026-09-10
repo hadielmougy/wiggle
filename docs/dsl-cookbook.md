@@ -183,6 +183,13 @@ the next iteration — a cancellation ends the instance immediately rather than 
 `doWhile` compiles to a plain cycle in the graph, so it behaves identically under every
 [execution mode](#7-executionlocal_async--checkpoint--dowhile).
 
+> **Every loop is budgeted.** A guard may evaluate true at most `maxIterations` times —
+> `doWhile("still-pending", 500, b -> …)` — defaulting to `WIGGLE_LOOP_MAX_ITERATIONS` (10,000)
+> when unstated. One evaluation past the budget FAILS the instance with a clear error, because an
+> unbounded loop with a buggy condition is a self-inflicted denial of service: it hot-spins
+> workers and the database (at local-chaining speed, ~90k steps/sec from one worker) and grows
+> the instance's token rows without limit. A loop that legitimately needs more iterations says so.
+
 ## 5. `awaitSignal` (timeout + escalation) + `choose`
 
 Wait for a human, escalate if nobody acts, then branch on which one happened.

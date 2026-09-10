@@ -259,11 +259,30 @@ class OrderHandlers {
 
 ```java
 try (WiggleClient client = new WiggleClient("localhost:8080")) {
-    String id = client.start(orders, Order.of(...));
+    String id = client.start(orders, Order.of(...));                       // same-JVM convenience: by Blueprint
     InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(30));   // COMPLETED | FAILED | CANCELLED
     client.cancel(id, "reason");
 }
 ```
+
+**Integrating as a separate team — start by name, no jar.** A submitting service does not need
+the Blueprint or any shared artifact: the graph is data the server owns, so the submitter's whole
+contract is the workflow **name** plus the agreed context shape (document it like any API schema).
+
+```java
+String id = client.start("order-fulfilment", Map.of("orderId", "A-1001", "quantity", 3L));
+
+// version pinning: unpinned = latest registered; pin to be immune to mid-deploy changes.
+String id2 = client.start("order-fulfilment", ctx, 302800684, "corr-42");
+```
+
+Registration belongs with whoever owns the definition — normally the **worker artifact**, where
+the handlers and the graph they serve deploy as one atomic act (`registerOnStart`, the default;
+the binder validates handler signatures against that exact graph on startup). Content-hash
+versioning makes this safe for everyone else: re-registering an identical graph is a no-op, a
+changed graph is a NEW version that redirects nothing, in-flight instances stay pinned to the
+version they started on, and by-name submitters pick the new version up only for new starts —
+or never, if they pin.
 
 ---
 
@@ -303,6 +322,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `false` | a sweep that fills its batch runs again immediately (drain mode) — removes the batch÷tick promotion ceiling under backlog (measured: 100 → ~1,700 timers/sec at defaults); idle cost unchanged |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
+| `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `doWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `doWhile(name, maxIterations, body)` |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog ([§7.5](#75-queue-lag-monitoring)) |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN once the backlog isn't draining within this budget |
 

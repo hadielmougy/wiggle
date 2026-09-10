@@ -12,22 +12,22 @@ import java.util.Map;
 public record Node(String id, NodeKind kind, String name, String activity, String queue,
                    RetryPolicy retry, long sleepMillis, String next, String altNext,
                    List<String> branches, int expected, boolean success, String reason,
-                   String itemsKey, String itemKey) {
+                   String itemsKey, String itemKey, int loopBudget) {
 
     public static Node task(String id, String name, String activity, String queue, RetryPolicy retry) {
-        return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null);
+        return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0);
     }
 
     public static Node predicate(String id, String name, String activity, String queue, RetryPolicy retry) {
-        return new Node(id, NodeKind.PREDICATE, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null);
+        return new Node(id, NodeKind.PREDICATE, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0);
     }
 
     public static Node sleep(String id, String name, long millis) {
-        return new Node(id, NodeKind.SLEEP, name, null, null, null, millis, null, null, List.of(), 0, false, null, null, null);
+        return new Node(id, NodeKind.SLEEP, name, null, null, null, millis, null, null, List.of(), 0, false, null, null, null, 0);
     }
 
     public static Node fork(String id, String name) {
-        return new Node(id, NodeKind.FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null, null, null);
+        return new Node(id, NodeKind.FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null, null, null, 0);
     }
 
     /**
@@ -37,12 +37,12 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
      */
     public static Node dynFork(String id, String name, String itemsKey, String itemKey) {
         return new Node(id, NodeKind.DYN_FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null,
-                itemsKey, itemKey);
+                itemsKey, itemKey, 0);
     }
 
     /** {@code expected == 0} marks a dynamic join: the width travels in the join group instead. */
     public static Node join(String id, String name, int expected) {
-        return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null, null, null);
+        return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null, null, null, 0);
     }
 
     /**
@@ -50,36 +50,42 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
      * (reuses {@code sleepMillis} for the deadline).
      */
     public static Node signal(String id, String name, long deadlineMillis) {
-        return new Node(id, NodeKind.SIGNAL, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null);
+        return new Node(id, NodeKind.SIGNAL, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null, 0);
     }
 
     /** Runs the workflow named {@code workflow} as a child; reuses {@code activity} for its name. */
     public static Node subWorkflow(String id, String name, String workflow) {
-        return new Node(id, NodeKind.SUB_WORKFLOW, name, workflow, null, null, 0, null, null, List.of(), 0, false, null, null, null);
+        return new Node(id, NodeKind.SUB_WORKFLOW, name, workflow, null, null, 0, null, null, List.of(), 0, false, null, null, null, 0);
     }
 
     public static Node end(String id, boolean success, String reason) {
-        return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason, null, null);
+        return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason, null, null, 0);
     }
 
     public Node withNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget);
     }
 
     public Node withAltNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey, loopBudget);
     }
 
     public Node withQueue(String q) {
-        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey);
+        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget);
     }
 
     public Node withBranches(List<String> b) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey, loopBudget);
+    }
+
+    /** doWhile guards only: max true-evaluations before the instance fails (-1 = engine default). */
+    public Node withLoopBudget(int budget) {
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext,
+                branches, expected, success, reason, itemsKey, itemKey, budget);
     }
 
     public Node withItemsKey(String k) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected, success, reason, k, itemKey);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected, success, reason, k, itemKey, 0);
     }
 
     public boolean isWorkerDispatched() {
@@ -103,6 +109,7 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         if (reason != null) m.put("reason", reason);
         if (itemsKey != null) m.put("itemsKey", itemsKey);
         if (itemKey != null) m.put("itemKey", itemKey);
+        if (loopBudget != 0) m.put("loopBudget", (long) loopBudget);
         return m;
     }
 
@@ -125,6 +132,7 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
                 Json.bool(m, "success", false),
                 Json.str(m, "reason", null),
                 Json.str(m, "itemsKey", null),
-                Json.str(m, "itemKey", null));
+                Json.str(m, "itemKey", null),
+                (int) Json.num(m, "loopBudget", 0));
     }
 }
