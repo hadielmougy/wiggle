@@ -52,12 +52,20 @@ final class HandlerBinder {
     record HandlerSet(String workflow, Object target, Map<String, Candidate> byName,
                       Map<Class<?>, Method> decoders) {}
 
+    /** Invokes a step's undo with both of its snapshots (raw JSON-shaped objects); the wrapper
+     *  decodes them into the activity's context type and hands a {@link Compensation} to
+     *  {@link Compensable#compensate}. */
+    @FunctionalInterface
+    interface Compensator {
+        void invoke(Object input, Object result) throws Exception;
+    }
+
     /** One resolved binding: the executable wrapper plus where it plugs into the worker.
      *  {@code compensator} is non-null only for a typed activity implementing {@link Compensable};
-     *  it receives the post-step context snapshot (wired to the engine's compensation phase when
-     *  that lands — see docs/saga-compensation.md). */
+     *  it receives the step's input and result snapshots (wired to the engine's compensation
+     *  phase when that lands — see docs/saga-compensation.md). */
     record Binding(String activity, String step, String queue, ActivityHandler handler,
-                   ActivityHandler compensator) {
+                   Compensator compensator) {
         Binding(String activity, String step, String queue, ActivityHandler handler) {
             this(activity, step, queue, handler, null);
         }
@@ -198,14 +206,18 @@ final class HandlerBinder {
     /** The compensator wrapper for a step, when its typed activity implements {@link Compensable}:
      *  decodes the post-step snapshot into the method's parameter type and invokes it (an effect —
      *  no return). Null when the step has no compensator. */
-    private static ActivityHandler compensatorHandler(HandlerSet set, Candidate c) {
+    private static Compensator compensatorHandler(HandlerSet set, Candidate c) {
         if (c.compensate() == null) return null;
-        return snapshot -> {
-            call(c.compensate(), c.target(), new Object[]{
-                    decode(snapshot, c.compensate().getParameterTypes()[0], set.target(), set.decoders())});
-            return null;
+        Class<?> ctxType = c.method().getParameterTypes()[0];   // the activity's C, from execute/test/apply
+        return (input, result) -> {
+            Object in = decode(input, ctxType, set.target(), set.decoders());
+            Object out = decode(result, ctxType, set.target(), set.decoders());
+            call(c.compensate(), c.target(), new Object[]{new Snapshots(in, out)});
         };
     }
+
+    /** The {@link Compensation} handed to a compensator: both snapshots, already decoded. */
+    private record Snapshots(Object input, Object result) implements Compensation<Object> {}
 
     /** The concrete (non-bridge) single-parameter implementation of an interface method, with its
      *  reified parameter type — what the decode machinery needs. */

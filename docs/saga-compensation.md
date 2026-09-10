@@ -62,8 +62,12 @@ compensator exists; no stringly reference that can dangle):
 
 ```java
 final class CapturePayment implements Activity<Order>, Compensable<Order> {
-    public Order execute(Order o)      { return o.withPaymentRef(gateway.capture(o.authRef())); }
-    public void  compensate(Order s)   { gateway.refund(s.paymentRef()); }   // idempotent!
+    public Order execute(Order o) { return o.withPaymentRef(gateway.capture(o.authRef())); }
+    public void  compensate(Compensation<Order> c) {
+        gateway.refund(c.result().paymentRef());   // result(): the step's own product — idempotent!
+        // c.input() is also available: restore-style undos and undo-only data (idempotency keys)
+        // read from the INPUT snapshot, so nothing is smuggled through the business context.
+    }
 }
 
 @Handlers("order-fulfilment")
@@ -81,10 +85,15 @@ class OrderHandlers {
 worker.register(orders).handlers(new OrderHandlers());      // ONE registration call, as always
 ```
 
-`compensate` receives the **snapshot context its forward step returned** (§4) — so `paymentRef`
-is guaranteed present regardless of what later steps replaced — and is an effect: it undoes an
-external side effect, never steers the (already failed) forward flow. Compensators are
-**at-least-once**, like every handler; they must be idempotent.
+`compensate` receives a `Compensation<C>` carrying **both snapshots of its step** (§4):
+`result()` — the context as the step left it, so `paymentRef` is guaranteed present regardless of
+what later steps replaced — and `input()` — the context as the step received it, for
+restore-previous-value undos and undo-only data (an idempotency key derived from the input) that
+would otherwise have to pollute the business context. Named accessors, never two same-typed
+positional parameters: before/after cannot be transposed, and the one signature implementors
+depend on can grow (failure reason, attempt, instance id) without breaking anyone. A compensator
+is an effect: it undoes an external side effect, never steers the (already failed) forward flow.
+Compensators are **at-least-once**, like every handler; they must be idempotent.
 
 **The topology stays the contract; the class provides the implementation.** A step is compensated
 on failure only if the workflow declares it (`.compensate()` on the step — a marker now, since the
@@ -130,12 +139,16 @@ what its forward step returned, *at completion time*, before a later step can re
 engine writes a **compensation-log entry** for the instance:
 
 ```
-CompLogEntry(instanceId, seq, activity, queue, retry, contextSnapshotJson)
+CompLogEntry(instanceId, seq, activity, queue, retry, inputSnapshotJson, resultSnapshotJson)
 ```
 
 - `seq` — a per-instance monotonic counter, defining the reverse order.
-- `contextSnapshotJson` — the context the step returned (for a branch-scoped step, the branch
-  overlay it produced — captured the same way, so branch compensation "just works").
+- `resultSnapshotJson` — the context the step returned; `inputSnapshotJson` — the context it was
+  dispatched with. Both are in hand at the single capture point (`complete()` holds the pre-step
+  context and the result in the same transaction), and both feed the compensator's
+  `Compensation<C>` carrier. For a branch-scoped step the branch overlay is captured the same
+  way, so branch compensation "just works". A linear step's input nearly duplicates its
+  predecessor's result — a possible storage optimization later; store both and keep it simple.
 
 The log is bounded by the number of *compensatable* steps actually run — small by construction
 (you compensate the few steps with external side effects, not reads). Storage: a new

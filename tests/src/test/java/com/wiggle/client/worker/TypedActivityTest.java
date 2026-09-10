@@ -35,13 +35,15 @@ class TypedActivityTest {
     static final class CapturePayment implements Activity<Map<String, Object>>,
             Compensable<Map<String, Object>> {
         final AtomicReference<Object> refunded = new AtomicReference<>();
+        final AtomicReference<Object> undoKey = new AtomicReference<>();
         public Map<String, Object> execute(Map<String, Object> ctx) {
             Map<String, Object> next = new LinkedHashMap<>(ctx);
             next.put("paymentRef", "pay-1");
             return next;
         }
-        public void compensate(Map<String, Object> snapshot) {
-            refunded.set(snapshot.get("paymentRef"));
+        public void compensate(Compensation<Map<String, Object>> comp) {
+            refunded.set(comp.result().get("paymentRef"));   // the step's own product: from result()
+            undoKey.set(comp.input().get("idemKey"));        // undo-only data: from input(), never the context
         }
     }
 
@@ -81,15 +83,17 @@ class TypedActivityTest {
         assertNull(byStep.get("audit-log").handler().invoke(Map.of()), "typed effect reports null");
     }
 
-    @Test @DisplayName("a Compensable factory result carries the undo; it receives the snapshot")
+    @Test @DisplayName("a Compensable factory result carries the undo; it sees BOTH snapshots")
     void compensatorBound() throws Exception {
         MixedHandlers h = new MixedHandlers();
         var r = HandlerBinder.bind(HandlerBinder.scan(h), linear());
-        ActivityHandler comp = r.bindings().stream()
+        HandlerBinder.Compensator comp = r.bindings().stream()
                 .filter(b -> b.step().equals("capture-payment")).findFirst().orElseThrow().compensator();
         assertNotNull(comp, "Compensable ⇒ the binding carries the undo");
-        comp.invoke(Map.of("paymentRef", "pay-9"));
-        assertEquals("pay-9", h.capture.refunded.get(), "the compensator saw the post-step snapshot");
+        comp.invoke(Map.of("idemKey", "k-7"),                       // input snapshot
+                    Map.of("paymentRef", "pay-9"));                 // result snapshot
+        assertEquals("pay-9", h.capture.refunded.get(), "result(): the step's own product");
+        assertEquals("k-7", h.capture.undoKey.get(), "input(): undo-only data, no context pollution");
         // the plain method carries none
         assertNull(r.bindings().stream()
                 .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow().compensator());
