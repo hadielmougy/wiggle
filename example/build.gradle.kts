@@ -109,3 +109,12 @@ tasks.register<JavaExec>("rateCeiling") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.RateCeilingBench")
 }
+
+tasks.register<JavaExec>("sagaLoad") {
+    group = "application"
+    description = "Saga reverse-pass load test: N failing instances with two compensable steps each; " +
+            "asserts every one lands COMPENSATED. Set WIGGLE_COORDINATOR_URL/WIGGLE_NAMESPACE/" +
+            "WIGGLE_ENDPOINT_REWRITE; tune BENCH_COUNT/BENCH_RATE/BENCH_THREADS."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.order.SagaLoadBench")
+}
