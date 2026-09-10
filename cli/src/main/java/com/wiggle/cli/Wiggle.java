@@ -23,7 +23,7 @@ import java.util.concurrent.Callable;
  * in Java (topology via the DSL, handlers via {@code @Handlers} classes on a worker), not from the
  * CLI.
  */
-@Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.8",
+@Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.9",
         subcommands = {Wiggle.Use.class,
                 Wiggle.Deallocate.class, Wiggle.Allocations.class, Wiggle.OpenEpoch.class},
         description = "Manage namespace allocations and placement epochs via a coordinator.")
