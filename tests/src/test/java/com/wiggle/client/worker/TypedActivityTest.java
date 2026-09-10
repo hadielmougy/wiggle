@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -24,19 +23,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The typed-activity registration model — one class per step, {@link Compensable} for the undo —
- * exercised through the same pure {@link HandlerBinder} seam as {@link HandlerBinderTest}, plus
- * one embedded end-to-end run mixing typed activities with lambda registration.
+ * Typed activities via <b>factory methods</b> on a {@link Handlers @Handlers} class — a
+ * zero-parameter method returning {@link Activity}/{@link GateActivity}/{@link EffectActivity} is
+ * invoked once at scan and its result serves the step named by the method (or by
+ * {@link Handles @Handles}); {@link Compensable} on the result binds the undo. Everything still
+ * registers through the one {@code worker.handlers(...)} call, mixing freely with plain methods.
  */
 class TypedActivityTest {
 
-    private static WorkflowDefinition linear() {
-        return Workflow.define("wf").step("capture-payment").gate("in-stock").effect("audit-log")
-                .build().definition();
-    }
-
-    // ------------------------------------------------------------------ typed classes
-
+    /** The standalone typed activity — dependencies via constructor, undo alongside the do. */
     static final class CapturePayment implements Activity<Map<String, Object>>,
             Compensable<Map<String, Object>> {
         final AtomicReference<Object> refunded = new AtomicReference<>();
@@ -50,85 +45,140 @@ class TypedActivityTest {
         }
     }
 
-    static final class InStock implements GateActivity<Map<String, Object>> {
-        public boolean test(Map<String, Object> ctx) { return true; }
+    @Handlers("wf")
+    static final class MixedHandlers {
+        final CapturePayment capture = new CapturePayment();
+
+        public boolean inStock(Map<String, Object> ctx) { return true; }      // plain gate method
+
+        public Activity<Map<String, Object>> capturePayment() {               // factory -> "capture-payment"
+            return capture;
+        }
+
+        public EffectActivity<Map<String, Object>> auditLog() {               // factory -> "audit-log"
+            return ctx -> { };
+        }
     }
 
-    static final class AuditLog implements EffectActivity<Map<String, Object>> {
-        public void apply(Map<String, Object> ctx) { }
+    private static WorkflowDefinition linear() {
+        return Workflow.define("wf").step("capture-payment").gate("in-stock").effect("audit-log")
+                .build().definition();
     }
 
     // ------------------------------------------------------------------ binder-level
 
-    @Test @DisplayName("class names match steps case/style-insensitively; kinds check out")
-    void classNameMatching() throws Exception {
-        CapturePayment cp = new CapturePayment();
-        var r1 = HandlerBinder.bind(HandlerBinder.scanActivity("wf", cp, null), linear());
-        var r2 = HandlerBinder.bind(HandlerBinder.scanActivity("wf", new InStock(), null), linear());
-        var r3 = HandlerBinder.bind(HandlerBinder.scanActivity("wf", new AuditLog(), null), linear());
+    @Test @DisplayName("factory methods register their activities under the method's name")
+    void factoriesBindByMethodName() throws Exception {
+        var r = HandlerBinder.bind(HandlerBinder.scan(new MixedHandlers()), linear());
+        assertEquals(3, r.bindings().size());
+        assertTrue(r.unserved().isEmpty());
+        Map<String, HandlerBinder.Binding> byStep = new LinkedHashMap<>();
+        r.bindings().forEach(b -> byStep.put(b.step(), b));
 
-        assertEquals("capture-payment", r1.bindings().get(0).step(), "CapturePayment ↔ capture-payment");
-        assertEquals("in-stock", r2.bindings().get(0).step());
-        assertEquals("audit-log", r3.bindings().get(0).step());
-
-        Object out = r1.bindings().get(0).handler().invoke(Map.of("a", 1L));
-        assertTrue(out.toString().contains("paymentRef"), "task wrapper returns the whole next context");
-        assertEquals(true, r2.bindings().get(0).handler().invoke(Map.of()));
-        assertNull(r3.bindings().get(0).handler().invoke(Map.of()), "effect reports null");
+        Object out = byStep.get("capture-payment").handler().invoke(Map.of("a", 1L));
+        assertTrue(out.toString().contains("paymentRef"), "typed task runs via the factory result");
+        assertEquals(true, byStep.get("in-stock").handler().invoke(Map.of()), "plain method still binds");
+        assertNull(byStep.get("audit-log").handler().invoke(Map.of()), "typed effect reports null");
     }
 
-    @Test @DisplayName("a Compensable activity's undo is bound and receives the snapshot")
+    @Test @DisplayName("a Compensable factory result carries the undo; it receives the snapshot")
     void compensatorBound() throws Exception {
-        CapturePayment cp = new CapturePayment();
-        var r = HandlerBinder.bind(HandlerBinder.scanActivity("wf", cp, null), linear());
-        ActivityHandler comp = r.bindings().get(0).compensator();
+        MixedHandlers h = new MixedHandlers();
+        var r = HandlerBinder.bind(HandlerBinder.scan(h), linear());
+        ActivityHandler comp = r.bindings().stream()
+                .filter(b -> b.step().equals("capture-payment")).findFirst().orElseThrow().compensator();
         assertNotNull(comp, "Compensable ⇒ the binding carries the undo");
         comp.invoke(Map.of("paymentRef", "pay-9"));
-        assertEquals("pay-9", cp.refunded.get(), "the compensator saw the post-step snapshot");
-        // non-Compensable activities carry none
-        var r2 = HandlerBinder.bind(HandlerBinder.scanActivity("wf", new InStock(), null), linear());
-        assertNull(r2.bindings().get(0).compensator());
+        assertEquals("pay-9", h.capture.refunded.get(), "the compensator saw the post-step snapshot");
+        // the plain method carries none
+        assertNull(r.bindings().stream()
+                .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow().compensator());
     }
 
-    @Test @DisplayName("a gate class bound to a task step (and vice versa) fails fast")
-    void kindMismatch() {
-        WorkflowDefinition def = Workflow.define("wf").step("in-stock").build().definition();
-        assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scanActivity("wf", new InStock(), null), def),
-                "boolean-shaped activity on a TASK node");
-        WorkflowDefinition def2 = Workflow.define("wf").gate("capture-payment").build().definition();
-        assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scanActivity("wf", new CapturePayment(), null), def2),
-                "task-shaped activity on a PREDICATE node");
-    }
+    @Test @DisplayName("@Handles renames a handler away from its method name — plain and factory alike")
+    void handlesAnnotation() throws Exception {
+        @Handlers("wf")
+        class Renamed {
+            @Handles("capture-payment")
+            public Map<String, Object> doTheCharge(Map<String, Object> ctx) { return ctx; }
 
-    @Test @DisplayName("implementing two roles is ambiguous; a lambda needs an explicit name")
-    void scanRejections() {
-        // NB: the compiler already forces a name() override here (conflicting defaults) —
-        // accidental double-roles don't even compile; the runtime check catches deliberate ones.
-        class Both implements Activity<Map<String, Object>>, GateActivity<Map<String, Object>> {
-            public Map<String, Object> execute(Map<String, Object> c) { return c; }
-            public boolean test(Map<String, Object> c) { return true; }
-            public String name() { return "both"; }
+            @Handles("in-stock")
+            public GateActivity<Map<String, Object>> stockGate() { return ctx -> true; }
+
+            public void auditLog(Map<String, Object> ctx) { }
         }
-        assertThrows(IllegalArgumentException.class,
-                () -> HandlerBinder.scanActivity("wf", new Both(), null));
-        Activity<Map<String, Object>> lambda = c -> c;
-        assertThrows(IllegalArgumentException.class,
-                () -> HandlerBinder.scanActivity("wf", lambda, null),
-                "lambdas have no usable class name");
-        // with an explicit name the same lambda is fine
-        var r = HandlerBinder.bind(HandlerBinder.scanActivity("wf", lambda, "capture-payment"), linear());
-        assertEquals("capture-payment", r.bindings().get(0).step());
+        var r = HandlerBinder.bind(HandlerBinder.scan(new Renamed()), linear());
+        assertEquals(3, r.bindings().size());
+        assertTrue(r.unserved().isEmpty(), "renamed methods served all three steps");
+        assertEquals(true, r.bindings().stream()
+                .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow()
+                .handler().invoke(Map.of()));
+    }
+
+    @Test @DisplayName("scan rejections: parameterized factories, null factories, double roles, @Handles collisions")
+    void scanRejections() {
+        @Handlers("wf")
+        class ParamFactory {
+            public Activity<Map<String, Object>> capturePayment(String oops) { return c -> c; }
+        }
+        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new ParamFactory()),
+                "a factory must be zero-parameter");
+
+        @Handlers("wf")
+        class NullFactory {
+            public Activity<Map<String, Object>> capturePayment() { return null; }
+        }
+        assertThrows(IllegalStateException.class, () -> HandlerBinder.scan(new NullFactory()));
+
+        @Handlers("wf")
+        class Collides {
+            public Map<String, Object> capturePayment(Map<String, Object> c) { return c; }
+            @Handles("capture-payment")
+            public Map<String, Object> other(Map<String, Object> c) { return c; }
+        }
+        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new Collides()),
+                "@Handles colliding with a method name is ambiguous");
+    }
+
+    @Test @DisplayName("kind mismatches fail fast for factory results too")
+    void kindMismatch() {
+        @Handlers("wf")
+        class GateOnTask {
+            public GateActivity<Map<String, Object>> capturePayment() { return ctx -> true; }
+        }
+        assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new GateOnTask()), linear()),
+                "boolean-shaped activity on a TASK node");
     }
 
     // ------------------------------------------------------------------ end-to-end
 
-    @Test @DisplayName("typed activities + a lambda run a workflow to COMPLETED on an embedded server")
+    @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        Blueprint bp = Workflow.define("typed-flow")
+        Blueprint bp = Workflow.define("wf")
                 .step("capture-payment").gate("in-stock").step("summarise").effect("audit-log")
                 .build();
+
+        @Handlers("wf")
+        class FlowHandlers {
+            public boolean inStock(Map<String, Object> ctx) { return true; }
+
+            public Activity<Map<String, Object>> capturePayment() {
+                return new CapturePayment();
+            }
+
+            @Handles("summarise")
+            public Activity<Map<String, Object>> buildSummary() {
+                return ctx -> {
+                    Map<String, Object> next = new LinkedHashMap<>(ctx);
+                    next.put("summary", "ok");
+                    return next;
+                };
+            }
+
+            public EffectActivity<Map<String, Object>> auditLog() { return ctx -> { }; }
+        }
+
         ServerConfig config = new ServerConfig(0, "typed-test", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
@@ -137,23 +187,15 @@ class TypedActivityTest {
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "typed-w")
                      .register(bp)
-                     .activities(new CapturePayment(), new InStock(), new AuditLog())
-                     .activity("summarise", ctx -> {
-                         Map<String, Object> next = new LinkedHashMap<>(ctx);
-                         next.put("summary", "ok");
-                         return next;
-                     })) {
+                     .handlers(new FlowHandlers())) {
             worker.start();
             String id = client.start(bp, Map.of("orderId", "A-1"));
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(10));
             assertEquals("COMPLETED", v.status());
             @SuppressWarnings("unchecked")
             Map<String, Object> ctx = (Map<String, Object>) v.context();
-            assertEquals("pay-1", ctx.get("paymentRef"), "typed task ran");
-            assertEquals("ok", ctx.get("summary"), "named lambda ran");
+            assertEquals("pay-1", ctx.get("paymentRef"), "factory-produced task ran");
+            assertEquals("ok", ctx.get("summary"), "@Handles-renamed factory ran");
         }
     }
-
-    @SuppressWarnings("unused")
-    private static List<Object> unusedSilencer() { return List.of(); }
 }

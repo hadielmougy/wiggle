@@ -110,52 +110,6 @@ public final class Worker implements AutoCloseable {
         return this;
     }
 
-    /**
-     * Registers typed activities — one class per step — against the single registered workflow.
-     * Each instance implements exactly one of {@link Activity}, {@link GateActivity}, or
-     * {@link EffectActivity}; its step is matched by {@code name()} (default: the class's simple
-     * name, case/style-insensitively — {@code class CapturePayment} serves {@code capture-payment}).
-     * An instance also implementing {@link Compensable} carries its own undo, bound alongside.
-     * Coexists freely with {@link #handlers}: use a {@code @Handlers} class for concise flows and
-     * combines, typed activities where a step deserves its own class or a compensator.
-     */
-    public Worker activities(Object... typedActivities) {
-        return activities(soleWorkflow(), typedActivities);
-    }
-
-    /** Registers typed activities against an explicit workflow (for a worker serving several). */
-    public Worker activities(String workflow, Object... typedActivities) {
-        for (Object a : typedActivities) handlerSets.add(HandlerBinder.scanActivity(workflow, a, null));
-        return this;
-    }
-
-    /** Registers one typed activity under an explicit step name (lambdas and anonymous classes
-     *  have no usable class name; this overload names them). */
-    public Worker activity(String name, Activity<java.util.Map<String, Object>> fn) {
-        handlerSets.add(HandlerBinder.scanActivity(soleWorkflow(), fn, name));
-        return this;
-    }
-
-    /** A named gate lambda over the raw context map. */
-    public Worker gate(String name, GateActivity<java.util.Map<String, Object>> fn) {
-        handlerSets.add(HandlerBinder.scanActivity(soleWorkflow(), fn, name));
-        return this;
-    }
-
-    /** A named effect lambda over the raw context map. */
-    public Worker effect(String name, EffectActivity<java.util.Map<String, Object>> fn) {
-        handlerSets.add(HandlerBinder.scanActivity(soleWorkflow(), fn, name));
-        return this;
-    }
-
-    private String soleWorkflow() {
-        if (blueprints.size() != 1) {
-            throw new IllegalStateException("this worker serves " + blueprints.size() + " workflows — "
-                    + "use activities(workflow, ...) to say which one these activities belong to");
-        }
-        return blueprints.get(0).name();
-    }
-
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
         if (options.registerOnStart()) {

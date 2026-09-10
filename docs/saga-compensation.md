@@ -66,8 +66,19 @@ final class CapturePayment implements Activity<Order>, Compensable<Order> {
     public void  compensate(Order s)   { gateway.refund(s.paymentRef()); }   // idempotent!
 }
 
-worker.register(orders)
-      .activities(new CapturePayment(), new ReserveStock(), new InStock());
+@Handlers("order-fulfilment")
+class OrderHandlers {
+    public boolean inStock(Order o) { ... }                 // plain methods coexist
+
+    public Activity<Order> capturePayment() {               // factory -> serves "capture-payment"
+        return new CapturePayment(gateway);
+    }
+
+    @Handles("reserve-stock")                               // rename when the method name can't match
+    public Activity<Order> stockReserver() { return new ReserveStock(wms); }
+}
+
+worker.register(orders).handlers(new OrderHandlers());      // ONE registration call, as always
 ```
 
 `compensate` receives the **snapshot context its forward step returned** (§4) — so `paymentRef`
