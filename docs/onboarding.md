@@ -259,11 +259,30 @@ class OrderHandlers {
 
 ```java
 try (WiggleClient client = new WiggleClient("localhost:8080")) {
-    String id = client.start(orders, Order.of(...));
+    String id = client.start(orders, Order.of(...));                       // same-JVM convenience: by Blueprint
     InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(30));   // COMPLETED | FAILED | CANCELLED
     client.cancel(id, "reason");
 }
 ```
+
+**Integrating as a separate team — start by name, no jar.** A submitting service does not need
+the Blueprint or any shared artifact: the graph is data the server owns, so the submitter's whole
+contract is the workflow **name** plus the agreed context shape (document it like any API schema).
+
+```java
+String id = client.start("order-fulfilment", Map.of("orderId", "A-1001", "quantity", 3L));
+
+// version pinning: unpinned = latest registered; pin to be immune to mid-deploy changes.
+String id2 = client.start("order-fulfilment", ctx, 302800684, "corr-42");
+```
+
+Registration belongs with whoever owns the definition — normally the **worker artifact**, where
+the handlers and the graph they serve deploy as one atomic act (`registerOnStart`, the default;
+the binder validates handler signatures against that exact graph on startup). Content-hash
+versioning makes this safe for everyone else: re-registering an identical graph is a no-op, a
+changed graph is a NEW version that redirects nothing, in-flight instances stay pinned to the
+version they started on, and by-name submitters pick the new version up only for new starts —
+or never, if they pin.
 
 ---
 

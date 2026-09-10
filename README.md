@@ -309,6 +309,19 @@ try (DirectConnection wiggle = WiggleConnection.direct("localhost:8080")) {
 }
 ```
 
+A team that only *starts* workflows needs none of that — no Blueprint, no shared jar. The graph
+is data the server owns, so a submitter's whole contract is the workflow **name** plus the agreed
+context shape (exactly the coupling of calling an HTTP API). Registration ships with the worker
+artifact — the handlers and the graph they serve deploy as one atomic act:
+
+```java
+// a separate submitting service: name + context, nothing else
+String id = client.start("order-fulfilment", Map.of("orderId", "A-1001", "quantity", 3L));
+
+// pin a version to be immune to mid-deploy definition changes (unpinned = latest)
+String id2 = client.start("order-fulfilment", ctx, 302800684, "corr-42");
+```
+
 And the parts long-running processes actually need are first-class:
 
 ```java
