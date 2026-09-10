@@ -1,10 +1,11 @@
 # Design: Saga / compensation (backward recovery)
 
-**Status:** proposal. Today a failed instance stops in place — sibling tokens are cancelled and the
-instance goes `FAILED` (`WorkflowEngine.failInstance`), with no undo. This design adds **declared,
-explicit compensation**: a step may name a compensating activity; when the instance fails, the
-engine runs the compensators of the already-completed steps, in reverse completion order, as real
-durable tokens.
+**Status:** implemented (client model + engine reverse pass; see `SagaCompensationTest`).
+Previously a failed instance stopped in place — sibling tokens cancelled, instance `FAILED`
+(`WorkflowEngine.failInstance`), no undo. This design adds **declared, explicit compensation**: a
+step may declare `.compensate()` and its activity implements `Compensable`; when the instance
+fails, the engine runs the compensators of the already-completed steps, in reverse completion
+order, as real durable tokens.
 
 The design is shaped by one hard fact about Wiggle and one principle.
 

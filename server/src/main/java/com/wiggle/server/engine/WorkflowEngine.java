@@ -55,6 +55,17 @@ public final class WorkflowEngine {
      *  along the token chain and stripped from every dispatched context. */
     static final String LOOP_COUNTS = "__loops__";
 
+    /** Marks a token as a COMPENSATION token (the reverse pass): its payload carries the comp-log
+     *  seq it settles plus the input/result snapshots the compensator receives. */
+    static final String COMP_SEQ = "__comp_seq__";
+
+    /** The comp-log seq a compensation token settles, or null for a forward token. */
+    private static Long compSeqOf(Token t) {
+        if (t.payloadJson == null || !t.payloadJson.contains(COMP_SEQ)) return null;
+        Object v = Json.parseObject(t.payloadJson).get(COMP_SEQ);
+        return v == null ? null : ((Number) v).longValue();
+    }
+
     /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
      *  is drained in one batched claim instead of a round trip per token. Trades up to this much
      *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
@@ -345,7 +356,19 @@ public final class WorkflowEngine {
 
     private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
         Instance inst = tx.findInstance(t.instanceId).orElse(null);
-        if (inst == null || inst.status != InstanceStatus.RUNNING) return Optional.empty();
+        boolean comp = t != null && compSeqOf(t) != null;
+        if (inst == null || inst.status != (comp ? InstanceStatus.COMPENSATING : InstanceStatus.RUNNING)) {
+            return Optional.empty();
+        }
+        if (comp) {
+            // A compensation task: the context is the {input, result} snapshot pair; the worker's
+            // compensator wrapper splits it. Always SERVER mode -- the reverse pass never chains.
+            Map<String, Object> payload = Json.parseObject(t.payloadJson);
+            payload.remove(COMP_SEQ);
+            return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version,
+                    t.nodeId, t.activity, t.activity, NodeKind.TASK, t.attempt + 1, until, workerId,
+                    payload, null, 0, null, ExecutionMode.SERVER));
+        }
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
         Object base = null;
@@ -408,11 +431,18 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             Token t = locked.token();
             requireLease(t, leaseOwner);
-            requireRunning(inst);
             long now = System.currentTimeMillis();
+            Long compSeq = compSeqOf(t);
+            if (compSeq != null) {                          // the reverse pass: a compensator finished
+                completeCompensation(tx, inst, t, compSeq, now);
+                return;
+            }
+            requireRunning(inst);
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
+            Object compInput = node.compensable() ? dispatchContext(inst, t) : null;
             String next = routeCompletion(inst, t, node, result);
+            if (node.compensable()) captureCompensation(tx, inst, t, node, compInput, now);
             String overrun = node.kind() == NodeKind.PREDICATE
                     ? tickLoopBudget(t, node, predicateValue(result)) : null;
             if (overrun != null) {
@@ -521,7 +551,9 @@ public final class WorkflowEngine {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
             requireReportedNode(node, step, current);
+            Object compInput = node.compensable() ? dispatchContext(inst, current) : null;
             String next = routeReportedStep(inst, current, node, step);
+            if (node.compensable()) captureCompensation(tx, inst, current, node, compInput, now);
             String overrun = node.kind() == NodeKind.PREDICATE
                     ? tickLoopBudget(current, node, step.predicateValue() != null && step.predicateValue()) : null;
             if (overrun != null) {
@@ -727,7 +759,10 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             Token t = locked.token();
             requireLease(t, leaseOwner);
-            if (inst.status != InstanceStatus.RUNNING) return;
+            // COMPENSATING instances still have live work in flight — their compensators. A
+            // compensator's failure report must reach failToken (-> COMPENSATION_FAILED), not
+            // be dropped by the terminal-status guard.
+            if (inst.status != InstanceStatus.RUNNING && inst.status != InstanceStatus.COMPENSATING) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             failToken(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
         });
@@ -761,6 +796,22 @@ public final class WorkflowEngine {
         LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
                 + " exhausted retries (attempt " + t.attempt + "/" + policy.maxAttempts()
                 + ", retryable=" + retryable + ") -> failing instance");
+        Long compSeq = compSeqOf(t);
+        if (compSeq != null) {
+            // A compensator itself is out of retries: the one thing worse than a stuck saga is a
+            // stuck saga reported as success — refuse to pretend and demand a human.
+            if (inst.status == InstanceStatus.COMPENSATING) {
+                inst.status = InstanceStatus.COMPENSATION_FAILED;
+                inst.error = (inst.error == null ? "" : inst.error + "; ")
+                        + "compensator '" + node.name() + "' (undo seq " + compSeq + ") failed: " + failReason;
+                inst.updatedAt = now;
+                tx.updateInstance(inst);
+                LOG.log(System.Logger.Level.WARNING, () -> "instance " + inst.id
+                        + " COMPENSATION_FAILED at undo seq " + compSeq + ": " + failReason);
+                notifyParent(tx, inst, now);
+            }
+            return;
+        }
         if (inst.status == InstanceStatus.RUNNING) {
             failInstance(tx, inst, node.name() + ": " + failReason, now);
         }
@@ -1439,12 +1490,85 @@ public final class WorkflowEngine {
 
     private void failInstance(Tx tx, Instance inst, String error, long now) {
         cancelActiveTokens(tx, inst.id, null, now);
+        boolean hasUndo = tx.compensationLog(inst.id).stream().anyMatch(e -> !e.compensated);
+        if (hasUndo) {
+            // The reverse pass: run the completed compensable steps' undos, newest first. The
+            // parent (for a sub-workflow) is notified only when the pass lands COMPENSATED or
+            // COMPENSATION_FAILED — the child's outcome isn't known until then.
+            inst.status = InstanceStatus.COMPENSATING;
+            inst.error = error;
+            inst.updatedAt = now;
+            tx.updateInstance(inst);
+            LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed (" + error
+                    + ") -> compensating");
+            mintNextCompensation(tx, inst, now);
+            return;
+        }
         inst.status = InstanceStatus.FAILED;
         inst.error = error;
         inst.updatedAt = now;
         tx.updateInstance(inst);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed: " + error);
         notifyParent(tx, inst, now);
+    }
+
+    /** Appends this compensable step's completion to the comp-log: both snapshots, captured
+     *  atomically with the completion itself. Result = the context as the step left it. */
+    private static void captureCompensation(Tx tx, Instance inst, Token t, Node node,
+                                            Object input, long now) {
+        Rows.CompLog e = new Rows.CompLog();
+        e.instanceId = inst.id;
+        e.seq = tx.compensationLog(inst.id).size() + 1L;
+        e.nodeId = node.id();
+        e.activity = node.activity();
+        e.queue = node.queue();
+        e.inputJson = Json.write(input);
+        e.resultJson = Json.write(dispatchContext(inst, t));   // post-apply: as the step left it
+        tx.appendCompensation(e);
+    }
+
+    /** Mints the reverse pass's next token: the newest uncompensated entry, dispatched to the
+     *  step's own queue under activity "<activity>#compensate" — a real leased task, executed by
+     *  a worker through the normal claim path. No entry left -> the pass is done: COMPENSATED. */
+    private void mintNextCompensation(Tx tx, Instance inst, long now) {
+        List<Rows.CompLog> log = tx.compensationLog(inst.id);
+        Rows.CompLog next = null;
+        for (int i = log.size() - 1; i >= 0; i--) {
+            if (!log.get(i).compensated) { next = log.get(i); break; }
+        }
+        if (next == null) {
+            inst.status = InstanceStatus.COMPENSATED;
+            inst.updatedAt = now;
+            tx.updateInstance(inst);
+            LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id
+                    + " compensated cleanly (" + log.size() + " undo(s))");
+            notifyParent(tx, inst, now);
+            return;
+        }
+        String payload = Json.write(Map.of(
+                COMP_SEQ, next.seq,
+                "input", Json.parse(next.inputJson),
+                "result", Json.parse(next.resultJson)));
+        Token t = newToken(inst, next.nodeId, "", payload, now);
+        t.activity = next.activity + "#compensate";
+        t.queue = next.queue;
+        tx.insertToken(t);
+        Set<String> ready = readyQueues.get();   // wake-on-produce, post-commit
+        if (ready != null && t.queue != null) ready.add(t.queue);
+        Rows.CompLog fNext = next;
+        LOG.log(System.Logger.Level.DEBUG, () -> "compensation: instance " + inst.id
+                + " dispatching undo seq " + fNext.seq + " (" + fNext.activity + ")");
+    }
+
+    /** A compensator completed: settle its entry and drive the next-newest, or finish the pass. */
+    private void completeCompensation(Tx tx, Instance inst, Token t, long seq, long now) {
+        if (inst.status != InstanceStatus.COMPENSATING) {
+            throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
+        }
+        settleToken(tx, t, now);
+        tx.markCompensated(inst.id, seq);
+        touchInstance(tx, inst, now);
+        mintNextCompensation(tx, inst, now);
     }
 
     private static void cancelActiveTokens(Tx tx, String instanceId, String except, long now) {

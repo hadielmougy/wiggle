@@ -195,6 +195,16 @@ final class HandlerBinder {
                 unserved.add(node.name());
                 continue;
             }
+            if (node.compensable() && c.compensate() == null) {
+                throw new IllegalStateException("step '" + node.name() + "' declares .compensate() "
+                        + "but its handler is not Compensable — implement Compensable on the "
+                        + "activity (or drop the declaration)");
+            }
+            if (!node.compensable() && c.compensate() != null) {
+                throw new IllegalStateException("activity for step '" + node.name() + "' is "
+                        + "Compensable but the step does not declare .compensate() — a silently "
+                        + "unused undo is a lie; declare it in the topology (or drop Compensable)");
+            }
             bindings.add(new Binding(node.activity(), node.name(),
                     node.queue() != null ? node.queue() : set.workflow(),
                     buildHandler(set, node, c),

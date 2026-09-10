@@ -50,6 +50,6 @@ public record NodeDraft(NodeKind kind, String name, String activity, String queu
     /** Positions this draft at {@code id}, producing an edge-less {@link Node} ready to be wired. */
     public Node toNode(String id) {
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, null, null,
-                List.of(), expected, success, reason, itemsKey, itemKey, 0);
+                List.of(), expected, success, reason, itemsKey, itemKey, 0, false);
     }
 }

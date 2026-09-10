@@ -12,22 +12,22 @@ import java.util.Map;
 public record Node(String id, NodeKind kind, String name, String activity, String queue,
                    RetryPolicy retry, long sleepMillis, String next, String altNext,
                    List<String> branches, int expected, boolean success, String reason,
-                   String itemsKey, String itemKey, int loopBudget) {
+                   String itemsKey, String itemKey, int loopBudget, boolean compensable) {
 
     public static Node task(String id, String name, String activity, String queue, RetryPolicy retry) {
-        return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0);
+        return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0, false);
     }
 
     public static Node predicate(String id, String name, String activity, String queue, RetryPolicy retry) {
-        return new Node(id, NodeKind.PREDICATE, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0);
+        return new Node(id, NodeKind.PREDICATE, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0, false);
     }
 
     public static Node sleep(String id, String name, long millis) {
-        return new Node(id, NodeKind.SLEEP, name, null, null, null, millis, null, null, List.of(), 0, false, null, null, null, 0);
+        return new Node(id, NodeKind.SLEEP, name, null, null, null, millis, null, null, List.of(), 0, false, null, null, null, 0, false);
     }
 
     public static Node fork(String id, String name) {
-        return new Node(id, NodeKind.FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null, null, null, 0);
+        return new Node(id, NodeKind.FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null, null, null, 0, false);
     }
 
     /**
@@ -37,12 +37,12 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
      */
     public static Node dynFork(String id, String name, String itemsKey, String itemKey) {
         return new Node(id, NodeKind.DYN_FORK, name, null, null, null, 0, null, null, List.of(), 0, false, null,
-                itemsKey, itemKey, 0);
+                itemsKey, itemKey, 0, false);
     }
 
     /** {@code expected == 0} marks a dynamic join: the width travels in the join group instead. */
     public static Node join(String id, String name, int expected) {
-        return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null, null, null, 0);
+        return new Node(id, NodeKind.JOIN, name, null, null, null, 0, null, null, List.of(), expected, false, null, null, null, 0, false);
     }
 
     /**
@@ -50,42 +50,49 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
      * (reuses {@code sleepMillis} for the deadline).
      */
     public static Node signal(String id, String name, long deadlineMillis) {
-        return new Node(id, NodeKind.SIGNAL, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null, 0);
+        return new Node(id, NodeKind.SIGNAL, name, null, null, null, deadlineMillis, null, null, List.of(), 0, false, null, null, null, 0, false);
     }
 
     /** Runs the workflow named {@code workflow} as a child; reuses {@code activity} for its name. */
     public static Node subWorkflow(String id, String name, String workflow) {
-        return new Node(id, NodeKind.SUB_WORKFLOW, name, workflow, null, null, 0, null, null, List.of(), 0, false, null, null, null, 0);
+        return new Node(id, NodeKind.SUB_WORKFLOW, name, workflow, null, null, 0, null, null, List.of(), 0, false, null, null, null, 0, false);
     }
 
     public static Node end(String id, boolean success, String reason) {
-        return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason, null, null, 0);
+        return new Node(id, NodeKind.END, "end", null, null, null, 0, null, null, List.of(), 0, success, reason, null, null, 0, false);
     }
 
     public Node withNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
     }
 
     public Node withAltNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey, loopBudget);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
     }
 
     public Node withQueue(String q) {
-        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget);
+        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
     }
 
     public Node withBranches(List<String> b) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey, loopBudget);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+    }
+
+    /** Marks this step compensable: on instance failure its bound Compensable undo runs in the
+     *  reverse pass, fed the input/result snapshots captured at completion. */
+    public Node withCompensable() {
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext,
+                branches, expected, success, reason, itemsKey, itemKey, loopBudget, true);
     }
 
     /** doWhile guards only: max true-evaluations before the instance fails (-1 = engine default). */
     public Node withLoopBudget(int budget) {
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext,
-                branches, expected, success, reason, itemsKey, itemKey, budget);
+                branches, expected, success, reason, itemsKey, itemKey, budget, compensable);
     }
 
     public Node withItemsKey(String k) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected, success, reason, k, itemKey, 0);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected, success, reason, k, itemKey, 0, false);
     }
 
     public boolean isWorkerDispatched() {
@@ -110,6 +117,7 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         if (itemsKey != null) m.put("itemsKey", itemsKey);
         if (itemKey != null) m.put("itemKey", itemKey);
         if (loopBudget != 0) m.put("loopBudget", (long) loopBudget);
+        if (compensable) m.put("compensable", true);
         return m;
     }
 
@@ -133,6 +141,7 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
                 Json.str(m, "reason", null),
                 Json.str(m, "itemsKey", null),
                 Json.str(m, "itemKey", null),
-                (int) Json.num(m, "loopBudget", 0));
+                (int) Json.num(m, "loopBudget", 0),
+                Json.bool(m, "compensable", false));
     }
 }

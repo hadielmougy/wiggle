@@ -440,6 +440,23 @@ public final class WorkflowBuilder {
         return this;
     }
 
+    /**
+     * Marks the step just added as <b>compensable</b>: if the instance later fails, this step's
+     * undo — the {@code Compensable} implemented by its bound activity — runs in the reverse pass,
+     * fed the input/result snapshots captured when the step completed. The topology declares the
+     * fact (versioned, console-visible, engine-enforced); the handler carries the implementation,
+     * and the binder verifies the pairing both ways at registration. Must directly follow a
+     * {@code step()} or {@code effect()}. Under {@code LOCAL_ASYNC} a compensable step is a flush
+     * boundary, so its snapshots are always durably captured before anything later can fail.
+     */
+    public WorkflowBuilder compensate() {
+        if (lastStepId == null) {
+            throw new IllegalStateException("compensate() must directly follow step() or effect()");
+        }
+        pipeline.markCompensable(lastStepId);
+        return this;
+    }
+
     public Blueprint build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         if (forkPending) throw new IllegalStateException(

@@ -68,6 +68,9 @@ public final class InMemoryStorage implements Storage {
 
     @Override public void close() { }
 
+    /** instanceId -> compensation log entries (seq-ordered append). */
+    private final Map<String, List<Rows.CompLog>> compLogs = new ConcurrentHashMap<>();
+
     private final class MemTx implements Tx {
 
         @Override public void putDefinition(String name, int version, String json) {
@@ -309,12 +312,14 @@ public final class InMemoryStorage implements Storage {
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
             List<String> victims = instances.values().stream()
-                    .filter(i -> i.status != InstanceStatus.RUNNING && i.updatedAt < updatedBefore)
+                    .filter(i -> i.status != InstanceStatus.RUNNING
+                            && i.status != InstanceStatus.COMPENSATING && i.updatedAt < updatedBefore)
                     .limit(limit)
                     .map(i -> i.id)
                     .toList();
             victims.forEach(id -> {
                 instances.remove(id);
+                compLogs.remove(id);
                 NavigableMap<String, Token> byId = tokensByInstance.remove(id);
                 if (byId != null) {
                     for (Token t : byId.values()) {
@@ -324,6 +329,32 @@ public final class InMemoryStorage implements Storage {
                 }
             });
             return victims.size();
+        }
+
+        @Override public void appendCompensation(Rows.CompLog entry) {
+            compLogs.computeIfAbsent(entry.instanceId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                    .add(entry.clone());
+        }
+
+        @Override public List<Rows.CompLog> compensationLog(String instanceId) {
+            List<Rows.CompLog> log = compLogs.get(instanceId);
+            if (log == null) return List.of();
+            List<Rows.CompLog> out = new ArrayList<>(log.size());
+            for (Rows.CompLog e : log) out.add(e.clone());
+            out.sort(java.util.Comparator.comparingLong(e -> e.seq));
+            return out;
+        }
+
+        @Override public void markCompensated(String instanceId, long seq) {
+            List<Rows.CompLog> log = compLogs.get(instanceId);
+            if (log == null) return;
+            for (int k = 0; k < log.size(); k++) {
+                if (log.get(k).seq == seq) {
+                    Rows.CompLog e = log.get(k).clone();
+                    e.compensated = true;
+                    log.set(k, e);
+                }
+            }
         }
     }
 }

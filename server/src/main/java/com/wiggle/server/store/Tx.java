@@ -82,4 +82,10 @@ public interface Tx extends GraphStore {
     void setLeader(String nodeId, boolean leader);
 
     int deleteTerminalInstancesBefore(long updatedBefore, int limit);
+
+    // ---- saga compensation log (bounded: one row per compensable completion) ----
+    void appendCompensation(Rows.CompLog entry);
+    /** The instance's compensation log, ordered by seq ascending. */
+    java.util.List<Rows.CompLog> compensationLog(String instanceId);
+    void markCompensated(String instanceId, long seq);
 }

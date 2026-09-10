@@ -141,6 +141,16 @@ public final class Worker implements AutoCloseable {
             if (handlers.putIfAbsent(b.activity(), b.handler()) != null) {
                 throw new IllegalStateException("duplicate handler for activity '" + b.activity() + "'");
             }
+            if (b.compensator() != null) {
+                // The undo is a normal claimable activity under "<activity>#compensate"; its
+                // context is the {input, result} snapshot pair the engine staged.
+                HandlerBinder.Compensator comp = b.compensator();
+                handlers.putIfAbsent(b.activity() + "#compensate", ctx -> {
+                    Map<String, Object> snaps = Json.asObject(ctx);
+                    comp.invoke(snaps.get("input"), snaps.get("result"));
+                    return null;
+                });
+            }
             queues.add(b.queue());
         }
         graphs.put(def.key(), def);
@@ -448,7 +458,10 @@ public final class Worker implements AutoCloseable {
          * affects ASYNC).
          */
         private boolean shouldFlush(boolean handback) {
-            return handback || def.checkpoints().contains(node.id()) || buffer.size() >= maxBatch;
+            // A compensable step flushes like a checkpoint: its input/result snapshots must be
+            // durably captured (the engine's comp-log) before anything later can fail.
+            return handback || def.checkpoints().contains(node.id()) || node.compensable()
+                    || buffer.size() >= maxBatch;
         }
 
         /** Flushes the buffer; true = the server leased us the continuation, keep chaining. */
