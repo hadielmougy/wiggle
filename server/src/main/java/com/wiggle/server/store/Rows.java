@@ -6,7 +6,8 @@ import com.wiggle.core.NodeKind;
 public final class Rows {
     private Rows() {}
 
-    public enum InstanceStatus { RUNNING, COMPLETED, FAILED, CANCELLED }
+    public enum InstanceStatus { RUNNING, COMPLETED, FAILED, CANCELLED,
+        COMPENSATING, COMPENSATED, COMPENSATION_FAILED }
 
     public enum TokenStatus {
         /** Dispatchable to a worker. */           READY,
@@ -121,6 +122,24 @@ public final class Rows {
 
         @Override public Schedule clone() {
             try { return (Schedule) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
+        }
+    }
+
+    /** One compensable step's completion record: the reverse pass runs these newest-first.
+     *  {@code inputJson}/{@code resultJson} are the step's snapshots (as received / as left),
+     *  captured atomically with the completion — see docs/saga-compensation.md §4. */
+    public static class CompLog implements Cloneable {
+        public String instanceId;
+        public long seq;
+        public String nodeId;
+        public String activity;
+        public String queue;
+        public String inputJson;
+        public String resultJson;
+        public boolean compensated;
+
+        @Override public CompLog clone() {
+            try { return (CompLog) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
         }
     }
 

@@ -127,6 +127,16 @@ final class Pipeline {
     String addEnd(String reason) { return add(NodeDraft.end(true, reason)); }
 
     /** Points {@code from}'s primary (true / next) edge at {@code target}. */
+    /** Marks a step compensable (its Compensable undo runs in the reverse pass on failure). */
+    void markCompensable(String stepId) {
+        Node n = nodes.get(stepId);
+        if (n.kind() != NodeKind.TASK || n.itemsKey() != null) {
+            throw new IllegalStateException("compensate() applies to a step or effect, not "
+                    + (n.itemsKey() != null ? "a combine" : String.valueOf(n.kind())));
+        }
+        nodes.put(stepId, n.withCompensable());
+    }
+
     /** Marks a guard as a doWhile loop condition with an iteration budget (-1 = engine default). */
     void markLoop(String guardId, int budget) { nodes.put(guardId, nodes.get(guardId).withLoopBudget(budget)); }
 

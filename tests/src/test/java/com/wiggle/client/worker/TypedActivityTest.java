@@ -62,9 +62,16 @@ class TypedActivityTest {
         }
     }
 
+    /** capture-payment declares .compensate() — pairs with MixedHandlers' Compensable factory. */
     private static WorkflowDefinition linear() {
-        return Workflow.define("wf").step("capture-payment").gate("in-stock").effect("audit-log")
-                .build().definition();
+        return Workflow.define("wf").step("capture-payment").compensate().gate("in-stock")
+                .effect("audit-log").build().definition();
+    }
+
+    /** Same shape, nothing compensable — for handler classes whose activities carry no undo. */
+    private static WorkflowDefinition linearPlain() {
+        return Workflow.define("wf").step("capture-payment").gate("in-stock")
+                .effect("audit-log").build().definition();
     }
 
     // ------------------------------------------------------------------ binder-level
@@ -111,7 +118,7 @@ class TypedActivityTest {
 
             public void auditLog(Map<String, Object> ctx) { }
         }
-        var r = HandlerBinder.bind(HandlerBinder.scan(new Renamed()), linear());
+        var r = HandlerBinder.bind(HandlerBinder.scan(new Renamed()), linearPlain());
         assertEquals(3, r.bindings().size());
         assertTrue(r.unserved().isEmpty(), "renamed methods served all three steps");
         assertEquals(true, r.bindings().stream()
@@ -151,7 +158,7 @@ class TypedActivityTest {
             public GateActivity<Map<String, Object>> capturePayment() { return ctx -> true; }
         }
         assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scan(new GateOnTask()), linear()),
+                () -> HandlerBinder.bind(HandlerBinder.scan(new GateOnTask()), linearPlain()),
                 "boolean-shaped activity on a TASK node");
     }
 
@@ -160,7 +167,7 @@ class TypedActivityTest {
     @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
     void endToEnd() throws Exception {
         Blueprint bp = Workflow.define("wf")
-                .step("capture-payment").gate("in-stock").step("summarise").effect("audit-log")
+                .step("capture-payment").compensate().gate("in-stock").step("summarise").effect("audit-log")
                 .build();
 
         @Handlers("wf")

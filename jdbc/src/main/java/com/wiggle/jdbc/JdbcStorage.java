@@ -205,6 +205,23 @@ public final class JdbcStorage implements Storage {
             // (-1 = engine default). Nullable, so the change is rolling-deploy safe.
             new Migration(7, "loop-budgets", """
             ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS loop_budget INT;
+            """),
+            // Saga compensation: the compensable marker on a step node, and the per-instance
+            // compensation log (input/result snapshots per compensable completion). Nullable /
+            // additive, rolling-deploy safe.
+            new Migration(8, "compensation", """
+            ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS compensable INT;
+            CREATE TABLE IF NOT EXISTS wf_comp_log (
+              instance_id  VARCHAR(64)  NOT NULL,
+              seq          BIGINT       NOT NULL,
+              node_id      VARCHAR(64)  NOT NULL,
+              activity     VARCHAR(300) NOT NULL,
+              queue        VARCHAR(200),
+              input_json   TEXT,
+              result_json  TEXT,
+              compensated  INT          NOT NULL,
+              PRIMARY KEY (instance_id, seq)
+            );
             """));
 
     /** Applies the cell schema. */
@@ -392,7 +409,7 @@ public final class JdbcStorage implements Storage {
             if (graphExists(def.name(), def.version())) return;
             try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
                     "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key,loop_budget) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
+                    "items_key,item_key,loop_budget,compensable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
                  PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
                     "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)", "to_node"))) {
                 for (Node n : def.nodes().values()) {
@@ -404,6 +421,7 @@ public final class JdbcStorage implements Storage {
                     node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
                     node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
                     node.setString(14, n.itemsKey()); node.setString(15, n.itemKey()); node.setInt(16, n.loopBudget());
+                    node.setInt(17, n.compensable() ? 1 : 0);
                     node.addBatch();
                     for (Edge e : edgesOf(n)) {
                         edge.setString(1, def.name()); edge.setInt(2, def.version()); edge.setString(3, n.id());
@@ -428,7 +446,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
             try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason," +
-                    "items_key,item_key,loop_budget FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
+                    "items_key,item_key,loop_budget,compensable FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
                 try (ResultSet rs = p.executeQuery()) {
                     if (!rs.next()) return Optional.empty();
@@ -443,8 +461,9 @@ public final class JdbcStorage implements Storage {
                     String itemsKey = rs.getString(10);
                     String itemKey = rs.getString(11);
                     int loopBudget = rs.getInt(12);   // NULL -> 0 (not a loop)
+                    boolean compensable = rs.getInt(13) != 0;
                     return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
-                            retry, sleep, expected, success, reason, itemsKey, itemKey, loopBudget));
+                            retry, sleep, expected, success, reason, itemsKey, itemKey, loopBudget, compensable));
                 }
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -452,7 +471,7 @@ public final class JdbcStorage implements Storage {
         /** Reads a node's outgoing edges and folds them back into the node's typed next/altNext/branches. */
         private Node assemble(String workflow, int version, String id, NodeKind kind, String name, String activity,
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
-                              String itemsKey, String itemKey, int loopBudget) {
+                              String itemsKey, String itemKey, int loopBudget, boolean compensable) {
             EdgeTargets targets = new EdgeTargets(kind);
             try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
                     "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
@@ -461,8 +480,9 @@ public final class JdbcStorage implements Storage {
                     while (rs.next()) targets.absorb(rs.getString(1), rs.getString(2));
                 }
             } catch (SQLException e) { throw wrap(e); }
-            return new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
-                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget);
+            Node n = new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
+                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget, false);
+            return compensable ? n.withCompensable() : n;
         }
 
         /** Folds edge rows back into a node's typed successor slots (the inverse of {@code edgesOf}). */
@@ -989,20 +1009,60 @@ public final class JdbcStorage implements Storage {
             // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
             // dialect a deterministic "oldest first" deletion order at no cost.
             try (PreparedStatement p = ps(dialect.limit(
-                    "SELECT id FROM wf_instance WHERE status<>'RUNNING' AND updated_at<? ORDER BY updated_at LIMIT ?"))) {
+                    "SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?"))) {
                 p.setLong(1, updatedBefore);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }
             } catch (SQLException e) { throw wrap(e); }
             if (ids.isEmpty()) return 0;
             try (PreparedStatement dt = ps("DELETE FROM wf_token WHERE instance_id=?");
+                 PreparedStatement dc = ps("DELETE FROM wf_comp_log WHERE instance_id=?");
                  PreparedStatement di = ps("DELETE FROM wf_instance WHERE id=?")) {
                 for (String id : ids) {
                     dt.setString(1, id); dt.executeUpdate();
+                    dc.setString(1, id); dc.executeUpdate();
                     di.setString(1, id); di.executeUpdate();
                 }
             } catch (SQLException e) { throw wrap(e); }
             return ids.size();
+        }
+
+        @Override public void appendCompensation(Rows.CompLog e) {
+            try (PreparedStatement p = ps("INSERT INTO wf_comp_log "
+                    + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
+                    + "VALUES (?,?,?,?,?,?,?,?)")) {
+                p.setString(1, e.instanceId); p.setLong(2, e.seq); p.setString(3, e.nodeId);
+                p.setString(4, e.activity); p.setString(5, e.queue);
+                p.setString(6, e.inputJson); p.setString(7, e.resultJson);
+                p.setInt(8, e.compensated ? 1 : 0);
+                p.executeUpdate();
+            } catch (SQLException ex) { throw wrap(ex); }
+        }
+
+        @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
+            java.util.List<Rows.CompLog> out = new java.util.ArrayList<>();
+            try (PreparedStatement p = ps("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
+                    + "FROM wf_comp_log WHERE instance_id=? ORDER BY seq")) {
+                p.setString(1, instanceId);
+                try (ResultSet rs = p.executeQuery()) {
+                    while (rs.next()) {
+                        Rows.CompLog e = new Rows.CompLog();
+                        e.instanceId = instanceId;
+                        e.seq = rs.getLong(1); e.nodeId = rs.getString(2); e.activity = rs.getString(3);
+                        e.queue = rs.getString(4); e.inputJson = rs.getString(5);
+                        e.resultJson = rs.getString(6); e.compensated = rs.getInt(7) != 0;
+                        out.add(e);
+                    }
+                }
+            } catch (SQLException ex) { throw wrap(ex); }
+            return out;
+        }
+
+        @Override public void markCompensated(String instanceId, long seq) {
+            try (PreparedStatement p = ps("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=? AND seq=?")) {
+                p.setString(1, instanceId); p.setLong(2, seq);
+                p.executeUpdate();
+            } catch (SQLException ex) { throw wrap(ex); }
         }
 
         private static Instance readInstance(ResultSet rs) throws SQLException {

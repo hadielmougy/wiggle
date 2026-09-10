@@ -17,8 +17,9 @@ package com.wiggle.client.worker;
  * idempotency key, not blindly).
  *
  * <p>The topology remains the contract: a step is compensated on failure only if the workflow
- * declares it ({@code .compensate(...)}). At bind time the pairing is verified both ways once the
- * engine's compensation phase lands; until then the binder records the compensator on the binding.
+ * declares it ({@code .compensate()}). The binder verifies the pairing both ways at bind time — a
+ * declared {@code .compensate()} without a {@code Compensable} handler, or a {@code Compensable}
+ * handler on an undeclared step, refuses to bind.
  */
 public interface Compensable<C> {
 

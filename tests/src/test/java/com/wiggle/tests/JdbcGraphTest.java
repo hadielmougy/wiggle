@@ -27,7 +27,7 @@ class JdbcGraphTest {
     private static WorkflowDefinition sampleGraph() {
         RetryPolicy retry = RetryPolicy.exponential(3, Duration.ofMillis(50));
         Map<String, Node> nodes = new LinkedHashMap<>();
-        nodes.put("t", Node.task("t", "task", "do-it", "q", retry).withNext("p"));
+        nodes.put("t", Node.task("t", "task", "do-it", "q", retry).withNext("p").withCompensable());
         nodes.put("p", Node.predicate("p", "check", "is-ok", "q", null).withNext("fk").withAltNext("bad"));
         nodes.put("fk", Node.fork("fk", "split").withBranches(List.of("b1", "b2")));
         nodes.put("b1", Node.task("b1", "left", "left-act", "q", null).withNext("jn"));
@@ -83,10 +83,49 @@ class JdbcGraphTest {
                 assertEquals("item", df.itemKey());
 
                 assertTrue(tx.graphNode("sample", def.version(), "nope").isEmpty());
+                assertTrue(tx.graphNode("sample", def.version(), "t").orElseThrow().compensable(),
+                        "compensable flag survives the column round-trip");
             });
 
             // Re-registering the same content hash is an idempotent no-op.
             assertDoesNotThrow(() -> storage.inTxVoid(tx -> tx.putGraph(def)));
+        }
+    }
+
+    @Test @DisplayName("the compensation log round-trips: append, ordered read-back, mark compensated")
+    void compLogRoundTrip() {
+        try (Storage storage = new JdbcStorage(
+                "jdbc:h2:mem:comp-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2,
+                new H2Dialect())) {
+            storage.migrate();
+            storage.inTxVoid(tx -> {
+                for (int i = 1; i <= 3; i++) {
+                    var e = new com.wiggle.server.store.Rows.CompLog();
+                    e.instanceId = "wfi_x";
+                    e.seq = i;
+                    e.nodeId = "n" + i;
+                    e.activity = "act" + i;
+                    e.queue = "q";
+                    e.inputJson = "{\"in\":" + i + "}";
+                    e.resultJson = "{\"out\":" + i + "}";
+                    tx.appendCompensation(e);
+                }
+            });
+            storage.inTxVoid(tx -> {
+                var log = tx.compensationLog("wfi_x");
+                assertEquals(3, log.size());
+                assertEquals(List.of(1L, 2L, 3L), log.stream().map(e -> e.seq).toList(), "seq-ordered");
+                assertEquals("{\"in\":2}", log.get(1).inputJson);
+                assertEquals("{\"out\":2}", log.get(1).resultJson);
+                assertFalse(log.get(2).compensated);
+                tx.markCompensated("wfi_x", 3);
+            });
+            storage.inTxVoid(tx -> {
+                var log = tx.compensationLog("wfi_x");
+                assertTrue(log.get(2).compensated, "seq 3 marked");
+                assertFalse(log.get(0).compensated, "others untouched");
+                assertTrue(tx.compensationLog("wfi_other").isEmpty());
+            });
         }
     }
 }
