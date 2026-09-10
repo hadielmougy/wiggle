@@ -6,6 +6,7 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.WorkflowDefinition;
+import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -40,13 +41,35 @@ final class HandlerBinder {
 
     private HandlerBinder() {}
 
-    /** An {@link Handlers @Handlers} object's inventory: its step methods keyed by canonical name,
-     *  and its {@link Decode @Decode} decoders keyed by decoded type. */
-    record HandlerSet(String workflow, Object target, Map<String, Method> byName,
+    /** One step candidate: the object to invoke on and its handler method — a plain
+     *  {@code @Handlers} method (target = the handlers object) or a factory-produced typed
+     *  activity (target = the activity instance, method = its execute/test/apply; compensate
+     *  set when the instance implements {@link Compensable}). */
+    record Candidate(Object target, Method method, Method compensate) {}
+
+    /** A handler source's inventory: its step candidates keyed by canonical name, and its
+     *  {@link Decode @Decode} decoders (living on the handlers object) keyed by decoded type. */
+    record HandlerSet(String workflow, Object target, Map<String, Candidate> byName,
                       Map<Class<?>, Method> decoders) {}
 
-    /** One resolved binding: the executable wrapper plus where it plugs into the worker. */
-    record Binding(String activity, String step, String queue, ActivityHandler handler) {}
+    /** Invokes a step's undo with both of its snapshots (raw JSON-shaped objects); the wrapper
+     *  decodes them into the activity's context type and hands a {@link Compensation} to
+     *  {@link Compensable#compensate}. */
+    @FunctionalInterface
+    interface Compensator {
+        void invoke(Object input, Object result) throws Exception;
+    }
+
+    /** One resolved binding: the executable wrapper plus where it plugs into the worker.
+     *  {@code compensator} is non-null only for a typed activity implementing {@link Compensable};
+     *  it receives the step's input and result snapshots (wired to the engine's compensation
+     *  phase when that lands — see docs/saga-compensation.md). */
+    record Binding(String activity, String step, String queue, ActivityHandler handler,
+                   Compensator compensator) {
+        Binding(String activity, String step, String queue, ActivityHandler handler) {
+            this(activity, step, queue, handler, null);
+        }
+    }
 
     /** Everything {@link #bind} decided: the bindings, plus the steps this object doesn't serve
      *  (informational — another worker may serve them). */
@@ -59,6 +82,85 @@ final class HandlerBinder {
      * methods whose names collide under case-folding are rejected as ambiguous.
      */
     static HandlerSet scan(Object handlerObject) {
+        String workflow = getWorkflowName(handlerObject);
+        Map<String, Candidate> byName = new LinkedHashMap<>();
+        Map<String, String> sourceNames = new LinkedHashMap<>();   // canonical -> method, for errors
+        Map<Class<?>, Method> decoders = new LinkedHashMap<>();
+        for (Method m : handlerObject.getClass().getMethods()) {
+            if (m.isSynthetic() || m.isBridge() || Modifier.isStatic(m.getModifiers())) continue;
+            if (m.getDeclaringClass() == Object.class) continue;
+            m.setAccessible(true);
+            if (m.isAnnotationPresent(Decode.class)) {
+                decoders.put(m.getReturnType(), m);
+                continue;
+            }
+            boolean factoryReturn = isActivityType(m.getReturnType());
+            if (m.getParameterCount() == 0 && !factoryReturn) continue;   // a helper, not a handler
+            if (m.getParameterCount() > 0 && factoryReturn) {
+                throw new IllegalArgumentException("method '" + m.getName() + "' returns "
+                        + m.getReturnType().getSimpleName() + " but takes parameters — an activity "
+                        + "factory must be zero-parameter (its result serves the step)");
+            }
+            String canon = stepName(m);
+            if (canon.isEmpty()) continue;
+            Candidate cand = factoryReturn
+                    ? factoryCandidate(handlerObject, m)
+                    : new Candidate(handlerObject, m, null);
+            if (byName.putIfAbsent(canon, cand) != null) {
+                throw new IllegalArgumentException("methods '" + sourceNames.get(canon) + "' and '"
+                        + m.getName() + "' map to the same step name '" + canon + "'; names differing "
+                        + "only in case/style are ambiguous -- rename one (or use @Handles)");
+            }
+            sourceNames.put(canon, m.getName());
+        }
+        return new HandlerSet(workflow, handlerObject, byName, decoders);
+    }
+
+    /** The canonical step name a method serves: {@link Handles @Handles} when present, else the
+     *  method's own name — both under the same case/style folding. */
+    private static String stepName(Method m) {
+        Handles h = m.getAnnotation(Handles.class);
+        if (h != null) {
+            String canon = canonicalName(h.value());
+            if (canon.isEmpty()) {
+                throw new IllegalArgumentException("@Handles on '" + m.getName() + "' names nothing");
+            }
+            return canon;
+        }
+        return canonicalName(m.getName());
+    }
+
+    private static boolean isActivityType(Class<?> t) {
+        return Activity.class.isAssignableFrom(t) || GateActivity.class.isAssignableFrom(t)
+                || EffectActivity.class.isAssignableFrom(t);
+    }
+
+    /** Invokes a factory method once and inventories its typed activity: the instance's concrete
+     *  execute/test/apply is the handler, its {@link Compensable#compensate} the undo. */
+    private static Candidate factoryCandidate(Object handlerObject, Method factory) {
+        Object typed;
+        try {
+            typed = factory.invoke(handlerObject);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("activity factory '" + factory.getName() + "' failed", e);
+        }
+        if (typed == null) {
+            throw new IllegalStateException("activity factory '" + factory.getName() + "' returned null");
+        }
+        int roles = (typed instanceof Activity ? 1 : 0) + (typed instanceof GateActivity ? 1 : 0)
+                + (typed instanceof EffectActivity ? 1 : 0);
+        if (roles != 1) {
+            throw new IllegalArgumentException("factory '" + factory.getName() + "' returned "
+                    + typed.getClass().getName() + ", which must implement exactly one of "
+                    + "Activity, GateActivity, EffectActivity (found " + roles + ")");
+        }
+        String primary = typed instanceof Activity ? "execute"
+                : typed instanceof GateActivity ? "test" : "apply";
+        Method compensate = typed instanceof Compensable ? concreteMethod(typed, "compensate") : null;
+        return new Candidate(typed, concreteMethod(typed, primary), compensate);
+    }
+
+    private static @NonNull String getWorkflowName(Object handlerObject) {
         if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
         Handlers ann = handlerObject.getClass().getAnnotation(Handlers.class);
         if (ann == null) {
@@ -70,27 +172,7 @@ final class HandlerBinder {
             throw new IllegalArgumentException("@Handlers on " + handlerObject.getClass().getName()
                     + " needs the workflow name");
         }
-        Map<String, Method> byName = new LinkedHashMap<>();
-        Map<Class<?>, Method> decoders = new LinkedHashMap<>();
-        for (Method m : handlerObject.getClass().getMethods()) {
-            if (m.isSynthetic() || m.isBridge() || Modifier.isStatic(m.getModifiers())) continue;
-            if (m.getDeclaringClass() == Object.class) continue;
-            m.setAccessible(true);
-            if (m.isAnnotationPresent(Decode.class)) {
-                decoders.put(m.getReturnType(), m);
-                continue;
-            }
-            if (m.getParameterCount() == 0) continue;   // a helper, not a handler
-            String canon = canonicalName(m.getName());
-            if (canon.isEmpty()) continue;
-            Method prev = byName.putIfAbsent(canon, m);
-            if (prev != null) {
-                throw new IllegalArgumentException("methods '" + prev.getName() + "' and '" + m.getName()
-                        + "' map to the same step name '" + canon + "'; names differing only in "
-                        + "case/style are ambiguous -- rename one");
-            }
-        }
-        return new HandlerSet(workflow, handlerObject, byName, decoders);
+        return workflow;
     }
 
     /**
@@ -105,8 +187,8 @@ final class HandlerBinder {
         TreeSet<String> unserved = new TreeSet<>();
         for (Node node : def.nodes().values()) {
             if (!node.isWorkerDispatched() || node.name() == null) continue;
-            Method m = set.byName().get(canonicalName(node.name()));
-            if (m == null) {
+            Candidate c = set.byName().get(canonicalName(node.name()));
+            if (c == null) {
                 // No handler on this worker for this step -- another worker may serve it. This
                 // includes combine nodes: there is NO default fold; a combine served by no worker
                 // fails its task at claim time ("no handler registered"), never merges implicitly.
@@ -115,9 +197,39 @@ final class HandlerBinder {
             }
             bindings.add(new Binding(node.activity(), node.name(),
                     node.queue() != null ? node.queue() : set.workflow(),
-                    buildHandler(set, node, m)));
+                    buildHandler(set, node, c),
+                    compensatorHandler(set, c)));
         }
         return new Result(List.copyOf(bindings), List.copyOf(unserved));
+    }
+
+    /** The compensator wrapper for a step, when its typed activity implements {@link Compensable}:
+     *  decodes the post-step snapshot into the method's parameter type and invokes it (an effect —
+     *  no return). Null when the step has no compensator. */
+    private static Compensator compensatorHandler(HandlerSet set, Candidate c) {
+        if (c.compensate() == null) return null;
+        Class<?> ctxType = c.method().getParameterTypes()[0];   // the activity's C, from execute/test/apply
+        return (input, result) -> {
+            Object in = decode(input, ctxType, set.target(), set.decoders());
+            Object out = decode(result, ctxType, set.target(), set.decoders());
+            call(c.compensate(), c.target(), new Object[]{new Snapshots(in, out)});
+        };
+    }
+
+    /** The {@link Compensation} handed to a compensator: both snapshots, already decoded. */
+    private record Snapshots(Object input, Object result) implements Compensation<Object> {}
+
+    /** The concrete (non-bridge) single-parameter implementation of an interface method, with its
+     *  reified parameter type — what the decode machinery needs. */
+    private static Method concreteMethod(Object typed, String methodName) {
+        for (Method m : typed.getClass().getMethods()) {
+            if (!m.getName().equals(methodName) || m.isBridge() || m.isSynthetic()) continue;
+            if (m.getParameterCount() != 1) continue;
+            m.setAccessible(true);
+            return m;
+        }
+        throw new IllegalStateException(typed.getClass().getName() + " has no concrete " + methodName
+                + "(C) method");
     }
 
     /**
@@ -136,11 +248,13 @@ final class HandlerBinder {
 
     // ------------------------------------------------------------------ wrapper construction
 
-    /** Builds the handler for a graph node from its matched method, validating the signature vs kind. */
-    private static ActivityHandler buildHandler(HandlerSet set, Node node, Method m) {
-        Object target = set.target();
+    /** Builds the handler for a graph node from its matched candidate, validating signature vs kind. */
+    private static ActivityHandler buildHandler(HandlerSet set, Node node, Candidate c) {
+        Method m = c.method();
+        Object target = c.target();          // the invocation target: handlers object OR activity
+        Object decoderOwner = set.target();  // @Decode methods always live on the handlers object
         Map<Class<?>, Method> decoders = set.decoders();
-        if (isCombine(node)) return combineHandler(node, m, target, decoders);
+        if (isCombine(node)) return combineHandler(node, m, target, decoderOwner, decoders);
 
         Class<?> ret = m.getReturnType();
         boolean returnsBool = (ret == boolean.class || ret == Boolean.class);
@@ -150,7 +264,7 @@ final class HandlerBinder {
                 throw new IllegalStateException("gate '" + node.name() + "' handler '" + m.getName()
                         + "' must take the context and return boolean");
             }
-            return ctx -> call(m, target, args.build(ctx, node, m, target, decoders));
+            return ctx -> call(m, target, args.build(ctx, node, m, decoderOwner, decoders));
         }
         if (returnsBool) {
             throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
@@ -158,12 +272,12 @@ final class HandlerBinder {
         }
         boolean effect = (ret == void.class || ret == Void.class);
         if (effect) {
-            return ctx -> { call(m, target, args.build(ctx, node, m, target, decoders)); return null; };
+            return ctx -> { call(m, target, args.build(ctx, node, m, decoderOwner, decoders)); return null; };
         }
         return ctx -> {
             // The return IS the next context: it is sent whole and REPLACES the previous value
             // server-side (no diff, no merge). A null return leaves the context untouched.
-            Object out = call(m, target, args.build(ctx, node, m, target, decoders));
+            Object out = call(m, target, args.build(ctx, node, m, decoderOwner, decoders));
             return out == null ? null : RecordMapper.toJson(out);
         };
     }
@@ -173,10 +287,10 @@ final class HandlerBinder {
      *  parameter, or call {@code Step.base()} inside the method; both read the same value. */
     private record Args(int inputAt, Class<?> inputType, int contextAt, Class<?> contextType) {
 
-        Object[] build(Object ctx, Node node, Method m, Object target, Map<Class<?>, Method> decoders)
+        Object[] build(Object ctx, Node node, Method m, Object decoderOwner, Map<Class<?>, Method> decoders)
                 throws Exception {
             Object[] out = new Object[contextAt < 0 ? 1 : 2];
-            out[inputAt] = decode(ctx, inputType, target, decoders);
+            out[inputAt] = decode(ctx, inputType, decoderOwner, decoders);
             if (contextAt >= 0) {
                 Map<String, Object> base;
                 try {
@@ -186,7 +300,7 @@ final class HandlerBinder {
                             + "' declares a @Context parameter, but this step has no base context — "
                             + "@Context is only meaningful inside a forEach body (or a combine)", e);
                 }
-                out[contextAt] = decode(base, contextType, target, decoders);
+                out[contextAt] = decode(base, contextType, decoderOwner, decoders);
             }
             return out;
         }
@@ -239,9 +353,10 @@ final class HandlerBinder {
      *       parameter gets the pre-forEach context.</li>
      * </ul>
      */
-    private static ActivityHandler combineHandler(Node node, Method m, Object target, Map<Class<?>, Method> decoders) {
+    private static ActivityHandler combineHandler(Node node, Method m, Object target, Object decoderOwner,
+                                                  Map<Class<?>, Method> decoders) {
         Object parsedKey = Json.parse(node.itemsKey());
-        if (parsedKey instanceof String scratch) return forEachCombineHandler(node, m, target, decoders, scratch);
+        if (parsedKey instanceof String scratch) return forEachCombineHandler(node, m, target, decoderOwner, decoders, scratch);
         List<String> arms = armNames(node);
         java.lang.reflect.Parameter[] params = m.getParameters();
         return ctx -> {
@@ -253,9 +368,9 @@ final class HandlerBinder {
                 java.lang.reflect.Parameter p = params[i];
                 Arm arm = p.getAnnotation(Arm.class);
                 if (arm != null) {
-                    args[i] = decode(map.get(arm.value()), p.getType(), target, decoders);
+                    args[i] = decode(map.get(arm.value()), p.getType(), decoderOwner, decoders);
                 } else if (p.isAnnotationPresent(Context.class)) {
-                    args[i] = decode(base, p.getType(), target, decoders);
+                    args[i] = decode(base, p.getType(), decoderOwner, decoders);
                 } else {
                     throw new IllegalStateException("combine '" + node.name() + "' handler '" + m.getName()
                             + "' parameter " + i + " must be @Arm(\"branch\") or @Context");
@@ -268,7 +383,7 @@ final class HandlerBinder {
     }
 
     /** The forEach flavor: bind the staged collection (list or map of item results) plus @Context. */
-    private static ActivityHandler forEachCombineHandler(Node node, Method m, Object target,
+    private static ActivityHandler forEachCombineHandler(Node node, Method m, Object target, Object decoderOwner,
                                                          Map<Class<?>, Method> decoders, String scratch) {
         java.lang.reflect.Parameter[] params = m.getParameters();
         return ctx -> {
@@ -281,9 +396,9 @@ final class HandlerBinder {
                 if (p.isAnnotationPresent(Context.class)) {
                     Map<String, Object> base = new LinkedHashMap<>(map);
                     base.remove(scratch);
-                    args[i] = decode(base, p.getType(), target, decoders);
+                    args[i] = decode(base, p.getType(), decoderOwner, decoders);
                 } else if (!itemsBound) {
-                    args[i] = decodeCollection(staged, p, target, decoders, node.name());
+                    args[i] = decodeCollection(staged, p, decoderOwner, decoders, node.name());
                     itemsBound = true;
                 } else {
                     throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
@@ -351,7 +466,8 @@ final class HandlerBinder {
     private static Object decode(Object json, Class<?> type, Object target, Map<Class<?>, Method> decoders) throws Exception {
         Method dec = decoders.get(type);
         if (dec != null) return call(dec, target, Json.asObject(json));
-        if (Map.class.isAssignableFrom(type)) return Json.asObject(json);
+        // Object = a type-erased lambda (activity/gate/effect registered by name): hand it the raw map.
+        if (type == Object.class || Map.class.isAssignableFrom(type)) return Json.asObject(json);
         return RecordMapper.fromJson(json, type);
     }
 
