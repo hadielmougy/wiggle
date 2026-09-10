@@ -1,6 +1,9 @@
 <div align="center">
 
-# 🌀 Wiggle
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/wiggle-logo-dark.svg">
+  <img alt="Wiggle" src="docs/img/wiggle-logo.svg" width="360">
+</picture>
 
 ### Durable workflows, cellular by design.
 
