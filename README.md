@@ -126,7 +126,7 @@ runtime, so you never build a per-database image:
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  hadielmougy/wiggle:2.1.8
+  hadielmougy/wiggle:2.1.9
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a
@@ -562,9 +562,9 @@ Suggestions and PRs welcome — open an issue.
 **Install** (Maven Central, `io.github.hadielmougy`):
 
 ```kotlin
-implementation("io.github.hadielmougy:wiggle-client:2.1.8")     // DSL + worker + client
-implementation("io.github.hadielmougy:wiggle-server:2.1.8")     // only to embed the server
-implementation("io.github.hadielmougy:wiggle-postgres:2.1.8")   // + your storage module
+implementation("io.github.hadielmougy:wiggle-client:2.1.9")     // DSL + worker + client
+implementation("io.github.hadielmougy:wiggle-server:2.1.9")     // only to embed the server
+implementation("io.github.hadielmougy:wiggle-postgres:2.1.9")   // + your storage module
 ```
 
 **Build from source** — JDK 21+, wrapper included:
