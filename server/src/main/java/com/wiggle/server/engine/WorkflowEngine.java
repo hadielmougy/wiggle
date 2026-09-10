@@ -44,6 +44,17 @@ public final class WorkflowEngine {
             System.getProperty("wiggle.adaptive.fallback",
                     System.getenv().getOrDefault("WIGGLE_ADAPTIVE_FALLBACK_POLL", "false")));
 
+    /** Default doWhile iteration budget for loops that don't declare one: a loop guard may
+     *  evaluate true at most this many times before the instance FAILS with a clear error. An
+     *  unbounded loop with a buggy condition is a self-inflicted denial of service — it hot-spins
+     *  workers and the database and grows the instance's token rows without limit — so every
+     *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
+    private final long loopMaxIterations = envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
+
+    /** Token-payload bookkeeping: per-loop-guard true-evaluation counts ({nodeId: n}), carried
+     *  along the token chain and stripped from every dispatched context. */
+    static final String LOOP_COUNTS = "__loops__";
+
     /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
      *  is drained in one batched claim instead of a round trip per token. Trades up to this much
      *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
@@ -402,12 +413,43 @@ public final class WorkflowEngine {
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
             String next = routeCompletion(inst, t, node, result);
+            String overrun = node.kind() == NodeKind.PREDICATE
+                    ? tickLoopBudget(t, node, predicateValue(result)) : null;
+            if (overrun != null) {
+                settleToken(tx, t, now);
+                failInstance(tx, inst, overrun, now);
+                return;
+            }
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
             Token cont = newToken(inst, next, t.joinStack, stripCombineScratch(node, t.payloadJson), now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
+    }
+
+    /**
+     * Counts a loop guard's true evaluation against its budget. Returns the failure message when
+     * the budget is exhausted (the caller fails the instance and mints no continuation); otherwise
+     * records the incremented count in the token's payload — the continuation inherits it, so the
+     * count survives the whole loop. Non-loop guards (loopBudget 0) are untouched.
+     */
+    private String tickLoopBudget(Token t, Node node, boolean value) {
+        if (node.kind() != NodeKind.PREDICATE || !value || node.loopBudget() == 0) return null;
+        long budget = node.loopBudget() > 0 ? node.loopBudget() : loopMaxIterations;
+        Map<String, Object> payload = t.payloadJson == null
+                ? new java.util.LinkedHashMap<>() : Json.parseObject(t.payloadJson);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> counts = (Map<String, Object>) payload
+                .computeIfAbsent(LOOP_COUNTS, k -> new java.util.LinkedHashMap<String, Object>());
+        long n = ((Number) counts.getOrDefault(node.id(), 0L)).longValue() + 1;
+        if (n > budget) {
+            return "loop '" + node.name() + "' exceeded its budget of " + budget
+                    + " iterations (raise it with doWhile(name, maxIterations, body) or fix the condition)";
+        }
+        counts.put(node.id(), n);
+        t.payloadJson = Json.write(payload);
+        return null;
     }
 
     /** Merges a task result (or routes a predicate) and returns the successor node id. */
@@ -480,6 +522,13 @@ public final class WorkflowEngine {
             Node node = def.node(current.nodeId);
             requireReportedNode(node, step, current);
             String next = routeReportedStep(inst, current, node, step);
+            String overrun = node.kind() == NodeKind.PREDICATE
+                    ? tickLoopBudget(current, node, step.predicateValue() != null && step.predicateValue()) : null;
+            if (overrun != null) {
+                settleToken(tx, current, now);
+                failInstance(tx, inst, overrun, now);
+                return new AdvanceOutcome(inst.status.name(), 0, null);
+            }
             settleToken(tx, current, now);
             touchInstance(tx, inst, now);
             Token cont = newToken(inst, next, current.joinStack, stripCombineScratch(node, current.payloadJson), now);
@@ -935,6 +984,7 @@ public final class WorkflowEngine {
             Map<String, Object> out = new LinkedHashMap<>();
             m.forEach((k, v) -> out.put(String.valueOf(k), v));
             out.remove(ARM_IDX);
+            out.remove(LOOP_COUNTS);
             cleaned = out;
         }
         if (inScopedBranch(t)) {
@@ -958,6 +1008,7 @@ public final class WorkflowEngine {
                 ? Json.asObject(dropNulls(result)) : Json.parseObject(Json.write(result));
         if (prev.containsKey(ARM_IDX)) overlay.put(ARM_IDX, prev.get(ARM_IDX));
         if (prev.containsKey(ITEM_MAP_KEY)) overlay.put(ITEM_MAP_KEY, prev.get(ITEM_MAP_KEY));
+        if (prev.containsKey(LOOP_COUNTS)) overlay.put(LOOP_COUNTS, prev.get(LOOP_COUNTS));
         return Json.write(overlay);
     }
 
@@ -1278,6 +1329,7 @@ public final class WorkflowEngine {
                 Map<String, Object> branch = bt.payloadJson == null
                         ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
                 Object idx = branch.remove(ARM_IDX);
+                branch.remove(LOOP_COUNTS);
                 if (idx == null) continue;   // defensive: a token that never carried an arm tag
                 staged.put(armNames.get(((Number) idx).intValue()), branch);
             }
@@ -1318,6 +1370,7 @@ public final class WorkflowEngine {
         if (overlay.containsKey(ITEM_VALUE)) return overlay.get(ITEM_VALUE);
         Map<String, Object> ctx = Json.parseObject(inst.contextJson);
         overlay.remove(ARM_IDX);
+        overlay.remove(LOOP_COUNTS);
         ctx.putAll(overlay);
         return ctx;
     }
@@ -1330,6 +1383,7 @@ public final class WorkflowEngine {
         overlay.remove(ARM_IDX);
         overlay.remove(ITEM_VALUE);
         overlay.remove(ITEM_MAP_KEY);
+        overlay.remove(LOOP_COUNTS);
         ctx.putAll(overlay);
         return ctx;
     }

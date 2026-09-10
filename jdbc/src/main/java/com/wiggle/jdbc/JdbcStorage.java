@@ -200,6 +200,11 @@ public final class JdbcStorage implements Storage {
             // collapse onto one row instead of firing the same workflow on N duplicate cadences.
             new Migration(6, "schedule-workflow-unique", """
             CREATE UNIQUE INDEX IF NOT EXISTS ux_schedule_workflow ON wf_schedule (workflow);
+            """),
+            // doWhile loop budgets: max true-evaluations of a loop guard before the instance fails
+            // (-1 = engine default). Nullable, so the change is rolling-deploy safe.
+            new Migration(7, "loop-budgets", """
+            ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS loop_budget INT;
             """));
 
     /** Applies the cell schema. */
@@ -387,7 +392,7 @@ public final class JdbcStorage implements Storage {
             if (graphExists(def.name(), def.version())) return;
             try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
                     "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
+                    "items_key,item_key,loop_budget) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
                  PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
                     "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)", "to_node"))) {
                 for (Node n : def.nodes().values()) {
@@ -398,7 +403,7 @@ public final class JdbcStorage implements Storage {
                     node.setLong(9, n.sleepMillis()); node.setInt(10, n.expected());
                     node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
                     node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
-                    node.setString(14, n.itemsKey()); node.setString(15, n.itemKey());
+                    node.setString(14, n.itemsKey()); node.setString(15, n.itemKey()); node.setInt(16, n.loopBudget());
                     node.addBatch();
                     for (Edge e : edgesOf(n)) {
                         edge.setString(1, def.name()); edge.setInt(2, def.version()); edge.setString(3, n.id());
@@ -423,7 +428,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
             try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason," +
-                    "items_key,item_key FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
+                    "items_key,item_key,loop_budget FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
                 try (ResultSet rs = p.executeQuery()) {
                     if (!rs.next()) return Optional.empty();
@@ -437,8 +442,9 @@ public final class JdbcStorage implements Storage {
                     String reason = rs.getString(9);
                     String itemsKey = rs.getString(10);
                     String itemKey = rs.getString(11);
+                    int loopBudget = rs.getInt(12);   // NULL -> 0 (not a loop)
                     return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
-                            retry, sleep, expected, success, reason, itemsKey, itemKey));
+                            retry, sleep, expected, success, reason, itemsKey, itemKey, loopBudget));
                 }
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -446,7 +452,7 @@ public final class JdbcStorage implements Storage {
         /** Reads a node's outgoing edges and folds them back into the node's typed next/altNext/branches. */
         private Node assemble(String workflow, int version, String id, NodeKind kind, String name, String activity,
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
-                              String itemsKey, String itemKey) {
+                              String itemsKey, String itemKey, int loopBudget) {
             EdgeTargets targets = new EdgeTargets(kind);
             try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
                     "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
@@ -456,7 +462,7 @@ public final class JdbcStorage implements Storage {
                 }
             } catch (SQLException e) { throw wrap(e); }
             return new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
-                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey);
+                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget);
         }
 
         /** Folds edge rows back into a node's typed successor slots (the inverse of {@code edgesOf}). */
