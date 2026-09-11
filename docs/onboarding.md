@@ -123,15 +123,17 @@ scripts/kind-down.sh                   # tear down
 The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=cell ∣ coordinator ∣ console`,
 every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
-keystore.
+keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
+and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whichever you prefer.
 
 ```bash
 # run the released image: an in-memory server (gRPC :8080, /healthz probe optional)
-docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.2
+docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.2            # Docker Hub
+# docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.2  # …or GHCR
 
 # the ops console against it (same image, different role) → http://localhost:8090
 docker run --rm -p 8090:8090 -e WIGGLE_ROLE=console -e WIGGLE_URL=host.docker.internal:8080 \
-  -e WIGGLE_DASHBOARD_PASSWORD=change-me ghcr.io/hadielmougy/wiggle:0.0.2
+  -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.2
 
 # a complete stack: server + Postgres + console with login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)

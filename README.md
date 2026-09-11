@@ -12,6 +12,8 @@ crashes, waits for humans, retries failures — and shards itself across isolate
 one database is no longer enough.**
 
 [![Maven Central](https://img.shields.io/maven-central/v/sh.wiggle/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/sh.wiggle/wiggle-client)
+[![Docker Hub](https://img.shields.io/badge/docker%20hub-hadielmougy%2Fwiggle-2496ed)](https://hub.docker.com/r/hadielmougy/wiggle)
+[![GHCR](https://img.shields.io/badge/ghcr-hadielmougy%2Fwiggle-24292f)](https://github.com/hadielmougy/wiggle/pkgs/container/wiggle)
 [![License](https://img.shields.io/badge/license-Apache--2.0-2f9e63)](LICENSE)
 ![Java](https://img.shields.io/badge/java-21%2B-e0a63a)
 [![Go client](https://img.shields.io/badge/client-go-00add8)](https://github.com/hadielmougy/wiggle-go)
@@ -136,13 +138,16 @@ WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
 ```
 
 As a container — one image bundles **every** storage backend; the JDBC URL scheme picks one at
-runtime, so you never build a per-database image:
+runtime, so you never build a per-database image. The signed, multi-arch (amd64 + arm64) image is
+published to **both Docker Hub and GitHub Container Registry** — pull from whichever your
+environment prefers:
 
 ```bash
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  ghcr.io/hadielmougy/wiggle:0.0.2
+  hadielmougy/wiggle:0.0.2                 # Docker Hub
+  # ghcr.io/hadielmougy/wiggle:0.0.2       # …or GHCR (same image)
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a
