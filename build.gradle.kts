@@ -1,6 +1,7 @@
 import com.vanniktech.maven.publish.MavenPublishBaseExtension
 import com.vanniktech.maven.publish.SonatypeHost
 import java.time.Duration
+import org.gradle.plugins.signing.Sign
 
 plugins {
     java
@@ -8,15 +9,17 @@ plugins {
 }
 
 allprojects {
-    group = "io.github.hadielmougy"
-    version = "2.1.9"
+    group = "sh.wiggle"
+    version = "0.0.1"
 
     repositories {
         mavenCentral()
     }
 }
 
-subprojects {
+// Every module is a Java library EXCEPT `bom`, which is a `java-platform` (a BOM has no code and
+// the java-library plugin is incompatible with java-platform).
+configure(subprojects.filter { it.name != "bom" }) {
     apply(plugin = "java-library")
 
     extensions.configure<JavaPluginExtension> {
@@ -47,7 +50,9 @@ subprojects {
 // RELEASING.md. Signing and Central-Portal credentials are read from properties or
 // environment variables and are never stored in the repository.
 
-val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "mysql", "oracle", "sqlserver")
+// The BOM is published by the shared block below. `client-all` (the shaded client) publishes a
+// SHADOW component with a dependency-free POM, so it wires its own publishing in client-all/build.gradle.kts.
+val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "mysql", "oracle", "sqlserver", "bom")
 
 val moduleDescriptions = mapOf(
     "core" to "Wiggle shared model: JSON, the compiled state-machine graph, retry policy, wire records.",
@@ -59,6 +64,7 @@ val moduleDescriptions = mapOf(
     "mysql" to "Wiggle MySQL storage: the MySQL/MariaDB dialect for multi-node clustering.",
     "oracle" to "Wiggle Oracle storage: the Oracle Database dialect for multi-node clustering.",
     "sqlserver" to "Wiggle SQL Server storage: the Microsoft SQL Server dialect for multi-node clustering.",
+    "bom" to "Wiggle BOM: a version-alignment platform for every wiggle module and its gRPC/protobuf stack.",
 )
 
 configure(subprojects.filter { it.name in publishedModules }) {
@@ -70,6 +76,11 @@ configure(subprojects.filter { it.name in publishedModules }) {
     plugins.withId("signing") {
         extensions.configure<SigningExtension> {
             useGpgCmd()
+        }
+        // Signing is required only for the Central upload; never for a local install. Skip it for
+        // publishToMavenLocal so `./gradlew publishToMavenLocal` works with no GPG key present.
+        tasks.withType<Sign>().configureEach {
+            onlyIf { !gradle.startParameter.taskNames.any { it.contains("MavenLocal") } }
         }
     }
 

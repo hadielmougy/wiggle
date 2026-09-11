@@ -11,7 +11,7 @@
 crashes, waits for humans, retries failures — and shards itself across isolated cells when
 one database is no longer enough.**
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.hadielmougy/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/io.github.hadielmougy/wiggle-client)
+[![Maven Central](https://img.shields.io/maven-central/v/sh.wiggle/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/sh.wiggle/wiggle-client)
 [![License](https://img.shields.io/badge/license-Apache--2.0-2f9e63)](LICENSE)
 ![Java](https://img.shields.io/badge/java-21%2B-e0a63a)
 [![Go client](https://img.shields.io/badge/client-go-00add8)](https://github.com/hadielmougy/wiggle-go)
@@ -129,7 +129,7 @@ runtime, so you never build a per-database image:
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  hadielmougy/wiggle:2.1.9
+  hadielmougy/wiggle:0.0.1
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a
@@ -562,12 +562,28 @@ Suggestions and PRs welcome — open an issue.
 | 📽 **[Slide deck](https://hadielmougy.github.io/wiggle/presentation.html)** | the 5-minute tour |
 | 🐍 **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** · 🐹 **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** | idiomatic clients, same control plane |
 
-**Install** (Maven Central, `io.github.hadielmougy`):
+**Install** (Maven Central, `sh.wiggle`):
 
 ```kotlin
-implementation("io.github.hadielmougy:wiggle-client:2.1.9")     // DSL + worker + client
-implementation("io.github.hadielmougy:wiggle-server:2.1.9")     // only to embed the server
-implementation("io.github.hadielmougy:wiggle-postgres:2.1.9")   // + your storage module
+implementation("sh.wiggle:wiggle-client:0.0.1")     // DSL + worker + client
+implementation("sh.wiggle:wiggle-server:0.0.1")     // only to embed the server
+implementation("sh.wiggle:wiggle-postgres:0.0.1")   // + your storage module
+```
+
+Prefer the **BOM** so every wiggle module (and the shared gRPC/protobuf stack) stays version-aligned
+with no per-dependency pins:
+
+```kotlin
+implementation(platform("sh.wiggle:wiggle-bom:0.0.1"))
+implementation("sh.wiggle:wiggle-client")            // versions come from the BOM
+```
+
+Behind a locked-down internal Artifactory? Use the **shaded** client — one self-contained jar with
+gRPC, protobuf and Guava relocated under `com.wiggle.shaded`, so it has **zero transitive
+dependencies** and cannot clash with anything already on the app's classpath:
+
+```kotlin
+implementation("sh.wiggle:wiggle-client-all:0.0.1")  // author flows + run workers, nothing else
 ```
 
 **Build from source** — JDK 21+, wrapper included:

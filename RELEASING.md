@@ -1,16 +1,23 @@
 # Releasing to Maven Central
 
-Wiggle publishes four modules to the [Central Portal](https://central.sonatype.com)
-under the group `io.github.hadielmougy`:
+Wiggle publishes its library modules to the [Central Portal](https://central.sonatype.com)
+under the group `sh.wiggle`:
 
-| Module   | Artifact          |
-|----------|-------------------|
-| `core`   | `wiggle-core`     |
-| `proto`  | `wiggle-proto`    |
-| `client` | `wiggle-client`   |
-| `server` | `wiggle-server`   |
+| Module       | Artifact             | Notes                                             |
+|--------------|----------------------|---------------------------------------------------|
+| `core`       | `wiggle-core`        |                                                   |
+| `proto`      | `wiggle-proto`       |                                                   |
+| `client`     | `wiggle-client`      | the usual dependency: DSL + worker + client       |
+| `server`     | `wiggle-server`      |                                                   |
+| `jdbc`       | `wiggle-jdbc`        |                                                   |
+| `postgres`   | `wiggle-postgres`    |                                                   |
+| `mysql`      | `wiggle-mysql`       |                                                   |
+| `oracle`     | `wiggle-oracle`      |                                                   |
+| `sqlserver`  | `wiggle-sqlserver`   |                                                   |
+| `bom`        | `wiggle-bom`         | version-alignment platform (`java-platform`)      |
+| `client-all` | `wiggle-client-all`  | shaded client — gRPC/protobuf/Guava relocated     |
 
-`example` and `tests` are not published.
+`example`, `tests`, `dist`, `cli`, `console`, and `coordinator` are not published.
 
 Publishing is wired up with the [Vanniktech Maven Publish plugin](https://vanniktech.github.io/gradle-maven-publish-plugin/),
 which builds sources + javadoc jars, signs every artifact, and uploads a deployment
@@ -22,9 +29,11 @@ bundle to the Central Portal.
 ## One-time setup
 
 1. **Central Portal account + namespace.** Sign in at https://central.sonatype.com and
-   register the `io.github.hadielmougy` namespace (verified by creating the GitHub repo
-   it tells you to, or a TXT record). Then **Account → Generate User Token** to get a
-   token username/password pair.
+   register the `sh.wiggle` namespace, verified with a DNS **TXT record on `wiggle.sh`**
+   (Central shows the exact token to add). A domain-verified namespace reads as a real
+   project rather than a personal `io.github.<user>` repo — which matters for the
+   enterprise Artifactory allowlists that gate adoption. Then **Account → Generate User
+   Token** to get a token username/password pair.
 
 2. **GPG signing key.**
    ```sh
