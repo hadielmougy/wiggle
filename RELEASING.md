@@ -112,14 +112,18 @@ identity):
   builder arch (`--platform=$BUILDPLATFORM`), and the JARs are portable, so the Java/dashboard
   compile runs **once** natively and only the per-arch runtime layer is rebuilt — no emulated
   recompilation.
-- Pushed to **`ghcr.io/<owner>/wiggle`**, tagged `X.Y.Z` and `latest`, with an **SBOM** and **SLSA
-  provenance** attestation.
-- **Signed keyless** with cosign (Sigstore) — the image index digest.
+- Pushed to **`ghcr.io/<owner>/wiggle`** *and* **`docker.io/hadielmougy/wiggle`** in one build, both
+  tagged `X.Y.Z` and `latest`, with an **SBOM** and **SLSA provenance** attestation.
+- **Signed keyless** with cosign (Sigstore) — the image index digest, in both registries.
+
+**Docker Hub requires two repo secrets** (Settings → Secrets and variables → Actions):
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with Read/Write). Optionally set
+the repo **variable** `DOCKERHUB_IMAGE` to override the default `docker.io/hadielmougy/wiggle` (e.g. a
+`wiggle` org). Without those secrets the `image` job fails at the Docker Hub login step.
 
 First release only: make the GHCR package public (Packages → wiggle → Package settings → change
-visibility) if you want anonymous pulls; otherwise consumers configure an image pull secret.
-To publish to Docker Hub as well, add a second `docker/login-action` + registry to the `image` job
-(needs `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets).
+visibility) if you want anonymous pulls; otherwise consumers configure an image pull secret. (Docker
+Hub repos are public by default.)
 
 Verify a pulled image:
 
