@@ -537,7 +537,8 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 |---|---|---|
 | `WIGGLE_ROLE` | `cell` | set `coordinator` to run the control plane (no engine, no cell DB) |
 | `WIGGLE_PORT` | `8080` | coordinator gRPC port (`8099` by convention) |
-| `WIGGLE_COORD_STORE` | `ratis:///var/lib/wiggle/coord` | embedded Ratis+RocksDB store; multi-node: `ratis://<dir>?peers=id0@host:port,…&id=<self>` |
+| `WIGGLE_COORD_STORE` | `ratis:///var/lib/wiggle/coord` | coordinator store. **Ratis** (self-contained, no external dep): `ratis://<dir>?peers=id0@host:port,…&id=<self>`. Or **JDBC** (point it at your own DB; stateless coordinators, single-writer via a durable lease): `jdbc:postgresql://host:5432/wiggle_coord` |
+| `WIGGLE_COORD_JDBC_USER` / `WIGGLE_COORD_JDBC_PASSWORD` / `WIGGLE_COORD_JDBC_POOL` | — / — / `4` | credentials + pool size for the JDBC coordinator store |
 | `WIGGLE_MISSED_HEARTBEATS` / `WIGGLE_NODE_NAME` / `WIGGLE_TLS_*` | as above | shared knobs |
 
 ### Ops console

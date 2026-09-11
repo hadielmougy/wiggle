@@ -20,7 +20,14 @@ dependencies {
     runtimeOnly("org.apache.ratis:ratis-metrics-default:${property("ratisVersion")}")
     implementation("org.rocksdb:rocksdbjni:${property("rocksdbVersion")}")
 
+    // The JDBC coordinator-store backend: connection pooling only. The JDBC driver is supplied at
+    // runtime by the distribution; talking to the database directly keeps this module free of the
+    // engine's :jdbc storage module (which would pull in :server and break the decoupling).
+    implementation("com.zaxxer:HikariCP:${property("hikariVersion")}")
+
     testImplementation(platform("org.junit:junit-bom:${property("junitVersion")}"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("com.h2database:h2:${property("h2Version")}")
+    testRuntimeOnly("org.postgresql:postgresql:${property("postgresVersion")}")  // opt-in live-PG run
 }

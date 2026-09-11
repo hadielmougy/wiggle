@@ -1,9 +1,16 @@
 # Embedded coordinator store on Apache Ratis + RocksDB
 
-**Status:** implemented and shipped — the coordinator's **only** store backend. The code lives in the
-standalone `coordinator/` module (store under `com.wiggle.coordinator.ratis`, contract under
-`com.wiggle.server.coord`). Durable state lives in an **embedded Raft group over local RocksDB**, so the
-control plane needs no external database *or* etcd — both were removed as coordinator options.
+**Status:** implemented and shipped — the coordinator's **default, self-contained** store backend. The
+code lives in the standalone `coordinator/` module (store under `com.wiggle.coordinator.ratis`, contract
+under `com.wiggle.server.coord`). Durable state lives in an **embedded Raft group over local RocksDB**, so
+the control plane needs no external database — ideal for airgapped / "download and run" deployments.
+
+There is also a **JDBC backend** (`com.wiggle.coordinator.jdbc.JdbcCoordinatorStore`,
+`WIGGLE_COORD_STORE=jdbc:…`) for teams that would rather point the coordinator at a database they already
+operate: the coordinator processes become stateless (single-writer via the store's durable leader lease),
+and HA/backup/DR come from the managed DB. The coordinator's state is tiny and rarely written, and
+routing is directory-free (off the hot path), so the choice is operational, not performance. Pick Ratis
+for zero external dependencies; pick JDBC to fold the control plane into existing DB ops.
 
 > One-line: the coordinator's cluster becomes one Ratis group; every write is a replicated command
 > applied deterministically to RocksDB; reads are linearizable Ratis queries. Leadership is Raft's, not a
