@@ -26,3 +26,11 @@ application {
     mainClass.set("com.wiggle.dist.Main")
     applicationName = "wiggle"
 }
+
+// The launcher stays `bin/wiggle`, but the release ARCHIVE is `wiggle-server-<version>` so it does
+// not collide with the CLI's `wiggle-<version>` archive on the same GitHub Release.
+distributions {
+    main {
+        distributionBaseName.set("wiggle-server")
+    }
+}

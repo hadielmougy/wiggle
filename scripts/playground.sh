@@ -31,7 +31,7 @@ COORD_PORT=${COORD_PORT:-8099}
 STATE="$ROOT/.playground"
 LOGS="$STATE/logs"
 PIDS_FILE="$STATE/pids"
-SERVER_BIN="dist/build/install/wiggle/bin/wiggle"
+SERVER_BIN="dist/build/install/wiggle-server/bin/wiggle"
 CLI_BIN="cli/build/install/wiggle/bin/wiggle"
 COORD_URL="127.0.0.1:$COORD_PORT"
 

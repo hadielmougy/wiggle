@@ -122,6 +122,19 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 ./gradlew :dist:run        # single node, in-memory, gRPC on :8080
 ```
 
+Or **download the pre-built distribution** from the [GitHub release](https://github.com/hadielmougy/wiggle/releases)
+and run it directly — no build, no Maven, no registry, just a JRE 21 (ideal for airgapped or
+locked-down environments). Each release attaches `wiggle-server-<version>.tar`/`.zip` plus a signed
+`SHA-256SUMS`:
+
+```bash
+tar xf wiggle-server-0.0.1.tar
+sha256sum -c SHA-256SUMS           # optional: verify the download
+WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
+  WIGGLE_JDBC_USER=wiggle WIGGLE_JDBC_PASSWORD=wiggle \
+  ./wiggle-server-0.0.1/bin/wiggle
+```
+
 As a container — one image bundles **every** storage backend; the JDBC URL scheme picks one at
 runtime, so you never build a per-database image:
 

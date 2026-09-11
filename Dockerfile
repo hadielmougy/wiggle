@@ -37,7 +37,7 @@ RUN cd dashboard-ui && (npm ci || npm install)
 COPY . .
 RUN chmod +x gradlew \
  && ./gradlew --no-daemon --console=plain :dist:installDist
-# -> /src/dist/build/install/wiggle/{bin,lib}
+# -> /src/dist/build/install/wiggle-server/{bin,lib}
 
 # ---- runtime stage: slim JRE + the assembled distribution ----
 FROM eclipse-temurin:21-jre-jammy AS runtime
@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget \
  && groupadd -r wiggle && useradd -r -g wiggle -d /opt/wiggle wiggle
 
 WORKDIR /opt/wiggle
-COPY --from=build /src/dist/build/install/wiggle/ ./
+COPY --from=build /src/dist/build/install/wiggle-server/ ./
 USER wiggle
 
 # gRPC control plane and the (optional) HTTP dashboard. Storage defaults to in-memory; set

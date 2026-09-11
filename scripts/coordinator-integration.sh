@@ -28,7 +28,7 @@ PG_CONTAINER=${PG_CONTAINER:-wiggle-coord-it-pg}
 PG_PORT=${PG_PORT:-5433}
 PG_IMAGE=${PG_IMAGE:-postgres:16-alpine}
 COORD_PORT=${COORD_PORT:-8099}
-BIN=dist/build/install/wiggle/bin/wiggle
+BIN=dist/build/install/wiggle-server/bin/wiggle
 LOGS=$(mktemp -d)
 declare -a PIDS=()
 fail=0
@@ -113,7 +113,7 @@ echo "== drain/retire: bump cell A's epoch, drain the old one, watch it retire (
 # The dist bundles core/proto/server/grpc but not the client module; add its compiled classes so the
 # driver can use WiggleClient + the workflow DSL (all its runtime deps are already in the dist jars).
 ./gradlew :client:classes -q 2>/dev/null
-CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)client/build/classes/java/main
+CP=$(printf '%s:' dist/build/install/wiggle-server/lib/*.jar)client/build/classes/java/main
 mkdir -p "$LOGS/adminout"
 cat >"$LOGS/Drain.java" <<'JAVA'
 import com.wiggle.client.WiggleClient;
