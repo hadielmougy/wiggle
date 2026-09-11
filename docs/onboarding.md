@@ -127,11 +127,11 @@ keystore.
 
 ```bash
 # run the released image: an in-memory server (gRPC :8080, /healthz probe optional)
-docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.1
+docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.1
 
 # the ops console against it (same image, different role) → http://localhost:8090
 docker run --rm -p 8090:8090 -e WIGGLE_ROLE=console -e WIGGLE_URL=host.docker.internal:8080 \
-  -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.1
+  -e WIGGLE_DASHBOARD_PASSWORD=change-me ghcr.io/hadielmougy/wiggle:0.0.1
 
 # a complete stack: server + Postgres + console with login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)

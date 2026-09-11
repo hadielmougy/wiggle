@@ -4,8 +4,8 @@
 # and the ClojureScript dashboard (needs Node), then the runtime stage ships only a JRE plus
 # the assembled distribution.
 #
-#   docker build -t hadielmougy/wiggle:0.0.1 .
-#   docker run --rm -p 8080:8080 -p 8090:8090 hadielmougy/wiggle:0.0.1      # in-memory
+#   docker build -t ghcr.io/hadielmougy/wiggle:0.0.1 .
+#   docker run --rm -p 8080:8080 -p 8090:8090 ghcr.io/hadielmougy/wiggle:0.0.1      # in-memory
 #
 # The image bundles every storage backend (PostgreSQL/H2, MySQL/MariaDB, Oracle, SQL Server,
 # Cassandra); the engine is picked from the URL scheme, so pointing it at a database is just env:
@@ -13,10 +13,13 @@
 #     -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
 #     -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
 #     -e WIGGLE_DASHBOARD_PASSWORD=change-me \
-#     hadielmougy/wiggle:0.0.1
+#     ghcr.io/hadielmougy/wiggle:0.0.1
 
 # ---- build stage: JDK 21 + Node (for the shadow-cljs dashboard bundle) ----
-FROM eclipse-temurin:21-jdk-jammy AS build
+# Pinned to the BUILDER's platform (--platform=$BUILDPLATFORM): the output is portable Java
+# bytecode (rocksdbjni/netty bundle every arch's natives), so a multi-arch `buildx` build compiles
+# ONCE natively here and only re-layers the per-arch runtime below — no emulated recompilation.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk-jammy AS build
 
 # Node 20 for the ClojureScript dashboard (shadow-cljs). Without it the build still succeeds
 # but the dashboard would be absent; the image is meant to ship the full UI, so install it.

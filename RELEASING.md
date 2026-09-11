@@ -102,6 +102,33 @@ cosign verify-blob --certificate SHA-256SUMS.pem \
   SHA-256SUMS                                              # …and the manifest is authentic
 ```
 
+## Container image (multi-arch, signed, automated)
+
+The same [`Release` workflow](.github/workflows/release.yml) also publishes the container image on a
+`v*` tag push — no stored secret required (GHCR uses the run's `GITHUB_TOKEN`, signing uses its OIDC
+identity):
+
+- **Multi-arch** `linux/amd64` + `linux/arm64`. The Dockerfile's build stage is pinned to the
+  builder arch (`--platform=$BUILDPLATFORM`), and the JARs are portable, so the Java/dashboard
+  compile runs **once** natively and only the per-arch runtime layer is rebuilt — no emulated
+  recompilation.
+- Pushed to **`ghcr.io/<owner>/wiggle`**, tagged `X.Y.Z` and `latest`, with an **SBOM** and **SLSA
+  provenance** attestation.
+- **Signed keyless** with cosign (Sigstore) — the image index digest.
+
+First release only: make the GHCR package public (Packages → wiggle → Package settings → change
+visibility) if you want anonymous pulls; otherwise consumers configure an image pull secret.
+To publish to Docker Hub as well, add a second `docker/login-action` + registry to the `image` job
+(needs `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets).
+
+Verify a pulled image:
+
+```sh
+cosign verify ghcr.io/hadielmougy/wiggle:0.0.1 \
+  --certificate-identity-regexp '^https://github.com/hadielmougy/wiggle' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
 ## Releasing the `wiggle` CLI
 
 The CLI (the coordinator namespace/epoch tool — see the README's "Command-line tool" section) ships

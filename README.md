@@ -142,7 +142,7 @@ runtime, so you never build a per-database image:
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  hadielmougy/wiggle:0.0.1
+  ghcr.io/hadielmougy/wiggle:0.0.1
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a

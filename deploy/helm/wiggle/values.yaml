@@ -6,7 +6,7 @@ replicaCount: 1
 
 image:
   # Override to pull from your internal registry (e.g. artifactory.example.com).
-  registry: docker.io
+  registry: ghcr.io
   repository: hadielmougy/wiggle
   tag: ""            # empty -> the chart's appVersion
   digest: ""         # optional "sha256:..."; pins by digest and wins over tag
