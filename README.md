@@ -128,11 +128,11 @@ locked-down environments). Each release attaches `wiggle-server-<version>.tar`/`
 `SHA-256SUMS`:
 
 ```bash
-tar xf wiggle-server-0.0.1.tar
+tar xf wiggle-server-0.0.2.tar
 sha256sum -c SHA-256SUMS           # optional: verify the download
 WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   WIGGLE_JDBC_USER=wiggle WIGGLE_JDBC_PASSWORD=wiggle \
-  ./wiggle-server-0.0.1/bin/wiggle
+  ./wiggle-server-0.0.2/bin/wiggle
 ```
 
 As a container — one image bundles **every** storage backend; the JDBC URL scheme picks one at
@@ -142,7 +142,7 @@ runtime, so you never build a per-database image:
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  ghcr.io/hadielmougy/wiggle:0.0.1
+  ghcr.io/hadielmougy/wiggle:0.0.2
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a
@@ -590,16 +590,16 @@ Suggestions and PRs welcome — open an issue.
 **Install** (Maven Central, `sh.wiggle`):
 
 ```kotlin
-implementation("sh.wiggle:wiggle-client:0.0.1")     // DSL + worker + client
-implementation("sh.wiggle:wiggle-server:0.0.1")     // only to embed the server
-implementation("sh.wiggle:wiggle-postgres:0.0.1")   // + your storage module
+implementation("sh.wiggle:wiggle-client:0.0.2")     // DSL + worker + client
+implementation("sh.wiggle:wiggle-server:0.0.2")     // only to embed the server
+implementation("sh.wiggle:wiggle-postgres:0.0.2")   // + your storage module
 ```
 
 Prefer the **BOM** so every wiggle module (and the shared gRPC/protobuf stack) stays version-aligned
 with no per-dependency pins:
 
 ```kotlin
-implementation(platform("sh.wiggle:wiggle-bom:0.0.1"))
+implementation(platform("sh.wiggle:wiggle-bom:0.0.2"))
 implementation("sh.wiggle:wiggle-client")            // versions come from the BOM
 ```
 
@@ -608,7 +608,7 @@ gRPC, protobuf and Guava relocated under `com.wiggle.shaded`, so it has **zero t
 dependencies** and cannot clash with anything already on the app's classpath:
 
 ```kotlin
-implementation("sh.wiggle:wiggle-client-all:0.0.1")  // author flows + run workers, nothing else
+implementation("sh.wiggle:wiggle-client-all:0.0.2")  // author flows + run workers, nothing else
 ```
 
 **Build from source** — JDK 21+, wrapper included:

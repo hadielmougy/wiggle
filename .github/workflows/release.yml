@@ -22,6 +22,12 @@ permissions:
   contents: write   # create the Release and upload assets
   id-token: write   # keyless (Sigstore) signing of the checksums, no stored key
 
+# One release run per ref at a time — a manual re-run or a stray dispatch on the same tag can't
+# race the push run into a "Release.tag_name already exists" failure.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   tarball:
     name: Runnable distribution (tar + zip)
@@ -101,11 +107,11 @@ jobs:
             dist/build/distributions/SHA-256SUMS.sig
             dist/build/distributions/SHA-256SUMS.pem
           )
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+          # Idempotent + race-tolerant: try to create with the assets; if the release already
+          # exists (a re-run, or another run created it), upload/overwrite the assets instead.
+          if ! gh release create "${GITHUB_REF_NAME}" "${ASSETS[@]}" \
+                 --title "Wiggle ${GITHUB_REF_NAME}" --generate-notes 2>/dev/null; then
             gh release upload "${GITHUB_REF_NAME}" "${ASSETS[@]}" --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" "${ASSETS[@]}" \
-              --title "Wiggle ${GITHUB_REF_NAME}" --generate-notes
           fi
 
   image:
