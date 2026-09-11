@@ -1,0 +1,164 @@
+name: Release
+
+# Cutting a release is a tag push: `git tag v0.0.1 && git push origin v0.0.1`. The tag's version
+# (minus the leading `v`) must match `version` in build.gradle.kts. This workflow:
+#   - `tarball`: builds the runnable server distribution, checksums + signs it, and attaches it to
+#     the GitHub Release — download one file and run it, no build, no Maven, no registry.
+#   - `image`: builds the multi-arch (amd64+arm64) container image, pushes it to GHCR with an SBOM
+#     and SLSA provenance attestation, and signs it keyless with cosign.
+#
+# `workflow_dispatch` runs both on demand WITHOUT publishing (the tarball is a run artifact; the
+# image is built but not pushed), so the pipeline can be exercised without cutting a tag. Neither
+# job needs a stored secret — GHCR uses GITHUB_TOKEN and signing uses the run's OIDC identity.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the Release and upload assets
+  id-token: write   # keyless (Sigstore) signing of the checksums, no stored key
+
+jobs:
+  tarball:
+    name: Runnable distribution (tar + zip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The distribution bundles the ops console, whose UI is a ClojureScript (shadow-cljs) app —
+      # Node builds it. Without Node the build still succeeds but ships no dashboard.
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the distribution
+        run: ./gradlew --no-daemon :dist:distTar :dist:distZip
+
+      # In a fresh checkout only the current version's archives exist, so the globs are unambiguous.
+      - name: Checksums
+        working-directory: dist/build/distributions
+        run: sha256sum wiggle-server-*.tar wiggle-server-*.zip > SHA-256SUMS
+
+      # Catch the classic mistake: tag bumped but build.gradle.kts version not (or vice versa). The
+      # archive is named from the Gradle project version, so a matching file must exist for the tag.
+      - name: Verify the tag matches the project version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          if [ ! -f "dist/build/distributions/wiggle-server-${VER}.tar" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match the Gradle project version " \
+                 "(no wiggle-server-${VER}.tar was built). Set 'version' in build.gradle.kts to ${VER}."
+            exit 1
+          fi
+
+      - name: Install Cosign
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: sigstore/cosign-installer@v3
+
+      # One keyless signature over the checksums manifest covers every asset (verify a download by
+      # checking it against SHA-256SUMS, then verifying SHA-256SUMS itself against the signature).
+      - name: Sign the checksums (keyless)
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: dist/build/distributions
+        run: |
+          cosign sign-blob --yes SHA-256SUMS \
+            --output-signature SHA-256SUMS.sig \
+            --output-certificate SHA-256SUMS.pem
+
+      # Always available (incl. workflow_dispatch): download the build from the Actions run to test.
+      - name: Upload run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wiggle-distribution
+          path: |
+            dist/build/distributions/wiggle-server-*.tar
+            dist/build/distributions/wiggle-server-*.zip
+            dist/build/distributions/SHA-256SUMS*
+
+      - name: Create the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS=(
+            dist/build/distributions/wiggle-server-*.tar
+            dist/build/distributions/wiggle-server-*.zip
+            dist/build/distributions/SHA-256SUMS
+            dist/build/distributions/SHA-256SUMS.sig
+            dist/build/distributions/SHA-256SUMS.pem
+          )
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${ASSETS[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${ASSETS[@]}" \
+              --title "Wiggle ${GITHUB_REF_NAME}" --generate-notes
+          fi
+
+  image:
+    name: Multi-arch image (GHCR, signed)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push to GHCR
+      id-token: write   # cosign keyless + provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU only handles pulling the correct per-arch runtime base; the build stage is pinned to
+      # the runner's native arch (--platform=$BUILDPLATFORM in the Dockerfile), so nothing compiles
+      # under emulation.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/wiggle
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build & push (multi-arch + SBOM + provenance)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Cosign
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: sigstore/cosign-installer@v3
+
+      # Sign the pushed image index by digest (keyless — OIDC identity of this workflow run).
+      - name: Sign the image (keyless)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/wiggle@${DIGEST}"

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: wiggle
+description: >-
+  The Wiggle durable workflow engine — a cell node or a shared-database cluster. Point several
+  replicas at one PostgreSQL and they form a cluster; the image bundles every storage backend and
+  the JDBC URL scheme picks one at runtime.
+type: application
+# Chart version — bump on chart changes, independent of the app.
+version: 0.1.0
+# The wiggle server image this chart deploys by default (overridable via image.tag).
+appVersion: "0.0.1"
+home: https://wiggle.sh
+sources:
+  - https://github.com/hadielmougy/wiggle
+maintainers:
+  - name: Hadi Elmougy

@@ -24,8 +24,8 @@ cleanup() { for c in "${CONTAINERS[@]:-}"; do docker rm -f "$c" >/dev/null 2>&1;
 trap cleanup EXIT
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 
-[ -d dist/build/install/wiggle/lib ] || { echo "== building :dist:installDist (all backends + drivers) =="; ./gradlew :dist:installDist -q; }
-CP=$(printf '%s:' dist/build/install/wiggle/lib/*.jar)
+[ -d dist/build/install/wiggle-server/lib ] || { echo "== building :dist:installDist (all backends + drivers) =="; ./gradlew :dist:installDist -q; }
+CP=$(printf '%s:' dist/build/install/wiggle-server/lib/*.jar)
 
 cat > "$OUT/CoordConformance.java" <<'JAVA'
 import com.wiggle.cassandra.CassandraStorage;

@@ -11,6 +11,8 @@ include(
     "oracle",
     "sqlserver",
     "client",
+    "client-all",
+    "bom",
     "dist",
     "example",
     "tests",

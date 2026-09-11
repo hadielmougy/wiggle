@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wiggle.fullname" . }}
+  labels:
+    {{- include "wiggle.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "wiggle.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wiggle.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        {{- if or .Values.storage.jdbc.url .Values.storage.jdbc.password }}
+        # Roll the pods when the JDBC secret content changes.
+        checksum/jdbc: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "wiggle.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: wiggle
+          image: {{ include "wiggle.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+          env:
+            # Distinct membership identity per pod.
+            - name: WIGGLE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: WIGGLE_ADVERTISE_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: WIGGLE_PORT
+              value: {{ .Values.service.grpcPort | quote }}
+            - name: WIGGLE_DASHBOARD_PORT
+              value: {{ .Values.service.healthPort | quote }}
+            {{- if or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret }}
+            - name: WIGGLE_JDBC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wiggle.jdbcSecretName" . }}
+                  key: url
+            - name: WIGGLE_JDBC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wiggle.jdbcSecretName" . }}
+                  key: user
+            - name: WIGGLE_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wiggle.jdbcSecretName" . }}
+                  key: password
+            {{- end }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem is on, so give the JVM a writable temp dir.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
