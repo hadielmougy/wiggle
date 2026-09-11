@@ -4,12 +4,14 @@ name: Release
 # (minus the leading `v`) must match `version` in build.gradle.kts. This workflow:
 #   - `tarball`: builds the runnable server distribution, checksums + signs it, and attaches it to
 #     the GitHub Release — download one file and run it, no build, no Maven, no registry.
-#   - `image`: builds the multi-arch (amd64+arm64) container image, pushes it to GHCR with an SBOM
-#     and SLSA provenance attestation, and signs it keyless with cosign.
+#   - `image`: builds the multi-arch (amd64+arm64) container image, pushes it to GHCR AND Docker Hub
+#     with an SBOM and SLSA provenance attestation, and signs it keyless with cosign.
 #
 # `workflow_dispatch` runs both on demand WITHOUT publishing (the tarball is a run artifact; the
-# image is built but not pushed), so the pipeline can be exercised without cutting a tag. Neither
-# job needs a stored secret — GHCR uses GITHUB_TOKEN and signing uses the run's OIDC identity.
+# image is built but not pushed), so the pipeline can be exercised without cutting a tag. GHCR needs
+# no secret (GITHUB_TOKEN) and signing uses the run's OIDC identity; Docker Hub needs repo secrets
+# DOCKERHUB_USERNAME + DOCKERHUB_TOKEN (and optional repo variable DOCKERHUB_IMAGE to override the
+# default docker.io/hadielmougy/wiggle).
 
 on:
   push:
@@ -129,11 +131,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker Hub push only happens on a tag; skip the login on workflow_dispatch (which builds
+      # without pushing and would otherwise fail on missing secrets).
+      - name: Log in to Docker Hub
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Image tags & labels
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/wiggle
+          # Same tags pushed to both registries in one build. Override the Docker Hub repo with the
+          # DOCKERHUB_IMAGE repo variable (e.g. a `wiggle` org) without editing this file.
+          images: |
+            ghcr.io/${{ github.repository_owner }}/wiggle
+            ${{ vars.DOCKERHUB_IMAGE || 'docker.io/hadielmougy/wiggle' }}
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
@@ -156,9 +171,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: sigstore/cosign-installer@v3
 
-      # Sign the pushed image index by digest (keyless — OIDC identity of this workflow run).
+      # Sign the pushed image index by digest in BOTH registries (keyless — the run's OIDC identity).
+      # The content-addressed digest is identical across registries, so one digest signs both.
       - name: Sign the image (keyless)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/wiggle@${DIGEST}"
+          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE || 'docker.io/hadielmougy/wiggle' }}
+        run: |
+          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/wiggle@${DIGEST}"
+          cosign sign --yes "${DOCKERHUB_IMAGE}@${DIGEST}"
