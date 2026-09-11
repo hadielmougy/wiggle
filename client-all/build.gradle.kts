@@ -46,13 +46,21 @@ tasks.shadowJar {
 tasks.named<Jar>("jar") { enabled = false }
 tasks.named("assemble") { dependsOn(tasks.shadowJar) }
 
+// Maven Central requires -sources and -javadoc jars for every jar artifact. This module has no
+// source of its own; the shaded jar's public API IS wiggle-client's (com.wiggle.client.*), so we
+// ship :client's sources and javadoc (Maven republishes them under the wiggle-client-all
+// coordinates). Force :client to configure first so its jar tasks are resolvable here.
+evaluationDependsOn(":client")
+
 // Publish the SHADOW component: artifact = shadowJar, dependencies = the (empty) `shadow`
-// configuration, giving a dependency-free POM.
+// configuration, giving a dependency-free POM; plus the sources/javadoc jars Central mandates.
 publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["shadow"])
             artifactId = "wiggle-client-all"
+            artifact(project(":client").tasks.named("sourcesJar")) { classifier = "sources" }
+            artifact(project(":client").tasks.named("mavenPlainJavadocJar")) { classifier = "javadoc" }
         }
     }
 }
