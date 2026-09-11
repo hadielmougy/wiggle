@@ -9,6 +9,7 @@ import com.wiggle.dist.coord.NoopCoordinatorLink;
 import com.wiggle.server.Logging;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.coordinator.jdbc.JdbcCoordinatorStoreProvider;
 import com.wiggle.coordinator.ratis.RatisCoordinatorStoreProvider;
 import com.wiggle.server.coord.CoordinatorServer;
 import com.wiggle.server.coord.CoordinatorStore;
@@ -97,22 +98,41 @@ public final class Main {
     private static void runCoordinator(ServerConfig config) throws Exception {
         String uri = System.getenv("WIGGLE_COORD_STORE");
         if (uri == null || uri.isBlank()) uri = "ratis:///var/lib/wiggle/coord";
-        if (!uri.startsWith("ratis:")) {
-            throw new IllegalArgumentException("the coordinator store is Ratis-only; set "
-                    + "WIGGLE_COORD_STORE=ratis://<dir>?peers=... (got '" + uri + "')");
+        String backend;
+        CoordinatorStore store;
+        if (uri.startsWith("ratis:")) {
+            backend = "ratis " + uri;
+            store = new RatisCoordinatorStoreProvider(uri).coordinatorStore();
+        } else if (uri.startsWith("jdbc:")) {
+            // Point the coordinator at its own (small) database. Several coordinator processes may
+            // share it; a durable leader lease in the store keeps them single-writer.
+            backend = "jdbc " + uri;
+            store = new JdbcCoordinatorStoreProvider(uri,
+                    System.getenv("WIGGLE_COORD_JDBC_USER"),
+                    System.getenv("WIGGLE_COORD_JDBC_PASSWORD"),
+                    intEnv("WIGGLE_COORD_JDBC_POOL", 4)).coordinatorStore();
+        } else {
+            throw new IllegalArgumentException("unknown coordinator store; set "
+                    + "WIGGLE_COORD_STORE=ratis://<dir>?peers=...  or  WIGGLE_COORD_STORE=jdbc:<url> "
+                    + "(got '" + uri + "')");
         }
-        CoordinatorStore store = new RatisCoordinatorStoreProvider(uri).coordinatorStore();
         CoordinatorServer coordinator = new CoordinatorServer(store, config.port(), config.tls(),
                 config.missedHeartbeatsBeforeDead(), config.nodeName()).start();
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle coordinator '" + config.nodeName() + "' on 127.0.0.1:" + coordinator.port()
-                + " (gRPC: " + (tls ? "TLS" : "plaintext") + ", store: ratis " + uri + ")");
+                + " (gRPC: " + (tls ? "TLS" : "plaintext") + ", store: " + backend + ")");
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             coordinator.close();
             try { store.close(); } catch (Exception ignored) { }
         }));
         Thread.currentThread().join();
+    }
+
+    private static int intEnv(String key, int def) {
+        String v = System.getenv(key);
+        if (v == null || v.isBlank()) return def;
+        try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return def; }
     }
 
     private static String engineVersion() {
