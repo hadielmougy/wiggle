@@ -1,0 +1,26 @@
+Wiggle is deployed as {{ include "wiggle.fullname" . }} ({{ .Values.replicaCount }} replica(s)).
+
+Image:   {{ include "wiggle.image" . }}
+Storage: {{ if or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret }}JDBC (durable){{ else }}in-memory (NON-DURABLE — single node, dev only){{ end }}
+
+Reach the gRPC control plane in-cluster at:
+    {{ include "wiggle.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+
+Port-forward it to your machine:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.grpcPort }}:{{ .Values.service.grpcPort }}
+Then point a client at localhost:{{ .Values.service.grpcPort }}.
+
+Liveness/readiness use the always-open /healthz on port {{ .Values.service.healthPort }}.
+
+{{- if not (or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret) }}
+
+NOTE: no JDBC url set, so this runs in-memory and state is lost on restart, and replicas do NOT
+form a cluster. For a real deployment set a database and scale out:
+    helm upgrade {{ .Release.Name }} <chart> \
+      --set storage.jdbc.url=jdbc:postgresql://postgres:5432/wiggle \
+      --set storage.jdbc.user=wiggle --set storage.jdbc.password=... \
+      --set replicaCount=3
+{{- end }}
+
+Pulling from an internal registry? Override only the registry:
+    --set image.registry=artifactory.example.com

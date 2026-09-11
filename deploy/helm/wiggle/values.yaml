@@ -1,0 +1,93 @@
+# Wiggle server (cell node / cluster). The one thing an enterprise usually overrides is
+# `image.registry` — point it at your internal registry mirror and everything else has a working
+# default. Several replicas pointing at one database form a cluster.
+
+replicaCount: 1
+
+image:
+  # Override to pull from your internal registry (e.g. artifactory.example.com).
+  registry: docker.io
+  repository: hadielmougy/wiggle
+  tag: ""            # empty -> the chart's appVersion
+  digest: ""         # optional "sha256:..."; pins by digest and wins over tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# --- storage ---
+# Empty JDBC url -> in-memory (single node, non-durable — dev only). For a real deployment set a
+# JDBC url; point multiple replicas at the same database to cluster them.
+storage:
+  jdbc:
+    url: ""          # e.g. jdbc:postgresql://postgres:5432/wiggle
+    user: ""
+    password: ""     # written into a Secret this chart creates...
+    existingSecret: ""   # ...unless you name a Secret with keys url/user/password (wins over the above)
+
+service:
+  type: ClusterIP
+  grpcPort: 8080     # the gRPC control plane
+  healthPort: 8090   # serves the always-open /healthz probe (and the console, if enabled)
+
+# Extra environment: any WIGGLE_* tunable, TLS, the console password, etc.
+env: {}
+  # WIGGLE_POLL_INTERVAL_MILLIS: "200"
+  # WIGGLE_HOUSEKEEPING_BATCH: "500"
+  # WIGGLE_DASHBOARD_PASSWORD: "change-me"
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# --- hardened by default: matches the distroless :nonroot image (uid 65532), passes a
+#     "restricted" PodSecurity namespace with no edits ---
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true       # the app writes nothing to disk; /tmp is a mounted emptyDir
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: health
+  initialDelaySeconds: 15
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# Only meaningful with replicaCount > 1.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

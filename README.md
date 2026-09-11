@@ -157,6 +157,18 @@ scripts/cluster.sh 20            # three server nodes, two workers, one Postgres
 scripts/kind-up.sh 3             # or the same on Kubernetes (kind)
 ```
 
+On a real cluster, the [Helm chart](deploy/helm/wiggle) deploys a hardened, non-root pod (distroless
+image, read-only root filesystem, all capabilities dropped — passes a *restricted* PodSecurity
+namespace unmodified). Point `image.registry` at your internal registry and you're done:
+
+```bash
+helm install wiggle deploy/helm/wiggle \
+  --set image.registry=artifactory.example.com \
+  --set storage.jdbc.url=jdbc:postgresql://postgres:5432/wiggle \
+  --set storage.jdbc.user=wiggle --set storage.jdbc.password=secret \
+  --set replicaCount=3
+```
+
 ### 2.3 Sharding & the coordinator (cellular)
 
 When one database is no longer enough — or tenants must not share blast radius — go cellular.
