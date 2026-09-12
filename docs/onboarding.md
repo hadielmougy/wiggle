@@ -514,6 +514,18 @@ append a `Migration(n, "name", sql)` — never edit a released one; keep changes
 for rolling deploys. Tables: `wf_definition`, `wf_graph_node`, `wf_graph_edge`, `wf_instance`,
 `wf_token`, `wf_node`, `wf_schema_version`.
 
+Each applied migration records a **SHA-256 checksum** of its source in `wf_schema_version`; if an
+already-applied migration's definition later differs from the code (someone edited a released
+migration), startup **fails loudly with a drift error** rather than silently diverging.
+
+For deployments where a DBA or CI pipeline — not the application — owns DDL:
+
+- **`WIGGLE_MIGRATE_ONLY=true`** — a one-shot job that applies pending migrations and **exits** (run
+  it as an init container or a CI step; it forces apply even if the app env pins verify).
+- **`WIGGLE_SCHEMA_MODE=verify`** — the app **applies nothing**; it checks the schema is current and
+  un-drifted and **fails fast** if it's behind (telling you to run the migrate job first). Run the
+  migrate-only job, then run the app in verify mode with only `SELECT`/`INSERT`/… grants.
+
 ### 7.5 Queue-lag monitoring
 
 The leader watches whether the dispatchable backlog is draining fast enough (backlog vs
