@@ -29,6 +29,7 @@ dependencies {
 
         // --- the control-plane stack wiggle-proto exposes transitively ---
         api("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
+        api("io.github.hadielmougy:shield:${property("shieldVersion")}")
         api("com.zaxxer:HikariCP:${property("hikariVersion")}")
 
         // --- JDBC drivers each wiggle-<db> module brings in at runtime ---

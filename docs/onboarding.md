@@ -369,6 +369,15 @@ new Worker(client, "worker-1", WorkerOptions.defaults()
 | `registerOnStart` | true | (re)register blueprints when the worker starts |
 | `localBatchSize` | 64 | LOCAL_ASYNC steps buffered before a flush (ignored by SERVER/LOCAL_SYNC) |
 
+**RPC retry (client + worker).** Every `WiggleClient` call — and therefore every worker RPC (poll,
+complete, fail, heartbeat) — retries on `UNAVAILABLE`, so an operation issued while a cell is
+momentarily gone (a restart, or an active/passive failover taking over the address) rides out the
+outage instead of failing. Only `UNAVAILABLE` is retried (the RPC almost certainly never ran, so
+it's safe even for non-idempotent calls); permanent errors and `DEADLINE_EXCEEDED` are not. Tune per
+JVM: `-Dwiggle.rpc.maxAttempts` / `WIGGLE_RPC_MAX_ATTEMPTS` (default `5`; `1` disables retry) and
+`-Dwiggle.rpc.retryDelayMillis` / `WIGGLE_RPC_RETRY_DELAY_MILLIS` (default `200`, exponential
+backoff). For exactly-once starts across a retried failover, pass a `correlationId` to `start`.
+
 ### 6.6 Logging
 
 Wiggle logs through the JDK's `System.Logger` (routes to `java.util.logging`), so there's no
