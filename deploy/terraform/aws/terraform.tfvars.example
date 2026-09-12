@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars and edit. Every value here has a working default in variables.tf.
+
+region = "eu-west-1"
+name   = "wiggle"
+
+# --- sizing (defaults are production-ish; shrink for a trial) ---
+# node_instance_types   = ["m6i.large"]
+# node_desired_size     = 3
+# aurora_instance_class = "db.r6g.large"
+# aurora_instance_count = 2      # 1 writer + 1 reader
+# wiggle_replicas       = 3
+
+# --- image (defaults to the public GHCR image) ---
+# wiggle_image_registry   = "ghcr.io"
+# wiggle_image_repository = "hadielmougy/wiggle"
+# wiggle_image_tag        = "0.0.2"   # empty = the chart's appVersion
+
+# --- keep the EKS API private in production (reach it via a bastion/VPN) ---
+# cluster_public_access = false
+
+tags = {
+  owner = "platform"
+  env   = "prod"
+}
