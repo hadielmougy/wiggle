@@ -1,0 +1,90 @@
+# The Wiggle coordinator (WIGGLE_ROLE=coordinator). Pick a store backend and, for JDBC, point it at
+# its own database (never a tenant cell's). Override image.registry for an internal registry.
+
+# JDBC backend: the coordinator is stateless, so replicas may be > 1 — a durable leader lease in the
+# store keeps them single-writer. Ratis backend: keep replicas at 1 (single-member; HA Ratis needs
+# peer wiring this chart does not do).
+replicaCount: 1
+
+image:
+  registry: ghcr.io
+  repository: hadielmougy/wiggle
+  tag: ""       # empty -> the chart's appVersion
+  digest: ""    # optional "sha256:..."; wins over tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+store:
+  # "jdbc" (recommended for cloud / managed DB) or "ratis" (self-contained, single-member).
+  backend: jdbc
+
+  jdbc:
+    url: ""              # jdbc:postgresql://coord-db:5432/wiggle_coord  (WIGGLE_COORD_STORE)
+    user: ""
+    password: ""         # written into a Secret this chart creates...
+    existingSecret: ""   # ...unless you name a Secret with keys url/user/password (wins over the above)
+    poolSize: 4
+
+  ratis:
+    dataDir: /var/lib/wiggle/coord
+    persistence:
+      size: 10Gi
+      storageClassName: ""   # "" = the cluster default
+
+service:
+  type: ClusterIP
+  grpcPort: 8099   # coordinator gRPC (WIGGLE_PORT)
+
+# Extra environment (WIGGLE_* tunables, TLS, ...).
+env: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Hardened by default, matched to the distroless :nonroot image (uid 65532). A mounted volume (the
+# Ratis PVC, /tmp) stays writable even with a read-only root filesystem.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop: ["ALL"]
+
+# The coordinator has no HTTP health endpoint, so probes are a TCP check on the gRPC port.
+livenessProbe:
+  tcpSocket:
+    port: grpc
+  initialDelaySeconds: 15
+  periodSeconds: 15
+readinessProbe:
+  tcpSocket:
+    port: grpc
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

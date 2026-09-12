@@ -1,0 +1,81 @@
+{{- if eq .Values.store.backend "ratis" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "wiggle-coordinator.fullname" . }}
+  labels:
+    {{- include "wiggle-coordinator.labels" . | nindent 4 }}
+spec:
+  # Ratis here is single-member: the embedded Raft log + RocksDB live on the pod's own volume.
+  # HA Ratis (3/5 members) needs peer wiring this chart does not do — use the JDBC backend for HA.
+  replicas: 1
+  serviceName: {{ include "wiggle-coordinator.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "wiggle-coordinator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wiggle-coordinator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "wiggle-coordinator.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: coordinator
+          image: {{ include "wiggle-coordinator.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+          env:
+            {{- include "wiggle-coordinator.env" . | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.store.ratis.dataDir }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.store.ratis.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.store.ratis.persistence.size }}
+{{- end }}
