@@ -1,10 +1,16 @@
 package com.wiggle.tests;
 
+import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.dsl.Blueprint;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.server.coord.CoordinatorApi;
+import com.wiggle.server.coord.CoordinatorService;
+import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,6 +69,34 @@ class RpcRetryFailoverTest {
         } finally {
             late.join(5_000);
             if (server.get() != null) server.get().close();
+        }
+    }
+
+    @Test @Timeout(30)
+    @DisplayName("coordinator resolution rides out a coordinator restart/failover too")
+    void coordinatorResolutionRidesOut() throws Exception {
+        int port = freePort();
+        System.setProperty("wiggle.rpc.maxAttempts", "60");
+        System.setProperty("wiggle.rpc.retryDelayMillis", "150");
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        AtomicReference<AutoCloseable> coord = new AtomicReference<>();
+        Thread late = new Thread(() -> {
+            try {
+                Thread.sleep(700);                       // coordinator absent for a beat...
+                CoordinatorService svc = new CoordinatorService(store);
+                CoordinatorApi api = new CoordinatorApi(svc, port, Tls.Options.DISABLED);
+                api.start();                             // ...then it comes back on the address
+                coord.set(() -> { api.close(); svc.close(); });
+            } catch (Exception e) { throw new RuntimeException(e); }
+        });
+        try (CoordinatedConnection resolver =
+                     WiggleConnection.coordinator("127.0.0.1:" + port, Tls.Options.DISABLED, "eu")) {
+            late.start();
+            // issued while the coordinator is DOWN; retry must ride it out and then resolve cleanly
+            assertTrue(resolver.activeCellTargets("acme").isEmpty(), "resolved once the coordinator returned");
+        } finally {
+            late.join(5_000);
+            if (coord.get() != null) coord.get().close();
         }
     }
 

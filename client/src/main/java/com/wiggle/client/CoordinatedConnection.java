@@ -6,9 +6,11 @@ import com.wiggle.core.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.*;
+import io.github.shield.internal.RetriesExhaustedException;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
+import io.grpc.StatusRuntimeException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -76,11 +78,11 @@ public final class CoordinatedConnection implements AutoCloseable {
     public void registerWorkflow(String namespace, Blueprint blueprint) {
         String json = Json.write(blueprint.definition().toJson());
         try {
-            coord.registerWorkflow(RegisterWorkflowRequest.newBuilder()
+            coordCall(() -> coord.registerWorkflow(RegisterWorkflowRequest.newBuilder()
                     .setNamespace(namespace)
                     .setName(blueprint.name())
                     .setDefinition(ByteString.copyFromUtf8(json))
-                    .build());
+                    .build()));
         }  catch (Exception e) {
             throw new WorkflowRegistrationException("Workflow can't be registered", e);
         }
@@ -92,8 +94,8 @@ public final class CoordinatedConnection implements AutoCloseable {
      * cells that join later.
      */
     public boolean deregisterWorkflow(String namespace, String name) {
-        return coord.deregisterWorkflow(DeregisterWorkflowRequest.newBuilder()
-                .setNamespace(namespace).setName(name).build()).getRemoved();
+        return coordCall(() -> coord.deregisterWorkflow(DeregisterWorkflowRequest.newBuilder()
+                .setNamespace(namespace).setName(name).build())).getRemoved();
     }
 
     /**
@@ -101,20 +103,20 @@ public final class CoordinatedConnection implements AutoCloseable {
      * marking the previous epoch draining. Returns the resulting policy.
      */
     public Policy openEpoch(String namespace, List<RingSlot> ring) {
-        return coord.openEpoch(OpenEpochRequest.newBuilder()
-                .setNamespace(namespace).addAllRing(ring).build());
+        return coordCall(() -> coord.openEpoch(OpenEpochRequest.newBuilder()
+                .setNamespace(namespace).addAllRing(ring).build()));
     }
 
     /** The workflows currently allocated to a namespace. */
     public List<AllocatedWorkflow> listWorkflows(String namespace) {
-        return coord.listWorkflows(ListWorkflowsRequest.newBuilder()
-                .setNamespace(namespace).build()).getWorkflowsList();
+        return coordCall(() -> coord.listWorkflows(ListWorkflowsRequest.newBuilder()
+                .setNamespace(namespace).build())).getWorkflowsList();
     }
 
     /** The cells hosting live work for a namespace (a worker polls all of them). */
     public List<String> activeCellTargets(String namespace) {
-        ActiveCellsResponse r = coord.activeCells(ActiveCellsRequest.newBuilder()
-                .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build());
+        ActiveCellsResponse r = coordCall(() -> coord.activeCells(ActiveCellsRequest.newBuilder()
+                .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build()));
         List<String> targets = new ArrayList<>();
         for (Endpoint e : r.getCellsList()) targets.add(rewriteTarget(e.getTarget()));
         return targets;
@@ -129,8 +131,8 @@ public final class CoordinatedConnection implements AutoCloseable {
     /** Resolves where a NEW instance of a namespace should start. Not cached: the coordinator spreads new
      *  starts across the ring, so resolving per start is what distributes them across cells/shards. */
     private Endpoint resolveNamespace(String namespace) {
-        return coord.resolve(ResolveRequest.newBuilder()
-                .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build()).getEndpoint();
+        return coordCall(() -> coord.resolve(ResolveRequest.newBuilder()
+                .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build())).getEndpoint();
     }
 
     /** Resolves the cell that owns an existing instance, by its baked-in epoch+shard. Cached by
@@ -141,12 +143,28 @@ public final class CoordinatedConnection implements AutoCloseable {
         String key = p.namespace() + "|e" + p.epoch() + "|s" + p.shard();
         Cached c = byShard.get(key);
         if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();
-        ResolveResponse r = coord.resolve(ResolveRequest.newBuilder()
-                .setInstanceId(instanceId).setCallerRegion(nz(callerRegion)).build());
+        ResolveResponse r = coordCall(() -> coord.resolve(ResolveRequest.newBuilder()
+                .setInstanceId(instanceId).setCallerRegion(nz(callerRegion)).build()));
         Endpoint e = r.getEndpoint();
         long ttlNanos = Math.max(1, e.getTtlSeconds()) * 1_000_000_000L;
         byShard.put(key, new Cached(e, System.nanoTime() + ttlNanos));
         return e;
+    }
+
+    /**
+     * Runs a coordinator RPC with the shared UNAVAILABLE retry ({@link RpcRetry}) — so resolution and
+     * registration ride out a coordinator restart / failover the same way cell calls do. On exhaustion
+     * it rethrows the underlying {@link StatusRuntimeException}, so callers see the same exception type
+     * as an un-retried call (nothing new leaks out).
+     */
+    private <T> T coordCall(java.util.function.Supplier<T> op) {
+        try {
+            return RpcRetry.retrying(op);
+        } catch (RetriesExhaustedException e) {
+            StatusRuntimeException s = RpcRetry.lastStatus(e);
+            if (s != null) throw s;
+            throw e;
+        }
     }
 
     private WiggleClient clientFor(String target) {
