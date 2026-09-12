@@ -13,6 +13,10 @@ import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.TlsChannelCredentials;
+import io.github.shield.Interceptor;
+import io.github.shield.Shield;
+import io.github.shield.ShieldedSupplier;
+import io.github.shield.internal.RetriesExhaustedException;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -320,13 +324,70 @@ public final class WiggleClient implements AutoCloseable {
 
     private interface Call<T> { T run(); }
 
+    // --- transient-failure retry (shield) --------------------------------------------------------
+    // Every client and worker operation routes through call(), so retry here covers them all. Retry
+    // is scoped to UNAVAILABLE — "the server isn't reachable" (down, restarting, or an active/passive
+    // failover in flight) — where the RPC almost certainly never executed, so retrying is safe even
+    // for non-idempotent operations. Permanent errors (NOT_FOUND, INVALID_ARGUMENT, ...) are NOT
+    // retried. DEADLINE_EXCEEDED is deliberately excluded (the call may have run server-side).
+    // Tunable: -Dwiggle.rpc.maxAttempts / WIGGLE_RPC_MAX_ATTEMPTS (default 5; 1 disables),
+    //          -Dwiggle.rpc.retryDelayMillis / WIGGLE_RPC_RETRY_DELAY_MILLIS (default 200, exp backoff).
+    private final int rpcMaxAttempts = intConfig("wiggle.rpc.maxAttempts", "WIGGLE_RPC_MAX_ATTEMPTS", 5);
+    private final long rpcRetryDelayMillis = intConfig("wiggle.rpc.retryDelayMillis", "WIGGLE_RPC_RETRY_DELAY_MILLIS", 200);
+
     private <T> T call(Call<T> call) {
-        try {
-            return call.run();
-        } catch (StatusRuntimeException e) {
-            throw new WiggleApiException(statusCode(e.getStatus()), e.getStatus().getDescription() != null
-                    ? e.getStatus().getDescription() : e.getMessage(), e);
+        if (rpcMaxAttempts <= 1) {                // retry disabled -> the original fast path
+            try {
+                return call.run();
+            } catch (StatusRuntimeException e) {
+                throw mapStatus(e);
+            }
         }
+        ShieldedSupplier<T> shielded = Shield.decorate(() -> {
+                    try {
+                        return call.run();
+                    } catch (StatusRuntimeException e) {
+                        if (e.getStatus().getCode() == Status.Code.UNAVAILABLE) throw new TransientRpc(e);
+                        throw e;                  // permanent -> propagate, not retried
+                    }
+                })
+                .with(Interceptor.retry()
+                        .maxRetries(rpcMaxAttempts)
+                        .delayMillis(rpcRetryDelayMillis)
+                        .backOff()
+                        .onException(TransientRpc.class))
+                .build();
+        try {
+            return shielded.get();
+        } catch (RetriesExhaustedException ex) {
+            StatusRuntimeException last = ex.getCause() instanceof TransientRpc t ? t.status : null;
+            String desc = last != null ? last.getStatus().getDescription() : "unavailable";
+            throw new WiggleApiException(0, "server unavailable after " + rpcMaxAttempts + " attempts: " + desc,
+                    last != null ? last : ex);
+        } catch (StatusRuntimeException e) {      // a permanent error that propagated through
+            throw mapStatus(e);
+        } finally {
+            shielded.close();
+        }
+    }
+
+    private static WiggleApiException mapStatus(StatusRuntimeException e) {
+        return new WiggleApiException(statusCode(e.getStatus()), e.getStatus().getDescription() != null
+                ? e.getStatus().getDescription() : e.getMessage(), e);
+    }
+
+    /** Marks an UNAVAILABLE RPC as retryable, carrying the original status for the exhausted case. */
+    private static final class TransientRpc extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        private final transient StatusRuntimeException status;
+        TransientRpc(StatusRuntimeException s) { super(s); this.status = s; }
+    }
+
+    private static int intConfig(String prop, String env, int def) {
+        String v = System.getProperty(prop);
+        if (v == null || v.isBlank()) v = System.getenv(env);
+        if (v == null || v.isBlank()) return def;
+        try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return def; }
     }
 
     private static int statusCode(Status status) {

@@ -36,6 +36,8 @@ tasks.shadowJar {
     relocate("com.google", "$shaded.com.google")
     relocate("io.grpc", "$shaded.io.grpc")
     relocate("io.perfmark", "$shaded.io.perfmark")
+    relocate("io.github.shield", "$shaded.io.github.shield")   // client retry lib
+    relocate("net.jcip", "$shaded.net.jcip")
     relocate("org.checkerframework", "$shaded.org.checkerframework")
     relocate("org.codehaus.mojo", "$shaded.org.codehaus.mojo")
 
