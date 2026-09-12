@@ -11,6 +11,7 @@ import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.coordinator.jdbc.JdbcCoordinatorStoreProvider;
 import com.wiggle.coordinator.ratis.RatisCoordinatorStoreProvider;
+import com.wiggle.server.store.Storage;
 import com.wiggle.server.coord.CoordinatorServer;
 import com.wiggle.server.coord.CoordinatorStore;
 
@@ -49,6 +50,18 @@ public final class Main {
         // and the coordinator are decoupled libraries composed here.
         if ("coordinator".equalsIgnoreCase(System.getenv().getOrDefault("WIGGLE_ROLE", "cell").trim())) {
             runCoordinator(config);   // a separate, engine-free control plane; never a WiggleServer
+            return;
+        }
+
+        // One-shot schema migration then exit, for a CI/DBA-owned schema (run this, then run the app
+        // with WIGGLE_SCHEMA_MODE=verify). Forces APPLY even if the app env pins verify.
+        if (Boolean.parseBoolean(System.getenv().getOrDefault("WIGGLE_MIGRATE_ONLY", "false"))) {
+            System.setProperty("wiggle.schema.forceApply", "true");
+            try (Storage storage = new WiggleStorageFactory().create(config)) {
+                storage.migrate();
+            }
+            System.out.println("Wiggle schema migrated ("
+                    + (config.isInMemory() ? "in-memory (no-op)" : config.jdbcUrl()) + "); exiting (WIGGLE_MIGRATE_ONLY).");
             return;
         }
 

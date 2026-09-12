@@ -8,6 +8,8 @@ import com.wiggle.server.store.Rows.*;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.sql.*;
 import java.util.*;
 import java.util.function.Function;
@@ -224,15 +226,33 @@ public final class JdbcStorage implements Storage {
             );
             """));
 
-    /** Applies the cell schema. */
-    @Override public void migrate() {
-        applyMigrations(MIGRATIONS, "baseline");
+    /** How {@link #migrate()} treats pending schema changes. */
+    public enum MigrationMode {
+        /** Apply any pending migrations (the default). */ APPLY,
+        /** Apply nothing; fail if the schema is behind or has drifted — for a DBA/CI-owned schema. */ VERIFY
     }
 
-    private void applyMigrations(List<Migration> migrations, String baseline) {
+    /**
+     * Applies the cell schema. Honours {@code WIGGLE_SCHEMA_MODE}: {@code apply} (default) migrates,
+     * {@code verify} only checks that the schema is current and un-drifted and fails otherwise (for
+     * deployments where a DBA or CI pipeline — not the app — owns DDL). Run a one-shot migration
+     * with the distribution's {@code WIGGLE_MIGRATE_ONLY=true}, then run the app in {@code verify}.
+     */
+    @Override public void migrate() {
+        applyMigrations(MIGRATIONS, "baseline", modeFromEnv());
+    }
+
+    private static MigrationMode modeFromEnv() {
+        // A one-shot migration job (WIGGLE_MIGRATE_ONLY) forces APPLY even if the app's env pins verify.
+        if (Boolean.getBoolean("wiggle.schema.forceApply")) return MigrationMode.APPLY;
+        String m = System.getenv("WIGGLE_SCHEMA_MODE");
+        return m != null && m.trim().equalsIgnoreCase("verify") ? MigrationMode.VERIFY : MigrationMode.APPLY;
+    }
+
+    private void applyMigrations(List<Migration> migrations, String baseline, MigrationMode mode) {
         Connection c = borrow();
         try {
-            runMigrations(c, migrations, dialect, baseline);
+            runMigrations(c, migrations, dialect, baseline, mode);
             c.commit();   // also releases the migration lock held for the duration
         } catch (SQLException e) {
             rollback(c);
@@ -262,11 +282,25 @@ public final class JdbcStorage implements Storage {
      */
     public static void runMigrations(Connection c, List<Migration> migrations, Dialect dialect,
                                      String expectedBaseline) throws SQLException {
+        runMigrations(c, migrations, dialect, expectedBaseline, MigrationMode.APPLY);
+    }
+
+    /**
+     * As above, with an explicit {@link MigrationMode}. In {@code VERIFY} mode nothing is applied:
+     * it fails if any migration is pending (the schema is behind — a migration step must run first)
+     * or if an already-applied migration's checksum no longer matches the code (drift — a released
+     * migration was edited). Each applied migration records a checksum of its source, so drift is
+     * caught on every subsequent startup, in either mode.
+     */
+    public static void runMigrations(Connection c, List<Migration> migrations, Dialect dialect,
+                                     String expectedBaseline, MigrationMode mode) throws SQLException {
         dialect.acquireMigrationLock(c);
         try (Statement st = c.createStatement()) {
             execDdl(st, dialect, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
-                    "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL)");
+                    "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL, " +
+                    "checksum VARCHAR(64))");
         }
+        ensureChecksumColumn(c, dialect);
         if (expectedBaseline != null) {
             try (Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery("SELECT name FROM wf_schema_version WHERE version=1")) {
@@ -280,25 +314,85 @@ public final class JdbcStorage implements Storage {
                 }
             }
         }
-        int current = 0;
+        // Load applied versions -> stored checksum.
+        Map<Integer, String> applied = new HashMap<>();
         try (Statement st = c.createStatement();
-             ResultSet rs = st.executeQuery("SELECT COALESCE(MAX(version),0) FROM wf_schema_version")) {
-            if (rs.next()) current = rs.getInt(1);
+             ResultSet rs = st.executeQuery("SELECT version, checksum FROM wf_schema_version")) {
+            while (rs.next()) applied.put(rs.getInt(1), rs.getString(2));
         }
+        int current = applied.keySet().stream().mapToInt(Integer::intValue).max().orElse(0);
+
+        // Drift check: every already-applied migration still in the code must match its recorded
+        // checksum. A null stored checksum is a legacy row (predates this feature) — in APPLY mode we
+        // backfill it from the code (adopting the source as truth); in VERIFY mode we leave it be.
         for (Migration m : migrations) {
-            if (m.version() <= current) continue;
+            if (!applied.containsKey(m.version())) continue;
+            String want = checksum(m);
+            String have = applied.get(m.version());
+            if (have == null) {
+                if (mode == MigrationMode.APPLY) {
+                    try (PreparedStatement up = c.prepareStatement(
+                            "UPDATE wf_schema_version SET checksum = ? WHERE version = ?")) {
+                        up.setString(1, want);
+                        up.setInt(2, m.version());
+                        up.executeUpdate();
+                    }
+                }
+            } else if (!have.equals(want)) {
+                throw new SQLException("schema drift: migration V" + m.version() + " ('" + m.name()
+                        + "') was applied with a different definition than the current code (checksum "
+                        + have + " != " + want + "). Never edit a released migration — add a new one.");
+            }
+        }
+
+        List<Migration> pending = migrations.stream().filter(m -> m.version() > current).toList();
+        if (mode == MigrationMode.VERIFY) {
+            if (!pending.isEmpty()) {
+                throw new SQLException("schema is behind: " + pending.size() + " migration(s) pending (up to V"
+                        + pending.get(pending.size() - 1).version() + "). Running in verify mode (WIGGLE_SCHEMA_MODE"
+                        + "=verify) — apply them out of band first (WIGGLE_MIGRATE_ONLY=true).");
+            }
+            return;
+        }
+        for (Migration m : pending) {
             try (Statement st = c.createStatement()) {
                 for (String stmt : m.sql().split(";")) {
                     if (!stmt.isBlank()) execDdl(st, dialect, stmt);
                 }
             }
             try (PreparedStatement ins = c.prepareStatement(
-                    "INSERT INTO wf_schema_version (version,name,applied_at) VALUES (?,?,?)")) {
+                    "INSERT INTO wf_schema_version (version,name,applied_at,checksum) VALUES (?,?,?,?)")) {
                 ins.setInt(1, m.version());
                 ins.setString(2, m.name());
                 ins.setLong(3, System.currentTimeMillis());
+                ins.setString(4, checksum(m));
                 ins.executeUpdate();
             }
+        }
+    }
+
+    /** Adds the {@code checksum} column to a pre-existing (legacy) version table that lacks it. */
+    private static void ensureChecksumColumn(Connection c, Dialect dialect) throws SQLException {
+        DatabaseMetaData md = c.getMetaData();
+        for (String table : new String[]{"wf_schema_version", "WF_SCHEMA_VERSION"}) {
+            try (ResultSet rs = md.getColumns(null, null, table, "checksum")) { if (rs.next()) return; }
+            try (ResultSet rs = md.getColumns(null, null, table, "CHECKSUM")) { if (rs.next()) return; }
+        }
+        try (Statement st = c.createStatement()) {
+            execDdl(st, dialect, "ALTER TABLE wf_schema_version ADD checksum VARCHAR(64)");
+        }
+    }
+
+    /** SHA-256 (hex) of a migration's source — dialect-independent, so it's stable across backends. */
+    static String checksum(Migration m) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] h = md.digest((m.version() + "\n" + m.name() + "\n" + m.sql()).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(h.length * 2);
+            for (byte b : h) sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e); // never on a standard JRE
         }
     }
 
