@@ -1,11 +1,9 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
@@ -75,7 +73,7 @@ public final class WiggleFlow<T> {
     }
 
     /** Records an operation and returns a handle on it. */
-    private <R> WiggleFlow<R> record(String label, UnaryOperator<WorkflowBuilder> op) {
+    private <R> WiggleFlow<R> record(String label, UnaryOperator<GraphBuilder> op) {
         return new WiggleFlow<>(new Plan.Step(step, op, label));
     }
 
@@ -226,7 +224,7 @@ public final class WiggleFlow<T> {
      * signal does not arrive in time, rejoining the flow afterwards.
      */
     public WiggleFlow<T> thenAwait(String signal, Duration timeout, UnaryOperator<WiggleFlow<T>> escalation) {
-        UnaryOperator<WorkflowBuilder> body = body(escalation, "the escalation branch of '" + signal + "'");
+        UnaryOperator<GraphBuilder> body = body(escalation, "the escalation branch of '" + signal + "'");
         return record(signal, b -> b.awaitSignal(signal, timeout, body));
     }
 
@@ -257,7 +255,7 @@ public final class WiggleFlow<T> {
      *  same collection key is fanned over twice (node names must be unique). */
     public <E> Items thenForEach(String name, String itemsKey, Class<E> itemType,
                                  Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
-        UnaryOperator<WorkflowBuilder> body = body(loopBody, "the forEach body for '" + name + "'");
+        UnaryOperator<GraphBuilder> body = body(loopBody, "the forEach body for '" + name + "'");
         return new Items(this, name, itemsKey, body);
     }
 
@@ -321,7 +319,7 @@ public final class WiggleFlow<T> {
      */
     public WiggleFlow<T> repeatWhile(FlowGate<T> condition, UnaryOperator<WiggleFlow<T>> loopBody) {
         String name = StepNames.of(condition);
-        UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + name + "'");
+        UnaryOperator<GraphBuilder> body = body(loopBody, "the body of loop '" + name + "'");
         return record(name, b -> b.doWhile(name, body));
     }
 
@@ -330,7 +328,7 @@ public final class WiggleFlow<T> {
     public WiggleFlow<T> repeatWhile(FlowGate<T> condition, int maxIterations,
                                        UnaryOperator<WiggleFlow<T>> loopBody) {
         String name = StepNames.of(condition);
-        UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + name + "'");
+        UnaryOperator<GraphBuilder> body = body(loopBody, "the body of loop '" + name + "'");
         return record(name, b -> b.doWhile(name, maxIterations, body));
     }
 
@@ -368,12 +366,12 @@ public final class WiggleFlow<T> {
      * reverse pass. Must directly follow {@link #thenApply} or {@link #thenAccept}.
      */
     public WiggleFlow<T> compensate() {
-        return record(null, WorkflowBuilder::compensate);
+        return record(null, GraphBuilder::compensate);
     }
 
     /** Marks the step just added as a flush boundary under {@code LOCAL_ASYNC}. */
     public WiggleFlow<T> checkpoint() {
-        return record(null, WorkflowBuilder::checkpoint);
+        return record(null, GraphBuilder::checkpoint);
     }
 
     /** Sets the queue used by every step defined after this point. */
@@ -405,13 +403,13 @@ public final class WiggleFlow<T> {
      * step is applied.
      */
     /** How {@link Items} records the forEach once its combine is known. */
-    <R> WiggleFlow<R> recordForEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> loopBody,
+    <R> WiggleFlow<R> recordForEach(String name, String itemsKey, UnaryOperator<GraphBuilder> loopBody,
                                     String combineName) {
         return record(name, b -> b.forEach(name, itemsKey, loopBody).combine(combineName));
     }
 
-    private static <A> UnaryOperator<WorkflowBuilder> body(Function<WiggleFlow<A>, ? extends WiggleFlow<?>> body,
-                                                           String what) {
+    private static <A> UnaryOperator<GraphBuilder> body(Function<WiggleFlow<A>, ? extends WiggleFlow<?>> body,
+                                                        String what) {
         Plan.Step root = Plan.root();
         WiggleFlow<?> tail = body.apply(new WiggleFlow<>(root));
         if (tail == null) {

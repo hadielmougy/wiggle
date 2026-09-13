@@ -2,7 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.WorkflowBuilder;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -104,7 +104,7 @@ public final class Benchmark {
      * handler and counts the instance down exactly once.
      */
     private static FlowSpec linear(String name, int steps, ExecutionMode mode) {
-        WorkflowBuilder s = Wiggle.graph(name).execution(mode);
+        GraphBuilder s = Wiggle.graph(name).execution(mode);
         for (int i = 0; i < steps - 1; i++) {
             s = s.step(hop(i));   // distinct raw name, all canonicalise to the "hop" handler
         }

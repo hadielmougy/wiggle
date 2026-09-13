@@ -3,7 +3,7 @@ package com.wiggle.client.worker;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.WorkflowBuilder;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -34,7 +34,7 @@ class WorkerPacingTest {
     }
 
     private static FlowSpec chain() {
-        WorkflowBuilder b = Wiggle.graph("pacing");
+        GraphBuilder b = Wiggle.graph("pacing");
         for (int i = 0; i < STEPS; i++) b = b.step("hop" + "-".repeat(i));
         return b.build();
     }

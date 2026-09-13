@@ -1,7 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.flow.WorkflowBuilder;
-
 import java.util.function.UnaryOperator;
 
 /**
@@ -13,9 +11,9 @@ public final class Items {
     private final WiggleFlow<?> from;
     private final String name;
     private final String itemsKey;
-    private final UnaryOperator<WorkflowBuilder> body;
+    private final UnaryOperator<GraphBuilder> body;
 
-    Items(WiggleFlow<?> from, String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+    Items(WiggleFlow<?> from, String name, String itemsKey, UnaryOperator<GraphBuilder> body) {
         this.from = from;
         this.name = name;
         this.itemsKey = itemsKey;

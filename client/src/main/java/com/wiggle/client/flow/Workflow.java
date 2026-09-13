@@ -33,11 +33,11 @@ final class Workflow {
 
     private Workflow() {}
 
-    static WorkflowBuilder define(String name) {
+    static GraphBuilder define(String name) {
         return define(name, RetryPolicy.exponential(3, java.time.Duration.ofMillis(500)));
     }
 
-    static WorkflowBuilder define(String name, RetryPolicy defaultRetry) {
-        return WorkflowBuilder.root(new Pipeline(name, defaultRetry));
+    static GraphBuilder define(String name, RetryPolicy defaultRetry) {
+        return GraphBuilder.root(new Pipeline(name, defaultRetry));
     }
 }

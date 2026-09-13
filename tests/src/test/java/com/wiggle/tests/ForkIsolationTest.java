@@ -4,7 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.WorkflowBuilder;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * The design-B guarantee of {@link WorkflowBuilder#fork}: each branch runs on
+ * The design-B guarantee of {@link GraphBuilder#fork}: each branch runs on
  * its own isolated context copy, so a branch's writes are invisible to its siblings and never reach
  * the shared context implicitly -- the only thing that lands is what the mandatory {@code combine}
  * returns.

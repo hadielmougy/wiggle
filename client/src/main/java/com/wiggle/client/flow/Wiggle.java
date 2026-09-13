@@ -1,6 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;
@@ -100,12 +99,12 @@ public final class Wiggle {
      * step against the handler that implements it and follows a rename. Both produce the same
      * {@link FlowSpec} -- the graph has only ever held names -- and a worker cannot tell which was used.
      */
-    public static WorkflowBuilder graph(String name) {
+    public static GraphBuilder graph(String name) {
         return Workflow.define(name);
     }
 
     /** {@link #graph(String)} with an explicit default retry policy for every step that names none. */
-    public static WorkflowBuilder graph(String name, RetryPolicy defaultRetry) {
+    public static GraphBuilder graph(String name, RetryPolicy defaultRetry) {
         return Workflow.define(name, defaultRetry);
     }
 

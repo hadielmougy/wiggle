@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.WorkflowBuilder;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.PermanentActivityException;
@@ -56,7 +56,7 @@ public final class Scenarios {
         return w.start();
     }
 
-    private static WorkflowBuilder json(String name) {
+    private static GraphBuilder json(String name) {
         return Wiggle.graph(name);
     }
 

@@ -1,10 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Case;
-import com.wiggle.client.flow.Workflow;
-import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;
@@ -36,21 +31,21 @@ final class Plan {
 
         final Step parent;
         /** How this step appends itself to a builder. Null on a root, which appends nothing. */
-        private final UnaryOperator<WorkflowBuilder> op;
+        private final UnaryOperator<GraphBuilder> op;
         /** The graph node this step adds, for arm naming and error messages. */
         final String label;
         final List<Step> children = new ArrayList<>();
         /** True once a fork has taken this step into one of its arms; it leaves the trunk. */
         boolean claimed;
 
-        Step(Step parent, UnaryOperator<WorkflowBuilder> op, String label) {
+        Step(Step parent, UnaryOperator<GraphBuilder> op, String label) {
             this.parent = parent;
             this.op = op;
             this.label = label;
             if (parent != null) parent.children.add(this);
         }
 
-        WorkflowBuilder apply(WorkflowBuilder builder) {
+        GraphBuilder apply(GraphBuilder builder) {
             return op == null ? builder : op.apply(builder);
         }
     }
@@ -70,7 +65,7 @@ final class Plan {
         }
 
         @Override
-        WorkflowBuilder apply(WorkflowBuilder builder) {
+        GraphBuilder apply(GraphBuilder builder) {
             if (combineName == null) {
                 throw new IllegalStateException("allOf(" + String.join(", ", armNames)
                         + ") has no merge: follow it with combine(...)");
@@ -117,7 +112,7 @@ final class Plan {
         }
 
         @Override
-        WorkflowBuilder apply(WorkflowBuilder builder) {
+        GraphBuilder apply(GraphBuilder builder) {
             return builder.choose(cases.toArray(new Case[0]));
         }
     }
@@ -254,13 +249,13 @@ final class Plan {
 
     /** Walks the recorded tree once, appending each step to a real builder. */
     static FlowSpec compile(String workflow, RetryPolicy defaultRetry, Step root) {
-        WorkflowBuilder builder = defaultRetry == null
+        GraphBuilder builder = defaultRetry == null
                 ? Workflow.define(workflow) : Workflow.define(workflow, defaultRetry);
         return walk(root, builder, "workflow '" + workflow + "'").build();
     }
 
     /** Appends {@code from}'s descendants, following the single trunk at each step. */
-    static WorkflowBuilder walk(Step from, WorkflowBuilder builder, String what) {
+    static GraphBuilder walk(Step from, GraphBuilder builder, String what) {
         Step step = from;
         while (true) {
             Step next = onlyChild(step, what);
@@ -271,7 +266,7 @@ final class Plan {
     }
 
     /** Replays one arm's recorded path into a branch's own builder. */
-    private static WorkflowBuilder replay(List<Step> arm, WorkflowBuilder builder, String what) {
+    private static GraphBuilder replay(List<Step> arm, GraphBuilder builder, String what) {
         for (Step step : arm) {
             builder = step.apply(builder);
         }

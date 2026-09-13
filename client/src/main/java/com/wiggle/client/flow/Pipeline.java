@@ -10,7 +10,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * The accumulating build model behind the {@link WorkflowBuilder} DSL: it owns the graph's nodes and
+ * The accumulating build model behind the {@link GraphBuilder} DSL: it owns the graph's nodes and
  * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
  * {@link FlowSpec} on {@link #build()}. The flowSpec is pure topology -- no step logic -- so this
  * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
@@ -45,7 +45,7 @@ final class Pipeline {
     /** Records the graph's entry node. Called once, for the first node attached to the root stream. */
     void startAt(String id) { this.startNode = id; }
 
-    /** Marks an already-added step as a checkpoint (see {@link WorkflowBuilder#checkpoint()}). */
+    /** Marks an already-added step as a checkpoint (see {@link GraphBuilder#checkpoint()}). */
     void markCheckpoint(String nodeId) { checkpoints.add(nodeId); }
 
     /** The step's own queue, or the workflow default when none is given. */
@@ -178,7 +178,7 @@ final class Pipeline {
 
     /**
      * Assembles the accumulated nodes into a validated, content-addressed {@link FlowSpec}. The
-     * caller ({@link WorkflowBuilder#build()}) has already appended the terminal end node and wired
+     * caller ({@link GraphBuilder#build()}) has already appended the terminal end node and wired
      * every open edge to it.
      */
     FlowSpec build() {
