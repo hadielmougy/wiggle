@@ -1,6 +1,6 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;
@@ -10,7 +10,7 @@ import java.util.function.Function;
 /**
  * Entry point to the flow API: a workflow written as a chain of method references
  * to its handler methods, compiled to the same {@link FlowSpec} that
- * {@link com.wiggle.client.dsl.Workflow Workflow.define(...)} produces.
+ * {@link com.wiggle.client.flow.Workflow Workflow.define(...)} produces.
  *
  * <pre>{@code
  * OrderHandlers h = new OrderHandlers();

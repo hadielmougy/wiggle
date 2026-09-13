@@ -1,6 +1,6 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.dsl.ActivityHandler;
+import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;

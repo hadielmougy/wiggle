@@ -1,9 +1,9 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Case;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Case;
+import com.wiggle.client.flow.Workflow;
 import com.wiggle.client.flow.Fixtures.Fulfilment;
 import com.wiggle.client.flow.Fixtures.Line;
 import com.wiggle.client.flow.Fixtures.Order;

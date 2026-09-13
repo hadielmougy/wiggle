@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.*;
 

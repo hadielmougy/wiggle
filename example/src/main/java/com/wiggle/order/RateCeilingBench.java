@@ -3,7 +3,7 @@ package com.wiggle.order;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 

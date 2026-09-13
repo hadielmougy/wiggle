@@ -1,8 +1,7 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.server.ServerConfig;
@@ -34,27 +33,25 @@ public final class DashboardSeed {
         }
         ServerConfig config = ServerConfig.fromEnvironment();
 
-        FlowSpec kyc = Workflow.define("kyc-checks")
-                .step("verify-id")
-                .step("risk-score")
-                .build();
+        FlowSpec kyc = Wiggle.define("kyc-checks", Map.class, f -> f
+                .thenApply("verify-id")
+                .thenApply("risk-score"));
 
-        FlowSpec onboarding = Workflow.define("onboarding")
-                .step("create-account")
-                .fork(
-                        Branch.of("send-welcome", b -> b.step("welcome")),
-                        Branch.of("provision", b -> b.step("provision-hw")))
-                .combine("merge")
-                .subWorkflow("run-kyc", "kyc-checks")
-                .awaitSignal("manager-approval", Duration.ofHours(48),
-                        b -> b.step("auto-escalate"))
-                .step("activate")
-                .build();
+        FlowSpec onboarding = Wiggle.define("onboarding", Map.class, f -> {
+            var created = f.thenApply("create-account");
+            var welcome = created.thenApply("welcome");
+            var provision = created.thenApply("provision-hw");
+            return Wiggle.allOf(welcome, provision)
+                    .combine("merge", Map.class)
+                    .thenSubFlow("run-kyc", "kyc-checks", Map.class)
+                    .thenAwait("manager-approval", Duration.ofHours(48),
+                            b -> b.thenApply("auto-escalate"))
+                    .thenApply("activate");
+        });
 
-        FlowSpec report = Workflow.define("nightly-report")
-                .step("gather")
-                .step("render")
-                .build();
+        FlowSpec report = Wiggle.define("nightly-report", Map.class, f -> f
+                .thenApply("gather")
+                .thenApply("render"));
 
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());

@@ -1,6 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;

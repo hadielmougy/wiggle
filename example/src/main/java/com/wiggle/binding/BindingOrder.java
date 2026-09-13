@@ -1,7 +1,7 @@
 package com.wiggle.binding;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 
 import java.util.LinkedHashMap;
@@ -36,12 +36,11 @@ public final class BindingOrder {
      * without running any worker at all.
      */
     public static FlowSpec flowSpec() {
-        return Workflow.define(NAME)
-                .step("validate")
-                .gate("in-stock")
-                .step("charge", PAYMENTS_QUEUE)
-                .step("ship")
-                .effect("notify")
-                .build();
+        return Wiggle.define(NAME, Map.class, f -> f
+                .thenApply("validate")
+                .thenFilter("in-stock")
+                .thenApply("charge").onQueue(PAYMENTS_QUEUE)
+                .thenApply("ship")
+                .thenAccept("notify"));
     }
 }

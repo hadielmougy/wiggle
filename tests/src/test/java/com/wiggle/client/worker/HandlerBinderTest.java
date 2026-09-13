@@ -1,8 +1,8 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.ActivityHandler;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Workflow;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

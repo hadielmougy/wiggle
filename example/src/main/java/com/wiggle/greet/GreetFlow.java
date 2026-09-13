@@ -1,7 +1,9 @@
 package com.wiggle.greet;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
+
+import java.util.Map;
 
 /**
  * The tiny "greet" flow used by {@link GreetWorker} and {@link GreetStart}. The flowSpec carries both
@@ -13,9 +15,8 @@ public final class GreetFlow {
     private GreetFlow() { }
 
     public static FlowSpec flowSpec() {
-        return Workflow.define("greet")
-                .step("hello")
-                .step("world")
-                .build();
+        return Wiggle.define("greet", Map.class, f -> f
+                .thenApply("hello")
+                .thenApply("world"));
     }
 }

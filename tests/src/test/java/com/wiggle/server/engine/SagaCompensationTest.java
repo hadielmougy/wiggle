@@ -1,8 +1,8 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Workflow;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;

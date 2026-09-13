@@ -1,7 +1,7 @@
 package com.wiggle.greet;
 
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Tls;
 
 import java.util.Map;

@@ -1,7 +1,7 @@
 package com.wiggle.client;
 
 import com.google.protobuf.ByteString;
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;

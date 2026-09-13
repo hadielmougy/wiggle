@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.Workflow;
 import com.wiggle.core.IdCodec;
 import com.wiggle.server.coord.CoordNamespace;
 import com.wiggle.server.coord.EmbeddedCellDeployer;

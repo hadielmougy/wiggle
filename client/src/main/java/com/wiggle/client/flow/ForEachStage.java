@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import java.util.function.UnaryOperator;
 
@@ -19,7 +19,7 @@ import java.util.function.UnaryOperator;
  *
  * @see WorkflowBuilder#forEach
  */
-public final class ForEachStage {
+final class ForEachStage {
 
     private final WorkflowBuilder stream;
     private final String name;
@@ -43,7 +43,7 @@ public final class ForEachStage {
      * @param name the step name of the combine node (must be unique in the workflow)
      * @return the stream, reopened after the combine node
      */
-    public WorkflowBuilder combine(String name) {
+    WorkflowBuilder combine(String name) {
         if (combined) throw new IllegalStateException("combine already applied to this forEach");
         combined = true;
         stream.buildForEachCombine(this.name, itemsKey, body, name);

@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Workflow;
 import com.wiggle.core.Json;
 import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.RegisteredNode;

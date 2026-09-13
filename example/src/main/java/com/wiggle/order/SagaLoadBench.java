@@ -3,8 +3,8 @@ package com.wiggle.order;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
@@ -47,11 +47,10 @@ public final class SagaLoadBench {
 
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
-        return Workflow.define("saga-load")
-                .step("reserve").compensate()
-                .step("enrich").compensate()
-                .step("boom")
-                .build();
+        return Wiggle.define("saga-load", Map.class, f -> f
+                .thenApply("reserve").compensate()
+                .thenApply("enrich").compensate()
+                .thenApply("boom"));
     }
 
     @Handlers("saga-load")

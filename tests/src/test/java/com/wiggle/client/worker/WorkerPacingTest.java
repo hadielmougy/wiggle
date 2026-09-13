@@ -1,9 +1,9 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowBuilder;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;

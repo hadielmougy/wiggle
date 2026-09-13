@@ -1,9 +1,9 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.ActivityHandler;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Workflow;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.ServerConfig;

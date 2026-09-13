@@ -1,8 +1,8 @@
 package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -47,11 +47,10 @@ public final class TimerBench {
         boolean adaptive = Boolean.parseBoolean(env("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"));
 
         CountDownLatch done = new CountDownLatch(count);
-        FlowSpec bp = Workflow.define("bench-timer")
-                .step("enter")
-                .sleep("hold", Duration.ofMillis(sleepMillis))
-                .effect("exit")
-                .build();
+        FlowSpec bp = Wiggle.define("bench-timer", Map.class, f -> f
+                .thenApply("enter")
+                .thenSleep("hold", Duration.ofMillis(sleepMillis))
+                .thenAccept("exit"));
 
         ServerConfig config = new ServerConfig(0, "timer-bench", null, null, null, 16,
                 Duration.ofMillis(tickMillis), Duration.ofMillis(500), 3, Duration.ofSeconds(30),

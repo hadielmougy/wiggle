@@ -1,9 +1,7 @@
 package com.wiggle.cookbook;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Case;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -45,37 +43,35 @@ public final class Cookbook {
     // 1. step + then + effect + gate -- the smallest linear pipeline with a filter.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec linearWithGate() {
-        return Workflow.define("cb-linear-gate")
+        return Wiggle.define("cb-linear-gate", Map.class, f -> f
 
-                .step("normalise")
+                .thenApply("normalise")
 
-                .then("classify")
+                .thenApply("classify")
 
                 // A false gate ends the instance successfully as "gated:eligible" -- not an error.
-                .gate("eligible")
+                .thenFilter("eligible")
 
-                .effect("welcome")
-
-                .build();
+                .thenAccept("welcome"));
     }
 
     // ---------------------------------------------------------------------------------------
     // 2. choose + fork + retry -- an exclusive branch whose body itself fans out in parallel.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec chooseThenFork() {
-        return Workflow.define("cb-choose-fork")
+        return Wiggle.define("cb-choose-fork", Map.class, f -> {
+            // the large arm itself fans out: a fan-out inside a choice arm is just a fan-out whose
+            // junction is the guard
+            var large = f.when("is-large");
+            var fraud = large.thenApply("fraud-check")
+                    .withRetry(RetryPolicy.exponential(3, Duration.ofMillis(50)));
+            var notice = large.thenAccept("manager-notice");
+            var largeArm = Wiggle.allOf(fraud, notice).combine("large-merge", Map.class);
 
-                .choose(
-                        Case.when("is-large",
-                                b -> b.fork(
-                                        Branch.of("fraud-check", s -> s.step("fraud-check",
-                                                RetryPolicy.exponential(3, Duration.ofMillis(50)))),
-                                        Branch.of("manager-notice", s -> s.effect("manager-notice"))).combine("large-merge")),
+            var standard = f.otherwise().thenApply("fast-path");
 
-                        Case.otherwise("standard", b -> b.step("fast-path")))
-
-                .step("settle")
-                .build();
+            return Wiggle.oneOf(largeArm, standard).thenApply("settle");
+        });
     }
 
     // ---------------------------------------------------------------------------------------
@@ -84,16 +80,15 @@ public final class Cookbook {
     //    combine receives the collected final values.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec forEachAcrossQueues() {
-        return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
+        return Wiggle.define("cb-foreach-queues", Map.class, f -> f.defaultQueue("cpu")
 
-                .forEach("charge-items", "items", b -> b
-                        .step("price")
+                .thenForEach("charge-items", "items", Map.class, b -> b
+                        .thenApply("price")
                         // Only this step moves to the "gpu" queue; the workflow default stays "cpu".
-                        .step("render-thumbnail", "gpu"))
-                .combine("collect-items")
+                        .thenApply("render-thumbnail").onQueue("gpu"))
+                .combine("collect-items", Map.class)
 
-                .step("summarise")
-                .build();
+                .thenApply("summarise"));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -101,54 +96,49 @@ public final class Cookbook {
     //    cancelled draw straight out of the loop.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec pollUntilReady() {
-        return Workflow.define("cb-poll-until-ready")
+        return Wiggle.define("cb-poll-until-ready", Map.class, f -> f
 
-                .doWhile("still-pending", b -> b
-                        // gate() short-circuits to the loop's exit (the enclosing join/end),
+                .repeatWhile("still-pending", b -> b
+                        // a gate short-circuits to the loop's exit (the enclosing join/end),
                         // not just the body -- a cancellation ends the whole instance here.
-                        .gate("not-cancelled")
-                        .step("poll"))
+                        .thenFilter("not-cancelled")
+                        .thenApply("poll"))
 
-                .step("finish")
-                .build();
+                .thenApply("finish"));
     }
 
     // ---------------------------------------------------------------------------------------
     // 5. awaitSignal (timeout + escalation) + choose -- branch on how the wait resolved.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec approvalWithEscalation() {
-        return Workflow.define("cb-approval-escalation")
+        return Wiggle.define("cb-approval-escalation", Map.class, f -> {
+            var waited = f
+                    .thenApply("submit")
+                    .thenAwait("manager-approval", Duration.ofMillis(200),
+                            esc -> esc.thenApply("auto-escalate"));
 
-                .step("submit")
+            var escalated = waited.when("was-escalated").thenAccept("notify-director");
+            var approved = waited.otherwise().thenAccept("notify-submitter");
 
-                .awaitSignal("manager-approval", Duration.ofMillis(200),
-                        esc -> esc.step("auto-escalate"))
-
-                .choose(
-                        Case.when("was-escalated",
-                                b -> b.effect("notify-director")),
-                        Case.otherwise("was-approved",
-                                b -> b.effect("notify-submitter")))
-
-                .build();
+            return Wiggle.oneOf(escalated, approved);
+        });
     }
 
     // ---------------------------------------------------------------------------------------
     // 6. subWorkflow + gate + fork -- compose a registered child workflow into a bigger one.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec childCheckThenFork() {
-        return Workflow.define("cb-parent")
+        return Wiggle.define("cb-parent", Map.class, f -> {
+            var checked = f
+                    // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
+                    .thenSubFlow("run-eligibility", "cb-linear-gate", Map.class)
+                    .thenFilter("child-passed");
 
-                // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
-                .subWorkflow("run-eligibility", "cb-linear-gate")
+            var provision = checked.thenApply("provision");
+            var audit = checked.thenAccept("audit");
 
-                .gate("child-passed")
-
-                .fork(
-                        Branch.of("provision", s -> s.step("provision")),
-                        Branch.of("audit", s -> s.effect("audit")))
-                .combine("merge")
-                .build();
+            return Wiggle.allOf(provision, audit).combine("merge", Map.class);
+        });
     }
 
     // ---------------------------------------------------------------------------------------
@@ -156,14 +146,14 @@ public final class Cookbook {
     //    deliberate commit point so a crash mid-loop only replays the current iteration.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec batchedLoopWithCheckpoint() {
-        return Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
+        return Wiggle.define("cb-batched-loop", Map.class, f -> f
+                .execution(ExecutionMode.LOCAL_ASYNC)
 
-                .doWhile("more-batches", b -> b
-                        .step("process-batch")
+                .repeatWhile("more-batches", b -> b
+                        .thenApply("process-batch")
                         .checkpoint()) // flush the buffer before the next iteration under LOCAL_ASYNC
 
-                .step("finalise")
-                .build();
+                .thenApply("finalise"));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -172,37 +162,29 @@ public final class Cookbook {
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
     public static FlowSpec kitchenSink() {
-        return Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
+        return Wiggle.define("cb-kitchen-sink", Map.class, f -> {
+            var ready = f.defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
+                    .thenApply("intake")
+                    .thenFilter("has-items")
+                    .thenSubFlow("run-eligibility", "cb-linear-gate", Map.class);
 
-                .step("intake")
+            var vip = ready.when("is-vip");
+            var pack = vip.thenApply("pack")
+                    .withRetry(RetryPolicy.fixed(2, Duration.ofMillis(20))).onQueue("packing");
+            var notice = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept("notice");
+            var vipArm = Wiggle.allOf(pack, notice).combine("large-merge", Map.class);
 
-                .gate("has-items")
+            var standard = ready.otherwise()
+                    .thenForEach("pack-items", "items", Map.class, body -> body.thenApply("pack-item"))
+                    .combine("collect-packed", Map.class);
 
-                .subWorkflow("run-eligibility", "cb-linear-gate")
-
-                .choose(
-                        Case.when("is-vip", b -> b
-                                .fork(
-                                        Branch.of("priority-pack", s -> s
-                                                .step("pack",
-                                                        RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing")),
-                                        Branch.of("priority-notice", s -> s
-                                                .sleep("brief-hold", Duration.ofMillis(50))
-                                                .effect("notice"))).combine("large-merge")),
-
-                        Case.otherwise("standard", b -> b
-                                .forEach("pack-items", "items", body -> body
-                                        .step("pack-item"))
-                                .combine("collect-packed")))
-
-                .awaitSignal("dock-clear", Duration.ofMillis(150),
-                        esc -> esc.effect("auto-clear"))
-
-                .doWhile("more-checks", b -> b
-                        .step("run-check")
-                        .checkpoint())
-
-                .step("ship")
-                .build();
+            return Wiggle.oneOf(vipArm, standard)
+                    .thenAwait("dock-clear", Duration.ofMillis(150),
+                            esc -> esc.thenAccept("auto-clear"))
+                    .repeatWhile("more-checks", b -> b
+                            .thenApply("run-check")
+                            .checkpoint())
+                    .thenApply("ship");
+        });
     }
 }

@@ -181,7 +181,7 @@ public final class CookbookHandlers {
             System.out.println("   [cookbook] VIP order held briefly");
         }
         public Map<String, Object> largeMerge(@Context Map<String, Object> base,
-                                              @Arm("priority-pack") Map<String, Object> pack) {
+                                              @Arm("pack") Map<String, Object> pack) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (pack != null) out.putAll(pack);   // priority-notice is an effect: nothing to fold
             return out;

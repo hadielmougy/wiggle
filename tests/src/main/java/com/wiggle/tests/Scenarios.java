@@ -1,9 +1,9 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowBuilder;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;

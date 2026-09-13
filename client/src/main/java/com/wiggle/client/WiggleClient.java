@@ -1,6 +1,6 @@
 package com.wiggle.client;
 
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.PollResult;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.NodeKind;

@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.RetryPolicy;
 
@@ -29,15 +29,15 @@ import com.wiggle.core.RetryPolicy;
  * }
  * }</pre>
  */
-public final class Workflow {
+final class Workflow {
 
     private Workflow() {}
 
-    public static WorkflowBuilder define(String name) {
+    static WorkflowBuilder define(String name) {
         return define(name, RetryPolicy.exponential(3, java.time.Duration.ofMillis(500)));
     }
 
-    public static WorkflowBuilder define(String name, RetryPolicy defaultRetry) {
+    static WorkflowBuilder define(String name, RetryPolicy defaultRetry) {
         return WorkflowBuilder.root(new Pipeline(name, defaultRetry));
     }
 }

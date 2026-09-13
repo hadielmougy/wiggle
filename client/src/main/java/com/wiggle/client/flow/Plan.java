@@ -1,10 +1,10 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.FlowSpec;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Case;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowBuilder;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Case;
+import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;

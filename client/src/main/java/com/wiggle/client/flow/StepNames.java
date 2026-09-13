@@ -170,7 +170,7 @@ final class StepNames {
                     "cannot read the method reference in " + methodRef.getClass().getName()
                     + ": the module defining the flow must open its package to com.wiggle.client "
                     + "(add 'opens <your.package>;' to its module-info), or define the flow with the "
-                    + "name-based DSL in com.wiggle.client.dsl instead", e);
+                    + "name-based builder instead", e);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("cannot read the method reference in "
                     + methodRef.getClass().getName(), e);

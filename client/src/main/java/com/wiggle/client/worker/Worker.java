@@ -1,8 +1,8 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.FlowSpec;
+import com.wiggle.client.worker.ActivityHandler;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.*;
 
 import java.util.*;

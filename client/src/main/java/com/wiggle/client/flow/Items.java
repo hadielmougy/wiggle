@@ -1,6 +1,6 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.WorkflowBuilder;
+import com.wiggle.client.flow.WorkflowBuilder;
 
 import java.util.function.UnaryOperator;
 
