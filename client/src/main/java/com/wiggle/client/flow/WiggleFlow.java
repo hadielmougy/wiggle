@@ -1,6 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.WorkflowBuilder;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
@@ -52,7 +51,7 @@ import java.util.function.UnaryOperator;
  * The definition body runs once, so an ordinary {@code for} loop around {@code thenApply} records that
  * many steps -- fine when the bound is a constant, and what you want for generated topologies.
  * Anything that depends on a step's <em>result</em> cannot be an {@code if} or {@code while}: use
- * {@link #thenChoose} and {@link #repeatWhile}, which the engine evaluates at run time.
+ * {@link Wiggle#oneOf} and {@link #repeatWhile}, which the engine evaluates at run time.
  *
  * <p>One handler method is one node: node names address the graph and must be unique, so referencing
  * the same method twice in a workflow is a duplicate and is rejected. An unrolled loop therefore
@@ -263,23 +262,54 @@ public final class WiggleFlow<T> {
     // ------------------------------------------------------------------ branching and looping
 
     /**
-     * Exclusive choice over the context: the first {@link Alt}'s guard to hold runs its branch and the
-     * rest are skipped; an {@link Alt#otherwise} arm (which must come last) runs when none matched.
-     * Every arm must leave the context type unchanged -- which branch ran is not knowable statically,
-     * so there is no honest type to return otherwise. Use {@link #as} after it if a branch does change
-     * the shape.
+     * Opens an arm of a {@link Wiggle#oneOf}: the steps chained after this run only when {@code guard}
+     * is the first of the choice's guards to hold.
+     *
+     * <pre>{@code
+     * var vip      = f.when(h::isVip).thenApply(h::vipPath);
+     * var standard = f.otherwise().thenApply(h::standardPath);
+     * return Wiggle.oneOf(vip, standard);
+     * }</pre>
+     *
+     * <p>This is not {@link #thenFilter}: a gate that fails ends the instance (or short-circuits its
+     * branch), while a guard that fails hands the choice to the next arm. The marker records no node
+     * of its own -- {@code oneOf} builds the guards, in the order the arms are given to it.
      */
-    @SafeVarargs
-    public final WiggleFlow<T> thenChoose(Alt<T>... alts) {
-        Case[] cases = new Case[alts.length];
-        for (int i = 0; i < alts.length; i++) {
-            Alt<T> alt = alts[i];
-            UnaryOperator<WorkflowBuilder> branch = body(alt.body(), "the branch of case '" + alt.name() + "'");
-            cases[i] = alt.guarded()
-                    ? Case.when(alt.name(), alt.retry(), alt.queue(), branch)
-                    : Case.otherwise(alt.name(), branch);
-        }
-        return record(null, b -> b.choose(cases));
+    public WiggleFlow<T> when(FlowGate<T> guard) {
+        return guarded(guard, null, null);
+    }
+
+    /** {@link #when(FlowGate)} with an explicit retry policy for the guard. */
+    public WiggleFlow<T> when(FlowGate<T> guard, RetryPolicy retry) {
+        return guarded(guard, retry, null);
+    }
+
+    /** {@link #when(FlowGate)} with the guard pinned to a dedicated worker queue. */
+    public WiggleFlow<T> when(FlowGate<T> guard, String queue) {
+        return guarded(guard, null, queue);
+    }
+
+    /** {@link #when(FlowGate)} with both a retry policy and a dedicated queue. */
+    public WiggleFlow<T> when(FlowGate<T> guard, RetryPolicy retry, String queue) {
+        return guarded(guard, retry, queue);
+    }
+
+    /** {@link #when(FlowGate, RetryPolicy, String)}, queue first. */
+    public WiggleFlow<T> when(FlowGate<T> guard, String queue, RetryPolicy retry) {
+        return guarded(guard, retry, queue);
+    }
+
+    private WiggleFlow<T> guarded(FlowGate<T> guard, RetryPolicy retry, String queue) {
+        return new WiggleFlow<>(new Plan.Guard(step, StepNames.of(guard), retry, queue, false));
+    }
+
+    /**
+     * Opens the default arm of a {@link Wiggle#oneOf}: it runs when none of the choice's guards held.
+     * It has no guard of its own, so it takes no retry or queue, and it must be the last arm given to
+     * {@code oneOf}.
+     */
+    public WiggleFlow<T> otherwise() {
+        return new WiggleFlow<>(new Plan.Guard(step, null, null, null, true));
     }
 
     /**
@@ -356,7 +386,7 @@ public final class WiggleFlow<T> {
 
     /**
      * Re-types the context without recording anything -- the escape hatch for the places where the
-     * new type is not statically knowable ({@link #thenChoose}, {@link #thenAwait}). It adds no node
+     * new type is not statically knowable ({@link Wiggle#oneOf}, {@link #thenAwait}). It adds no node
      * and asserts nothing; the claim is checked where it always was, when the worker decodes the
      * persisted context into the next handler's parameter.
      */

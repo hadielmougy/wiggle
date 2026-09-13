@@ -119,6 +119,32 @@ public final class Wiggle {
         return new WiggleFlow.ForkN(Plan.fork(steps(arms)));
     }
 
+    /**
+     * {@link #allOf}'s exclusive twin: of the arms given, <em>exactly one</em> runs -- the first whose
+     * guard holds, or the {@link WiggleFlow#otherwise} arm if none did. Every arm must open with
+     * {@link WiggleFlow#when} or {@code otherwise()}, which is what supplies the guard, and they are
+     * evaluated in the order given here.
+     *
+     * <pre>{@code
+     * var vip      = f.when(h::isVip).thenApply(h::vipPath);
+     * var standard = f.otherwise().thenApply(h::standardPath);
+     * return Wiggle.oneOf(vip, standard);
+     * }</pre>
+     *
+     * <p>Where {@code allOf} needs a combine, this needs nothing: the arms are alternatives on the one
+     * context, not parallel branches on isolated copies, so there is no join to merge and control
+     * simply continues from whichever arm ran. That is also why the arms must agree on the type they
+     * end at -- which one ran is not knowable until run time. Use {@link WiggleFlow#as} after it if
+     * they genuinely differ.
+     *
+     * <p>With no {@code otherwise} arm, a choice where nothing matched skips straight past to the step
+     * after it.
+     */
+    @SafeVarargs
+    public static <R> WiggleFlow<R> oneOf(WiggleFlow<R>... arms) {
+        return new WiggleFlow<>(Plan.choice(steps(arms)));
+    }
+
     private static List<Plan.Step> steps(WiggleFlow<?>... flows) {
         List<Plan.Step> steps = new ArrayList<>(flows.length);
         for (WiggleFlow<?> flow : flows) {

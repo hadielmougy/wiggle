@@ -186,7 +186,7 @@ class FlowEquivalenceTest {
     // ------------------------------------------------------------------ choose / loop
 
     @Test
-    void chooseAndRepeatWhileCompileToTheSameGraphAsTheDsl() {
+    void oneOfAndRepeatWhileCompileToTheSameGraphAsTheDsl() {
         FlowSpec dsl = Workflow.define("triage")
                 .step("validate")
                 .choose(Case.when("isVip", s -> s.step("vipPath")),
@@ -194,11 +194,16 @@ class FlowEquivalenceTest {
                 .doWhile("hasMore", s -> s.step("drain"))
                 .build();
 
-        FlowSpec flow = Wiggle.define("triage", Order.class, f -> f
-                .thenApply(h::validate)
-                .thenChoose(Alt.when(h::isVip, a -> a.thenApply(h::vipPath)),
-                            Alt.otherwise("standard", a -> a.thenApply(h::standardPath)))
-                .repeatWhile(h::hasMore, a -> a.thenApply(h::drain)));
+        FlowSpec flow = Wiggle.define("triage", Order.class, f -> {
+            var validated = f.thenApply(h::validate);
+
+            // exactly one of these runs -- allOf's exclusive twin, and the arms need no merge
+            var vip = validated.when(h::isVip).thenApply(h::vipPath);
+            var standard = validated.otherwise().thenApply(h::standardPath);
+
+            return Wiggle.oneOf(vip, standard)
+                    .repeatWhile(h::hasMore, a -> a.thenApply(h::drain));
+        });
 
         assertSameDefinition(dsl, flow);
 
@@ -389,22 +394,57 @@ class FlowEquivalenceTest {
     }
 
     @Test
-    void eachChooseGuardCarriesItsOwnRetryAndQueue() {
+    void eachOneOfGuardCarriesItsOwnRetryAndQueue() {
         // a choose records several guards at once, so there is no "the one just added" to amend --
         // the settings ride on the case instead
         RetryPolicy retry = RetryPolicy.exponential(2, Duration.ofMillis(40));
 
         FlowSpec dsl = Workflow.define("triage")
                 .choose(Case.when("isVip", retry, "vip-checks", s -> s.step("vipPath")),
-                        Case.otherwise("standard", s -> s.step("standardPath")))
+                        Case.otherwise("otherwise", s -> s.step("standardPath")))
                 .build();
 
-        FlowSpec flow = Wiggle.define("triage", Order.class, f -> f
-                .thenChoose(Alt.when(h::isVip, retry, "vip-checks", a -> a.thenApply(h::vipPath)),
-                            Alt.otherwise("standard", a -> a.thenApply(h::standardPath))));
+        FlowSpec flow = Wiggle.define("triage", Order.class, f -> {
+            var vip = f.when(h::isVip, retry, "vip-checks").thenApply(h::vipPath);
+            var standard = f.otherwise().thenApply(h::standardPath);
+            return Wiggle.oneOf(vip, standard);
+        });
 
         assertSameDefinition(dsl, flow);
         assertEquals("vip-checks", named(flow.definition(), "isVip").queue());
+    }
+
+    @Test
+    void oneOfWithNoOtherwiseArmSkipsPastWhenNothingMatched() {
+        FlowSpec dsl = Workflow.define("maybe")
+                .choose(Case.when("isVip", s -> s.step("vipPath")))
+                .step("drain")
+                .build();
+
+        FlowSpec flow = Wiggle.define("maybe", Order.class, f -> {
+            var vip = f.when(h::isVip).thenApply(h::vipPath);
+            var plain = f.when(h::hasMore).thenApply(h::standardPath);
+            return Wiggle.oneOf(vip, plain).thenApply(h::drain);
+        });
+
+        // two guarded arms, no default: the second guard's false edge carries on to the next step
+        assertEquals(NodeKind.PREDICATE, named(flow.definition(), "isVip").kind());
+        assertEquals(NodeKind.PREDICATE, named(flow.definition(), "hasMore").kind());
+        assertEquals(NodeKind.TASK, named(flow.definition(), "drain").kind());
+        assertTrue(dsl.version() != flow.version(), "different topologies, compared structurally above");
+    }
+
+    @Test
+    void everyOneOfArmMustOpenWithWhenOrOtherwise() {
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
+            Wiggle.define("unguarded", Order.class, f -> {
+                var vip = f.thenApply(h::vipPath);              // no when(...)
+                var standard = f.otherwise().thenApply(h::standardPath);
+                return Wiggle.oneOf(vip, standard);
+            });
+        });
+
+        assertTrue(ex.getMessage().contains("when(...) or otherwise()"), ex.getMessage());
     }
 
     @Test

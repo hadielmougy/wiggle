@@ -2,6 +2,7 @@ package com.wiggle.client.flow;
 
 import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
+import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowBuilder;
 import com.wiggle.core.RetryPolicy;
@@ -95,6 +96,43 @@ final class Plan {
         }
     }
 
+    /**
+     * The marker a {@link WiggleFlow#when} or {@link WiggleFlow#otherwise} records at the head of a
+     * {@link Wiggle#oneOf} arm. It adds no node of its own -- a choose builds its guards itself, in
+     * case order -- it only says which guard this arm is taken under.
+     */
+    static final class Guard extends Step {
+
+        final String name;
+        final RetryPolicy retry;
+        final String queue;
+        final boolean fallback;
+
+        Guard(Step parent, String name, RetryPolicy retry, String queue, boolean fallback) {
+            super(parent, null, null);
+            this.name = name;
+            this.retry = retry;
+            this.queue = queue;
+            this.fallback = fallback;
+        }
+    }
+
+    /** The step a {@link Wiggle#oneOf} records: an exclusive choice over the arms it was given. */
+    static final class Choice extends Step {
+
+        private final List<Case> cases;
+
+        Choice(Step parent, List<Case> cases) {
+            super(parent, null, null);
+            this.cases = cases;
+        }
+
+        @Override
+        WorkflowBuilder apply(WorkflowBuilder builder) {
+            return builder.choose(cases.toArray(new Case[0]));
+        }
+    }
+
     // ------------------------------------------------------------------ recording
 
     static Step root() {
@@ -122,6 +160,41 @@ final class Plan {
                     + " -- name them with .named(\"...\")");
         }
         return new Fork(junction, arms, names);
+    }
+
+    /**
+     * Records an exclusive choice over {@code leaves} -- the same junction and claiming as
+     * {@link #fork}, but each arm must open with a {@link WiggleFlow#when} or
+     * {@link WiggleFlow#otherwise} marker, which says the guard it is taken under. The marker adds no
+     * node; the choose builds its guards itself, in the order the arms were given, and the first to
+     * hold wins.
+     */
+    static Choice choice(List<Step> leaves) {
+        if (leaves.size() < 2) throw new IllegalArgumentException("oneOf needs at least two branches to choose between");
+        Step junction = junction(leaves);
+
+        List<Case> cases = new ArrayList<>(leaves.size());
+        for (Step leaf : leaves) {
+            List<Step> path = pathFrom(junction, leaf);
+            for (Step s : path) s.claimed = true;
+
+            if (!(path.get(0) instanceof Guard guard)) {
+                throw new IllegalArgumentException(
+                        "every arm of oneOf must open with when(...) or otherwise(): the arm ending at "
+                        + describe(leaf) + " starts with " + describe(path.get(0))
+                        + ". A choose picks one arm by evaluating each arm's guard in turn.");
+            }
+            List<Step> body = path.subList(1, path.size());
+            if (body.isEmpty()) {
+                throw new IllegalArgumentException("the " + (guard.fallback ? "otherwise" : "when('"
+                        + guard.name + "')") + " arm of oneOf has no steps");
+            }
+            String what = guard.fallback ? "the otherwise arm" : "the '" + guard.name + "' arm";
+            cases.add(guard.fallback
+                    ? Case.otherwise("otherwise", sub -> replay(body, sub, what))
+                    : Case.when(guard.name, guard.retry, guard.queue, sub -> replay(body, sub, what)));
+        }
+        return new Choice(junction, cases);
     }
 
     /** The nearest step every leaf descends from -- where the fork belongs. */
