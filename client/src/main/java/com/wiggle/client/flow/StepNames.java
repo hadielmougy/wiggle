@@ -64,12 +64,16 @@ final class StepNames {
 
     /**
      * The node name for a combine reference, having first checked it really is the combine for
-     * <em>this</em> fork: one parameter per arm, {@link Arm @Arm}-annotated with that arm's name in
-     * fork order, preceded by the {@link Context @Context} parameter when {@code withContext}.
+     * <em>this</em> fork: one parameter per arm, preceded by the {@link Context @Context} parameter
+     * when {@code withContext}.
      *
-     * <p>The engine keys each isolated branch's result by arm name, so a name that does not match is
-     * a combine that silently receives nothing for that arm. Referencing the method gives us its
-     * declaration at definition time, which is early enough to say so.
+     * <p>The arms may be taken two ways, matching what the worker binds. {@link Arm @Arm} names each
+     * one, and is checked here against this fork's arms, in fork order -- the engine keys each
+     * isolated branch's result by arm name, so a name that does not match is a combine that silently
+     * receives nothing for that arm, and referencing the method lets us say so at definition time
+     * instead. A handler with no {@code @Arm} at all takes the arms <em>by position</em>, which the
+     * typed signature already pins; there is nothing left to check beyond the arity above, so it
+     * passes. The two forms cannot be mixed.
      *
      * @param arms this fork's arm names, in fork order
      */
@@ -93,12 +97,21 @@ final class StepNames {
             }
             offset = 1;
         }
+
+        boolean named = false;
+        for (int i = offset; i < params.length; i++) {
+            if (params[i].isAnnotationPresent(Arm.class)) { named = true; break; }
+        }
+        if (!named) return name;   // binds by position, which the signature already fixes
+
         for (int i = 0; i < arms.size(); i++) {
             Arm arm = params[i + offset].getAnnotation(Arm.class);
             if (arm == null || !arm.value().equals(arms.get(i))) {
                 throw new IllegalArgumentException(combineError(name, arms, withContext)
                         + " but parameter " + (i + offset) + " is "
-                        + (arm == null ? "not @Arm-annotated" : "@Arm(\"" + arm.value() + "\")"));
+                        + (arm == null ? "not @Arm-annotated (annotate every arm, or none of them to"
+                                       + " bind by position)"
+                                       : "@Arm(\"" + arm.value() + "\")"));
             }
         }
         return name;

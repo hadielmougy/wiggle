@@ -139,6 +139,19 @@ class FlowEquivalenceTest {
     }
 
     @Test
+    void aCombineWithNoArmAnnotationsIsAcceptedAndBindsByPosition() {
+        // @Arm is optional: with none, the parameters take the arms in the order given to allOf --
+        // which the typed signature has already pinned, so there is nothing left to check here
+        Blueprint flow = Wiggle.define("positional", Order.class, f -> {
+            var payment = f.thenApply(h::charge).named("payment");
+            var shipping = f.thenApply(h::label).named("shipping");
+            return Wiggle.allOf(payment, shipping).combine(h::settlePositionally);
+        });
+
+        assertEquals("[\"payment\",\"shipping\"]", named(flow.definition(), "settlePositionally").itemsKey());
+    }
+
+    @Test
     void aCombineWhoseArmNamesDoNotMatchTheFanOutIsRejectedWhileDefining() {
         // the engine keys each branch's result by arm name, so "shippping" would simply receive
         // nothing at run time -- referencing the handler lets us say so now instead

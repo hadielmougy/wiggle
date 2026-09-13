@@ -218,17 +218,43 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("fork combine rejects a plain (un-annotated) parameter")
-    void forkCombineRejectsPlainParam() throws Exception {
-        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked());
+    @Test @DisplayName("a combine with no @Arm takes the arms by position, in fork order")
+    void forkCombineBindsByPosition() throws Exception {
+        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new PositionalCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
                 .filter(b -> b.step().equals("merge")).findFirst().orElseThrow().handler();
+
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            assertThrows(IllegalStateException.class, () -> merge.invoke(Map.of()));
+            Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
+            assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
+                    "parameter order is fork order: arm 'a' first, arm 'b' second");
         } finally {
             Step.end();
         }
+    }
+
+    @Handlers("wf")
+    static final class PositionalCombineH {
+        public Map<String, Object> a1(Map<String, Object> c) { return c; }
+        public Map<String, Object> b1(Map<String, Object> c) { return c; }
+        // no @Arm anywhere; @Context still needs its annotation, as it is not an arm
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         Map<String, Object> a, Map<String, Object> b) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("base", base.get("pre"));
+            out.put("first", a);
+            out.put("second", b);
+            return out;
+        }
+    }
+
+    @Test @DisplayName("a positional combine must take every arm")
+    void forkCombinePositionalMustTakeEveryArm() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked()));
+        assertTrue(ex.getMessage().contains("by position"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("@Arm"), "and says how to take only some: " + ex.getMessage());
     }
 
     @Handlers("wf")
@@ -236,6 +262,37 @@ class HandlerBinderTest {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
         public Map<String, Object> merge(Map<String, Object> notAnnotated) { return notAnnotated; }
+    }
+
+    @Test @DisplayName("mixing @Arm with a plain parameter is rejected, naming both forms")
+    void forkCombineRejectsMixedForms() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new MixedCombineH()), forked()));
+        assertTrue(ex.getMessage().contains("annotate every arm, or none"), ex.getMessage());
+    }
+
+    @Handlers("wf")
+    static final class MixedCombineH {
+        public Map<String, Object> a1(Map<String, Object> c) { return c; }
+        public Map<String, Object> b1(Map<String, Object> c) { return c; }
+        public Map<String, Object> merge(@Arm("a") Map<String, Object> a, Map<String, Object> b) { return a; }
+    }
+
+    @Test @DisplayName("@Arm naming a branch the fork does not have is rejected at bind time")
+    void forkCombineRejectsUnknownArmName() {
+        // the engine stages results under the arm names, so an unknown name would just receive nothing
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new UnknownArmCombineH()), forked()));
+        assertTrue(ex.getMessage().contains("nope"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("[a, b]"), "and lists the real arms: " + ex.getMessage());
+    }
+
+    @Handlers("wf")
+    static final class UnknownArmCombineH {
+        public Map<String, Object> a1(Map<String, Object> c) { return c; }
+        public Map<String, Object> b1(Map<String, Object> c) { return c; }
+        public Map<String, Object> merge(@Arm("a") Map<String, Object> a,
+                                         @Arm("nope") Map<String, Object> b) { return a; }
     }
 
     private static WorkflowDefinition eachGraph() {

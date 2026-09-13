@@ -344,6 +344,62 @@ final class HandlerBinder {
         return node.kind() == NodeKind.TASK && node.itemsKey() != null;
     }
 
+    /**
+     * Works out, once at bind time, which fork arm each combine parameter receives -- the arm's name,
+     * or null for the {@link Context @Context} parameter that takes the pre-fork context.
+     *
+     * <p>Two forms are accepted. {@link Arm @Arm} on a parameter names its branch explicitly, and may
+     * take the arms in any order or skip the ones the merge ignores. A combine whose parameters carry
+     * <em>no</em> {@code @Arm} at all binds <b>by position</b> instead: parameter order is fork order,
+     * and every arm must be taken. Positional binding reads well when the arms are distinctly typed
+     * and the topology sits beside the handler (see {@code com.wiggle.client.flow}); naming the arms
+     * is the safer form when several arms share a type, since nothing then distinguishes two
+     * parameters but their order. The two forms cannot be mixed in one method.
+     */
+    private static String[] combineSources(Node node, Method m, java.lang.reflect.Parameter[] params,
+                                           List<String> arms) {
+        boolean named = false;
+        for (java.lang.reflect.Parameter p : params) {
+            if (p.isAnnotationPresent(Arm.class)) { named = true; break; }
+        }
+
+        String[] sources = new String[params.length];
+        int position = 0;
+        for (int i = 0; i < params.length; i++) {
+            java.lang.reflect.Parameter p = params[i];
+            Arm arm = p.getAnnotation(Arm.class);
+            if (arm != null) {
+                if (!arms.contains(arm.value())) {
+                    throw new IllegalStateException(combineWhat(node, m) + " parameter " + i
+                            + " is @Arm(\"" + arm.value() + "\") but the fork's arms are " + arms);
+                }
+                sources[i] = arm.value();
+            } else if (p.isAnnotationPresent(Context.class)) {
+                sources[i] = null;
+            } else if (named) {
+                throw new IllegalStateException(combineWhat(node, m) + " parameter " + i
+                        + " must be @Arm(\"branch\") or @Context: annotate every arm, or none of them"
+                        + " to bind the arms " + arms + " by position");
+            } else {
+                if (position >= arms.size()) {
+                    throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the"
+                            + " fork has: its arms are " + arms);
+                }
+                sources[i] = arms.get(position++);
+            }
+        }
+        if (!named && position != arms.size()) {
+            throw new IllegalStateException(combineWhat(node, m) + " binds its arms by position, so it"
+                    + " must take all " + arms.size() + " of them " + arms + " (it takes " + position
+                    + "); use @Arm(\"branch\") to take only some");
+        }
+        return sources;
+    }
+
+    private static String combineWhat(Node node, Method m) {
+        return "combine '" + node.name() + "' handler '" + m.getName() + "'";
+    }
+
     private static List<String> armNames(Node node) {
         return Json.asArray(Json.parse(node.itemsKey())).stream().map(String::valueOf).toList();
     }
@@ -369,22 +425,16 @@ final class HandlerBinder {
         if (parsedKey instanceof String scratch) return forEachCombineHandler(node, m, target, decoderOwner, decoders, scratch);
         List<String> arms = armNames(node);
         java.lang.reflect.Parameter[] params = m.getParameters();
+        String[] sources = combineSources(node, m, params, arms);
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Map<String, Object> base = new LinkedHashMap<>(map);
             arms.forEach(base::remove);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
-                java.lang.reflect.Parameter p = params[i];
-                Arm arm = p.getAnnotation(Arm.class);
-                if (arm != null) {
-                    args[i] = decode(map.get(arm.value()), p.getType(), decoderOwner, decoders);
-                } else if (p.isAnnotationPresent(Context.class)) {
-                    args[i] = decode(base, p.getType(), decoderOwner, decoders);
-                } else {
-                    throw new IllegalStateException("combine '" + node.name() + "' handler '" + m.getName()
-                            + "' parameter " + i + " must be @Arm(\"branch\") or @Context");
-                }
+                args[i] = sources[i] == null
+                        ? decode(base, params[i].getType(), decoderOwner, decoders)
+                        : decode(map.get(sources[i]), params[i].getType(), decoderOwner, decoders);
             }
             // Both access styles work: the @Context parameter above, or Step.base() inside the method.
             Object out = Step.withBase(base, () -> call(m, target, args));

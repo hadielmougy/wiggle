@@ -51,6 +51,9 @@ final class Fixtures {
             return new Fulfilment("audited");
         }
 
+        /** No @Arm anywhere: the arms bind by position, in fork order. */
+        Fulfilment settlePositionally(Payment payment, Label label) { return new Fulfilment("settled"); }
+
         /** Right shape for a context-taking combine, but the context parameter is not annotated. */
         Fulfilment unannotatedBase(Order base, @Arm("payment") Payment payment,
                                    @Arm("shipping") Label label) {

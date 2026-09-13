@@ -92,6 +92,40 @@ class FlowFutureApiTest {
                 "the effect step bound to notifyCustomer and saw the final context");
     }
 
+    @Handlers("positional-order")
+    public static final class PositionalOrderFlow {
+
+        public Order validate(Order o) { return new Order(o.id(), o.quantity(), "VALIDATED"); }
+
+        public Payment charge(Order o) { return new Payment("auth-" + o.id()); }
+
+        public Label label(Order o) { return new Label("lbl-" + o.id()); }
+
+        /** No @Arm: the arms bind by position, in the order they were given to allOf. */
+        public Fulfilment settle(Payment payment, Label label) {
+            return new Fulfilment(payment.reference().substring("auth-".length()),
+                    payment.reference(), label.code());
+        }
+    }
+
+    @Test
+    @DisplayName("a combine with no @Arm binds its arms by fork order, end to end")
+    void positionalCombineBindsArmsInForkOrder() throws Exception {
+        PositionalOrderFlow flow = new PositionalOrderFlow();
+
+        Blueprint bp = Wiggle.define("positional-order", Order.class, f -> {
+            var validated = f.thenApply(flow::validate);
+            var payment = validated.thenApply(flow::charge).named("payment");
+            var shipping = validated.thenApply(flow::label).named("shipping");
+            return Wiggle.allOf(payment, shipping).combine(flow::settle);
+        });
+
+        Map<String, Object> out = run(bp, flow, Map.of("id", "o3", "quantity", 1));
+
+        assertEquals("auth-o3", out.get("paymentRef"), "the first arm reached the first parameter");
+        assertEquals("lbl-o3", out.get("labelCode"), "the second arm reached the second parameter");
+    }
+
     @Test
     @DisplayName("a gate written as thenFilter still short-circuits the instance")
     void gateShortCircuitsWhenTheReferencedGuardIsFalse() throws Exception {
