@@ -1,8 +1,8 @@
 package com.wiggle.order;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.Arm;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -11,6 +11,13 @@ import java.time.Duration;
 /**
  * The workflow <em>topology</em>: named steps and how they fork and rejoin. It compiles to a graph
  * the server drives; the step logic lives in {@link OrderHandlers}, bound on the worker by name.
+ *
+ * <p>Written with the future-shaped API in {@code com.wiggle.client.flow}: each step is a method
+ * reference to the handler that implements it, so the compiler checks that every step consumes what
+ * the one before it produced, and the node names come from the methods rather than from strings
+ * typed twice. Nothing runs here -- the chain is walked once, at definition time, and compiles to
+ * exactly the graph the equivalent {@code Workflow.define(...)} chain would (see
+ * {@code FlowEquivalenceTest}). The same {@link OrderHandlers} instance can serve the worker.
  */
 public final class OrderFulfilment {
 
@@ -27,19 +34,22 @@ public final class OrderFulfilment {
     }
 
     public static Blueprint blueprint() {
-        return Workflow.define("order-fulfilment").execution(ExecutionMode.LOCAL_ASYNC)
-                .step("validate")
-                .gate("in-stock")
-                .fork(
-                        Branch.of("payment", s -> s
-                                .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                                .step("capture")),
-                        Branch.of("shipping", s -> s
-                                .step("reserve-stock")
-                                .step("print-label")))
-                .combine("merge")
-                .step("notify")
-                .effect("audit")
-                .build();
+        OrderHandlers h = new OrderHandlers();
+        return Wiggle.define("order-fulfilment", Order.class, f -> f
+                .execution(ExecutionMode.LOCAL_ASYNC)
+                .thenApply(h::validate)
+                .thenFilter(h::inStock)
+                .thenFork(
+                        Arm.of("payment", a -> a
+                                .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+                                .thenApply(h::capture)),
+                        Arm.of("shipping", a -> a
+                                .thenApply(h::reserveStock)
+                                .thenApply(h::printLabel)))
+                // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
+                // its @Arm names are checked against this fork's arms here, at definition time
+                .combineWithContext(h::merge)
+                .thenApply(h::notify)
+                .thenAccept(h::audit));
     }
 }

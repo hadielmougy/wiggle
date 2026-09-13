@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -105,6 +106,50 @@ class FlowEquivalenceTest {
     }
 
     // ------------------------------------------------------------------ choose / loop
+
+    @Test
+    void aCombineMayTakeThePreForkContextAlongsideTheArms() {
+        Blueprint dsl = Workflow.define("settle-with-base")
+                .fork(Branch.of("payment", s -> s.step("charge")),
+                      Branch.of("shipping", s -> s.step("label")))
+                .combine("settleWithBase")
+                .build();
+
+        Blueprint flow = Wiggle.define("settle-with-base", Order.class, f -> f
+                .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
+                          Arm.of("shipping", a -> a.thenApply(h::label)))
+                .combineWithContext(h::settleWithBase));
+
+        assertSameDefinition(dsl, flow);
+    }
+
+    @Test
+    void aCombineWhoseArmNamesDoNotMatchTheForkIsRejectedWhileDefining() {
+        // the engine keys each branch's result by arm name, so "shippping" would simply receive
+        // nothing at run time -- referencing the handler lets us say so now instead
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
+            Wiggle.define("mistyped", Order.class, f -> f
+                    .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
+                              Arm.of("shipping", a -> a.thenApply(h::label)))
+                    .combine(h::mistyped));
+        });
+
+        assertTrue(ex.getMessage().contains("@Arm(\"shippping\")"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("@Arm(\"shipping\")"), ex.getMessage());
+    }
+
+    @Test
+    void aCombineMissingTheContextParameterIsRejectedWhileDefining() {
+        // the types line up, so only the missing annotation distinguishes it from a real combine
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
+            Wiggle.define("no-context", Order.class, f -> f
+                    .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
+                              Arm.of("shipping", a -> a.thenApply(h::label)))
+                    .combineWithContext(h::unannotatedBase));
+        });
+
+        assertTrue(ex.getMessage().contains("@Context"), ex.getMessage());
+    }
 
     @Test
     void chooseAndRepeatWhileCompileToTheSameGraphAsTheDsl() {

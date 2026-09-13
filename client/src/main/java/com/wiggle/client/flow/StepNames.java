@@ -1,11 +1,14 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.client.worker.Arm;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handles;
 
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
+import java.util.List;
 
 /**
  * Reads the node name off a method reference. This is the whole bridge between the typed
@@ -37,7 +40,10 @@ final class StepNames {
 
     /** The node name a method reference stands for. */
     static String of(Serializable methodRef) {
-        SerializedLambda lambda = serializedForm(methodRef);
+        return of(methodRef, serializedForm(methodRef));
+    }
+
+    private static String of(Serializable methodRef, SerializedLambda lambda) {
         String impl = lambda.getImplMethodName();
 
         if (impl.startsWith("lambda$")) {
@@ -54,6 +60,58 @@ final class StepNames {
                     + "would not survive registration or replay.");
         }
         return handlesOverride(methodRef, lambda, impl);
+    }
+
+    /**
+     * The node name for a combine reference, having first checked it really is the combine for
+     * <em>this</em> fork: one parameter per arm, {@link Arm @Arm}-annotated with that arm's name in
+     * fork order, preceded by the {@link Context @Context} parameter when {@code withContext}.
+     *
+     * <p>The engine keys each isolated branch's result by arm name, so a name that does not match is
+     * a combine that silently receives nothing for that arm. Referencing the method gives us its
+     * declaration at definition time, which is early enough to say so.
+     *
+     * @param arms this fork's arm names, in fork order
+     */
+    static String ofCombine(Serializable methodRef, List<String> arms, boolean withContext) {
+        SerializedLambda lambda = serializedForm(methodRef);
+        String name = of(methodRef, lambda);
+        Method m = resolve(methodRef, lambda, lambda.getImplMethodName());
+        if (m == null) return name;   // not resolvable; the worker still checks at bind time
+
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        int expected = arms.size() + (withContext ? 1 : 0);
+        if (params.length != expected) {
+            throw new IllegalArgumentException(combineError(name, arms, withContext)
+                    + " but it declares " + params.length + " parameter(s)");
+        }
+        int offset = 0;
+        if (withContext) {
+            if (!params[0].isAnnotationPresent(Context.class)) {
+                throw new IllegalArgumentException(combineError(name, arms, withContext)
+                        + " but its first parameter is not @Context");
+            }
+            offset = 1;
+        }
+        for (int i = 0; i < arms.size(); i++) {
+            Arm arm = params[i + offset].getAnnotation(Arm.class);
+            if (arm == null || !arm.value().equals(arms.get(i))) {
+                throw new IllegalArgumentException(combineError(name, arms, withContext)
+                        + " but parameter " + (i + offset) + " is "
+                        + (arm == null ? "not @Arm-annotated" : "@Arm(\"" + arm.value() + "\")"));
+            }
+        }
+        return name;
+    }
+
+    private static String combineError(String name, List<String> arms, boolean withContext) {
+        StringBuilder b = new StringBuilder("combine '").append(name).append("' must be declared (");
+        if (withContext) b.append("@Context <context>, ");
+        for (int i = 0; i < arms.size(); i++) {
+            if (i > 0) b.append(", ");
+            b.append("@Arm(\"").append(arms.get(i)).append("\") <arm>");
+        }
+        return b.append(") to match the fork it merges").toString();
     }
 
     /** The {@link Handles} name on the referenced method, if it has one; otherwise the method's name. */

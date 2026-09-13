@@ -194,12 +194,14 @@ public final class WiggleFuture<T> {
      * flow. A fork left uncombined fails the build.
      */
     public <A, B> Fork2<A, B> thenFork(Arm<T, A> a, Arm<T, B> b) {
-        return new Fork2<>(take().fork(branches(List.<Arm<T, ?>>of(a, b))));
+        List<Arm<T, ?>> arms = List.of(a, b);
+        return new Fork2<>(take().fork(branches(arms)), names(arms));
     }
 
     /** Three-armed {@link #thenFork(Arm, Arm)}. */
     public <A, B, C> Fork3<A, B, C> thenFork(Arm<T, A> a, Arm<T, B> b, Arm<T, C> c) {
-        return new Fork3<>(take().fork(branches(List.<Arm<T, ?>>of(a, b, c))));
+        List<Arm<T, ?>> arms = List.of(a, b, c);
+        return new Fork3<>(take().fork(branches(arms)), names(arms));
     }
 
     /**
@@ -214,7 +216,13 @@ public final class WiggleFuture<T> {
         return new ForkN(take().fork(branches(list)));
     }
 
-    private Branch[] branches(List<Arm<T, ?>> arms) {
+    private static List<String> names(List<? extends Arm<?, ?>> arms) {
+        List<String> names = new ArrayList<>(arms.size());
+        for (Arm<?, ?> arm : arms) names.add(arm.name());
+        return names;
+    }
+
+    private Branch[] branches(List<? extends Arm<T, ?>> arms) {
         List<Branch> branches = new ArrayList<>(arms.size());
         for (Arm<T, ?> arm : arms) {
             branches.add(Branch.of(arm.name(), body(arm.body(), "fork arm '" + arm.name() + "'")));
@@ -331,30 +339,45 @@ public final class WiggleFuture<T> {
         };
     }
 
-    /** The stage returned by a two-armed {@link #thenFork(Arm, Arm)}; its combine is mandatory. */
+    /**
+     * The stage returned by a two-armed {@link #thenFork(Arm, Arm)}; its combine is mandatory.
+     *
+     * <p>A referenced combine is checked against the fork while the workflow is being defined: the
+     * handler's {@link com.wiggle.client.worker.Arm @Arm} parameters must name this fork's arms, in
+     * fork order. That is what makes {@code A} and {@code B} above mean anything -- and it turns a
+     * mistyped arm name, which the engine can only discover when the combine runs, into an error at
+     * definition time.
+     */
     public static final class Fork2<A, B> {
 
         private final ForkStage stage;
+        private final List<String> arms;
 
-        Fork2(ForkStage stage) {
+        Fork2(ForkStage stage, List<String> arms) {
             this.stage = stage;
+            this.arms = arms;
         }
 
         /**
-         * The merge for the preceding fork: a handler whose two {@link com.wiggle.client.worker.Arm
-         * @Arm} parameters receive the arms' results in fork order, and whose return is the complete
-         * post-join context.
+         * The merge for the preceding fork: a handler whose two {@code @Arm} parameters receive the
+         * arms' results in fork order, and whose return is the complete post-join context.
          */
         public <R> WiggleFuture<R> combine(FlowBiFn<A, B, R> combine) {
-            return new WiggleFuture<>(stage.combine(StepNames.of(combine)));
+            return new WiggleFuture<>(stage.combine(StepNames.ofCombine(combine, arms, false)));
         }
 
         /**
-         * The merge named explicitly rather than referenced -- the way to reach a combine handler this
-         * API cannot type, in particular one that also takes the pre-fork
-         * {@link com.wiggle.client.worker.Context @Context}: the worker matches a combine's parameters
-         * by their annotations, not their position, so an extra parameter has no honest place in a
-         * two-armed function type.
+         * {@link #combine(FlowBiFn)} for a merge that also needs the pre-fork context: a handler
+         * declared as {@code (@Context C base, @Arm(..) A a, @Arm(..) B b)}. The context parameter
+         * comes first so the type arguments line up with the declaration.
+         */
+        public <C, R> WiggleFuture<R> combineWithContext(FlowTriFn<C, A, B, R> combine) {
+            return new WiggleFuture<>(stage.combine(StepNames.ofCombine(combine, arms, true)));
+        }
+
+        /**
+         * The merge named explicitly rather than referenced -- the escape hatch for a combine handler
+         * this API cannot type, and the only form that skips the arm check above.
          */
         public <R> WiggleFuture<R> combine(String name, Class<R> result) {
             return new WiggleFuture<>(stage.combine(name));
@@ -365,17 +388,20 @@ public final class WiggleFuture<T> {
     public static final class Fork3<A, B, C> {
 
         private final ForkStage stage;
+        private final List<String> arms;
 
-        Fork3(ForkStage stage) {
+        Fork3(ForkStage stage, List<String> arms) {
             this.stage = stage;
+            this.arms = arms;
         }
 
         /** The merge for the preceding fork; the three parameters are the arms' results in fork order. */
         public <R> WiggleFuture<R> combine(FlowTriFn<A, B, C, R> combine) {
-            return new WiggleFuture<>(stage.combine(StepNames.of(combine)));
+            return new WiggleFuture<>(stage.combine(StepNames.ofCombine(combine, arms, false)));
         }
 
-        /** The merge named explicitly -- see {@link Fork2#combine(String, Class)} for when that is needed. */
+        /** The merge named explicitly -- see {@link Fork2#combine(String, Class)} for when that is needed.
+         *  A three-armed combine that also takes the {@code @Context} uses this form. */
         public <R> WiggleFuture<R> combine(String name, Class<R> result) {
             return new WiggleFuture<>(stage.combine(name));
         }
