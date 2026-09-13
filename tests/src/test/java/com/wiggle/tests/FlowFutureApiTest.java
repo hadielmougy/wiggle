@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.flow.Arm;
+
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -63,13 +63,16 @@ class FlowFutureApiTest {
 
     /** The workflow, written as a chain of references to {@code flow}'s own methods. */
     private static Blueprint blueprint(OrderFlow flow) {
-        return Wiggle.define("flow-order", Order.class, f -> f
-                .thenApply(flow::validate)
-                .thenFilter(flow::inStock)
-                .thenFork(Arm.of("payment", a -> a.thenApply(flow::charge)),
-                          Arm.of("shipping", a -> a.thenApply(flow::label)))
-                .combine(flow::settle)
-                .thenAccept(flow::notifyCustomer));
+        return Wiggle.define("flow-order", Order.class, f -> {
+            var validated = f.thenApply(flow::validate).thenFilter(flow::inStock);
+
+            var payment = validated.thenApply(flow::charge).named("payment");
+            var shipping = validated.thenApply(flow::label).named("shipping");
+
+            return Wiggle.allOf(payment, shipping)
+                    .combine(flow::settle)
+                    .thenAccept(flow::notifyCustomer);
+        });
     }
 
     @Test

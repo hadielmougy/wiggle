@@ -50,10 +50,10 @@ class FlowEquivalenceTest {
                 "the flow API must emit the identical topology, so the content hashes must match");
     }
 
-    // ------------------------------------------------------------------ step / gate / fork / sleep
+    // ------------------------------------------------------------------ step / gate / fan-out / sleep
 
     @Test
-    void stepsGatesForkAndSleepCompileToTheSameGraphAsTheDsl() {
+    void stepsGatesFanOutAndSleepCompileToTheSameGraphAsTheDsl() {
         Blueprint dsl = Workflow.define("order-fulfilment")
                 .step("validate")
                 .gate("inStock")
@@ -65,15 +65,19 @@ class FlowEquivalenceTest {
                 .effect("notifyCustomer")
                 .build();
 
-        Blueprint flow = Wiggle.define("order-fulfilment", Order.class, f -> f
-                .thenApply(h::validate)
-                .thenFilter(h::inStock)
-                .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
-                          Arm.of("shipping", a -> a.thenApply(h::reserve)
-                                                   .thenSleep(Duration.ofSeconds(2))
-                                                   .thenApply(h::label)))
-                .combine(h::settle)
-                .thenAccept(h::notifyCustomer));
+        Blueprint flow = Wiggle.define("order-fulfilment", Order.class, f -> {
+            var validated = f.thenApply(h::validate).thenFilter(h::inStock);
+
+            // continuing `validated` twice is the fan-out; allOf records where the graph splits
+            var payment = validated.thenApply(h::charge).named("payment");
+            var shipping = validated.thenApply(h::reserve)
+                                    .thenSleep(Duration.ofSeconds(2))
+                                    .thenApply(h::label).named("shipping");
+
+            return Wiggle.allOf(payment, shipping)
+                    .combine(h::settle)
+                    .thenAccept(h::notifyCustomer);
+        });
 
         assertSameDefinition(dsl, flow);
 
@@ -86,26 +90,36 @@ class FlowEquivalenceTest {
     }
 
     @Test
-    void threeArmedForkCombinesThroughTheTypedTriFunction() {
+    void anArmWithNoExplicitNameIsNamedAfterItsLastStep() {
+        Blueprint flow = Wiggle.define("unnamed-arms", Order.class, f -> {
+            var payment = f.thenApply(h::charge);
+            var shipping = f.thenApply(h::label);
+            return Wiggle.allOf(payment, shipping).combine("merge", Order.class);
+        });
+
+        assertEquals("[\"charge\",\"label\"]", named(flow.definition(), "merge").itemsKey());
+    }
+
+    @Test
+    void threeArmedFanOutCombinesThroughTheTypedTriFunction() {
         Blueprint dsl = Workflow.define("audit")
                 .fork(Branch.of("payment", s -> s.step("charge")),
                       Branch.of("shipping", s -> s.step("label")),
                       Branch.of("carrier", s -> s.subWorkflow("ship", "carrier-flow")))
-                .combine("audit-merge")
+                .combine("audit")
                 .build();
 
-        Blueprint flow = Wiggle.define("audit", Order.class, f -> f
-                .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
-                          Arm.of("shipping", a -> a.thenApply(h::label)),
-                          Arm.of("carrier", a -> a.thenSubFlow("ship", "carrier-flow", Shipment.class)))
-                .combine(h::audit));
+        Blueprint flow = Wiggle.define("audit", Order.class, f -> {
+            var payment = f.thenApply(h::charge).named("payment");
+            var shipping = f.thenApply(h::label).named("shipping");
+            var carrier = f.thenSubFlow("ship", "carrier-flow", Shipment.class).named("carrier");
+            return Wiggle.allOf(payment, shipping, carrier).combine(h::audit);
+        });
 
-        // the combine is referenced, so its node name comes from the handler method
-        assertEquals("audit", named(flow.definition(), "audit").name());
-        assertEquals(dsl.definition().nodes().size(), flow.definition().nodes().size());
+        assertSameDefinition(dsl, flow);
     }
 
-    // ------------------------------------------------------------------ choose / loop
+    // ------------------------------------------------------------------ the combine's contract
 
     @Test
     void aCombineMayTakeThePreForkContextAlongsideTheArms() {
@@ -115,23 +129,25 @@ class FlowEquivalenceTest {
                 .combine("settleWithBase")
                 .build();
 
-        Blueprint flow = Wiggle.define("settle-with-base", Order.class, f -> f
-                .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
-                          Arm.of("shipping", a -> a.thenApply(h::label)))
-                .combineWithContext(h::settleWithBase));
+        Blueprint flow = Wiggle.define("settle-with-base", Order.class, f -> {
+            var payment = f.thenApply(h::charge).named("payment");
+            var shipping = f.thenApply(h::label).named("shipping");
+            return Wiggle.allOf(payment, shipping).combineWithContext(h::settleWithBase);
+        });
 
         assertSameDefinition(dsl, flow);
     }
 
     @Test
-    void aCombineWhoseArmNamesDoNotMatchTheForkIsRejectedWhileDefining() {
+    void aCombineWhoseArmNamesDoNotMatchTheFanOutIsRejectedWhileDefining() {
         // the engine keys each branch's result by arm name, so "shippping" would simply receive
         // nothing at run time -- referencing the handler lets us say so now instead
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
-            Wiggle.define("mistyped", Order.class, f -> f
-                    .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
-                              Arm.of("shipping", a -> a.thenApply(h::label)))
-                    .combine(h::mistyped));
+            Wiggle.define("mistyped", Order.class, f -> {
+                var payment = f.thenApply(h::charge).named("payment");
+                var shipping = f.thenApply(h::label).named("shipping");
+                return Wiggle.allOf(payment, shipping).combine(h::mistyped);
+            });
         });
 
         assertTrue(ex.getMessage().contains("@Arm(\"shippping\")"), ex.getMessage());
@@ -142,14 +158,17 @@ class FlowEquivalenceTest {
     void aCombineMissingTheContextParameterIsRejectedWhileDefining() {
         // the types line up, so only the missing annotation distinguishes it from a real combine
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
-            Wiggle.define("no-context", Order.class, f -> f
-                    .thenFork(Arm.of("payment", a -> a.thenApply(h::charge)),
-                              Arm.of("shipping", a -> a.thenApply(h::label)))
-                    .combineWithContext(h::unannotatedBase));
+            Wiggle.define("no-context", Order.class, f -> {
+                var payment = f.thenApply(h::charge).named("payment");
+                var shipping = f.thenApply(h::label).named("shipping");
+                return Wiggle.allOf(payment, shipping).combineWithContext(h::unannotatedBase);
+            });
         });
 
         assertTrue(ex.getMessage().contains("@Context"), ex.getMessage());
     }
+
+    // ------------------------------------------------------------------ choose / loop
 
     @Test
     void chooseAndRepeatWhileCompileToTheSameGraphAsTheDsl() {

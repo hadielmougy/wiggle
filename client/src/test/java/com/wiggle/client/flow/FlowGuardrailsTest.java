@@ -8,38 +8,75 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The rules that keep a future-shaped definition honest about the model underneath it. The important
- * ones are enforced by the types and so cannot be written down as a test at all -- see
- * {@link #forkStagesDoNotYieldAFutureSoAForgottenCombineCannotBeWritten()} -- and this covers the rest.
+ * The rules that keep a future-shaped definition honest about the model underneath it. Continuing one
+ * future twice is legal -- it is how {@link Wiggle#allOf} gets its arms -- so the checks that matter
+ * are the ones that catch a split nobody rejoined, and a combine that does not match the fan-out it
+ * merges.
  */
 class FlowGuardrailsTest {
 
     private final OrderHandlers h = new OrderHandlers();
 
     @Test
-    void continuingTheSameFutureTwiceIsRejectedAndPointsAtFork() {
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
-                Wiggle.define("reuse", Order.class, f -> {
-                    WiggleFuture<Order> validated = f.thenApply(h::validate);
-                    validated.thenApply(h::vipPath);          // one successor...
-                    return validated.thenApply(h::standardPath);   // ...and a second: that is a fan-out
-                }));
+    void aSplitThatIsNeverCombinedIsRejectedAndNamesBothEnds() {
+        // branches run on isolated copies of the context, so there is no meaning to a split that
+        // never rejoins -- the engine would have two successors and no barrier
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
+            Wiggle.define("dangling", Order.class, f -> {
+                var validated = f.thenApply(h::validate);
+                validated.thenApply(h::vipPath);                  // one continuation...
+                return validated.thenApply(h::standardPath);      // ...and a second, never combined
+            });
+        });
 
-        assertTrue(ex.getMessage().contains("single-use"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("thenFork"),
-                "the error must name the construct that does express parallelism: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("never rejoined"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("vipPath") && ex.getMessage().contains("standardPath"),
+                "the error must name the two ends that dangle: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("allOf"),
+                "and the construct that fixes it: " + ex.getMessage());
     }
 
     @Test
-    void forkStagesDoNotYieldAFutureSoAForgottenCombineCannotBeWritten() {
-        // thenFork returns a Fork2/Fork3/ForkN, not a WiggleFuture, and only combine() turns one back
-        // into a future -- so a fork without a combine has nothing to continue or return, and the
-        // "forgotten combine" the name-based DSL can only catch at build() is unwritable here.
-        // This test documents that; there is nothing to assert at run time.
-        Wiggle.define("combined", Order.class, f -> f
-                .thenFork(Arm.of("a", a -> a.thenApply(h::vipPath)),
-                          Arm.of("b", a -> a.thenApply(h::standardPath)))
-                .combine("merge", Order.class));
+    void aFanOutWithNoCombineIsRejected() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> {
+            Wiggle.define("no-combine", Order.class, f -> {
+                var payment = f.thenApply(h::charge).named("payment");
+                var shipping = f.thenApply(h::label).named("shipping");
+                Wiggle.allOf(payment, shipping);       // stage dropped on the floor
+                return payment;
+            });
+        });
+
+        assertTrue(ex.getMessage().contains("combine"), ex.getMessage());
+    }
+
+    @Test
+    void armsMustFanOutFromOneCommonPoint() {
+        // a future belonging to another definition has no junction with this one
+        WiggleFuture<?>[] alien = new WiggleFuture<?>[1];
+        Wiggle.define("other-flow", Order.class, g -> alien[0] = g.thenApply(h::label).named("alien"));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
+            Wiggle.define("two-flows", Order.class, f -> {
+                var payment = f.thenApply(h::charge).named("payment");
+                return Wiggle.allOf(payment, alien[0]).combine("merge", Order.class);
+            });
+        });
+
+        assertTrue(ex.getMessage().contains("common point"), ex.getMessage());
+    }
+
+    @Test
+    void armsMustHaveDistinctNames() {
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
+            Wiggle.define("same-name", Order.class, f -> {
+                var a = f.thenApply(h::charge).named("arm");
+                var b = f.thenApply(h::label).named("arm");
+                return Wiggle.allOf(a, b).combine("merge", Order.class);
+            });
+        });
+
+        assertTrue(ex.getMessage().contains("distinct names"), ex.getMessage());
     }
 
     @Test
@@ -48,17 +85,6 @@ class FlowGuardrailsTest {
                 Wiggle.define("null-body", Order.class, f -> null));
 
         assertTrue(ex.getMessage().contains("must return the future it ends on"), ex.getMessage());
-    }
-
-    @Test
-    void anArmThatReturnsNullIsRejectedNamingTheArm() {
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
-                Wiggle.define("null-arm", Order.class, f -> f
-                        .thenFork(Arm.of("payment", a -> null),
-                                  Arm.of("shipping", a -> a.thenApply(h::standardPath)))
-                        .combine("merge", Order.class)));
-
-        assertTrue(ex.getMessage().contains("payment"), ex.getMessage());
     }
 
     @Test
@@ -95,7 +121,7 @@ class FlowGuardrailsTest {
     }
 
     @Test
-    void aFutureHasNoGetOrJoin() throws Exception {
+    void aFutureHasNoGetOrJoin() {
         // there is nothing to block on while a graph is being described; the only blocking handle is
         // the client-side one returned when an instance is started
         for (String blocking : java.util.List.of("get", "join", "getNow", "complete")) {

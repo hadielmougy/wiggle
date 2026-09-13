@@ -1,7 +1,6 @@
 package com.wiggle.order;
 
 import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.flow.Arm;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
@@ -35,21 +34,25 @@ public final class OrderFulfilment {
 
     public static Blueprint blueprint() {
         OrderHandlers h = new OrderHandlers();
-        return Wiggle.define("order-fulfilment", Order.class, f -> f
-                .execution(ExecutionMode.LOCAL_ASYNC)
-                .thenApply(h::validate)
-                .thenFilter(h::inStock)
-                .thenFork(
-                        Arm.of("payment", a -> a
-                                .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                                .thenApply(h::capture)),
-                        Arm.of("shipping", a -> a
-                                .thenApply(h::reserveStock)
-                                .thenApply(h::printLabel)))
-                // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
-                // its @Arm names are checked against this fork's arms here, at definition time
-                .combineWithContext(h::merge)
-                .thenApply(h::notify)
-                .thenAccept(h::audit));
+        return Wiggle.define("order-fulfilment", Order.class, f -> {
+            var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
+                    .thenApply(h::validate)
+                    .thenFilter(h::inStock);
+
+            // continuing `validated` twice is the fan-out; each arm runs on its own isolated copy
+            var payment = validated
+                    .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+                    .thenApply(h::capture).named("payment");
+            var shipping = validated
+                    .thenApply(h::reserveStock)
+                    .thenApply(h::printLabel).named("shipping");
+
+            // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
+            // its @Arm names are checked against these arms here, at definition time
+            return Wiggle.allOf(payment, shipping)
+                    .combineWithContext(h::merge)
+                    .thenApply(h::notify)
+                    .thenAccept(h::audit);
+        });
     }
 }
