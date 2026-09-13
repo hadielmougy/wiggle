@@ -93,40 +93,71 @@ public final class WiggleFlow<T> {
 
     // ------------------------------------------------------------------ steps
 
-    /** A task step: the handler's return value becomes the new context. */
+    /**
+     * A task step: the handler's return value becomes the new context.
+     *
+     * <p>Every step kind below takes an optional {@link RetryPolicy} and an optional queue, in either
+     * order, so any combination reads the way you want to write it. A step with no policy inherits the
+     * workflow default given to {@link Wiggle#define(String, RetryPolicy, Class, Function)}; a step
+     * with no queue uses the workflow's {@link #defaultQueue}.
+     */
     public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step) {
-        String name = StepNames.of(step);
-        return record(name, b -> b.step(name));
+        return task(step, null, null);
     }
 
     /** {@link #thenApply(FlowFn)} with an explicit retry policy for the step. */
     public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step, RetryPolicy retry) {
-        String name = StepNames.of(step);
-        return record(name, b -> b.step(name, retry));
+        return task(step, retry, null);
     }
 
     /** {@link #thenApply(FlowFn)} pinned to a dedicated worker queue. */
     public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step, String queue) {
+        return task(step, null, queue);
+    }
+
+    /** {@link #thenApply(FlowFn)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step, RetryPolicy retry, String queue) {
+        return task(step, retry, queue);
+    }
+
+    /** {@link #thenApply(FlowFn, RetryPolicy, String)}, queue first. */
+    public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step, String queue, RetryPolicy retry) {
+        return task(step, retry, queue);
+    }
+
+    private <R> WiggleFlow<R> task(FlowFn<T, R> step, RetryPolicy retry, String queue) {
         String name = StepNames.of(step);
-        return record(name, b -> b.step(name, queue));
+        return record(name, b -> b.step(name, retry, queue));
     }
 
     /** An effect step: the handler returns {@code void}, so the context is unchanged. */
     public WiggleFlow<T> thenAccept(FlowEffect<T> effect) {
-        String name = StepNames.of(effect);
-        return record(name, b -> b.effect(name));
+        return effect(effect, null, null);
     }
 
     /** {@link #thenAccept(FlowEffect)} with an explicit retry policy. */
     public WiggleFlow<T> thenAccept(FlowEffect<T> effect, RetryPolicy retry) {
-        String name = StepNames.of(effect);
-        return record(name, b -> b.effect(name, retry));
+        return effect(effect, retry, null);
     }
 
     /** {@link #thenAccept(FlowEffect)} pinned to a dedicated worker queue. */
     public WiggleFlow<T> thenAccept(FlowEffect<T> effect, String queue) {
+        return effect(effect, null, queue);
+    }
+
+    /** {@link #thenAccept(FlowEffect)} with both a retry policy and a dedicated queue. */
+    public WiggleFlow<T> thenAccept(FlowEffect<T> effect, RetryPolicy retry, String queue) {
+        return effect(effect, retry, queue);
+    }
+
+    /** {@link #thenAccept(FlowEffect, RetryPolicy, String)}, queue first. */
+    public WiggleFlow<T> thenAccept(FlowEffect<T> effect, String queue, RetryPolicy retry) {
+        return effect(effect, retry, queue);
+    }
+
+    private WiggleFlow<T> effect(FlowEffect<T> effect, RetryPolicy retry, String queue) {
         String name = StepNames.of(effect);
-        return record(name, b -> b.effect(name, queue));
+        return record(name, b -> b.effect(name, retry, queue));
     }
 
     /**
@@ -135,14 +166,32 @@ public final class WiggleFlow<T> {
      * name-based DSL.
      */
     public WiggleFlow<T> thenFilter(FlowGate<T> gate) {
-        String name = StepNames.of(gate);
-        return record(name, b -> b.gate(name));
+        return gate(gate, null, null);
     }
 
     /** {@link #thenFilter(FlowGate)} with an explicit retry policy for the guard. */
     public WiggleFlow<T> thenFilter(FlowGate<T> gate, RetryPolicy retry) {
+        return gate(gate, retry, null);
+    }
+
+    /** {@link #thenFilter(FlowGate)} pinned to a dedicated worker queue. */
+    public WiggleFlow<T> thenFilter(FlowGate<T> gate, String queue) {
+        return gate(gate, null, queue);
+    }
+
+    /** {@link #thenFilter(FlowGate)} with both a retry policy and a dedicated queue. */
+    public WiggleFlow<T> thenFilter(FlowGate<T> gate, RetryPolicy retry, String queue) {
+        return gate(gate, retry, queue);
+    }
+
+    /** {@link #thenFilter(FlowGate, RetryPolicy, String)}, queue first. */
+    public WiggleFlow<T> thenFilter(FlowGate<T> gate, String queue, RetryPolicy retry) {
+        return gate(gate, retry, queue);
+    }
+
+    private WiggleFlow<T> gate(FlowGate<T> gate, RetryPolicy retry, String queue) {
         String name = StepNames.of(gate);
-        return record(name, b -> b.gate(name, retry));
+        return record(name, b -> b.gate(name, retry, queue));
     }
 
     // ------------------------------------------------------------------ waiting

@@ -4,12 +4,14 @@ import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.Fixtures.Fulfilment;
 import com.wiggle.client.flow.Fixtures.Line;
 import com.wiggle.client.flow.Fixtures.Order;
 import com.wiggle.client.flow.Fixtures.OrderHandlers;
 import com.wiggle.client.flow.Fixtures.Shipment;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.Test;
 
@@ -296,6 +298,67 @@ class FlowEquivalenceTest {
 
         assertSameDefinition(dsl, flow);
         assertTrue(flow.queues().contains("fast-queue"));
+    }
+
+    @Test
+    void everyRetryAndQueueCombinationMatchesTheDsl() {
+        // the builder takes (name), (name, retry), (name, queue) and (name, retry, queue) for each of
+        // step / effect / gate; every one of those has a flow overload, with retry and queue accepted
+        // in either order. Each pair below is one overload against the builder call it must produce.
+        RetryPolicy retry = RetryPolicy.exponential(4, Duration.ofMillis(150));
+        String queue = "payments";
+
+        assertSameDefinition(Workflow.define("t").step("charge").build(),
+                Wiggle.define("t", Order.class, f -> f.thenApply(h::charge)));
+        assertSameDefinition(Workflow.define("t").step("charge", retry).build(),
+                Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, retry)));
+        assertSameDefinition(Workflow.define("t").step("charge", queue).build(),
+                Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, queue)));
+        assertSameDefinition(Workflow.define("t").step("charge", retry, queue).build(),
+                Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, retry, queue)));
+        assertSameDefinition(Workflow.define("t").step("charge", retry, queue).build(),
+                Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, queue, retry)));
+
+        assertSameDefinition(Workflow.define("t").effect("notifyCustomer").build(),
+                Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer)));
+        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", retry).build(),
+                Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, retry)));
+        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", queue).build(),
+                Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, queue)));
+        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", retry, queue).build(),
+                Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, retry, queue)));
+        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", retry, queue).build(),
+                Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, queue, retry)));
+
+        assertSameDefinition(Workflow.define("t").gate("inStock").build(),
+                Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock)));
+        assertSameDefinition(Workflow.define("t").gate("inStock", retry).build(),
+                Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, retry)));
+        assertSameDefinition(Workflow.define("t").gate("inStock", queue).build(),
+                Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, queue)));
+        assertSameDefinition(Workflow.define("t").gate("inStock", retry, queue).build(),
+                Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, retry, queue)));
+        assertSameDefinition(Workflow.define("t").gate("inStock", retry, queue).build(),
+                Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, queue, retry)));
+    }
+
+    @Test
+    void retryAndQueueOnDifferentStepKindsReachTheGraphTogether() {
+        RetryPolicy retry = RetryPolicy.exponential(4, Duration.ofMillis(150));
+
+        FlowSpec dsl = Workflow.define("pinned")
+                .gate("inStock", "checks")
+                .step("charge", retry, "payments")
+                .build();
+
+        FlowSpec flow = Wiggle.define("pinned", Order.class, f -> f
+                .thenFilter(h::inStock, "checks")
+                .thenApply(h::charge, retry, "payments"));
+
+        // the hash covers per-node retry and queue, so this is the real assertion
+        assertSameDefinition(dsl, flow);
+        // and both queues were discovered, which is what a worker polls
+        assertTrue(flow.queues().containsAll(List.of("payments", "checks")), flow.queues().toString());
     }
 
     @Test
