@@ -121,6 +121,56 @@ class FlowEquivalenceTest {
         assertSameDefinition(dsl, flow);
     }
 
+    @Test
+    void theTypedForkSeriesGoesWellPastAnyRealWorkflow() {
+        // Fork2..Fork10 are generated, so a five-armed fan-out is typed end to end: five arms of five
+        // different types, and a combine whose parameters must line up with them
+        FlowSpec dsl = Workflow.define("five")
+                .fork(Branch.of("armA", s -> s.step("armA")),
+                      Branch.of("armB", s -> s.step("armB")),
+                      Branch.of("armC", s -> s.step("armC")),
+                      Branch.of("armD", s -> s.step("armD")),
+                      Branch.of("armE", s -> s.step("armE")))
+                .combine("settleFive")
+                .build();
+
+        FlowSpec flow = Wiggle.define("five", Order.class, f -> {
+            var a = f.thenApply(h::armA);
+            var b = f.thenApply(h::armB);
+            var c = f.thenApply(h::armC);
+            var d = f.thenApply(h::armD);
+            var e = f.thenApply(h::armE);
+            return Wiggle.allOf(a, b, c, d, e).combineWithContext(h::settleFive);
+        });
+
+        assertSameDefinition(dsl, flow);
+        assertEquals("[\"armA\",\"armB\",\"armC\",\"armD\",\"armE\"]",
+                named(flow.definition(), "settleFive").itemsKey());
+    }
+
+    @Test
+    void pastTheTypedSeriesTheCombineIsNamedInstead() {
+        // eleven arms: more than Fork10, so allOf(WiggleFlow...) takes over and the merge is named
+        FlowSpec flow = Wiggle.define("wide", Order.class, f -> {
+            WiggleFlow<?>[] arms = new WiggleFlow<?>[11];
+            arms[0] = f.thenApply(h::armA);
+            arms[1] = f.thenApply(h::armB);
+            arms[2] = f.thenApply(h::armC);
+            arms[3] = f.thenApply(h::armD);
+            arms[4] = f.thenApply(h::armE);
+            arms[5] = f.thenApply(h::charge);
+            arms[6] = f.thenApply(h::label);
+            arms[7] = f.thenApply(h::reserve);
+            arms[8] = f.thenApply(h::validate);
+            arms[9] = f.thenApply(h::vipPath);
+            arms[10] = f.thenApply(h::standardPath);
+            return Wiggle.allOf(arms).combine("merge", Order.class);
+        });
+
+        assertEquals(11, com.wiggle.core.Json.asArray(
+                com.wiggle.core.Json.parse(named(flow.definition(), "merge").itemsKey())).size());
+    }
+
     // ------------------------------------------------------------------ the combine's contract
 
     @Test

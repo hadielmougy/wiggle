@@ -24,7 +24,7 @@ class StepNamesTest {
         assertEquals("validate", StepNames.of((FlowFn<Order, Order>) h::validate));
         assertEquals("inStock", StepNames.of((FlowGate<Order>) h::inStock));
         assertEquals("notifyCustomer", StepNames.of((FlowEffect<Fulfilment>) h::notifyCustomer));
-        assertEquals("settle", StepNames.of((FlowBiFn<Payment, Label, Fulfilment>) h::settle));
+        assertEquals("settle", StepNames.of((FlowFn2<Payment, Label, Fulfilment>) h::settle));
     }
 
     @Test

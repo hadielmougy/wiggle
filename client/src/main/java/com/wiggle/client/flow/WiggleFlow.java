@@ -392,6 +392,12 @@ public final class WiggleFlow<T> {
      * The body records its own little tree, which is walked into the nested builder when the enclosing
      * step is applied.
      */
+    /** How {@link Items} records the forEach once its combine is known. */
+    <R> WiggleFlow<R> recordForEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> loopBody,
+                                    String combineName) {
+        return record(name, b -> b.forEach(name, itemsKey, loopBody).combine(combineName));
+    }
+
     private static <A> UnaryOperator<WorkflowBuilder> body(Function<WiggleFlow<A>, ? extends WiggleFlow<?>> body,
                                                            String what) {
         Plan.Step root = Plan.root();
@@ -400,141 +406,5 @@ public final class WiggleFlow<T> {
             throw new IllegalStateException(what + " returned null; it must return the handle it ends on");
         }
         return sub -> Plan.walk(root, sub, what);
-    }
-
-    // ------------------------------------------------------------------ fork stages
-
-    /**
-     * The stage returned by a two-armed {@link Wiggle#allOf}; its combine is mandatory.
-     *
-     * <p>A referenced combine is checked against the fork while the workflow is being defined: the
-     * handler's {@link com.wiggle.client.worker.Arm @Arm} parameters must name this fork's arms, in
-     * the order the handles were given. That is what makes {@code A} and {@code B} above mean
-     * anything -- and it turns a mistyped arm name, which the engine can only discover when the
-     * combine runs, into an error at definition time.
-     */
-    public static final class Fork2<A, B> {
-
-        private final Plan.Fork fork;
-
-        Fork2(Plan.Fork fork) {
-            this.fork = fork;
-        }
-
-        /**
-         * The merge for the preceding fan-out: a handler whose two {@code @Arm} parameters receive the
-         * arms' results in the order given to {@code allOf}, and whose return is the complete
-         * post-join context.
-         */
-        public <R> WiggleFlow<R> combine(FlowBiFn<A, B, R> combine) {
-            return merge(StepNames.ofCombine(combine, fork.armNames, false));
-        }
-
-        /**
-         * {@link #combine(FlowBiFn)} for a merge that also needs the pre-fork context: a handler
-         * declared as {@code (@Context C base, @Arm(..) A a, @Arm(..) B b)}. The context parameter
-         * comes first so the type arguments line up with the declaration.
-         */
-        public <C, R> WiggleFlow<R> combineWithContext(FlowTriFn<C, A, B, R> combine) {
-            return merge(StepNames.ofCombine(combine, fork.armNames, true));
-        }
-
-        /**
-         * The merge named explicitly rather than referenced -- the escape hatch for a combine handler
-         * this API cannot type, and the only form that skips the arm check above.
-         */
-        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-            return merge(name);
-        }
-
-        private <R> WiggleFlow<R> merge(String name) {
-            fork.combineName = name;
-            return new WiggleFlow<>(fork);
-        }
-    }
-
-    /** The stage returned by a three-armed {@link Wiggle#allOf}; its combine is mandatory. */
-    public static final class Fork3<A, B, C> {
-
-        private final Plan.Fork fork;
-
-        Fork3(Plan.Fork fork) {
-            this.fork = fork;
-        }
-
-        /** The merge for the preceding fan-out; the three parameters are the arms' results in order. */
-        public <R> WiggleFlow<R> combine(FlowTriFn<A, B, C, R> combine) {
-            fork.combineName = StepNames.ofCombine(combine, fork.armNames, false);
-            return new WiggleFlow<>(fork);
-        }
-
-        /** The merge named explicitly -- see {@link Fork2#combine(String, Class)} for when that is needed.
-         *  A three-armed combine that also takes the {@code @Context} uses this form. */
-        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-            fork.combineName = name;
-            return new WiggleFlow<>(fork);
-        }
-    }
-
-    /** The stage returned by an n-armed {@link Wiggle#allOf}; its combine is mandatory. */
-    public static final class ForkN {
-
-        private final Plan.Fork fork;
-
-        ForkN(Plan.Fork fork) {
-            this.fork = fork;
-        }
-
-        /**
-         * The merge for the preceding fan-out, named rather than referenced: past three arms the
-         * handler's parameter list outruns any functional interface. The handler is the usual one --
-         * an {@link com.wiggle.client.worker.Arm @Arm} parameter per arm.
-         */
-        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-            fork.combineName = name;
-            return new WiggleFlow<>(fork);
-        }
-    }
-
-    /** The stage returned by {@link #thenForEach}; its combine is mandatory. */
-    public static final class Items {
-
-        private final WiggleFlow<?> from;
-        private final String name;
-        private final String itemsKey;
-        private final UnaryOperator<WorkflowBuilder> body;
-
-        Items(WiggleFlow<?> from, String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
-            this.from = from;
-            this.name = name;
-            this.itemsKey = itemsKey;
-            this.body = body;
-        }
-
-        /**
-         * The merge for the preceding forEach: a handler taking the collected item results -- a
-         * {@code List} ordered by item index when the input was a list, a {@code Map} keyed like the
-         * input when it was a map -- and returning the complete post-join context.
-         */
-        public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine) {
-            return merge(StepNames.of(combine));
-        }
-
-        /**
-         * {@link #combine(FlowFn)} for a handler that also takes the pre-forEach context: its
-         * {@link com.wiggle.client.worker.Context @Context} parameter plus the collected results.
-         */
-        public <C, X, R> WiggleFlow<R> combine(FlowBiFn<C, X, R> combine) {
-            return merge(StepNames.of(combine));
-        }
-
-        /** The merge named explicitly. */
-        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-            return merge(name);
-        }
-
-        private <R> WiggleFlow<R> merge(String combineName) {
-            return from.record(name, b -> b.forEach(name, itemsKey, body).combine(combineName));
-        }
     }
 }

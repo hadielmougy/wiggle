@@ -103,24 +103,93 @@ public final class Wiggle {
      * {@linkplain com.wiggle.client.worker.Arm by position} never sees them at all, and one that names
      * them with {@code @Arm} uses those.
      */
-    public static <A, B> WiggleFlow.Fork2<A, B> allOf(WiggleFlow<A> a, WiggleFlow<B> b) {
-        return new WiggleFlow.Fork2<>(Plan.fork(steps(a, b)));
+    public static <A, B> Fork2<A, B> allOf(WiggleFlow<A> a, WiggleFlow<B> b) {
+        return new Fork2<>(Plan.fork(steps(a, b)));
     }
 
-    /** Three-armed {@link #allOf(WiggleFlow, WiggleFlow)}. */
-    public static <A, B, C> WiggleFlow.Fork3<A, B, C> allOf(WiggleFlow<A> a, WiggleFlow<B> b,
-                                                              WiggleFlow<C> c) {
-        return new WiggleFlow.Fork3<>(Plan.fork(steps(a, b, c)));
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 3 arms. */
+    public static <A, B, C> Fork3<A, B, C> allOf(WiggleFlow<A> a, WiggleFlow<B> b, WiggleFlow<C> c) {
+        return new Fork3<>(Plan.fork(steps(a, b, c)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 4 arms. */
+    public static <A, B, C, D> Fork4<A, B, C, D> allOf(WiggleFlow<A> a, WiggleFlow<B> b,
+                                                           WiggleFlow<C> c, WiggleFlow<D> d) {
+        return new Fork4<>(Plan.fork(steps(a, b, c, d)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 5 arms. */
+    public static <A, B, C, D, E> Fork5<A, B, C, D, E> allOf(WiggleFlow<A> a, WiggleFlow<B> b,
+                                                                 WiggleFlow<C> c, WiggleFlow<D> d,
+                                                                 WiggleFlow<E> e) {
+        return new Fork5<>(Plan.fork(steps(a, b, c, d, e)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 6 arms. */
+    public static <A, B, C, D, E, F> Fork6<A, B, C, D, E, F> allOf(WiggleFlow<A> a, WiggleFlow<B> b,
+                                                                       WiggleFlow<C> c, WiggleFlow<D> d,
+                                                                       WiggleFlow<E> e, WiggleFlow<F> f) {
+        return new Fork6<>(Plan.fork(steps(a, b, c, d, e, f)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 7 arms. */
+    public static <A, B, C, D, E, F, G> Fork7<A, B, C, D, E, F, G> allOf(WiggleFlow<A> a,
+                                                                             WiggleFlow<B> b,
+                                                                             WiggleFlow<C> c,
+                                                                             WiggleFlow<D> d,
+                                                                             WiggleFlow<E> e,
+                                                                             WiggleFlow<F> f,
+                                                                             WiggleFlow<G> g) {
+        return new Fork7<>(Plan.fork(steps(a, b, c, d, e, f, g)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 8 arms. */
+    public static <A, B, C, D, E, F, G, H> Fork8<A, B, C, D, E, F, G, H> allOf(WiggleFlow<A> a,
+                                                                                   WiggleFlow<B> b,
+                                                                                   WiggleFlow<C> c,
+                                                                                   WiggleFlow<D> d,
+                                                                                   WiggleFlow<E> e,
+                                                                                   WiggleFlow<F> f,
+                                                                                   WiggleFlow<G> g,
+                                                                                   WiggleFlow<H> h) {
+        return new Fork8<>(Plan.fork(steps(a, b, c, d, e, f, g, h)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 9 arms. */
+    public static <A, B, C, D, E, F, G, H, I> Fork9<A, B, C, D, E, F, G, H, I> allOf(WiggleFlow<A> a,
+                                                                                         WiggleFlow<B> b,
+                                                                                         WiggleFlow<C> c,
+                                                                                         WiggleFlow<D> d,
+                                                                                         WiggleFlow<E> e,
+                                                                                         WiggleFlow<F> f,
+                                                                                         WiggleFlow<G> g,
+                                                                                         WiggleFlow<H> h,
+                                                                                         WiggleFlow<I> i) {
+        return new Fork9<>(Plan.fork(steps(a, b, c, d, e, f, g, h, i)));
+    }
+
+    /** {@link #allOf(WiggleFlow, WiggleFlow)} over 10 arms. */
+    public static <A, B, C, D, E, F, G, H, I, J> Fork10<A, B, C, D, E, F, G, H, I, J> allOf(WiggleFlow<A> a,
+                                                                                                WiggleFlow<B> b,
+                                                                                                WiggleFlow<C> c,
+                                                                                                WiggleFlow<D> d,
+                                                                                                WiggleFlow<E> e,
+                                                                                                WiggleFlow<F> f,
+                                                                                                WiggleFlow<G> g,
+                                                                                                WiggleFlow<H> h,
+                                                                                                WiggleFlow<I> i,
+                                                                                                WiggleFlow<J> j) {
+        return new Fork10<>(Plan.fork(steps(a, b, c, d, e, f, g, h, i, j)));
     }
 
     /**
-     * {@link #allOf(WiggleFlow, WiggleFlow)} with any number of arms. Past three the combine's
-     * parameters outrun what a functional interface can express, so
-     * {@link WiggleFlow.ForkN#combine(String, Class)} names the combine handler instead of
+     * {@link #allOf(WiggleFlow, WiggleFlow)} with any number of arms. Past ten the combine's
+     * parameters outrun the typed {@code FlowFnN} series, so
+     * {@link ForkN#combine(String, Class)} names the combine handler instead of
      * referencing it.
      */
-    public static WiggleFlow.ForkN allOf(WiggleFlow<?>... arms) {
-        return new WiggleFlow.ForkN(Plan.fork(steps(arms)));
+    public static ForkN allOf(WiggleFlow<?>... arms) {
+        return new ForkN(Plan.fork(steps(arms)));
     }
 
     /**

@@ -83,6 +83,21 @@ final class Fixtures {
 
         Order totalWithBase(Order base, List<Line> priced) { return base; }
 
+        /** A five-armed combine, to exercise the wider end of the typed series. */
+        Fulfilment settleFive(@Context Order base, Payment a, Label b, Shipment c, Order d, Line e) {
+            return new Fulfilment("five");
+        }
+
+        Payment armA(Order o) { return new Payment("a"); }
+
+        Label armB(Order o) { return new Label("b"); }
+
+        Shipment armC(Order o) { return new Shipment("c"); }
+
+        Order armD(Order o) { return o; }
+
+        Line armE(Order o) { return new Line("e", 1); }
+
         @Handles("capture-payment")
         Payment doCapture(Order o) { return new Payment(o.id()); }
     }
