@@ -3,7 +3,7 @@ package com.wiggle.console;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The console's Tomcat/servlet web tier end to end: the SPA API over HTTP, and the auth filter. */
 class ConsoleWebTest {
 
-    private static Blueprint wf() {
+    private static FlowSpec wf() {
         return Workflow.define("wf").step("work").build();
     }
 

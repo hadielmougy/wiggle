@@ -2,7 +2,7 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
@@ -166,7 +166,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        Blueprint bp = Workflow.define("wf")
+        FlowSpec bp = Workflow.define("wf")
                 .step("capture-payment").compensate().gate("in-stock").step("summarise").effect("audit-log")
                 .build();
 

@@ -3,7 +3,7 @@ package com.wiggle.client.worker;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisteredNode;
@@ -37,7 +37,7 @@ class NamespaceWorkerTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint workflow() {
+    private static FlowSpec workflow() {
         return Workflow.define("wf").step("a").build();
     }
 
@@ -50,7 +50,7 @@ class NamespaceWorkerTest {
 
     @Test @DisplayName("serves every active cell, and stops a cell's worker when it retires")
     void fanOutAcrossCellsAndRetire() throws Exception {
-        Blueprint bp = workflow();
+        FlowSpec bp = workflow();
         try (WiggleServer a = new WiggleServer(config()).start();
              WiggleServer b = new WiggleServer(config()).start();
              WiggleClient ca = new WiggleClient(a.baseUrl());
@@ -85,7 +85,7 @@ class NamespaceWorkerTest {
 
     @Test @DisplayName("wired through a real coordinator, it serves the namespace's resolved cell")
     void coordinatorWired() throws Exception {
-        Blueprint bp = workflow();
+        FlowSpec bp = workflow();
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         CoordinatorService svc = new CoordinatorService(store);
         CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED);

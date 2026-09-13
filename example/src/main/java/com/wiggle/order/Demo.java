@@ -1,6 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
@@ -27,24 +27,24 @@ public final class Demo {
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
-            Blueprint blueprint = OrderFulfilment.blueprint();
-            System.out.println("Workflow " + blueprint.name() + " v" + blueprint.version()
-                    + " compiled to " + blueprint.definition().nodes().size() + " nodes");
+            FlowSpec flowSpec = OrderFulfilment.flowSpec();
+            System.out.println("Flow " + flowSpec.name() + " v" + flowSpec.version()
+                    + " compiled to " + flowSpec.definition().nodes().size() + " nodes");
 
             try (Worker worker = new Worker(client, "worker-1")
-                    .register(blueprint).handlers(new OrderHandlers())) {
+                    .register(flowSpec).handlers(new OrderHandlers())) {
                 worker.start();
 
                 System.out.println("\n--- happy path (retries through a flaky gateway) ---");
-                String happy = client.start(blueprint, Order.of("A-1001", "hadi", 3, new BigDecimal("249.90")));
+                String happy = client.start(flowSpec, Order.of("A-1001", "hadi", 3, new BigDecimal("249.90")));
                 print(client.awaitCompletion(happy, Duration.ofSeconds(30)));
 
                 System.out.println("\n--- filtered (quantity 0 short-circuits the pipeline) ---");
-                String filtered = client.start(blueprint, Order.of("A-1002", "hadi", 0, new BigDecimal("10.00")));
+                String filtered = client.start(flowSpec, Order.of("A-1002", "hadi", 0, new BigDecimal("10.00")));
                 print(client.awaitCompletion(filtered, Duration.ofSeconds(30)));
 
                 System.out.println("\n--- failure (validation rejects the order for good) ---");
-                String failed = client.start(blueprint, Order.of("A-1003", "  ", 1, new BigDecimal("5.00")));
+                String failed = client.start(flowSpec, Order.of("A-1003", "  ", 1, new BigDecimal("5.00")));
                 print(client.awaitCompletion(failed, Duration.ofSeconds(30)));
 
                 System.out.println("\n--- cluster ---");

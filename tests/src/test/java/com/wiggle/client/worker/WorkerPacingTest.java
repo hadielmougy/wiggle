@@ -1,7 +1,7 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowBuilder;
 import com.wiggle.server.ServerConfig;
@@ -33,7 +33,7 @@ class WorkerPacingTest {
         public Map<String, Object> hop(Map<String, Object> ctx) { return ctx; }
     }
 
-    private static Blueprint chain() {
+    private static FlowSpec chain() {
         WorkflowBuilder b = Workflow.define("pacing");
         for (int i = 0; i < STEPS; i++) b = b.step("hop" + "-".repeat(i));
         return b.build();

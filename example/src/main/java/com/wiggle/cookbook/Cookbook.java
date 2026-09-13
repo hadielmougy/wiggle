@@ -1,6 +1,6 @@
 package com.wiggle.cookbook;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
@@ -17,7 +17,7 @@ import java.util.Map;
  * {@code docs/dsl-cookbook.md}, which explains what each one demonstrates and why. Run them
  * all with {@code ./gradlew :example:runCookbook} ({@link CookbookDemo}).
  *
- * <p>Every blueprint uses {@link Workflow#define}. A step's return REPLACES the context: it must
+ * <p>Every flowSpec uses {@link Workflow#define}. A step's return REPLACES the context: it must
  * be the <b>whole</b> next document, not just the fields it touched -- {@link #with} builds that
  * full copy, and a partial map (e.g. bare {@code Map.of("k", v)}) deliberately clears every other
  * key. Nothing merges implicitly anywhere: fork branches rejoin at an explicit combine handler,
@@ -44,7 +44,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 1. step + then + effect + gate -- the smallest linear pipeline with a filter.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint linearWithGate() {
+    public static FlowSpec linearWithGate() {
         return Workflow.define("cb-linear-gate")
 
                 .step("normalise")
@@ -62,7 +62,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 2. choose + fork + retry -- an exclusive branch whose body itself fans out in parallel.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint chooseThenFork() {
+    public static FlowSpec chooseThenFork() {
         return Workflow.define("cb-choose-fork")
 
                 .choose(
@@ -83,7 +83,7 @@ public final class Cookbook {
     //    item's context (handlers take it directly; the base rides on Step.base()); the mandatory
     //    combine receives the collected final values.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint forEachAcrossQueues() {
+    public static FlowSpec forEachAcrossQueues() {
         return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
 
                 .forEach("charge-items", "items", b -> b
@@ -100,7 +100,7 @@ public final class Cookbook {
     // 4. doWhile + gate -- retry-until-ready loop, with an inner gate short-circuiting a
     //    cancelled draw straight out of the loop.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint pollUntilReady() {
+    public static FlowSpec pollUntilReady() {
         return Workflow.define("cb-poll-until-ready")
 
                 .doWhile("still-pending", b -> b
@@ -116,7 +116,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 5. awaitSignal (timeout + escalation) + choose -- branch on how the wait resolved.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint approvalWithEscalation() {
+    public static FlowSpec approvalWithEscalation() {
         return Workflow.define("cb-approval-escalation")
 
                 .step("submit")
@@ -136,7 +136,7 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 6. subWorkflow + gate + fork -- compose a registered child workflow into a bigger one.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint childCheckThenFork() {
+    public static FlowSpec childCheckThenFork() {
         return Workflow.define("cb-parent")
 
                 // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
@@ -155,7 +155,7 @@ public final class Cookbook {
     // 7. execution(LOCAL_ASYNC) + checkpoint + doWhile -- batched local execution with a
     //    deliberate commit point so a crash mid-loop only replays the current iteration.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint batchedLoopWithCheckpoint() {
+    public static FlowSpec batchedLoopWithCheckpoint() {
         return Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
 
                 .doWhile("more-batches", b -> b
@@ -171,7 +171,7 @@ public final class Cookbook {
     //    sleep, awaitSignal + escalation, subWorkflow, doWhile, defaultQueue, and checkpoint,
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint kitchenSink() {
+    public static FlowSpec kitchenSink() {
         return Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
 
                 .step("intake")

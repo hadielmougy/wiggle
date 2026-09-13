@@ -1,7 +1,7 @@
 # Builder → Pipeline specification
 
 The requirements for the workflow DSL's build layer, from the fluent `WorkflowBuilder` surface down
-to the assembled, validated, content-versioned `Blueprint`. An implementation that follows this
+to the assembled, validated, content-versioned `FlowSpec`. An implementation that follows this
 produces byte-identical `WorkflowDefinition`s (same content-version) to the current one.
 
 The build layer is **topology only** — it declares named nodes and how they chain, branch, and
@@ -12,7 +12,7 @@ worker via `@Handlers` classes, matched to the graph by name.
 
 ## 1. Output contract
 
-`build()` returns `Blueprint(WorkflowDefinition definition)` — pure topology, **no** handler table,
+`build()` returns `FlowSpec(WorkflowDefinition definition)` — pure topology, **no** handler table,
 no context type.
 
 `WorkflowDefinition(String name, int version, String startNode, Map<String,Node> nodes,
@@ -75,7 +75,7 @@ only thing the "start" callback does.)
 1. if `startNode == null` → `IllegalStateException("workflow defines no steps")`.
 2. `version = contentVersion(name, startNode, nodes, executionMode, checkpoints)`.
 3. validate (§3.8).
-4. return `Blueprint(new WorkflowDefinition(...))`.
+4. return `FlowSpec(new WorkflowDefinition(...))`.
 
 **contentVersion** (must match exactly for stable versions): SHA-256 over the **canonical JSON** of
 `{name, startNode, nodes:[node.toJson() sorted by id], executionMode:name(), checkpoints:sorted}`;

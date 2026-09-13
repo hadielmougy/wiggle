@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.IdCodec;
 import com.wiggle.server.ServerConfig;
@@ -28,7 +28,7 @@ class EpochAwareIdTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint workflow() {
+    private static FlowSpec workflow() {
         return Workflow.define("wf").step("a").build();
     }
 

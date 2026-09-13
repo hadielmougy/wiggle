@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *  logic is a worker concern, exercised end-to-end in the engine tests. */
 class ForkCombineTest {
 
-    private static Blueprint tripBlueprint() {
+    private static FlowSpec tripFlowSpec() {
         return Workflow.define("trip")
                 .step("prep")
                 .fork(
@@ -41,7 +41,7 @@ class ForkCombineTest {
 
     @Test
     void forkCombineWiresForkBranchesJoinCombine() {
-        WorkflowDefinition def = tripBlueprint().definition();
+        WorkflowDefinition def = tripFlowSpec().definition();
 
         Node fork = only(def, NodeKind.FORK);
         Node join = only(def, NodeKind.JOIN);
@@ -63,7 +63,7 @@ class ForkCombineTest {
 
     @Test
     void combineNodeCarriesArmNamesForTheEngineToKeyBranchResults() {
-        WorkflowDefinition def = tripBlueprint().definition();
+        WorkflowDefinition def = tripFlowSpec().definition();
         // The arm names ride on the combine node's itemsKey (a store-portable field) as a JSON array,
         // in fork order, so the engine can stage each isolated branch's result under its name.
         assertEquals("[\"air\",\"hotel\"]", named(def, "merge").itemsKey());
@@ -89,7 +89,7 @@ class ForkCombineTest {
 
     @Test
     void combineResumesNormalFlowAndBuilds() {
-        WorkflowDefinition def = tripBlueprint().definition();
+        WorkflowDefinition def = tripFlowSpec().definition();
         assertTrue(def.version() != 0);
         assertEquals(NodeKind.END, def.nodes().get(named(def, "book").next()).kind());
     }

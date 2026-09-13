@@ -1,6 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
@@ -34,12 +34,12 @@ public final class DashboardSeed {
         }
         ServerConfig config = ServerConfig.fromEnvironment();
 
-        Blueprint kyc = Workflow.define("kyc-checks")
+        FlowSpec kyc = Workflow.define("kyc-checks")
                 .step("verify-id")
                 .step("risk-score")
                 .build();
 
-        Blueprint onboarding = Workflow.define("onboarding")
+        FlowSpec onboarding = Workflow.define("onboarding")
                 .step("create-account")
                 .fork(
                         Branch.of("send-welcome", b -> b.step("welcome")),
@@ -51,7 +51,7 @@ public final class DashboardSeed {
                 .step("activate")
                 .build();
 
-        Blueprint report = Workflow.define("nightly-report")
+        FlowSpec report = Workflow.define("nightly-report")
                 .step("gather")
                 .step("render")
                 .build();

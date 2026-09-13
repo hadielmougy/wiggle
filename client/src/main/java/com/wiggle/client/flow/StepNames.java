@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * Reads the node name off a method reference. This is the whole bridge between the typed
- * {@link WiggleFuture} API and the name-keyed topology the server and worker already speak: a
+ * {@link WiggleFlow} API and the name-keyed topology the server and worker already speak: a
  * reference like {@code account::withdraw} yields the string {@code "withdraw"}, which is emitted as
  * the node name and later bound back to that method by the worker's canonical folding (so
  * {@code inStock} and a node named {@code in-stock} are the same step).

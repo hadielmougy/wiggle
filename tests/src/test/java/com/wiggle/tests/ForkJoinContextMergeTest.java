@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Arm;
@@ -37,7 +37,7 @@ class ForkJoinContextMergeTest {
         return n;
     }
 
-    private static Blueprint blueprint() {
+    private static FlowSpec flowSpec() {
         return Workflow.define("merge-check")
                 .step("validate")
                 .fork(
@@ -70,7 +70,7 @@ class ForkJoinContextMergeTest {
     @Test @DisplayName("both parallel branches' fields survive the join (no sibling clobber)")
     void bothBranchFieldsSurvive() throws Exception {
         String url = "jdbc:h2:mem:merge-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint bp = blueprint();
+        FlowSpec bp = flowSpec();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();
@@ -123,7 +123,7 @@ class ForkJoinContextMergeTest {
         Parcel withTracking(String t) { return new Parcel(id, payment, t); }
     }
 
-    private static Blueprint typedBlueprint() {
+    private static FlowSpec typedFlowSpec() {
         return Workflow.define("parcel-merge")
                 .step("validate")
                 .fork(
@@ -150,7 +150,7 @@ class ForkJoinContextMergeTest {
     @Test @DisplayName("typed-record branches (codec round-trip) keep both fields")
     void typedBothBranchFieldsSurvive() throws Exception {
         String url = "jdbc:h2:mem:merge2-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint bp = typedBlueprint();
+        FlowSpec bp = typedFlowSpec();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();

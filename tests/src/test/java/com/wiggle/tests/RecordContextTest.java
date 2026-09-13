@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
@@ -40,7 +40,7 @@ class RecordContextTest {
         Shipment withInvoice(String i) { return new Shipment(id, items, total, status, label, i, log); }
     }
 
-    private static Blueprint blueprint() {
+    private static FlowSpec flowSpec() {
         return Workflow.define("record-shipment")
                 .step("validate")
                 .gate("has-items")
@@ -74,7 +74,7 @@ class RecordContextTest {
 
     @Test @DisplayName("a record context survives gate, fork merge and typed decode end to end")
     void recordRoundTripThroughEngine() throws Exception {
-        Blueprint bp = blueprint();
+        FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
@@ -96,7 +96,7 @@ class RecordContextTest {
 
     @Test @DisplayName("a false gate on a record context ends the instance as gated")
     void recordGateShortCircuits() throws Exception {
-        Blueprint bp = blueprint();
+        FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {

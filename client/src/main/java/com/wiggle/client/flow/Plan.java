@@ -1,6 +1,6 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowBuilder;
@@ -14,11 +14,11 @@ import java.util.function.UnaryOperator;
 
 /**
  * What a flow definition records before it becomes a graph. Each {@code then*} call on a
- * {@link WiggleFuture} appends a {@link Step} to this tree instead of appending a node to the
+ * {@link WiggleFlow} appends a {@link Step} to this tree instead of appending a node to the
  * builder, and {@link #compile} walks the tree once at the end.
  *
- * <p>The indirection exists for one reason: {@link Wiggle#allOf} takes futures that already exist,
- * so a future must be continuable more than once -- the second continuation is what makes a fan-out.
+ * <p>The indirection exists for one reason: {@link Wiggle#allOf} takes handles that already exist,
+ * so a handle must be continuable more than once -- the second continuation is what makes a fan-out.
  * A builder cannot express that, because by the time the second branch is written the first has
  * already been appended to the trunk. Recording first, compiling last, lets the fork be discovered
  * after both of its arms have been described.
@@ -41,7 +41,7 @@ final class Plan {
         final List<Step> children = new ArrayList<>();
         /** True once a fork has taken this step into one of its arms; it leaves the trunk. */
         boolean claimed;
-        /** An explicit arm name from {@link WiggleFuture#named}, when this step ends an arm. */
+        /** An explicit arm name from {@link WiggleFlow#named}, when this step ends an arm. */
         String armName;
 
         Step(Step parent, UnaryOperator<WorkflowBuilder> op, String label) {
@@ -106,7 +106,7 @@ final class Plan {
      * each out of the trunk, and hangs a {@link Fork} where they diverged.
      */
     static Fork fork(List<Step> leaves) {
-        if (leaves.size() < 2) throw new IllegalArgumentException("allOf needs at least two futures");
+        if (leaves.size() < 2) throw new IllegalArgumentException("allOf needs at least two branches to fan out over");
         Step junction = junction(leaves);
 
         List<List<Step>> arms = new ArrayList<>(leaves.size());
@@ -135,7 +135,7 @@ final class Plan {
             while (s != null && !ancestors.contains(s)) s = s.parent;
             if (s == null) {
                 throw new IllegalArgumentException(
-                        "allOf was given futures from different flows (or from inside a branch it does "
+                        "allOf was given handles from different definitions (or from inside a branch it does "
                         + "not enclose); every arm must fan out from one common point");
             }
             if (junction == null || isAncestor(junction, s)) junction = s;
@@ -144,7 +144,7 @@ final class Plan {
         for (Step s = leaves.get(0); s != null; s = s.parent) onFirst.add(s);
         if (onFirst.contains(junction) && junction == leaves.get(0)) {
             throw new IllegalArgumentException(
-                    "allOf was given a future that is an ancestor of another; arms must be siblings");
+                    "allOf was given a handle that is an ancestor of another; arms must be siblings");
         }
         return junction;
     }
@@ -160,7 +160,7 @@ final class Plan {
         for (Step s = leaf; s != junction; s = s.parent) {
             if (s == null) throw new IllegalStateException("leaf does not descend from the junction");
             if (s.claimed) {
-                throw new IllegalArgumentException("the future ending at '" + describe(s)
+                throw new IllegalArgumentException("the branch ending at '" + describe(s)
                         + "' is already an arm of another allOf");
             }
             path.add(s);
@@ -172,7 +172,7 @@ final class Plan {
     // ------------------------------------------------------------------ compilation
 
     /** Walks the recorded tree once, appending each step to a real builder. */
-    static Blueprint compile(String workflow, RetryPolicy defaultRetry, Step root) {
+    static FlowSpec compile(String workflow, RetryPolicy defaultRetry, Step root) {
         WorkflowBuilder builder = defaultRetry == null
                 ? Workflow.define(workflow) : Workflow.define(workflow, defaultRetry);
         return walk(root, builder, "workflow '" + workflow + "'").build();
@@ -220,7 +220,7 @@ final class Plan {
         List<String> heads = new ArrayList<>();
         for (Step child : unclaimed(step)) heads.add(describe(child));
         return "in " + what + ", the flow after " + describe(step) + " splits into " + heads
-                + " but is never rejoined. Continuing one future twice is a fan-out: pass both to "
+                + " but is never rejoined. Continuing one handle twice is a fan-out: pass both to "
                 + "Wiggle.allOf(...) and combine them, or continue only one of them.";
     }
 

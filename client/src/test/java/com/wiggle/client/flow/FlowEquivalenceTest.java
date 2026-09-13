@@ -1,6 +1,6 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Case;
 import com.wiggle.client.dsl.Workflow;
@@ -42,7 +42,7 @@ class FlowEquivalenceTest {
                         + def.nodes().values().stream().map(Node::name).toList()));
     }
 
-    private static void assertSameDefinition(Blueprint dsl, Blueprint flow) {
+    private static void assertSameDefinition(FlowSpec dsl, FlowSpec flow) {
         assertEquals(dsl.name(), flow.name());
         assertEquals(dsl.definition().startNode(), flow.definition().startNode());
         assertEquals(dsl.definition().nodes().keySet(), flow.definition().nodes().keySet());
@@ -54,7 +54,7 @@ class FlowEquivalenceTest {
 
     @Test
     void stepsGatesFanOutAndSleepCompileToTheSameGraphAsTheDsl() {
-        Blueprint dsl = Workflow.define("order-fulfilment")
+        FlowSpec dsl = Workflow.define("order-fulfilment")
                 .step("validate")
                 .gate("inStock")
                 .fork(Branch.of("payment", s -> s.step("charge")),
@@ -65,7 +65,7 @@ class FlowEquivalenceTest {
                 .effect("notifyCustomer")
                 .build();
 
-        Blueprint flow = Wiggle.define("order-fulfilment", Order.class, f -> {
+        FlowSpec flow = Wiggle.define("order-fulfilment", Order.class, f -> {
             var validated = f.thenApply(h::validate).thenFilter(h::inStock);
 
             // continuing `validated` twice is the fan-out; allOf records where the graph splits
@@ -91,7 +91,7 @@ class FlowEquivalenceTest {
 
     @Test
     void anArmWithNoExplicitNameIsNamedAfterItsLastStep() {
-        Blueprint flow = Wiggle.define("unnamed-arms", Order.class, f -> {
+        FlowSpec flow = Wiggle.define("unnamed-arms", Order.class, f -> {
             var payment = f.thenApply(h::charge);
             var shipping = f.thenApply(h::label);
             return Wiggle.allOf(payment, shipping).combine("merge", Order.class);
@@ -102,14 +102,14 @@ class FlowEquivalenceTest {
 
     @Test
     void threeArmedFanOutCombinesThroughTheTypedTriFunction() {
-        Blueprint dsl = Workflow.define("audit")
+        FlowSpec dsl = Workflow.define("audit")
                 .fork(Branch.of("payment", s -> s.step("charge")),
                       Branch.of("shipping", s -> s.step("label")),
                       Branch.of("carrier", s -> s.subWorkflow("ship", "carrier-flow")))
                 .combine("audit")
                 .build();
 
-        Blueprint flow = Wiggle.define("audit", Order.class, f -> {
+        FlowSpec flow = Wiggle.define("audit", Order.class, f -> {
             var payment = f.thenApply(h::charge).named("payment");
             var shipping = f.thenApply(h::label).named("shipping");
             var carrier = f.thenSubFlow("ship", "carrier-flow", Shipment.class).named("carrier");
@@ -123,13 +123,13 @@ class FlowEquivalenceTest {
 
     @Test
     void aCombineMayTakeThePreForkContextAlongsideTheArms() {
-        Blueprint dsl = Workflow.define("settle-with-base")
+        FlowSpec dsl = Workflow.define("settle-with-base")
                 .fork(Branch.of("payment", s -> s.step("charge")),
                       Branch.of("shipping", s -> s.step("label")))
                 .combine("settleWithBase")
                 .build();
 
-        Blueprint flow = Wiggle.define("settle-with-base", Order.class, f -> {
+        FlowSpec flow = Wiggle.define("settle-with-base", Order.class, f -> {
             var payment = f.thenApply(h::charge).named("payment");
             var shipping = f.thenApply(h::label).named("shipping");
             return Wiggle.allOf(payment, shipping).combineWithContext(h::settleWithBase);
@@ -142,7 +142,7 @@ class FlowEquivalenceTest {
     void aCombineWithNoArmAnnotationsIsAcceptedAndBindsByPosition() {
         // @Arm is optional: with none, the parameters take the arms in the order given to allOf --
         // which the typed signature has already pinned, so there is nothing left to check here
-        Blueprint flow = Wiggle.define("positional", Order.class, f -> {
+        FlowSpec flow = Wiggle.define("positional", Order.class, f -> {
             var payment = f.thenApply(h::charge).named("payment");
             var shipping = f.thenApply(h::label).named("shipping");
             return Wiggle.allOf(payment, shipping).combine(h::settlePositionally);
@@ -185,14 +185,14 @@ class FlowEquivalenceTest {
 
     @Test
     void chooseAndRepeatWhileCompileToTheSameGraphAsTheDsl() {
-        Blueprint dsl = Workflow.define("triage")
+        FlowSpec dsl = Workflow.define("triage")
                 .step("validate")
                 .choose(Case.when("isVip", s -> s.step("vipPath")),
                         Case.otherwise("standard", s -> s.step("standardPath")))
                 .doWhile("hasMore", s -> s.step("drain"))
                 .build();
 
-        Blueprint flow = Wiggle.define("triage", Order.class, f -> f
+        FlowSpec flow = Wiggle.define("triage", Order.class, f -> f
                 .thenApply(h::validate)
                 .thenChoose(Alt.when(h::isVip, a -> a.thenApply(h::vipPath)),
                             Alt.otherwise("standard", a -> a.thenApply(h::standardPath)))
@@ -209,11 +209,11 @@ class FlowEquivalenceTest {
 
     @Test
     void repeatWhileWithABudgetMatchesTheDslsBoundedDoWhile() {
-        Blueprint dsl = Workflow.define("drain")
+        FlowSpec dsl = Workflow.define("drain")
                 .doWhile("hasMore", 5, s -> s.step("drain"))
                 .build();
 
-        Blueprint flow = Wiggle.define("drain", Order.class, f -> f
+        FlowSpec flow = Wiggle.define("drain", Order.class, f -> f
                 .repeatWhile(h::hasMore, 5, a -> a.thenApply(h::drain)));
 
         assertSameDefinition(dsl, flow);
@@ -223,13 +223,13 @@ class FlowEquivalenceTest {
 
     @Test
     void forEachCompilesToTheSameDynamicFanOutAsTheDsl() {
-        Blueprint dsl = Workflow.define("pricing")
+        FlowSpec dsl = Workflow.define("pricing")
                 .step("validate")
                 .forEach("lines", s -> s.step("price"))
                 .combine("total")
                 .build();
 
-        Blueprint flow = Wiggle.define("pricing", Order.class, f -> f
+        FlowSpec flow = Wiggle.define("pricing", Order.class, f -> f
                 .thenApply(h::validate)
                 .thenForEach("lines", Line.class, a -> a.thenApply(h::price))
                 .combine(h::total));
@@ -244,7 +244,7 @@ class FlowEquivalenceTest {
 
     @Test
     void forEachCombineMayAlsoTakeThePreForEachContext() {
-        Blueprint flow = Wiggle.define("pricing-with-base", Order.class, f -> f
+        FlowSpec flow = Wiggle.define("pricing-with-base", Order.class, f -> f
                 .thenForEach("lines", Line.class, a -> a.thenApply(h::price))
                 .combine(h::totalWithBase));
 
@@ -253,13 +253,13 @@ class FlowEquivalenceTest {
 
     @Test
     void signalWaitsAndSubFlowsCompileToTheSameGraphAsTheDsl() {
-        Blueprint dsl = Workflow.define("approval")
+        FlowSpec dsl = Workflow.define("approval")
                 .step("validate")
                 .awaitSignal("approved", Duration.ofMinutes(5))
                 .subWorkflow("ship", "shipping-flow")
                 .build();
 
-        Blueprint flow = Wiggle.define("approval", Order.class, f -> f
+        FlowSpec flow = Wiggle.define("approval", Order.class, f -> f
                 .thenApply(h::validate)
                 .thenAwait("approved", Duration.ofMinutes(5))
                 .thenSubFlow("ship", "shipping-flow", Shipment.class));
@@ -272,7 +272,7 @@ class FlowEquivalenceTest {
 
     @Test
     void handlesAnnotationRenamesTheNodeSoBothSidesAgree() {
-        Blueprint flow = Wiggle.define("renamed", Order.class, f -> f.thenApply(h::doCapture));
+        FlowSpec flow = Wiggle.define("renamed", Order.class, f -> f.thenApply(h::doCapture));
 
         // the handler is bound by @Handles("capture-payment"), so that -- not "doCapture" -- is the node
         List<String> names = flow.definition().nodes().values().stream()
@@ -283,13 +283,13 @@ class FlowEquivalenceTest {
 
     @Test
     void perStepQueueRetryCompensateAndCheckpointPassThroughUnchanged() {
-        Blueprint dsl = Workflow.define("settings")
+        FlowSpec dsl = Workflow.define("settings")
                 .step("validate", "fast-queue").compensate()
                 .step("charge", com.wiggle.core.RetryPolicy.exponential(7, Duration.ofMillis(250)))
                 .checkpoint()
                 .build();
 
-        Blueprint flow = Wiggle.define("settings", Order.class, f -> f
+        FlowSpec flow = Wiggle.define("settings", Order.class, f -> f
                 .thenApply(h::validate, "fast-queue").compensate()
                 .thenApply(h::charge, com.wiggle.core.RetryPolicy.exponential(7, Duration.ofMillis(250)))
                 .checkpoint());
@@ -300,8 +300,8 @@ class FlowEquivalenceTest {
 
     @Test
     void asReTypesTheChainWithoutTouchingTheGraph() {
-        Blueprint plain = Wiggle.define("retyped", Order.class, f -> f.thenApply(h::validate));
-        Blueprint retyped = Wiggle.define("retyped", Order.class, f -> f
+        FlowSpec plain = Wiggle.define("retyped", Order.class, f -> f.thenApply(h::validate));
+        FlowSpec retyped = Wiggle.define("retyped", Order.class, f -> f
                 .thenApply(h::validate).as(Shipment.class));
 
         assertEquals(plain.version(), retyped.version(), "as() must add no node");

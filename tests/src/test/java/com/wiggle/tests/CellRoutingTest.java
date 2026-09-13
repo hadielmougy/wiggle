@@ -4,7 +4,7 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.IdCodec;
 import com.wiggle.core.InstanceView;
@@ -37,7 +37,7 @@ class CellRoutingTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint workflow() {
+    private static FlowSpec workflow() {
         return Workflow.define("wf").step("a").build();
     }
 

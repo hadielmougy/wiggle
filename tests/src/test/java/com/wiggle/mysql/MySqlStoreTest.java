@@ -1,6 +1,6 @@
 package com.wiggle.mysql;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Ids;
 import com.wiggle.jdbc.JdbcStorage;
@@ -45,7 +45,7 @@ class MySqlStoreTest {
         return storage;
     }
 
-    private static Blueprint uniqueWorkflow() {
+    private static FlowSpec uniqueWorkflow() {
         return Workflow.define("mysql-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
@@ -55,7 +55,7 @@ class MySqlStoreTest {
     void migrateAndRun() {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint bp = uniqueWorkflow();
+            FlowSpec bp = uniqueWorkflow();
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
             assertTrue(id != null && !id.isBlank(), "an instance id is returned");
@@ -71,7 +71,7 @@ class MySqlStoreTest {
     void concurrentClaimsAreExclusive() throws Exception {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint bp = uniqueWorkflow();
+            FlowSpec bp = uniqueWorkflow();
             engine.register(bp.definition());
             int tokens = 50;
             for (int i = 0; i < tokens; i++) engine.start(bp.name(), bp.version(), Map.of(), null);

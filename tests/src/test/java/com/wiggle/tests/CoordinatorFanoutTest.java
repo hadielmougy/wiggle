@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Json;
 import com.wiggle.proto.RegisterWorkflowResponse;
@@ -34,7 +34,7 @@ class CoordinatorFanoutTest {
     }
 
     private static byte[] definitionJson() {
-        Blueprint bp = Workflow.define("wf").step("a").build();
+        FlowSpec bp = Workflow.define("wf").step("a").build();
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 

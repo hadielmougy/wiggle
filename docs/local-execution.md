@@ -49,7 +49,7 @@ calls `CompleteTask`/`FailTask`; the server advances one node and the cycle repe
 is "dumb": it only knows the single `TaskActivation` it was handed.
 
 Key enabler for this proposal: **the worker already holds the full compiled graph.** When it
-calls `register(Blueprint)` it keeps the `WorkflowDefinition` (nodes + edges) and the handler
+calls `register(FlowSpec)` it keeps the `WorkflowDefinition` (nodes + edges) and the handler
 table, so it can locally resolve "what runs next" without asking the server.
 
 ## 3. Execution modes
@@ -206,7 +206,7 @@ enum Handback { SLEEP, FORK, JOIN, USER_TASK, OTHER_QUEUE, TERMINAL /* END */ }
 
 - `SERVER` (or unknown/unregistered version): unchanged — execute one activity, `CompleteTask`/`FailTask`.
 - `LOCAL_SYNC` / `LOCAL_ASYNC`: run the local driver loop:
-  1. Look up the blueprint for `(workflow, version)` (already registered); if absent, fall back to `SERVER`.
+  1. Look up the flow spec for `(workflow, version)` (already registered); if absent, fall back to `SERVER`.
   2. Execute the current node's handler; accumulate the result into a local context copy.
   3. Buffer a `StepResult`. In `LOCAL_SYNC`, `AdvanceRun([step], final=false)` now; in `LOCAL_ASYNC`, keep buffering.
   4. Compute `successor(...)`; `classify(...)` the next node.
@@ -277,7 +277,7 @@ marker on the parked token; keep the default `SERVER` for anyone who needs step-
   keep their pinned mode.
 - **Old workers** (pre-feature) ignore `execution_mode` and use `CompleteTask` per step — they
   simply run any workflow in effective `SERVER` mode. A new worker that lacks the pinned version's
-  blueprint falls back to `SERVER`. So mixed-version fleets stay correct, just not uniformly fast.
+  flow spec falls back to `SERVER`. So mixed-version fleets stay correct, just not uniformly fast.
 - **Old servers** don't implement `AdvanceRun`; a new worker detects the unimplemented RPC and
   falls back to `SERVER`. (gRPC returns `UNIMPLEMENTED`.)
 

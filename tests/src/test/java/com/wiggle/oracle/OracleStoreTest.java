@@ -1,6 +1,6 @@
 package com.wiggle.oracle;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Ids;
 import com.wiggle.jdbc.JdbcStorage;
@@ -48,7 +48,7 @@ class OracleStoreTest {
         return storage;
     }
 
-    private static Blueprint uniqueWorkflow() {
+    private static FlowSpec uniqueWorkflow() {
         return Workflow.define("oracle-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
@@ -58,7 +58,7 @@ class OracleStoreTest {
     void migrateAndRun() {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint bp = uniqueWorkflow();
+            FlowSpec bp = uniqueWorkflow();
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
             assertTrue(id != null && !id.isBlank(), "an instance id is returned");
@@ -100,7 +100,7 @@ class OracleStoreTest {
     void concurrentClaimsAreExclusive() throws Exception {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint bp = uniqueWorkflow();
+            FlowSpec bp = uniqueWorkflow();
             engine.register(bp.definition());
             int tokens = 40;
             for (int i = 0; i < tokens; i++) engine.start(bp.name(), bp.version(), Map.of(), null);

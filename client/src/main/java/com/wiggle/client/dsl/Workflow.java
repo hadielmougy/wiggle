@@ -12,7 +12,7 @@ import com.wiggle.core.RetryPolicy;
  *
  * <pre>{@code
  * // topology
- * Blueprint order = Workflow.define("order-fulfilment")
+ * FlowSpec order = Flow.define("order-fulfilment")
  *         .step("validate").gate("in-stock")
  *         .fork(Branch.of("payment",  s -> s.step("charge")),
  *               Branch.of("shipping", s -> s.step("reserve").sleep(Duration.ofSeconds(2)).step("label")))

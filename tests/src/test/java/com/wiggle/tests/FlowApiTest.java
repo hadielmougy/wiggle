@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * and it implements the steps (as the {@link Handlers @Handlers} object). That is the point of the
  * API -- the two halves cannot drift, because the compiler ties them together.
  */
-class FlowFutureApiTest {
+class FlowApiTest {
 
     public record Order(String id, int quantity, String status) {}
 
@@ -62,7 +62,7 @@ class FlowFutureApiTest {
     }
 
     /** The workflow, written as a chain of references to {@code flow}'s own methods. */
-    private static Blueprint blueprint(OrderFlow flow) {
+    private static FlowSpec flowSpec(OrderFlow flow) {
         return Wiggle.define("flow-order", Order.class, f -> {
             var validated = f.thenApply(flow::validate).thenFilter(flow::inStock);
 
@@ -80,7 +80,7 @@ class FlowFutureApiTest {
     void methodReferenceNamesBindToTheirOwnMethodsOnAWorker() throws Exception {
         OrderFlow flow = new OrderFlow();
 
-        Map<String, Object> out = run(blueprint(flow), flow, Map.of("id", "o1", "quantity", 2));
+        Map<String, Object> out = run(flowSpec(flow), flow, Map.of("id", "o1", "quantity", 2));
 
         // the combine's return is the whole post-join context, so these are the fields that survived
         assertEquals("o1", out.get("orderId"));
@@ -113,7 +113,7 @@ class FlowFutureApiTest {
     void positionalCombineBindsArmsInForkOrder() throws Exception {
         PositionalOrderFlow flow = new PositionalOrderFlow();
 
-        Blueprint bp = Wiggle.define("positional-order", Order.class, f -> {
+        FlowSpec bp = Wiggle.define("positional-order", Order.class, f -> {
             var validated = f.thenApply(flow::validate);
             var payment = validated.thenApply(flow::charge).named("payment");
             var shipping = validated.thenApply(flow::label).named("shipping");
@@ -131,7 +131,7 @@ class FlowFutureApiTest {
     void gateShortCircuitsWhenTheReferencedGuardIsFalse() throws Exception {
         OrderFlow flow = new OrderFlow();
 
-        Map<String, Object> out = run(blueprint(flow), flow, Map.of("id", "o2", "quantity", 0));
+        Map<String, Object> out = run(flowSpec(flow), flow, Map.of("id", "o2", "quantity", 0));
 
         assertEquals("VALIDATED", out.get("status"), "validate ran before the gate closed");
         assertNull(out.get("paymentRef"), "the gate closed, so the fork never ran");
@@ -139,7 +139,7 @@ class FlowFutureApiTest {
     }
 
     /** Runs a single instance to completion on a one-node in-memory H2 server and returns its context. */
-    private static Map<String, Object> run(Blueprint bp, Object handlers, Map<String, Object> input) throws Exception {
+    private static Map<String, Object> run(FlowSpec bp, Object handlers, Map<String, Object> input) throws Exception {
         String url = "jdbc:h2:mem:flowapi-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
                 0, "node-0", url, "sa", "", 8,

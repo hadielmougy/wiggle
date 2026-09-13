@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
@@ -54,7 +54,7 @@ class DynamicConstructsTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private InstanceView run(Blueprint bp, Object handlers, Map<String, Object> input, String jdbcUrl)
+    private InstanceView run(FlowSpec bp, Object handlers, Map<String, Object> input, String jdbcUrl)
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -66,7 +66,7 @@ class DynamicConstructsTest {
 
     // ------------------------------------------------------------------ doWhile
 
-    private static Blueprint counterLoop(ExecutionMode mode) {
+    private static FlowSpec counterLoop(ExecutionMode mode) {
         return Workflow.define("dyn-loop")
                 .execution(mode)
                 .step("init")
@@ -105,7 +105,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile runs its body at least once")
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
-        Blueprint bp = Workflow.define("dyn-loop-once")
+        FlowSpec bp = Workflow.define("dyn-loop-once")
                 .doWhile("never-again", b -> b.step("work"))
                 .step("after")
                 .build();
@@ -130,7 +130,7 @@ class DynamicConstructsTest {
     // ----------------------------------------------------------------- forEach
 
     /** Two-step body: the item value evolves scalar -> map, proving the value threads the body. */
-    private static Blueprint fanOut(ExecutionMode mode) {
+    private static FlowSpec fanOut(ExecutionMode mode) {
         return Workflow.define("dyn-fan")
                 .execution(mode)
                 .forEach("per-item", "items", b -> b
@@ -189,7 +189,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("default-name shorthand: forEach(itemsKey, body) names the node after the collection")
     void shorthandDefaultsNameToItemsKey() {
-        Blueprint bp = Workflow.define("dyn-fan-short")
+        FlowSpec bp = Workflow.define("dyn-fan-short")
                 .forEach("items", b -> b.step("upper"))
                 .combine("collect")
                 .build();
@@ -202,7 +202,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("a map input fans out per entry; the combine receives a map keyed like the input")
     void mapInputCollectsAsMap() throws Exception {
-        Blueprint bp = Workflow.define("dyn-fan-map")
+        FlowSpec bp = Workflow.define("dyn-fan-map")
                 .forEach("per-entry", "prices", b -> b.step("tag"))
                 .combine("collect")
                 .step("after")
@@ -234,7 +234,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("scalar items flow scalar-to-scalar; a Set combine parameter deduplicates")
     void setParamDeduplicates() throws Exception {
-        Blueprint bp = Workflow.define("dyn-fan-set")
+        FlowSpec bp = Workflow.define("dyn-fan-set")
                 .forEach("per-item", "items", b -> b.step("norm"))
                 .combine("collect")
                 .build();

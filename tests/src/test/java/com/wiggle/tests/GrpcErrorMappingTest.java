@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
@@ -49,7 +49,7 @@ class GrpcErrorMappingTest {
 
     @Test @DisplayName("settling a task without its lease surfaces as 409 over gRPC")
     void conflict() throws Exception {
-        Blueprint bp = Workflow.define("err-conflict")
+        FlowSpec bp = Workflow.define("err-conflict")
                 .step("work")
                 .build();
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -67,7 +67,7 @@ class GrpcErrorMappingTest {
 
     @Test @DisplayName("a non-boolean predicate result surfaces as 400 over gRPC")
     void badRequest() throws Exception {
-        Blueprint bp = Workflow.define("err-bad")
+        FlowSpec bp = Workflow.define("err-bad")
                 .gate("check")
                 .step("after")
                 .build();

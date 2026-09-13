@@ -33,9 +33,9 @@ public final class TypedBindingDemo {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             // (1) author: register the topology, once.
-            var blueprint = TypedBindingOrder.blueprint();
-            client.register(blueprint);
-            System.out.println("[author] registered " + blueprint.name() + " v" + blueprint.version());
+            var flowSpec = TypedBindingOrder.flowSpec();
+            client.register(flowSpec);
+            System.out.println("[author] registered " + flowSpec.name() + " v" + flowSpec.version());
 
             // (2) fulfilment worker: typed handlers for everything but payments.
             // (3) payments worker: owns only `charge`, on its own queue.
@@ -50,7 +50,7 @@ public final class TypedBindingDemo {
                         .start();
                 System.out.println("[payments]   serving charge on the payments queue");
 
-                String id = client.start(blueprint, Purchase.of("A-1001", 2));
+                String id = client.start(flowSpec, Purchase.of("A-1001", 2));
                 InstanceView view = client.awaitCompletion(id, Duration.ofSeconds(30));
                 Purchase result = (Purchase) RecordMapper.fromJson(view.context(), Purchase.class);   // typed again on the way out
                 System.out.println("\n[result] status=" + view.status()

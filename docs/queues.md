@@ -68,7 +68,7 @@ are never routed to a queue — see §5.
 
 ## 3. Serve a queue (a worker = a microservice)
 
-A worker registers the blueprints it can run and, by default, serves **every** queue those blueprints
+A worker registers the flow specs it can run and, by default, serves **every** queue those flow specs
 mention. `withQueues(...)` restricts it — that's how you build a specialized service:
 
 ```java
@@ -80,7 +80,7 @@ Worker gpu = new Worker(client, "gpu-1",
 ```
 
 ```java
-// order-service: default = serve every queue of the blueprints it registered
+// order-service: default = serve every queue of the flow specs it registered
 Worker general = new Worker(client, "order-1").register(orders).start();
 ```
 
@@ -206,6 +206,6 @@ even inside a local chain, a step on another queue crosses to another service. E
 ---
 
 **Submitters need even less than workers.** Everything above is about *serving* steps; a service
-that only starts instances needs no Blueprint and no shared jar at all — `client.start("orders",
+that only starts instances needs no FlowSpec and no shared jar at all — `client.start("orders",
 context)` by name is the whole integration, with the context schema as the contract. See
 [onboarding §5.2](onboarding.md#52-running-instances).

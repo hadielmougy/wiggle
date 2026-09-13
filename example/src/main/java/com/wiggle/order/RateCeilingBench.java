@@ -3,7 +3,7 @@ package com.wiggle.order;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 
@@ -67,7 +67,7 @@ public final class RateCeilingBench {
         int threads = Integer.parseInt(env("BENCH_THREADS", "16"));
 
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
-            Blueprint bp = OrderFulfilment.blueprint();
+            FlowSpec bp = OrderFulfilment.flowSpec();
             resolver.registerWorkflow(ns, bp);
 
             System.out.printf("rate-ceiling bench: coordinator=%s namespace=%s stage=%ds threads=%d rates=%s%n",
@@ -116,7 +116,7 @@ public final class RateCeilingBench {
      * the namespace afresh ({@code clientForNamespace} per call) — that per-start resolve is what
      * spreads new instances across a multi-cell ring; a cached client would pin them to one cell.
      */
-    private static StageResult stage(CoordinatedConnection resolver, String ns, Blueprint bp, int rate,
+    private static StageResult stage(CoordinatedConnection resolver, String ns, FlowSpec bp, int rate,
                                      long stageMillis, int threads) throws Exception {
         ConcurrentLinkedQueue<Long> submitNanos = new ConcurrentLinkedQueue<>();
         ConcurrentLinkedQueue<ProbeSample> probes = new ConcurrentLinkedQueue<>();
@@ -206,7 +206,7 @@ public final class RateCeilingBench {
 
     /** Start one probe instance and poll it to a terminal state; -1 on timeout. The poll routes by the
      *  instance id ({@code clientForInstance}), so it reads the cell that actually owns the probe. */
-    private static long probeSojourn(CoordinatedConnection resolver, String ns, Blueprint bp) {
+    private static long probeSojourn(CoordinatedConnection resolver, String ns, FlowSpec bp) {
         long s = System.nanoTime();
         try {
             Order order = Order.of("PROBE-" + s, "probe", 1, new BigDecimal("1.00"));
@@ -232,7 +232,7 @@ public final class RateCeilingBench {
      * can jump ahead of older instances' queued branches.) The per-cell counts double as a check that
      * the epoch ring actually spreads load across the cells.
      */
-    private static long drain(CoordinatedConnection resolver, String ns, Blueprint bp, String label)
+    private static long drain(CoordinatedConnection resolver, String ns, FlowSpec bp, String label)
             throws Exception {
         long s = System.currentTimeMillis();
         int consecutive = 0;

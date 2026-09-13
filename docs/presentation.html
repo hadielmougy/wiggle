@@ -187,7 +187,7 @@
         <h2 class="rise">A workflow is a chain of steps.</h2>
         <p class="body rise" style="margin-top:14px">
           Nothing runs while you build it. <span class="accent">build()</span> produces an
-          immutable <span class="accent">Blueprint</span> you register and start. The context
+          immutable <span class="accent">FlowSpec</span> you register and start. The context
           is one type from first step to last — typed records or JSON maps.
         </p>
         <div class="meta rise" style="margin-top:22px">
@@ -197,7 +197,7 @@
           <span><b class="teal">sleep</b> timer</span>
         </div>
       </div>
-      <pre class="rise" aria-label="Workflow definition example"><code><span class="c-typ">Blueprint</span>&lt;Order&gt; orders = <span class="c-fn">Workflow</span>.define(<span class="c-str">"order-fulfilment"</span>,
+      <pre class="rise" aria-label="Workflow definition example"><code><span class="c-typ">FlowSpec</span>&lt;Order&gt; orders = <span class="c-fn">Workflow</span>.define(<span class="c-str">"order-fulfilment"</span>,
         <span class="c-fn">ContextCodec</span>.records(Order.class))
 
     .<span class="c-fn">step</span>(<span class="c-str">"validate"</span>, o -&gt; o.withStatus(<span class="c-str">"VALIDATED"</span>))
@@ -262,7 +262,7 @@
       </div>
       <div class="card">
         <span class="k">Workers</span><h3>Pull-based execution</h3>
-        <p>Register blueprints, long-poll for steps, run them with configurable concurrency &amp; leases. Add processes to scale — they share load automatically.</p>
+        <p>Register flow specs, long-poll for steps, run them with configurable concurrency &amp; leases. Add processes to scale — they share load automatically.</p>
       </div>
       <div class="card">
         <span class="k">Storage</span><h3>Pluggable</h3>
@@ -448,7 +448,7 @@ client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approva
           <span class="kicker">io.github.hadielmougy:wiggle-client:2.1.2</span>
         </div>
       </div>
-      <pre class="rise" aria-label="Quick start example"><code><span class="c-typ">Blueprint</span>&lt;Map&lt;String,Object&gt;&gt; greet =
+      <pre class="rise" aria-label="Quick start example"><code><span class="c-typ">FlowSpec</span>&lt;Map&lt;String,Object&gt;&gt; greet =
     <span class="c-fn">Workflow</span>.defineJson(<span class="c-str">"greet"</span>)
         .<span class="c-fn">step</span>(<span class="c-str">"hello"</span>, ctx -&gt;
             <span class="c-fn">Map</span>.of(<span class="c-str">"greeting"</span>,

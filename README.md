@@ -22,7 +22,7 @@ one database is no longer enough.**
 </div>
 
 ```java
-Blueprint orders = Workflow.define("order-fulfilment")
+FlowSpec orders = Workflow.define("order-fulfilment")
         .step("validate")
         .gate("in-stock")
         .fork(Branch.of("payment",  s -> s.step("authorise").step("capture")),
@@ -114,7 +114,7 @@ The server is a library. No database configured means an in-memory store — per
 ```java
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
-    // register blueprints, run workers, start instances — all in-process
+    // register flow specs, run workers, start instances — all in-process
 }
 ```
 
@@ -239,7 +239,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 // 1. A workflow is pure topology — named steps, no logic.
-Blueprint greet = Workflow.define("greet")
+FlowSpec greet = Workflow.define("greet")
         .step("say-hello")
         .build();
 
@@ -273,7 +273,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 A real one — parallel branches, a guard, a retry policy, a server-side timer:
 
 ```java
-Blueprint orders = Workflow.define("order-fulfilment")
+FlowSpec orders = Workflow.define("order-fulfilment")
         .step("validate")
         .gate("in-stock")                    // false ⇒ the instance ends cleanly, not an error
         .fork(
@@ -342,7 +342,7 @@ try (DirectConnection wiggle = WiggleConnection.direct("localhost:8080")) {
 }
 ```
 
-A team that only *starts* workflows needs none of that — no Blueprint, no shared jar. The graph
+A team that only *starts* workflows needs none of that — no FlowSpec, no shared jar. The graph
 is data the server owns, so a submitter's whole contract is the workflow **name** plus the agreed
 context shape (exactly the coupling of calling an HTTP API). Registration ships with the worker
 artifact — the handlers and the graph they serve deploy as one atomic act:

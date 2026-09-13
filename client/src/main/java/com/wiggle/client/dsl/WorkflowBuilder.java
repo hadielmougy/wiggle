@@ -12,7 +12,7 @@ import java.util.function.UnaryOperator;
 
 /**
  * A lazily-built workflow <em>topology</em> with a Stream-shaped API: intermediate operations append
- * nodes and return the stream, and the terminal {@link #build()} produces the {@link Blueprint}.
+ * nodes and return the stream, and the terminal {@link #build()} produces the {@link FlowSpec}.
  * Nothing executes at definition time, and no step logic lives here -- every {@code step}/{@code
  * gate}/{@code effect}/{@code combine} is just a named node. The implementations are bound
  * separately on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes, matched to
@@ -457,7 +457,7 @@ public final class WorkflowBuilder {
         return this;
     }
 
-    public Blueprint build() {
+    public FlowSpec build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         if (forkPending) throw new IllegalStateException(
                 "a fork(...) has no merge: follow it with combine(...) before build()");

@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.dsl.WorkflowBuilder;
@@ -31,7 +31,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("branch writes are isolated: no implicit merge, combine owns what lands")
     void branchesAreIsolatedAndCombineDecides() throws Exception {
-        Blueprint bp = Workflow.define("isolation")
+        FlowSpec bp = Workflow.define("isolation")
                 .step("seed")
                 .fork(
                         // Both arms write the SAME key to different values, and each also asserts it
@@ -58,7 +58,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a branch that combine ignores contributes nothing to the context")
     void ignoredBranchLeavesNoTrace() throws Exception {
-        Blueprint bp = Workflow.define("ignore-arm")
+        FlowSpec bp = Workflow.define("ignore-arm")
                 .fork(
                         Branch.of("keep", s -> s.step("k")),
                         Branch.of("drop", s -> s.step("d")))
@@ -75,7 +75,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine's return REPLACES the context: keys it omits do not survive the join")
     void combineReturnReplacesContext() throws Exception {
-        Blueprint bp = Workflow.define("replace-check")
+        FlowSpec bp = Workflow.define("replace-check")
                 .step("seed")
                 .fork(
                         Branch.of("a", s -> s.step("a1")),
@@ -92,7 +92,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine with no handler fails the instance — there is no implicit union fold")
     void combineWithoutHandlerFails() throws Exception {
-        Blueprint bp = Workflow.define("no-combine-handler")
+        FlowSpec bp = Workflow.define("no-combine-handler")
                 .fork(
                         Branch.of("x", s -> s.step("x1")),
                         Branch.of("y", s -> s.step("y1")))
@@ -155,7 +155,7 @@ class ForkIsolationTest {
     }
 
     /** Runs a single instance to a terminal state (COMPLETED or FAILED) and returns the view. */
-    private static InstanceView runToTerminal(Blueprint bp, Object handlers, Map<String, Object> input)
+    private static InstanceView runToTerminal(FlowSpec bp, Object handlers, Map<String, Object> input)
             throws Exception {
         String url = "jdbc:h2:mem:iso-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
@@ -179,7 +179,7 @@ class ForkIsolationTest {
     }
 
     /** Runs a single instance to completion on a one-node in-memory H2 server and returns its context. */
-    private static Map<String, Object> run(Blueprint bp, Object handlers, Map<String, Object> input) throws Exception {
+    private static Map<String, Object> run(FlowSpec bp, Object handlers, Map<String, Object> input) throws Exception {
         String url = "jdbc:h2:mem:iso-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
                 0, "node-0", url, "sa", "", 8,

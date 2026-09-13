@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Json;
 import com.wiggle.server.engine.DefinitionRegistry;
@@ -25,7 +25,7 @@ class ScheduleTest {
         return new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
     }
 
-    private static Blueprint probe() {
+    private static FlowSpec probe() {
         return Workflow.define("sched-probe").step("work").build();
     }
 
@@ -34,7 +34,7 @@ class ScheduleTest {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
-            Blueprint bp = probe();
+            FlowSpec bp = probe();
             engine.register(bp.definition());
 
             String id = engine.createSchedule("sched-probe", Duration.ofMillis(50), Map.of("from", "schedule"));

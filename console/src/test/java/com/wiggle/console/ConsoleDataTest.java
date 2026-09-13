@@ -4,7 +4,7 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ConsoleDataTest {
 
-    private static Blueprint wf() {
+    private static FlowSpec wf() {
         return Workflow.define("wf").step("work").build();
     }
 

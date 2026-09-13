@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
@@ -42,7 +42,7 @@ class CompetingConsumersTest {
     }
 
     /** A single-step workflow whose one step both workers will serve. */
-    private static Blueprint oneStep() {
+    private static FlowSpec oneStep() {
         return Workflow.define("competing").step("work").build();
     }
 

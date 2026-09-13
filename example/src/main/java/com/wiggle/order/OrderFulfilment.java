@@ -1,6 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
@@ -32,7 +32,7 @@ public final class OrderFulfilment {
         return v == null || v.isBlank() ? ExecutionMode.SERVER : ExecutionMode.valueOf(v.trim());
     }
 
-    public static Blueprint blueprint() {
+    public static FlowSpec flowSpec() {
         OrderHandlers h = new OrderHandlers();
         return Wiggle.define("order-fulfilment", Order.class, f -> {
             var validated = f.execution(ExecutionMode.LOCAL_ASYNC)

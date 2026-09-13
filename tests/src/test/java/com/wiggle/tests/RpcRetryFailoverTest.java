@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
@@ -51,7 +51,7 @@ class RpcRetryFailoverTest {
     @DisplayName("a call issued while the cell is down rides out the outage and succeeds once it returns")
     void ridesOutRescheduling() throws Exception {
         int port = freePort();
-        Blueprint bp = Workflow.define("wf").step("a").build();
+        FlowSpec bp = Workflow.define("wf").step("a").build();
         System.setProperty("wiggle.rpc.maxAttempts", "60");
         System.setProperty("wiggle.rpc.retryDelayMillis", "150");
 

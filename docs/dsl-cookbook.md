@@ -11,10 +11,10 @@ Eight small workflows, each pairing operators that don't otherwise appear togeth
 ./gradlew :example:runCookbook
 ```
 
-`CookbookDemo` starts an embedded server and one worker, registers every blueprint below and binds
+`CookbookDemo` starts an embedded server and one worker, registers every flow spec below and binds
 its handlers, runs one instance of each, and prints the resulting context.
 
-> **Topology and logic are separate.** A `Workflow.define(...)` blueprint is pure topology — named
+> **Topology and logic are separate.** A `Workflow.define(...)` flow spec is pure topology — named
 > nodes and their wiring, no logic and no context type. The step logic lives in a class annotated
 > `@Handlers("<workflow-name>")`, one per workflow, whose methods are matched to the graph by name
 > (case/style-insensitive, so `isLarge` serves `is-large`). Each method's signature defines its step:
@@ -262,7 +262,7 @@ class Parent {
 
 The child starts with the parent's current context and its final context merges back on completion;
 a failed or cancelled child fails the parent. The child workflow (`cb-linear-gate` here) must already
-be registered on the server — `CookbookDemo` registers all eight blueprints before starting any
+be registered on the server — `CookbookDemo` registers all eight flow specs before starting any
 instance for exactly this reason. The parent's own `merge` combine is an explicit
 handler folding the `provision` arm onto the pre-fork context (there is no implicit union).
 

@@ -11,7 +11,7 @@ import java.time.Duration;
 /**
  * A coordinator-routed worker. Unlike {@link WorkerMain}, which binds to a single server,
  * this resolves the active cells of a namespace through the coordinator and runs one worker
- * per cell, reconciling as cells come and go. The OrderFulfilment blueprint (its class
+ * per cell, reconciling as cells come and go. The OrderFulfilment flowSpec (its class
  * handlers) is bound to every per-cell worker via the configurator.
  */
 public final class NamespaceWorkerMain {
@@ -32,7 +32,7 @@ public final class NamespaceWorkerMain {
                 WiggleClient::new,                         // clientFactory (same as the convenience ctor)
                 id,
                 opts,
-                w -> w.register(OrderFulfilment.blueprint()).handlers(new OrderHandlers())
+                w -> w.register(OrderFulfilment.flowSpec()).handlers(new OrderHandlers())
         ).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -40,7 +40,7 @@ public final class NamespaceWorkerMain {
             resolver.close();
         }));
 
-        System.out.println("namespace worker " + id + " bound " + OrderFulfilment.blueprint().name()
+        System.out.println("namespace worker " + id + " bound " + OrderFulfilment.flowSpec().name()
                 + " for namespace " + ns + " via coordinator " + coord);
         Thread.currentThread().join();
     }

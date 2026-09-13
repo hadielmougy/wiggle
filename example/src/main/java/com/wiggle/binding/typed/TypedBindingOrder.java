@@ -1,6 +1,6 @@
 package com.wiggle.binding.typed;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 
 /**
@@ -16,7 +16,7 @@ public final class TypedBindingOrder {
 
     private TypedBindingOrder() {}
 
-    public static Blueprint blueprint() {
+    public static FlowSpec flowSpec() {
         return Workflow.define(NAME)
                 .step("validate")                                    // implemented by name, elsewhere
                 .gate("in-stock")                                    // predicate node; a worker supplies it

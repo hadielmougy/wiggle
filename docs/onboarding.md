@@ -176,10 +176,10 @@ processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:r
 ## 5. Authoring workflows
 
 A definition is pure **topology** — named nodes and their wiring, no logic and no context type.
-`build()` returns a `Blueprint` (just the graph):
+`build()` returns a `FlowSpec` (just the graph):
 
 ```java
-Blueprint orders = Workflow.define("order-fulfilment")
+FlowSpec orders = Workflow.define("order-fulfilment")
         .step("validate")
         .gate("in-stock")
         .fork(
@@ -237,7 +237,7 @@ Every operation is topology only — it names a node; the matching `@Handlers` m
 | `step(name, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
 | `execution(mode)` | set the execution mode ([§6.4](#64-execution-modes)) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
-| `build()` | produce the `Blueprint` |
+| `build()` | produce the `FlowSpec` |
 
 `step`/`effect`/`gate` take an optional trailing `RetryPolicy`. The context type is not fixed by the
 definition — each handler picks the type it works in by its signature (a typed record, or a
@@ -267,14 +267,14 @@ class OrderHandlers {
 
 ```java
 try (WiggleClient client = new WiggleClient("localhost:8080")) {
-    String id = client.start(orders, Order.of(...));                       // same-JVM convenience: by Blueprint
+    String id = client.start(orders, Order.of(...));                       // same-JVM convenience: by FlowSpec
     InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(30));   // COMPLETED | FAILED | CANCELLED
     client.cancel(id, "reason");
 }
 ```
 
 **Integrating as a separate team — start by name, no jar.** A submitting service does not need
-the Blueprint or any shared artifact: the graph is data the server owns, so the submitter's whole
+the FlowSpec or any shared artifact: the graph is data the server owns, so the submitter's whole
 contract is the workflow **name** plus the agreed context shape (document it like any API schema).
 
 ```java
@@ -366,7 +366,7 @@ new Worker(client, "worker-1", WorkerOptions.defaults()
 | `longPollWait` | 10s | how long the worker lets a poll block server-side |
 | `idleBackoff` | 200ms | pause when a poll returns nothing |
 | `errorBackoff` | 2s | pause after a poll error |
-| `registerOnStart` | true | (re)register blueprints when the worker starts |
+| `registerOnStart` | true | (re)register flow specs when the worker starts |
 | `localBatchSize` | 64 | LOCAL_ASYNC steps buffered before a flush (ignored by SERVER/LOCAL_SYNC) |
 
 **RPC retry (client + worker).** Every `WiggleClient` call — and therefore every worker RPC (poll,
@@ -410,7 +410,7 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 | `WIGGLE_JDBC_URL` / `_USER` / `_PASSWORD` | *(unset)* | Benchmark | run the benchmark against a real DB |
 
 > The example workflows set their mode in code via `.execution(...)`. To sweep modes without
-> editing, change `OrderFulfilment.blueprint()` to call the provided `mode()` helper (reads
+> editing, change `OrderFulfilment.flow spec()` to call the provided `mode()` helper (reads
 > `WIGGLE_EXECUTION_MODE`); the benchmark already reads it.
 
 ---

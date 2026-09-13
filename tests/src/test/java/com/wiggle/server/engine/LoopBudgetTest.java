@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -54,7 +54,7 @@ class LoopBudgetTest {
         public Map<String, Object> after(Map<String, Object> ctx) { return ctx; }
     }
 
-    private static InstanceView run(Blueprint bp, Duration timeout) throws Exception {
+    private static InstanceView run(FlowSpec bp, Duration timeout) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "loop-w").register(bp).handlers(new LoopHandlers())) {
@@ -67,7 +67,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its explicit budget (SERVER dispatch)")
     void runawayServerMode() throws Exception {
-        Blueprint bp = Workflow.define("loop-wf")
+        FlowSpec bp = Workflow.define("loop-wf")
                 .doWhile("forever", 7, b -> b.step("spin"))
                 .step("after")
                 .build();
@@ -81,7 +81,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its budget under local chaining too")
     void runawayLocalAsync() throws Exception {
-        Blueprint bp = Workflow.define("loop-wf")
+        FlowSpec bp = Workflow.define("loop-wf")
                 .doWhile("forever", 7, b -> b.step("spin"))
                 .step("after")
                 .execution(ExecutionMode.LOCAL_ASYNC)
@@ -94,7 +94,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a loop that finishes within budget completes; the counter never reaches the context")
     void legitLoopUnaffected() throws Exception {
-        Blueprint bp = Workflow.define("loop-wf")
+        FlowSpec bp = Workflow.define("loop-wf")
                 .doWhile("few-more", 10, b -> b.step("spin"))
                 .step("after")
                 .build();

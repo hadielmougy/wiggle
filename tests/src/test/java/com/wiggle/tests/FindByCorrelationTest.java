@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
@@ -29,7 +29,7 @@ class FindByCorrelationTest {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
     }
 
-    private static Blueprint wf() {
+    private static FlowSpec wf() {
         return Workflow.define("corr").step("work").build();
     }
 

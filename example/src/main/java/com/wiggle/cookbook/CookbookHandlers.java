@@ -11,7 +11,7 @@ import java.util.Map;
 import static com.wiggle.cookbook.Cookbook.with;
 
 /**
- * Step logic for the {@link Cookbook} blueprints, one {@code @Handlers} class per workflow. Each
+ * Step logic for the {@link Cookbook} flow specs, one {@code @Handlers} class per workflow. Each
  * method's name matches a step (case/style-insensitive, so {@code inStock} would serve {@code
  * in-stock}) and its signature defines the step: a {@code Map<String,Object>} in and out is a task, a
  * {@code boolean} return is a gate, {@code void} is an effect. Combine steps ({@code large-merge},

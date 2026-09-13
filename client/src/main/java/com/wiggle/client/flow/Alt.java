@@ -3,7 +3,7 @@ package com.wiggle.client.flow;
 import java.util.function.UnaryOperator;
 
 /**
- * One arm of a {@link WiggleFuture#thenChoose choose}: a guard and the branch that runs when it is
+ * One arm of a {@link WiggleFlow#thenChoose choose}: a guard and the branch that runs when it is
  * the first guard to hold. Exactly one arm ever runs. An {@link #otherwise} arm has no guard and runs
  * only when none of the guarded arms matched; it must be given last.
  *
@@ -12,7 +12,7 @@ import java.util.function.UnaryOperator;
  *
  * @param <T> the context type the choose sits on
  */
-public record Alt<T>(String name, boolean guarded, UnaryOperator<WiggleFuture<T>> body) {
+public record Alt<T>(String name, boolean guarded, UnaryOperator<WiggleFlow<T>> body) {
 
     public Alt {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("a choose case needs a name");
@@ -20,12 +20,12 @@ public record Alt<T>(String name, boolean guarded, UnaryOperator<WiggleFuture<T>
     }
 
     /** A guarded arm; the node name comes from the guard method the reference names. */
-    public static <T> Alt<T> when(FlowGate<T> guard, UnaryOperator<WiggleFuture<T>> body) {
+    public static <T> Alt<T> when(FlowGate<T> guard, UnaryOperator<WiggleFlow<T>> body) {
         return new Alt<>(StepNames.of(guard), true, body);
     }
 
     /** The default arm -- no guard, so nothing to reference; it is named for the console diagram only. */
-    public static <T> Alt<T> otherwise(String name, UnaryOperator<WiggleFuture<T>> body) {
+    public static <T> Alt<T> otherwise(String name, UnaryOperator<WiggleFlow<T>> body) {
         return new Alt<>(name, false, body);
     }
 }

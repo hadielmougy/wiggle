@@ -1,6 +1,6 @@
 package com.wiggle.cookbook;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
@@ -12,9 +12,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Runs every {@link Cookbook} blueprint to completion in one embedded JVM, printing the
+ * Runs every {@link Cookbook} flowSpec to completion in one embedded JVM, printing the
  * resulting context so you can see each operator combination's actual effect. Two of the
- * blueprints ({@code cb-approval-escalation}, {@code cb-kitchen-sink}) wait on a signal that
+ * flowSpecs ({@code cb-approval-escalation}, {@code cb-kitchen-sink}) wait on a signal that
  * this demo deliberately never sends, so you can watch the escalation branch fire instead.
  *
  * <pre>./gradlew :example:runCookbook</pre>
@@ -27,14 +27,14 @@ public final class CookbookDemo {
 
             // cb-linear-gate is also used as a child workflow by cb-parent and cb-kitchen-sink,
             // so it must be registered before either of those instances starts.
-            Blueprint linearGate = Cookbook.linearWithGate();
-            Blueprint chooseFork = Cookbook.chooseThenFork();
-            Blueprint forEachQueues = Cookbook.forEachAcrossQueues();
-            Blueprint pollLoop = Cookbook.pollUntilReady();
-            Blueprint approval = Cookbook.approvalWithEscalation();
-            Blueprint parentChild = Cookbook.childCheckThenFork();
-            Blueprint batchedLoop = Cookbook.batchedLoopWithCheckpoint();
-            Blueprint kitchenSink = Cookbook.kitchenSink();
+            FlowSpec linearGate = Cookbook.linearWithGate();
+            FlowSpec chooseFork = Cookbook.chooseThenFork();
+            FlowSpec forEachQueues = Cookbook.forEachAcrossQueues();
+            FlowSpec pollLoop = Cookbook.pollUntilReady();
+            FlowSpec approval = Cookbook.approvalWithEscalation();
+            FlowSpec parentChild = Cookbook.childCheckThenFork();
+            FlowSpec batchedLoop = Cookbook.batchedLoopWithCheckpoint();
+            FlowSpec kitchenSink = Cookbook.kitchenSink();
 
             try (Worker worker = new Worker(client, "cookbook-worker")
                     .register(linearGate).register(chooseFork).register(forEachQueues)
@@ -76,7 +76,7 @@ public final class CookbookDemo {
         }
     }
 
-    private static void run(WiggleClient client, String label, Blueprint bp,
+    private static void run(WiggleClient client, String label, FlowSpec bp,
                              Map<String, Object> context) throws Exception {
         System.out.println("\n--- " + label + " ---");
         String id = client.start(bp, context);

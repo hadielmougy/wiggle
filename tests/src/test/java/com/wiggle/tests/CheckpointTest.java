@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
@@ -57,9 +57,9 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        Blueprint plain = Workflow.define("cp")
+        FlowSpec plain = Workflow.define("cp")
                 .step("a").step("b").build();
-        Blueprint checked = Workflow.define("cp")
+        FlowSpec checked = Workflow.define("cp")
                 .step("a").checkpoint().step("b").build();
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
@@ -75,7 +75,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint bp = Workflow.define("cp-flush")
+        FlowSpec bp = Workflow.define("cp-flush")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a").checkpoint()
                 .step("b")
@@ -109,7 +109,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        Blueprint bp = Workflow.define("cp-nobuf")
+        FlowSpec bp = Workflow.define("cp-nobuf")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a")   // no checkpoint
                 .step("b")

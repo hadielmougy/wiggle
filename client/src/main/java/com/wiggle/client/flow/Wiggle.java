@@ -1,6 +1,6 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;
@@ -8,14 +8,14 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * Entry point to the future-shaped workflow API: a workflow written as a chain of method references
- * to its handler methods, compiled to the same {@link Blueprint} that
+ * Entry point to the flow API: a workflow written as a chain of method references
+ * to its handler methods, compiled to the same {@link FlowSpec} that
  * {@link com.wiggle.client.dsl.Workflow Workflow.define(...)} produces.
  *
  * <pre>{@code
  * OrderHandlers h = new OrderHandlers();
  *
- * Blueprint order = Wiggle.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge).named("payment");
@@ -37,8 +37,8 @@ import java.util.function.Function;
  * definitions.
  *
  * <p><b>What it is not.</b> The chain is not executing and the handles are not futures over running
- * work: there is no {@code get()} and no {@code join()}. See {@link WiggleFuture} for what continuing
- * a future twice means, and for why {@code for} loops in a definition body unroll into nodes.
+ * work: there is no {@code get()} and no {@code join()}. See {@link WiggleFlow} for what continuing
+ * a handle twice means, and for why {@code for} loops in a definition body unroll into nodes.
  *
  * <p>The handler object is used here only as the receiver the method references name; nothing on it
  * is invoked while the workflow is defined. It may be the very instance later given to
@@ -57,8 +57,8 @@ public final class Wiggle {
      *              not otherwise used; the graph carries no context type
      * @param body  the chain, run once, here
      */
-    public static <T> Blueprint define(String name, Class<T> input,
-                                       Function<WiggleFuture<T>, WiggleFuture<?>> body) {
+    public static <T> FlowSpec define(String name, Class<T> input,
+                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
         return define(name, null, input, body);
     }
 
@@ -66,14 +66,14 @@ public final class Wiggle {
      * {@link #define(String, Class, Function)} with an explicit default retry policy for every step
      * that does not name its own.
      */
-    public static <T> Blueprint define(String name, RetryPolicy defaultRetry, Class<T> input,
-                                       Function<WiggleFuture<T>, WiggleFuture<?>> body) {
+    public static <T> FlowSpec define(String name, RetryPolicy defaultRetry, Class<T> input,
+                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
         if (body == null) throw new IllegalArgumentException("workflow '" + name + "' has no body");
         Plan.Step root = Plan.root();
-        WiggleFuture<?> tail = body.apply(new WiggleFuture<>(root));
+        WiggleFlow<?> tail = body.apply(new WiggleFlow<>(root));
         if (tail == null) {
             throw new IllegalStateException(
-                    "the body of workflow '" + name + "' returned null; it must return the future it ends on");
+                    "the body of workflow '" + name + "' returned null; it must return the handle it ends on");
         }
         return Plan.compile(name, defaultRetry, root);
     }
@@ -81,8 +81,8 @@ public final class Wiggle {
     // ------------------------------------------------------------------ fan-out
 
     /**
-     * Fans the flow out over futures that branched from a common point, and returns the mandatory
-     * combine stage. The futures are the arms: each runs on its <em>own isolated copy</em> of the
+     * Fans the flow out over handles that branched from a common point, and returns the mandatory
+     * combine stage. The handles are the arms: each runs on its <em>own isolated copy</em> of the
      * context -- an arm's writes are invisible to its siblings and never touch the shared context --
      * so the combine is the only way an arm's result reaches the flow.
      *
@@ -95,35 +95,35 @@ public final class Wiggle {
      * <p>Unlike {@link java.util.concurrent.CompletableFuture#allOf}, the arms are not already
      * running and the result is not {@code Void}: this records where the graph forks, and the combine
      * that follows records where it rejoins. The arms must fan out from one common step -- that step
-     * is where the fork node lands. Each arm's name comes from {@link WiggleFuture#named}, or from its
+     * is where the fork node lands. Each arm's name comes from {@link WiggleFlow#named}, or from its
      * last step; the engine keys each branch's result by that name for the combine handler's
      * {@link com.wiggle.client.worker.Arm @Arm} parameters.
      */
-    public static <A, B> WiggleFuture.Fork2<A, B> allOf(WiggleFuture<A> a, WiggleFuture<B> b) {
-        return new WiggleFuture.Fork2<>(Plan.fork(steps(a, b)));
+    public static <A, B> WiggleFlow.Fork2<A, B> allOf(WiggleFlow<A> a, WiggleFlow<B> b) {
+        return new WiggleFlow.Fork2<>(Plan.fork(steps(a, b)));
     }
 
-    /** Three-armed {@link #allOf(WiggleFuture, WiggleFuture)}. */
-    public static <A, B, C> WiggleFuture.Fork3<A, B, C> allOf(WiggleFuture<A> a, WiggleFuture<B> b,
-                                                              WiggleFuture<C> c) {
-        return new WiggleFuture.Fork3<>(Plan.fork(steps(a, b, c)));
+    /** Three-armed {@link #allOf(WiggleFlow, WiggleFlow)}. */
+    public static <A, B, C> WiggleFlow.Fork3<A, B, C> allOf(WiggleFlow<A> a, WiggleFlow<B> b,
+                                                              WiggleFlow<C> c) {
+        return new WiggleFlow.Fork3<>(Plan.fork(steps(a, b, c)));
     }
 
     /**
-     * {@link #allOf(WiggleFuture, WiggleFuture)} with any number of arms. Past three the combine's
+     * {@link #allOf(WiggleFlow, WiggleFlow)} with any number of arms. Past three the combine's
      * parameters outrun what a functional interface can express, so
-     * {@link WiggleFuture.ForkN#combine(String, Class)} names the combine handler instead of
+     * {@link WiggleFlow.ForkN#combine(String, Class)} names the combine handler instead of
      * referencing it.
      */
-    public static WiggleFuture.ForkN allOf(WiggleFuture<?>... arms) {
-        return new WiggleFuture.ForkN(Plan.fork(steps(arms)));
+    public static WiggleFlow.ForkN allOf(WiggleFlow<?>... arms) {
+        return new WiggleFlow.ForkN(Plan.fork(steps(arms)));
     }
 
-    private static List<Plan.Step> steps(WiggleFuture<?>... futures) {
-        List<Plan.Step> steps = new ArrayList<>(futures.length);
-        for (WiggleFuture<?> future : futures) {
-            if (future == null) throw new IllegalArgumentException("allOf was given a null future");
-            steps.add(future.step());
+    private static List<Plan.Step> steps(WiggleFlow<?>... flows) {
+        List<Plan.Step> steps = new ArrayList<>(flows.length);
+        for (WiggleFlow<?> flow : flows) {
+            if (flow == null) throw new IllegalArgumentException("allOf was given a null branch");
+            steps.add(flow.step());
         }
         return steps;
     }

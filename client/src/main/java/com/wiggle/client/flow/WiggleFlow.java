@@ -15,7 +15,7 @@ import java.util.function.UnaryOperator;
  * {@link java.util.concurrent.CompletableFuture} so a workflow reads as a chain, but it is not a
  * future over a running computation. Nothing executes here. Each {@code then*} call records a step
  * and returns a handle on the new end; {@link Wiggle#define} walks the recording once and compiles it
- * to the same {@link com.wiggle.client.dsl.Blueprint Blueprint} the name-based DSL produces. The
+ * to the same {@link com.wiggle.client.dsl.FlowSpec FlowSpec} the name-based DSL produces. The
  * engine, the graph rows and the worker binding are unchanged -- this is a typed front-end, not a
  * second execution model.
  *
@@ -24,7 +24,7 @@ import java.util.function.UnaryOperator;
  * node name with the method.
  *
  * <pre>{@code
- * Blueprint order = Wiggle.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge).named("payment");
@@ -38,7 +38,7 @@ import java.util.function.UnaryOperator;
  * });
  * }</pre>
  *
- * <h2>Continuing a future twice is a fan-out</h2>
+ * <h2>Continuing a handle twice is a fan-out</h2>
  * {@code validated} above is continued twice, and that is exactly what makes the two arms. They must
  * be rejoined -- branches run on isolated copies of the context, so a combine is the only way their
  * results reach the flow. A split that is never passed to {@link Wiggle#allOf} is rejected when the
@@ -62,11 +62,11 @@ import java.util.function.UnaryOperator;
  *
  * @param <T> the context type at this point in the graph
  */
-public final class WiggleFuture<T> {
+public final class WiggleFlow<T> {
 
     private final Plan.Step step;
 
-    WiggleFuture(Plan.Step step) {
+    WiggleFlow(Plan.Step step) {
         this.step = step;
     }
 
@@ -76,8 +76,8 @@ public final class WiggleFuture<T> {
     }
 
     /** Records an operation and returns a handle on it. */
-    private <R> WiggleFuture<R> record(String label, UnaryOperator<WorkflowBuilder> op) {
-        return new WiggleFuture<>(new Plan.Step(step, op, label));
+    private <R> WiggleFlow<R> record(String label, UnaryOperator<WorkflowBuilder> op) {
+        return new WiggleFlow<>(new Plan.Step(step, op, label));
     }
 
     /**
@@ -85,7 +85,7 @@ public final class WiggleFuture<T> {
      * the combine handler's {@link com.wiggle.client.worker.Arm @Arm} parameter, so the name is part
      * of the contract, not a label. Without it an arm is named after its last step.
      */
-    public WiggleFuture<T> named(String armName) {
+    public WiggleFlow<T> named(String armName) {
         if (armName == null || armName.isBlank()) throw new IllegalArgumentException("an arm name is required");
         step.armName = armName;
         return this;
@@ -94,37 +94,37 @@ public final class WiggleFuture<T> {
     // ------------------------------------------------------------------ steps
 
     /** A task step: the handler's return value becomes the new context. */
-    public <R> WiggleFuture<R> thenApply(FlowFn<T, R> step) {
+    public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step) {
         String name = StepNames.of(step);
         return record(name, b -> b.step(name));
     }
 
     /** {@link #thenApply(FlowFn)} with an explicit retry policy for the step. */
-    public <R> WiggleFuture<R> thenApply(FlowFn<T, R> step, RetryPolicy retry) {
+    public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step, RetryPolicy retry) {
         String name = StepNames.of(step);
         return record(name, b -> b.step(name, retry));
     }
 
     /** {@link #thenApply(FlowFn)} pinned to a dedicated worker queue. */
-    public <R> WiggleFuture<R> thenApply(FlowFn<T, R> step, String queue) {
+    public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step, String queue) {
         String name = StepNames.of(step);
         return record(name, b -> b.step(name, queue));
     }
 
     /** An effect step: the handler returns {@code void}, so the context is unchanged. */
-    public WiggleFuture<T> thenAccept(FlowEffect<T> effect) {
+    public WiggleFlow<T> thenAccept(FlowEffect<T> effect) {
         String name = StepNames.of(effect);
         return record(name, b -> b.effect(name));
     }
 
     /** {@link #thenAccept(FlowEffect)} with an explicit retry policy. */
-    public WiggleFuture<T> thenAccept(FlowEffect<T> effect, RetryPolicy retry) {
+    public WiggleFlow<T> thenAccept(FlowEffect<T> effect, RetryPolicy retry) {
         String name = StepNames.of(effect);
         return record(name, b -> b.effect(name, retry));
     }
 
     /** {@link #thenAccept(FlowEffect)} pinned to a dedicated worker queue. */
-    public WiggleFuture<T> thenAccept(FlowEffect<T> effect, String queue) {
+    public WiggleFlow<T> thenAccept(FlowEffect<T> effect, String queue) {
         String name = StepNames.of(effect);
         return record(name, b -> b.effect(name, queue));
     }
@@ -134,13 +134,13 @@ public final class WiggleFuture<T> {
      * (or, inside a branch, short-circuits to that branch's join) exactly as {@code gate} does in the
      * name-based DSL.
      */
-    public WiggleFuture<T> thenFilter(FlowGate<T> gate) {
+    public WiggleFlow<T> thenFilter(FlowGate<T> gate) {
         String name = StepNames.of(gate);
         return record(name, b -> b.gate(name));
     }
 
     /** {@link #thenFilter(FlowGate)} with an explicit retry policy for the guard. */
-    public WiggleFuture<T> thenFilter(FlowGate<T> gate, RetryPolicy retry) {
+    public WiggleFlow<T> thenFilter(FlowGate<T> gate, RetryPolicy retry) {
         String name = StepNames.of(gate);
         return record(name, b -> b.gate(name, retry));
     }
@@ -148,12 +148,12 @@ public final class WiggleFuture<T> {
     // ------------------------------------------------------------------ waiting
 
     /** A server-side timer. No worker is held while the instance waits. */
-    public WiggleFuture<T> thenSleep(Duration duration) {
+    public WiggleFlow<T> thenSleep(Duration duration) {
         return record(null, b -> b.sleep(duration));
     }
 
     /** {@link #thenSleep(Duration)} under an explicit node name (for a readable console diagram). */
-    public WiggleFuture<T> thenSleep(String name, Duration duration) {
+    public WiggleFlow<T> thenSleep(String name, Duration duration) {
         return record(name, b -> b.sleep(name, duration));
     }
 
@@ -162,12 +162,12 @@ public final class WiggleFuture<T> {
      * result. The resulting context type is not knowable statically -- re-type it with {@link #as}
      * when the signal changes it.
      */
-    public WiggleFuture<T> thenAwait(String signal) {
+    public WiggleFlow<T> thenAwait(String signal) {
         return record(signal, b -> b.awaitSignal(signal));
     }
 
     /** {@link #thenAwait(String)} with a deadline; on timeout the instance fails. */
-    public WiggleFuture<T> thenAwait(String signal, Duration timeout) {
+    public WiggleFlow<T> thenAwait(String signal, Duration timeout) {
         return record(signal, b -> b.awaitSignal(signal, timeout));
     }
 
@@ -175,7 +175,7 @@ public final class WiggleFuture<T> {
      * {@link #thenAwait(String)} with a deadline and an escalation branch that runs instead when the
      * signal does not arrive in time, rejoining the flow afterwards.
      */
-    public WiggleFuture<T> thenAwait(String signal, Duration timeout, UnaryOperator<WiggleFuture<T>> escalation) {
+    public WiggleFlow<T> thenAwait(String signal, Duration timeout, UnaryOperator<WiggleFlow<T>> escalation) {
         UnaryOperator<WorkflowBuilder> body = body(escalation, "the escalation branch of '" + signal + "'");
         return record(signal, b -> b.awaitSignal(signal, timeout, body));
     }
@@ -185,7 +185,7 @@ public final class WiggleFuture<T> {
      * context merges back here. {@code result} names the type that comes back -- it is not checked
      * against the child's topology, which is a separate definition.
      */
-    public <R> WiggleFuture<R> thenSubFlow(String node, String workflow, Class<R> result) {
+    public <R> WiggleFlow<R> thenSubFlow(String node, String workflow, Class<R> result) {
         return record(node, b -> b.subWorkflow(node, workflow));
     }
 
@@ -199,14 +199,14 @@ public final class WiggleFuture<T> {
      * final value and returns the complete post-join context.
      */
     public <E> Items thenForEach(String itemsKey, Class<E> itemType,
-                                 Function<WiggleFuture<E>, WiggleFuture<?>> loopBody) {
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
         return thenForEach(itemsKey, itemsKey, itemType, loopBody);
     }
 
     /** {@link #thenForEach(String, Class, Function)} under an explicit node name -- needed when the
      *  same collection key is fanned over twice (node names must be unique). */
     public <E> Items thenForEach(String name, String itemsKey, Class<E> itemType,
-                                 Function<WiggleFuture<E>, WiggleFuture<?>> loopBody) {
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
         UnaryOperator<WorkflowBuilder> body = body(loopBody, "the forEach body for '" + name + "'");
         return new Items(this, name, itemsKey, body);
     }
@@ -221,7 +221,7 @@ public final class WiggleFuture<T> {
      * the shape.
      */
     @SafeVarargs
-    public final WiggleFuture<T> thenChoose(Alt<T>... alts) {
+    public final WiggleFlow<T> thenChoose(Alt<T>... alts) {
         Case[] cases = new Case[alts.length];
         for (int i = 0; i < alts.length; i++) {
             Alt<T> alt = alts[i];
@@ -236,7 +236,7 @@ public final class WiggleFuture<T> {
      * holds the body runs again. Note the ordering -- the body always runs at least once. Compiles to
      * a plain cycle in the graph; the iteration budget is the engine default.
      */
-    public WiggleFuture<T> repeatWhile(FlowGate<T> condition, UnaryOperator<WiggleFuture<T>> loopBody) {
+    public WiggleFlow<T> repeatWhile(FlowGate<T> condition, UnaryOperator<WiggleFlow<T>> loopBody) {
         String name = StepNames.of(condition);
         UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + name + "'");
         return record(name, b -> b.doWhile(name, body));
@@ -244,8 +244,8 @@ public final class WiggleFuture<T> {
 
     /** {@link #repeatWhile(FlowGate, UnaryOperator)} with an explicit iteration budget: one pass past
      *  {@code maxIterations} fails the instance rather than spinning. */
-    public WiggleFuture<T> repeatWhile(FlowGate<T> condition, int maxIterations,
-                                       UnaryOperator<WiggleFuture<T>> loopBody) {
+    public WiggleFlow<T> repeatWhile(FlowGate<T> condition, int maxIterations,
+                                       UnaryOperator<WiggleFlow<T>> loopBody) {
         String name = StepNames.of(condition);
         UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + name + "'");
         return record(name, b -> b.doWhile(name, maxIterations, body));
@@ -257,22 +257,22 @@ public final class WiggleFuture<T> {
      * Marks the step just added as compensable: if the instance later fails, its undo runs in the
      * reverse pass. Must directly follow {@link #thenApply} or {@link #thenAccept}.
      */
-    public WiggleFuture<T> compensate() {
+    public WiggleFlow<T> compensate() {
         return record(null, WorkflowBuilder::compensate);
     }
 
     /** Marks the step just added as a flush boundary under {@code LOCAL_ASYNC}. */
-    public WiggleFuture<T> checkpoint() {
+    public WiggleFlow<T> checkpoint() {
         return record(null, WorkflowBuilder::checkpoint);
     }
 
     /** Sets the queue used by every step defined after this point. */
-    public WiggleFuture<T> defaultQueue(String queue) {
+    public WiggleFlow<T> defaultQueue(String queue) {
         return record(null, b -> b.defaultQueue(queue));
     }
 
     /** Sets how this workflow's steps are driven. Part of the definition's content hash. */
-    public WiggleFuture<T> execution(ExecutionMode mode) {
+    public WiggleFlow<T> execution(ExecutionMode mode) {
         return record(null, b -> b.execution(mode));
     }
 
@@ -283,8 +283,8 @@ public final class WiggleFuture<T> {
      * persisted context into the next handler's parameter.
      */
     @SuppressWarnings("unchecked")
-    public <R> WiggleFuture<R> as(Class<R> type) {
-        return (WiggleFuture<R>) this;
+    public <R> WiggleFlow<R> as(Class<R> type) {
+        return (WiggleFlow<R>) this;
     }
 
     // ------------------------------------------------------------------ nested bodies
@@ -294,12 +294,12 @@ public final class WiggleFuture<T> {
      * The body records its own little tree, which is walked into the nested builder when the enclosing
      * step is applied.
      */
-    private static <A> UnaryOperator<WorkflowBuilder> body(Function<WiggleFuture<A>, ? extends WiggleFuture<?>> body,
+    private static <A> UnaryOperator<WorkflowBuilder> body(Function<WiggleFlow<A>, ? extends WiggleFlow<?>> body,
                                                            String what) {
         Plan.Step root = Plan.root();
-        WiggleFuture<?> tail = body.apply(new WiggleFuture<>(root));
+        WiggleFlow<?> tail = body.apply(new WiggleFlow<>(root));
         if (tail == null) {
-            throw new IllegalStateException(what + " returned null; it must return the future it ends on");
+            throw new IllegalStateException(what + " returned null; it must return the handle it ends on");
         }
         return sub -> Plan.walk(root, sub, what);
     }
@@ -311,7 +311,7 @@ public final class WiggleFuture<T> {
      *
      * <p>A referenced combine is checked against the fork while the workflow is being defined: the
      * handler's {@link com.wiggle.client.worker.Arm @Arm} parameters must name this fork's arms, in
-     * the order the futures were given. That is what makes {@code A} and {@code B} above mean
+     * the order the handles were given. That is what makes {@code A} and {@code B} above mean
      * anything -- and it turns a mistyped arm name, which the engine can only discover when the
      * combine runs, into an error at definition time.
      */
@@ -328,7 +328,7 @@ public final class WiggleFuture<T> {
          * arms' results in the order given to {@code allOf}, and whose return is the complete
          * post-join context.
          */
-        public <R> WiggleFuture<R> combine(FlowBiFn<A, B, R> combine) {
+        public <R> WiggleFlow<R> combine(FlowBiFn<A, B, R> combine) {
             return merge(StepNames.ofCombine(combine, fork.armNames, false));
         }
 
@@ -337,7 +337,7 @@ public final class WiggleFuture<T> {
          * declared as {@code (@Context C base, @Arm(..) A a, @Arm(..) B b)}. The context parameter
          * comes first so the type arguments line up with the declaration.
          */
-        public <C, R> WiggleFuture<R> combineWithContext(FlowTriFn<C, A, B, R> combine) {
+        public <C, R> WiggleFlow<R> combineWithContext(FlowTriFn<C, A, B, R> combine) {
             return merge(StepNames.ofCombine(combine, fork.armNames, true));
         }
 
@@ -345,13 +345,13 @@ public final class WiggleFuture<T> {
          * The merge named explicitly rather than referenced -- the escape hatch for a combine handler
          * this API cannot type, and the only form that skips the arm check above.
          */
-        public <R> WiggleFuture<R> combine(String name, Class<R> result) {
+        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
             return merge(name);
         }
 
-        private <R> WiggleFuture<R> merge(String name) {
+        private <R> WiggleFlow<R> merge(String name) {
             fork.combineName = name;
-            return new WiggleFuture<>(fork);
+            return new WiggleFlow<>(fork);
         }
     }
 
@@ -365,16 +365,16 @@ public final class WiggleFuture<T> {
         }
 
         /** The merge for the preceding fan-out; the three parameters are the arms' results in order. */
-        public <R> WiggleFuture<R> combine(FlowTriFn<A, B, C, R> combine) {
+        public <R> WiggleFlow<R> combine(FlowTriFn<A, B, C, R> combine) {
             fork.combineName = StepNames.ofCombine(combine, fork.armNames, false);
-            return new WiggleFuture<>(fork);
+            return new WiggleFlow<>(fork);
         }
 
         /** The merge named explicitly -- see {@link Fork2#combine(String, Class)} for when that is needed.
          *  A three-armed combine that also takes the {@code @Context} uses this form. */
-        public <R> WiggleFuture<R> combine(String name, Class<R> result) {
+        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
             fork.combineName = name;
-            return new WiggleFuture<>(fork);
+            return new WiggleFlow<>(fork);
         }
     }
 
@@ -392,21 +392,21 @@ public final class WiggleFuture<T> {
          * handler's parameter list outruns any functional interface. The handler is the usual one --
          * an {@link com.wiggle.client.worker.Arm @Arm} parameter per arm.
          */
-        public <R> WiggleFuture<R> combine(String name, Class<R> result) {
+        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
             fork.combineName = name;
-            return new WiggleFuture<>(fork);
+            return new WiggleFlow<>(fork);
         }
     }
 
     /** The stage returned by {@link #thenForEach}; its combine is mandatory. */
     public static final class Items {
 
-        private final WiggleFuture<?> from;
+        private final WiggleFlow<?> from;
         private final String name;
         private final String itemsKey;
         private final UnaryOperator<WorkflowBuilder> body;
 
-        Items(WiggleFuture<?> from, String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+        Items(WiggleFlow<?> from, String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
             this.from = from;
             this.name = name;
             this.itemsKey = itemsKey;
@@ -418,7 +418,7 @@ public final class WiggleFuture<T> {
          * {@code List} ordered by item index when the input was a list, a {@code Map} keyed like the
          * input when it was a map -- and returning the complete post-join context.
          */
-        public <X, R> WiggleFuture<R> combine(FlowFn<X, R> combine) {
+        public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine) {
             return merge(StepNames.of(combine));
         }
 
@@ -426,16 +426,16 @@ public final class WiggleFuture<T> {
          * {@link #combine(FlowFn)} for a handler that also takes the pre-forEach context: its
          * {@link com.wiggle.client.worker.Context @Context} parameter plus the collected results.
          */
-        public <C, X, R> WiggleFuture<R> combine(FlowBiFn<C, X, R> combine) {
+        public <C, X, R> WiggleFlow<R> combine(FlowBiFn<C, X, R> combine) {
             return merge(StepNames.of(combine));
         }
 
         /** The merge named explicitly. */
-        public <R> WiggleFuture<R> combine(String name, Class<R> result) {
+        public <R> WiggleFlow<R> combine(String name, Class<R> result) {
             return merge(name);
         }
 
-        private <R> WiggleFuture<R> merge(String combineName) {
+        private <R> WiggleFlow<R> merge(String combineName) {
             return from.record(name, b -> b.forEach(name, itemsKey, body).combine(combineName));
         }
     }

@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
@@ -65,7 +65,7 @@ class SagaCompensationTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static InstanceView run(Blueprint bp, Object handlers) throws Exception {
+    private static InstanceView run(FlowSpec bp, Object handlers) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "saga-w").register(bp).handlers(handlers)) {
@@ -79,7 +79,7 @@ class SagaCompensationTest {
     @DisplayName("a failed instance compensates its completed steps in reverse order -> COMPENSATED")
     void reverseOrderSaga() throws Exception {
         Recording rec = new Recording();
-        Blueprint bp = Workflow.define("saga")
+        FlowSpec bp = Workflow.define("saga")
                 .step("reserve").compensate()
                 .step("capture").compensate()
                 .step("boom")
@@ -120,7 +120,7 @@ class SagaCompensationTest {
     @DisplayName("locally-chained (LOCAL_SYNC) compensable steps capture snapshots and compensate too")
     void localSyncSaga() throws Exception {
         Recording rec = new Recording();
-        Blueprint bp = Workflow.define("saga-local")
+        FlowSpec bp = Workflow.define("saga-local")
                 .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
                 .step("reserve").compensate()
                 .step("capture").compensate()
@@ -146,7 +146,7 @@ class SagaCompensationTest {
     @Test @Timeout(30)
     @DisplayName("no declared compensation -> plain FAILED, exactly as before")
     void undeclaredStillFails() throws Exception {
-        Blueprint bp = Workflow.define("plain-fail").step("work").step("boom").build();
+        FlowSpec bp = Workflow.define("plain-fail").step("work").step("boom").build();
         @Handlers("plain-fail")
         class H {
             public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
@@ -162,7 +162,7 @@ class SagaCompensationTest {
     @DisplayName("a compensator that fails permanently lands COMPENSATION_FAILED, loudly")
     void compensatorFailure() throws Exception {
         Recording rec = new Recording();
-        Blueprint bp = Workflow.define("bad-undo")
+        FlowSpec bp = Workflow.define("bad-undo")
                 .step("reserve").compensate()
                 .step("boom")
                 .build();

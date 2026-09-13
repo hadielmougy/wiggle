@@ -53,7 +53,7 @@ class FlowGuardrailsTest {
     @Test
     void armsMustFanOutFromOneCommonPoint() {
         // a future belonging to another definition has no junction with this one
-        WiggleFuture<?>[] alien = new WiggleFuture<?>[1];
+        WiggleFlow<?>[] alien = new WiggleFlow<?>[1];
         Wiggle.define("other-flow", Order.class, g -> alien[0] = g.thenApply(h::label).named("alien"));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
@@ -84,7 +84,7 @@ class FlowGuardrailsTest {
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 Wiggle.define("null-body", Order.class, f -> null));
 
-        assertTrue(ex.getMessage().contains("must return the future it ends on"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("must return the handle it ends on"), ex.getMessage());
     }
 
     @Test
@@ -107,7 +107,7 @@ class FlowGuardrailsTest {
         java.util.List<FlowFn<Order, Order>> steps = java.util.List.of(h::validate, h::vipPath, h::standardPath);
 
         var flow = Wiggle.define("unrolled", Order.class, f -> {
-            WiggleFuture<Order> chain = f.thenApply(h::drain);
+            WiggleFlow<Order> chain = f.thenApply(h::drain);
             for (FlowFn<Order, Order> step : steps) {
                 chain = chain.thenApply(step);
             }
@@ -121,13 +121,13 @@ class FlowGuardrailsTest {
     }
 
     @Test
-    void aFutureHasNoGetOrJoin() {
+    void aFlowHandleHasNoGetOrJoin() {
         // there is nothing to block on while a graph is being described; the only blocking handle is
         // the client-side one returned when an instance is started
         for (String blocking : java.util.List.of("get", "join", "getNow", "complete")) {
             assertThrows(NoSuchMethodException.class,
-                    () -> WiggleFuture.class.getMethod(blocking),
-                    "WiggleFuture must not expose " + blocking + "()");
+                    () -> WiggleFlow.class.getMethod(blocking),
+                    "WiggleFlow must not expose " + blocking + "()");
         }
     }
 }

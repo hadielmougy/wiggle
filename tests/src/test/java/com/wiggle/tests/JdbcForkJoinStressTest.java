@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Arm;
@@ -40,7 +40,7 @@ class JdbcForkJoinStressTest {
         return n;
     }
 
-    private static Blueprint blueprint() {
+    private static FlowSpec flowSpec() {
         return Workflow.define("order-ish")
                 .step("validate")
                 .gate("in-stock")
@@ -85,7 +85,7 @@ class JdbcForkJoinStressTest {
         // One shared database, three server nodes -- as close to the kind cluster as a single
         // JVM gets: real leader election, three engines driving the same store.
         String url = "jdbc:h2:mem:stress-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint bp = blueprint();
+        FlowSpec bp = flowSpec();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();

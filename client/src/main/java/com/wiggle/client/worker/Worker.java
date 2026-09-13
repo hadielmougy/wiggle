@@ -2,7 +2,7 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.core.*;
 
 import java.util.*;
@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * The data plane. A worker registers its blueprints, then pulls work: it only ever
+ * The data plane. A worker registers its flowSpecs, then pulls work: it only ever
  * asks for as many tasks as it has free slots, so the server never overwhelms it and
  * backpressure is a property of the protocol rather than a thing to configure.
  *
@@ -31,7 +31,7 @@ public final class Worker implements AutoCloseable {
     private final WorkerOptions options;
     private final Map<String, ActivityHandler> handlers = new ConcurrentHashMap<>();
     private final Set<String> queues = ConcurrentHashMap.newKeySet();
-    private final List<Blueprint> blueprints = new CopyOnWriteArrayList<>();
+    private final List<FlowSpec> flowSpecs = new CopyOnWriteArrayList<>();
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
     /** {@link Handlers @Handlers} objects, matched to graph steps by name on start. */
@@ -80,9 +80,9 @@ public final class Worker implements AutoCloseable {
     public boolean isRunning() { return running.get(); }
 
     /** Registers a workflow's topology on this worker (the graph it will poll and drive). */
-    public Worker register(Blueprint blueprint) {
-        WorkflowDefinition def = blueprint.definition();
-        blueprints.add(blueprint);
+    public Worker register(FlowSpec flowSpec) {
+        WorkflowDefinition def = flowSpec.definition();
+        flowSpecs.add(flowSpec);
         graphs.put(def.key(), def);
         queues.addAll(def.workerQueues());
         return this;
@@ -113,7 +113,7 @@ public final class Worker implements AutoCloseable {
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
         if (options.registerOnStart()) {
-            for (Blueprint bp : blueprints) client.register(bp);
+            for (FlowSpec bp : flowSpecs) client.register(bp);
         }
         if (!handlerSets.isEmpty()) reconcile();
         executor = Executors.newVirtualThreadPerTaskExecutor();

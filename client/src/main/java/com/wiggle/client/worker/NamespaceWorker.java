@@ -28,7 +28,7 @@ import java.util.function.Supplier;
  * members share a database, so polling one is enough); this reconciles at the <em>cell</em> level.
  *
  * <p>Handlers are declared once via a {@code configurator} applied to each per-cell worker, so the same
- * blueprints/handlers run on every cell.
+ * flow specs/handlers run on every cell.
  */
 public final class NamespaceWorker implements AutoCloseable {
 

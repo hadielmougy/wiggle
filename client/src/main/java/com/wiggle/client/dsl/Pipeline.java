@@ -12,7 +12,7 @@ import java.util.Set;
 /**
  * The accumulating build model behind the {@link WorkflowBuilder} DSL: it owns the graph's nodes and
  * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
- * {@link Blueprint} on {@link #build()}. The blueprint is pure topology -- no step logic -- so this
+ * {@link FlowSpec} on {@link #build()}. The flowSpec is pure topology -- no step logic -- so this
  * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
  * on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes.
  */
@@ -151,17 +151,17 @@ final class Pipeline {
     }
 
     /**
-     * Assembles the accumulated nodes into a validated, content-addressed {@link Blueprint}. The
+     * Assembles the accumulated nodes into a validated, content-addressed {@link FlowSpec}. The
      * caller ({@link WorkflowBuilder#build()}) has already appended the terminal end node and wired
      * every open edge to it.
      */
-    Blueprint build() {
+    FlowSpec build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);
-        return new Blueprint(def);
+        return new FlowSpec(def);
     }
 
     private Set<String> copyOf(Set<String> set) {

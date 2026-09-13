@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.ScheduleInfo;
@@ -31,9 +31,9 @@ class ScheduleClientTest {
 
     @Test @DisplayName("a client creates, lists and deletes interval and cron schedules")
     void manageSchedules() throws Exception {
-        Blueprint bpA = Workflow.define("schedc-probe-a")
+        FlowSpec bpA = Workflow.define("schedc-probe-a")
                 .step("work").build();
-        Blueprint bpB = Workflow.define("schedc-probe-b")
+        FlowSpec bpB = Workflow.define("schedc-probe-b")
                 .step("work").build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -74,7 +74,7 @@ class ScheduleClientTest {
 
     @Test @DisplayName("re-creating a schedule for the same workflow updates it in place, no duplicate")
     void createIsIdempotentPerWorkflow() throws Exception {
-        Blueprint bp = Workflow.define("schedc-probe-dup")
+        FlowSpec bp = Workflow.define("schedc-probe-dup")
                 .step("work").build();
 
         try (WiggleServer server = new WiggleServer(config()).start();

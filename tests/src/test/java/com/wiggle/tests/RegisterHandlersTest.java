@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
@@ -37,7 +37,7 @@ class RegisterHandlersTest {
     }
 
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
-    private Blueprint authoredGraph() {
+    private FlowSpec authoredGraph() {
         return Workflow.define("order-fulfilment")
                 .step("validate")
                 .gate("in-stock")

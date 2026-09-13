@@ -1,7 +1,7 @@
 package com.wiggle.greet;
 
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.core.Tls;
 
 import java.util.Map;
@@ -26,7 +26,7 @@ public final class GreetStart {
         String name = args.length > 0 ? args[0] : "ada";
 
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null)) {
-            Blueprint bp = GreetFlow.blueprint();
+            FlowSpec bp = GreetFlow.flowSpec();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             String instanceId = resolver.clientForNamespace(ns).start(bp, Map.<String, Object>of("name", name));
             System.out.println("started " + bp.name() + " in namespace '" + ns + "' -> " + instanceId);

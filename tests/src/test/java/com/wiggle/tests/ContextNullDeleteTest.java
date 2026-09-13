@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.dsl.FlowSpec;
 import com.wiggle.client.dsl.Branch;
 import com.wiggle.client.dsl.Workflow;
 import com.wiggle.client.worker.Arm;
@@ -31,7 +31,7 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("a step that drops a field removes it from the context (not left as null)")
     void droppedFieldIsRemoved() throws Exception {
-        Blueprint bp = Workflow.define("trim")
+        FlowSpec bp = Workflow.define("trim")
                 .step("trim")
                 .build();
 
@@ -46,7 +46,7 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("branch combine clears its per-branch scratch keys from the final context")
     void combineScratchKeysAreRemoved() throws Exception {
-        Blueprint bp = Workflow.define("trip")
+        FlowSpec bp = Workflow.define("trip")
                 .fork(
                         Branch.of("air", s -> s.step("air")),
                         Branch.of("hotel", s -> s.step("hotel")))
@@ -89,7 +89,7 @@ class ContextNullDeleteTest {
     }
 
     /** Runs a single instance to completion on a one-node, in-memory H2 server and returns its context. */
-    private static Map<String, Object> run(Blueprint bp, Object handlers, Map<String, Object> input) throws Exception {
+    private static Map<String, Object> run(FlowSpec bp, Object handlers, Map<String, Object> input) throws Exception {
         String url = "jdbc:h2:mem:nulldel-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
                 0, "node-0", url, "sa", "", 8,
