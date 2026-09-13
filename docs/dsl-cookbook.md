@@ -14,7 +14,12 @@ Eight small workflows, each pairing operators that don't otherwise appear togeth
 `CookbookDemo` starts an embedded server and one worker, registers every flow spec below and binds
 its handlers, runs one instance of each, and prints the resulting context.
 
-> **Topology and logic are separate.** A `Workflow.define(...)` flow spec is pure topology — named
+> **These recipes use `Wiggle.graph`**, the mode for topology written apart from its handlers — it
+> shows each operator on its own, without a handler class in the way. Where the handlers *are* at
+> hand, `Wiggle.define` says the same thing with method references and gets it checked by the
+> compiler; both compile to the identical graph. See [onboarding](onboarding.md#5-authoring-workflows).
+>
+> **Topology and logic are separate.** A flow spec is pure topology — named
 > nodes and their wiring, no logic and no context type. The step logic lives in a class annotated
 > `@Handlers("<workflow-name>")`, one per workflow, whose methods are matched to the graph by name
 > (case/style-insensitive, so `isLarge` serves `is-large`). Each method's signature defines its step:
@@ -34,7 +39,7 @@ its handlers, runs one instance of each, and prints the resulting context.
 The smallest useful pipeline: two transforms, a side effect, and a filter.
 
 ```java
-Workflow.define("cb-linear-gate")
+Wiggle.graph("cb-linear-gate")
     .step("normalise")
     .then("classify")
     .gate("eligible")
@@ -70,7 +75,7 @@ context is unchanged.
 An exclusive switch/case whose matched branch itself fans out in parallel.
 
 ```java
-Workflow.define("cb-choose-fork")
+Wiggle.graph("cb-choose-fork")
     .choose(
         Case.when("is-large", b -> b
             .fork(
@@ -115,7 +120,7 @@ have no implicit fold; the effect arm contributes nothing).
 Runtime fan-out over a list, with one step in the branch pinned to a different worker pool.
 
 ```java
-Workflow.define("cb-foreach-queues").defaultQueue("cpu")
+Wiggle.graph("cb-foreach-queues").defaultQueue("cpu")
     .forEach("charge-items", "items", b -> b
         // the element IS each item's context (Step.base()/Step.itemIndex() for the rest);
         // the mandatory combine receives the collected final values.
@@ -150,7 +155,7 @@ fan-out entirely.
 A retry-until-ready loop, with an inner gate that can end the whole instance from inside the loop body.
 
 ```java
-Workflow.define("cb-poll-until-ready")
+Wiggle.graph("cb-poll-until-ready")
     .doWhile("still-pending", b -> b
         .gate("not-cancelled")
         .step("poll"))
@@ -195,7 +200,7 @@ the next iteration — a cancellation ends the instance immediately rather than 
 Wait for a human, escalate if nobody acts, then branch on which one happened.
 
 ```java
-Workflow.define("cb-approval-escalation")
+Wiggle.graph("cb-approval-escalation")
     .step("submit")
     .awaitSignal("manager-approval", Duration.ofMillis(200),
         esc -> esc.step("auto-escalate"))
@@ -235,7 +240,7 @@ here is a short deadline for the demo; in production it might be `Duration.ofHou
 Composing a *registered* workflow as a reusable child.
 
 ```java
-Workflow.define("cb-parent")
+Wiggle.graph("cb-parent")
     .subWorkflow("run-eligibility", "cb-linear-gate")   // example 1, reused as a child
     .gate("child-passed")
     .fork(
@@ -271,7 +276,7 @@ handler folding the `provision` arm onto the pre-fork context (there is no impli
 Batched local execution, with an explicit commit point inside a loop.
 
 ```java
-Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
+Wiggle.graph("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
     .doWhile("more-batches", b -> b
         .step("process-batch")
         .checkpoint())   // flush the buffer before the next iteration
@@ -308,7 +313,7 @@ commit every step.
 `defaultQueue` — one graph, every operator except the `fixed`/`forever` retry variants:
 
 ```java
-Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
+Wiggle.graph("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
     .step("intake")
     .gate("has-items")
     .subWorkflow("run-eligibility", "cb-linear-gate")

@@ -49,7 +49,7 @@ The queue is a trailing argument on a step (and on effects/gates). Or set a `def
 step after it. Unset ⇒ the queue is the **workflow name**.
 
 ```java
-Workflow.define("orders")
+Wiggle.graph("orders")
     .step("validate")                 // queue "orders" (the default)
     .step("charge", "payments")     // queue "payments"
     .step("render-receipt", "gpu")      // queue "gpu"

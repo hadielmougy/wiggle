@@ -61,7 +61,7 @@ how they chain, branch, and rejoin — and that this graph, not any function, is
 should own. A definition is built with a small, stream-flavored DSL:
 
 ```java
-FlowSpec orders = Workflow.define("order-fulfilment")
+FlowSpec orders = Wiggle.graph("order-fulfilment")
         .step("validate")
         .gate("in-stock")                    // false ⇒ the instance ends cleanly
         .fork(

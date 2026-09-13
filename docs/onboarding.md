@@ -175,11 +175,44 @@ processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:r
 
 ## 5. Authoring workflows
 
-A definition is pure **topology** — named nodes and their wiring, no logic and no context type.
-`build()` returns a `FlowSpec` (just the graph):
+A definition compiles to pure **topology** — named nodes and their wiring. What reaches the server
+is a `FlowSpec`: the graph, and nothing else. There are two ways to write one, and they differ only
+in where the step names come from.
+
+**`Wiggle.define` — when the handlers are at hand.** Each step is a method reference to the handler
+that implements it, so the compiler checks that every step consumes what the one before it produced,
+and a rename carries the step name with it:
 
 ```java
-FlowSpec orders = Workflow.define("order-fulfilment")
+OrderHandlers h = new OrderHandlers();
+
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, f -> {
+    var validated = f.thenApply(h::validate).thenFilter(h::inStock);
+
+    var payment  = validated.thenApply(h::authorise, RetryPolicy.exponential(5, ofMillis(100)))
+                            .thenApply(h::capture);
+    var shipping = validated.thenApply(h::reserve)
+                            .thenSleep("await", ofMillis(300))
+                            .thenApply(h::label);
+
+    return Wiggle.allOf(payment, shipping)   // continuing `validated` twice is the fan-out
+            .combineWithContext(h::merge)    // arms are isolated, so rejoining is always explicit
+            .thenApply(h::notify);
+});
+```
+
+Nothing executes while the workflow is defined — the chain is walked once and recorded. There is no
+`get()` or `join()` on a handle, because there is nothing to wait for: the server drives the graph
+one node at a time. An ordinary `for` loop in the body therefore *unrolls* into nodes; anything that
+depends on a step's **result** uses `Wiggle.oneOf` or `repeatWhile`, which the engine evaluates at
+run time.
+
+**`Wiggle.graph` — when they are not.** For a topology registered by an author with no handler
+classes on its classpath, generated from data, or served by several independent workers that each
+bind a subset by name:
+
+```java
+FlowSpec orders = Wiggle.graph("order-fulfilment")
         .step("validate")
         .gate("in-stock")
         .fork(
@@ -192,6 +225,9 @@ FlowSpec orders = Workflow.define("order-fulfilment")
         .step("notify")
         .build();
 ```
+
+Both produce the same `FlowSpec`, node for node and hash for hash; a worker cannot tell which was
+used, and one codebase may use both.
 
 The step logic is a separate class annotated `@Handlers("<workflow-name>")`, bound on a worker by
 name. Each method whose name matches a step (case/style-insensitive, so `inStock` serves `in-stock`)
@@ -336,7 +372,8 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 
 ### 6.4 Execution modes
 
-Set per workflow in the DSL: `Workflow.define(...).execution(ExecutionMode.LOCAL_SYNC)`. The mode
+Set per workflow: `f.execution(ExecutionMode.LOCAL_SYNC)` in a `define` body, or
+`Wiggle.graph(...).execution(...)`. The mode
 is part of the definition's **content hash**, so an in-flight instance keeps the mode it started on.
 
 | Mode | Behaviour | Crash blast radius | Use for |

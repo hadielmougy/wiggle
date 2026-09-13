@@ -22,19 +22,27 @@ one database is no longer enough.**
 </div>
 
 ```java
-FlowSpec orders = Workflow.define("order-fulfilment")
-        .step("validate")
-        .gate("in-stock")
-        .fork(Branch.of("payment",  s -> s.step("authorise").step("capture")),
-              Branch.of("shipping", s -> s.step("reserve-stock").step("print-label")))
-        .combine("merge")
-        .step("notify")
-        .build();
+OrderHandlers h = new OrderHandlers();
+
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, f -> {
+    var validated = f.thenApply(h::validate).thenFilter(h::inStock);
+
+    var payment  = validated.thenApply(h::authorise).thenApply(h::capture);
+    var shipping = validated.thenApply(h::reserveStock).thenApply(h::printLabel);
+
+    return Wiggle.allOf(payment, shipping)          // both arms run, on isolated context copies
+            .combineWithContext(h::merge)           // and rejoin explicitly
+            .thenApply(h::notify);
+});
 ```
 
 That's a **complete, durable, parallel workflow**. No YAML, no DSL files, no determinism rules
 to memorize — a compiled graph the server owns, and plain Java methods (or Go, or Python) that
 serve its steps.
+
+Each step is a method reference to the handler that implements it, so the compiler checks that
+every step consumes what the one before it produced, and a rename carries the step name with it.
+Continuing `validated` twice is what makes the two parallel arms.
 
 ---
 
@@ -229,7 +237,7 @@ WIGGLE_URL=localhost:8080 ./gradlew :console:run    # → http://localhost:8090
 The fastest end-to-end: an embedded server, one worker, one instance — one JVM.
 
 ```java
-import com.wiggle.client.dsl.*;
+import com.wiggle.client.flow.*;
 import com.wiggle.client.worker.*;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.*;
@@ -238,12 +246,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
-// 1. A workflow is pure topology — named steps, no logic.
-FlowSpec greet = Workflow.define("greet")
-        .step("say-hello")
-        .build();
-
-// 2. The logic lives in a @Handlers class, matched by method name (say-hello ↔ sayHello).
+// 1. The logic lives in a @Handlers class. The signature defines the step.
 @Handlers("greet")
 class GreetHandlers {
     public Map<String, Object> sayHello(Map<String, Object> ctx) {
@@ -253,12 +256,17 @@ class GreetHandlers {
     }
 }
 
+// 2. The workflow names its steps by referencing them. Nothing runs here; the chain is
+//    walked once and compiled to a graph.
+GreetHandlers handlers = new GreetHandlers();
+FlowSpec greet = Wiggle.define("greet", Map.class, f -> f.thenApply(handlers::sayHello));
+
 // 3. Embedded server + worker + one instance.
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
     try (Worker worker = new Worker(client, "worker-1")
-            .register(greet).handlers(new GreetHandlers())) {
+            .register(greet).handlers(handlers)) {
         worker.start();
 
         String id = client.start(greet, Map.of("name", "ada"));
@@ -273,21 +281,47 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 A real one — parallel branches, a guard, a retry policy, a server-side timer:
 
 ```java
-FlowSpec orders = Workflow.define("order-fulfilment")
+OrderHandlers h = new OrderHandlers();
+
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, f -> {
+    var validated = f.thenApply(h::validate)
+            .thenFilter(h::inStock);         // false ⇒ the instance ends cleanly, not an error
+
+    var payment = validated
+            .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+            .thenApply(h::capture);
+
+    var shipping = validated
+            .thenApply(h::reserveStock)
+            .thenSleep("await-warehouse", Duration.ofMillis(300))   // no worker held while waiting
+            .thenApply(h::printLabel);
+
+    return Wiggle.allOf(payment, shipping)   // arms ran on isolated context copies...
+            .combineWithContext(h::merge)    // ...so rejoining them is explicit, never implicit
+            .thenApply(h::notify);
+});
+```
+
+### Topology without handlers
+
+Sometimes the graph is written where its handlers are not — an author registering it with no
+handler classes on its classpath, a topology generated from data, or several independent workers
+that each bind a subset of the steps by name. `Wiggle.graph` names the steps directly:
+
+```java
+FlowSpec orders = Wiggle.graph("order-fulfilment")
         .step("validate")
-        .gate("in-stock")                    // false ⇒ the instance ends cleanly, not an error
-        .fork(
-            Branch.of("payment", s -> s
-                .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                .step("capture")),
-            Branch.of("shipping", s -> s
-                .step("reserve-stock")
-                .sleep("await-warehouse", Duration.ofMillis(300))   // no worker held while waiting
-                .step("print-label")))
-        .combine("merge")                    // branches ran on isolated context copies; rejoin here
+        .gate("in-stock")
+        .fork(Branch.of("payment",  s -> s.step("authorise").step("capture")),
+              Branch.of("shipping", s -> s.step("reserve-stock").step("print-label")))
+        .combine("merge")
         .step("notify")
         .build();
 ```
+
+Both produce the same `FlowSpec` — the graph has only ever held names — and a worker cannot tell
+which was used. Prefer `Wiggle.define` whenever the handlers *are* at hand: it is the one that
+gets checked.
 
 Handlers are plain methods — typed records or raw maps, your choice per step. The **signature
 defines the step kind**: a `boolean` return is a gate, `void` is an effect, anything else is a
@@ -359,7 +393,7 @@ And the parts long-running processes actually need are first-class:
 
 ```java
 // Human / external input — the instance parks (no worker held), a deadline can escalate:
-Workflow.define("expense")
+Wiggle.graph("expense")
         .step("submit")
         .awaitSignal("manager-approval", Duration.ofHours(48), b -> b.step("auto-escalate"))
         .step("pay-out")
@@ -389,7 +423,7 @@ workflows exercising every operator.
 | **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres`, `mysql`, `oracle`, `sqlserver` | One HikariCP-pooled, dialect-aware JDBC store; backends are drop-in modules behind an explicit `StorageFactory`. No DB configured ⇒ in-memory. |
 | **Coordinator** | `coordinator` | Optional control plane: a Raft group (embedded Ratis + RocksDB — no external store) that allocates namespaces to cells, publishes epoch rings, tracks node health, and answers "where does this instance live?". |
-| **Client & worker** | `client` | The DSL (`Workflow.define…`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
+| **Client & worker** | `client` | Workflow authoring (`Wiggle.define` ∣ `Wiggle.graph`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
 | **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
 | **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
 | **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ coordinator ∣ console`, every storage backend bundled. |

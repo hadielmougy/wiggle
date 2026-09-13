@@ -62,7 +62,7 @@ name**; `defaultQueue(q)` overrides it for subsequently-added nodes. Only task /
 add their resolved queue to the `queues` set.
 
 **3.4 Retry** — a node's own `RetryPolicy`, else the workflow `defaultRetry`. Constructor:
-`defaultRetry = given ?? RetryPolicy.forever()`. The DSL entry `Workflow.define(name)` supplies
+`defaultRetry = given ?? RetryPolicy.forever()`. The DSL entry `Wiggle.graph(name)` supplies
 `RetryPolicy.exponential(3, 500ms)` as that default; `define(name, retry)` overrides.
 
 **3.5 startNode** — recorded once, for the first node attached to the *root* stream. (This is the
@@ -121,7 +121,7 @@ fresh success END node; delegate to `Pipeline.build()`.
 
 ## 5. Operators (public API + graph produced + frontier effect)
 
-Entry: `Workflow.define(name)` / `define(name, RetryPolicy)` → `WorkflowBuilder`.
+Entry: `Wiggle.graph(name)` / `define(name, RetryPolicy)` → `WorkflowBuilder`.
 
 | operator (signatures) | nodes / edges created | frontier effect |
 |---|---|---|

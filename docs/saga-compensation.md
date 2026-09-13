@@ -27,7 +27,7 @@ A step optionally declares a compensating activity, attached to the just-added s
 `checkpoint()` attaches today (`WorkflowBuilder.java:418`):
 
 ```java
-FlowSpec orders = Workflow.define("order-fulfilment")
+FlowSpec orders = Wiggle.graph("order-fulfilment")
         .step("validate")
         .step("authorise").compensate("void-authorisation")
         .step("capture").compensate("refund", RetryPolicy.exponential(5, Duration.ofMillis(200)))

@@ -90,7 +90,7 @@ run now and I have lease budget."*
 ### 5.1 Per-workflow-definition flag (primary)
 
 ```java
-Workflow.define("name", codec)
+Wiggle.graph("name", codec)
         .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
         .step(...) ...
 ```
