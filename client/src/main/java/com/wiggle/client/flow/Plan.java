@@ -42,8 +42,6 @@ final class Plan {
         final List<Step> children = new ArrayList<>();
         /** True once a fork has taken this step into one of its arms; it leaves the trunk. */
         boolean claimed;
-        /** An explicit arm name from {@link WiggleFlow#named}, when this step ends an arm. */
-        String armName;
 
         Step(Step parent, UnaryOperator<WorkflowBuilder> op, String label) {
             this.parent = parent;
@@ -54,15 +52,6 @@ final class Plan {
 
         WorkflowBuilder apply(WorkflowBuilder builder) {
             return op == null ? builder : op.apply(builder);
-        }
-
-        /** The name this step contributes when it ends a fork arm. */
-        String armName() {
-            if (armName != null) return armName;
-            if (label != null) return label;
-            throw new IllegalArgumentException(
-                    "a fork arm needs a name: end it with .named(\"...\") so the combine handler's "
-                    + "@Arm parameter has something to match");
         }
     }
 
@@ -153,11 +142,13 @@ final class Plan {
             List<Step> path = pathFrom(junction, leaf);
             for (Step s : path) s.claimed = true;
             arms.add(path);
-            names.add(leaf.armName());
+            names.add(armName(path));
         }
         if (Set.copyOf(names).size() != names.size()) {
-            throw new IllegalArgumentException("allOf arms must have distinct names, got " + names
-                    + " -- name them with .named(\"...\")");
+            throw new IllegalArgumentException("allOf arms must be distinguishable, but two of them end"
+                    + " at steps with the same name " + names + ". Step names are unique, so this means"
+                    + " an arm ends at a sleep (whose name need not be) -- give those sleeps different"
+                    + " names with thenSleep(name, duration).");
         }
         return new Fork(junction, arms, names);
     }
@@ -195,6 +186,24 @@ final class Plan {
                     : Case.when(guard.name, guard.retry, guard.queue, sub -> replay(body, sub, what)));
         }
         return new Choice(junction, cases);
+    }
+
+    /**
+     * What an arm is called: the name of the last step in it that has one, walking back past the
+     * things that add no node of their own (a {@code withRetry}, a {@code compensate}). The engine
+     * keys this arm's result by that name, and a combine handler's {@link com.wiggle.client.worker.Arm
+     * @Arm} may name it -- though a combine that binds by position never has to.
+     *
+     * <p>Deriving beats declaring here because step names are already unique within a workflow, so the
+     * arm names are too, and there is nothing for the author to keep in sync.
+     */
+    private static String armName(List<Step> arm) {
+        for (int i = arm.size() - 1; i >= 0; i--) {
+            if (arm.get(i).label != null) return arm.get(i).label;
+        }
+        throw new IllegalArgumentException(
+                "an allOf arm has no step to take its name from -- it must contain at least one step,"
+                + " gate, combine or named sleep, since the engine keys the arm's result by that name");
     }
 
     /** The nearest step every leaf descends from -- where the fork belongs. */
@@ -298,7 +307,6 @@ final class Plan {
     }
 
     private static String describe(Step step) {
-        if (step.armName != null) return step.armName;
         if (step.label != null) return "'" + step.label + "'";
         return step.parent == null ? "the start of the flow" : "a fork";
     }

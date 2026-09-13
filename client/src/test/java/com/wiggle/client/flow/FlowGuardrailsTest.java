@@ -40,8 +40,8 @@ class FlowGuardrailsTest {
     void aFanOutWithNoCombineIsRejected() {
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> {
             Wiggle.define("no-combine", Order.class, f -> {
-                var payment = f.thenApply(h::charge).named("payment");
-                var shipping = f.thenApply(h::label).named("shipping");
+                var payment = f.thenApply(h::charge);
+                var shipping = f.thenApply(h::label);
                 Wiggle.allOf(payment, shipping);       // stage dropped on the floor
                 return payment;
             });
@@ -54,11 +54,11 @@ class FlowGuardrailsTest {
     void armsMustFanOutFromOneCommonPoint() {
         // a future belonging to another definition has no junction with this one
         WiggleFlow<?>[] alien = new WiggleFlow<?>[1];
-        Wiggle.define("other-flow", Order.class, g -> alien[0] = g.thenApply(h::label).named("alien"));
+        Wiggle.define("other-flow", Order.class, g -> alien[0] = g.thenApply(h::label));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
             Wiggle.define("two-flows", Order.class, f -> {
-                var payment = f.thenApply(h::charge).named("payment");
+                var payment = f.thenApply(h::charge);
                 return Wiggle.allOf(payment, alien[0]).combine("merge", Order.class);
             });
         });
@@ -67,16 +67,33 @@ class FlowGuardrailsTest {
     }
 
     @Test
-    void armsMustHaveDistinctNames() {
+    void armsAreNamedAfterTheirLastStep_andMustStillBeDistinguishable() {
+        // step names are unique, so derived arm names are too -- except a sleep name, which need
+        // not be, and is the one way two arms can end up sharing one
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
             Wiggle.define("same-name", Order.class, f -> {
-                var a = f.thenApply(h::charge).named("arm");
-                var b = f.thenApply(h::label).named("arm");
+                var a = f.thenApply(h::charge).thenSleep("wait", java.time.Duration.ofSeconds(1));
+                var b = f.thenApply(h::label).thenSleep("wait", java.time.Duration.ofSeconds(1));
                 return Wiggle.allOf(a, b).combine("merge", Order.class);
             });
         });
 
-        assertTrue(ex.getMessage().contains("distinct names"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("distinguishable"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("thenSleep"), "and how to fix it: " + ex.getMessage());
+    }
+
+    @Test
+    void anArmIsNamedPastTheStepsThatAddNoNode() {
+        // compensate() adds no node of its own, so the arm is still "capture", not nameless
+        var flow = Wiggle.define("past-markers", Order.class, f -> {
+            var a = f.thenApply(h::charge).compensate();
+            var b = f.thenApply(h::label);
+            return Wiggle.allOf(a, b).combine("merge", Order.class);
+        });
+
+        assertTrue(flow.definition().nodes().values().stream()
+                        .anyMatch(n -> "[\"charge\",\"label\"]".equals(n.itemsKey())),
+                "the combine carries the arms' derived names");
     }
 
     @Test

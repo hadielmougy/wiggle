@@ -52,8 +52,8 @@ class FlowApiTest {
 
         public Label label(Order o) { return new Label("lbl-" + o.id()); }
 
-        public Fulfilment settle(@com.wiggle.client.worker.Arm("payment") Payment payment,
-                                 @com.wiggle.client.worker.Arm("shipping") Label label) {
+        public Fulfilment settle(@com.wiggle.client.worker.Arm("charge") Payment payment,
+                                 @com.wiggle.client.worker.Arm("label") Label label) {
             return new Fulfilment(payment.reference().substring("auth-".length()),
                     payment.reference(), label.code());
         }
@@ -66,8 +66,8 @@ class FlowApiTest {
         return Wiggle.define("flow-order", Order.class, f -> {
             var validated = f.thenApply(flow::validate).thenFilter(flow::inStock);
 
-            var payment = validated.thenApply(flow::charge).named("payment");
-            var shipping = validated.thenApply(flow::label).named("shipping");
+            var payment = validated.thenApply(flow::charge);
+            var shipping = validated.thenApply(flow::label);
 
             return Wiggle.allOf(payment, shipping)
                     .combine(flow::settle)
@@ -115,8 +115,8 @@ class FlowApiTest {
 
         FlowSpec bp = Wiggle.define("positional-order", Order.class, f -> {
             var validated = f.thenApply(flow::validate);
-            var payment = validated.thenApply(flow::charge).named("payment");
-            var shipping = validated.thenApply(flow::label).named("shipping");
+            var payment = validated.thenApply(flow::charge);
+            var shipping = validated.thenApply(flow::label);
             return Wiggle.allOf(payment, shipping).combine(flow::settle);
         });
 

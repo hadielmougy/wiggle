@@ -18,8 +18,8 @@ import java.util.function.Function;
  * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
- *     var payment  = validated.thenApply(h::charge).named("payment");
- *     var shipping = validated.thenApply(h::reserve).thenApply(h::label).named("shipping");
+ *     var payment  = validated.thenApply(h::charge);
+ *     var shipping = validated.thenApply(h::reserve).thenApply(h::label);
  *
  *     return Wiggle.allOf(payment, shipping)
  *                  .combine(h::settle)
@@ -87,17 +87,21 @@ public final class Wiggle {
      * so the combine is the only way an arm's result reaches the flow.
      *
      * <pre>{@code
-     * var payment  = validated.thenApply(h::charge).named("payment");
-     * var shipping = validated.thenApply(h::label).named("shipping");
+     * var payment  = validated.thenApply(h::charge);
+     * var shipping = validated.thenApply(h::label);
      * Wiggle.allOf(payment, shipping).combine(h::settle);
      * }</pre>
      *
      * <p>Unlike {@link java.util.concurrent.CompletableFuture#allOf}, the arms are not already
      * running and the result is not {@code Void}: this records where the graph forks, and the combine
      * that follows records where it rejoins. The arms must fan out from one common step -- that step
-     * is where the fork node lands. Each arm's name comes from {@link WiggleFlow#named}, or from its
-     * last step; the engine keys each branch's result by that name for the combine handler's
-     * {@link com.wiggle.client.worker.Arm @Arm} parameters.
+     * is where the fork node lands.
+     *
+     * <p>An arm is named after its last step ({@code charge}, {@code label} above), which is how the
+     * engine keys its result for the combine. Step names are already unique within a workflow, so the
+     * arm names are too, and nothing has to be declared: a combine that binds
+     * {@linkplain com.wiggle.client.worker.Arm by position} never sees them at all, and one that names
+     * them with {@code @Arm} uses those.
      */
     public static <A, B> WiggleFlow.Fork2<A, B> allOf(WiggleFlow<A> a, WiggleFlow<B> b) {
         return new WiggleFlow.Fork2<>(Plan.fork(steps(a, b)));

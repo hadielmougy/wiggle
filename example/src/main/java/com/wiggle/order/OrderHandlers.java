@@ -1,6 +1,5 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 
@@ -9,7 +8,8 @@ import com.wiggle.client.worker.Handlers;
  * step (case/style-insensitive, so {@code inStock} serves {@code in-stock}) and its signature defines
  * the step: an {@link Order} in and out is a task, a {@code boolean} is a gate, {@code void} is an
  * effect. The {@code merge} method is the combine: it receives each branch's result and the pre-fork
- * context, and returns the complete post-join order (combines are always explicit).
+ * context, and returns the complete post-join order (combines are always explicit). Its two arm
+ * parameters carry no @Arm annotation, so they bind by position, in fork order.
  */
 @Handlers("order-fulfilment")
 public final class OrderHandlers {
@@ -42,7 +42,7 @@ public final class OrderHandlers {
     }
 
     /** The combine: fold what each branch produced onto the pre-fork order — the return is complete. */
-    public Order merge(@Context Order base, @Arm("payment") Order payment, @Arm("shipping") Order shipping) {
+    public Order merge(@Context Order base, Order payment, Order shipping) {
         return base.withPaymentRef(payment.paymentRef())
                 .withShipmentRef(shipping.shipmentRef())
                 .withTrackingLabel(shipping.trackingLabel());

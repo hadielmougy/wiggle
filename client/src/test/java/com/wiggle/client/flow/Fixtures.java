@@ -37,17 +37,17 @@ final class Fixtures {
 
         Label label(Order o) { return new Label(o.id()); }
 
-        Fulfilment settle(@Arm("payment") Payment payment, @Arm("shipping") Label label) {
+        Fulfilment settle(@Arm("charge") Payment payment, @Arm("label") Label label) {
             return new Fulfilment("settled");
         }
 
-        Fulfilment settleWithBase(@Context Order base, @Arm("payment") Payment payment,
-                                  @Arm("shipping") Label label) {
+        Fulfilment settleWithBase(@Context Order base, @Arm("charge") Payment payment,
+                                  @Arm("label") Label label) {
             return new Fulfilment("settled");
         }
 
-        Fulfilment audit(@Arm("payment") Payment payment, @Arm("shipping") Label label,
-                         @Arm("carrier") Shipment shipment) {
+        Fulfilment audit(@Arm("charge") Payment payment, @Arm("label") Label label,
+                         @Arm("ship") Shipment shipment) {
             return new Fulfilment("audited");
         }
 
@@ -55,13 +55,13 @@ final class Fixtures {
         Fulfilment settlePositionally(Payment payment, Label label) { return new Fulfilment("settled"); }
 
         /** Right shape for a context-taking combine, but the context parameter is not annotated. */
-        Fulfilment unannotatedBase(Order base, @Arm("payment") Payment payment,
-                                   @Arm("shipping") Label label) {
+        Fulfilment unannotatedBase(Order base, @Arm("charge") Payment payment,
+                                   @Arm("label") Label label) {
             return new Fulfilment("never");
         }
 
         /** Deliberately misnamed arm, to prove the fork checks its combine at definition time. */
-        Fulfilment mistyped(@Arm("payment") Payment payment, @Arm("shippping") Label label) {
+        Fulfilment mistyped(@Arm("charge") Payment payment, @Arm("labell") Label label) {
             return new Fulfilment("never");
         }
 

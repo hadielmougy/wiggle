@@ -42,10 +42,10 @@ public final class OrderFulfilment {
             // continuing `validated` twice is the fan-out; each arm runs on its own isolated copy
             var payment = validated
                     .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                    .thenApply(h::capture).named("payment");
+                    .thenApply(h::capture);
             var shipping = validated
                     .thenApply(h::reserveStock)
-                    .thenApply(h::printLabel).named("shipping");
+                    .thenApply(h::printLabel);
 
             // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
             // its @Arm names are checked against these arms here, at definition time

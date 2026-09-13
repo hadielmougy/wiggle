@@ -26,10 +26,10 @@ import java.util.function.UnaryOperator;
  * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
- *     var payment  = validated.thenApply(h::charge).named("payment");
+ *     var payment  = validated.thenApply(h::charge);
  *     var shipping = validated.thenApply(h::reserve)
  *                             .thenSleep(Duration.ofSeconds(2))
- *                             .thenApply(h::label).named("shipping");
+ *                             .thenApply(h::label);
  *
  *     return Wiggle.allOf(payment, shipping)
  *                  .combine(h::settle)
@@ -77,17 +77,6 @@ public final class WiggleFlow<T> {
     /** Records an operation and returns a handle on it. */
     private <R> WiggleFlow<R> record(String label, UnaryOperator<WorkflowBuilder> op) {
         return new WiggleFlow<>(new Plan.Step(step, op, label));
-    }
-
-    /**
-     * Names this point as a fork arm. The engine keys each isolated branch's result by arm name for
-     * the combine handler's {@link com.wiggle.client.worker.Arm @Arm} parameter, so the name is part
-     * of the contract, not a label. Without it an arm is named after its last step.
-     */
-    public WiggleFlow<T> named(String armName) {
-        if (armName == null || armName.isBlank()) throw new IllegalArgumentException("an arm name is required");
-        step.armName = armName;
-        return this;
     }
 
     // ------------------------------------------------------------------ steps
@@ -197,7 +186,8 @@ public final class WiggleFlow<T> {
 
     /** A server-side timer. No worker is held while the instance waits. */
     public WiggleFlow<T> thenSleep(Duration duration) {
-        return record(null, b -> b.sleep(duration));
+        // same generated name the builder gives it, so an arm ending here still has one
+        return record("sleep-" + duration.toMillis() + "ms", b -> b.sleep(duration));
     }
 
     /** {@link #thenSleep(Duration)} under an explicit node name (for a readable console diagram). */
