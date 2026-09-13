@@ -9,7 +9,7 @@ import com.wiggle.client.worker.Handlers;
  * the step: an {@link Order} in and out is a task, a {@code boolean} is a gate, {@code void} is an
  * effect. The {@code merge} method is the combine: it receives each branch's result and the pre-fork
  * context, and returns the complete post-join order (combines are always explicit). Its two arm
- * parameters carry no @Arm annotation, so they bind by position, in fork order.
+ * parameters bind by position, in fork order.
  */
 @Handlers("order-fulfilment")
 public final class OrderHandlers {

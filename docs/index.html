@@ -283,8 +283,8 @@ footer .fin { margin-top: 34px; font-size: 13px; }
   <span class="c">// the combine is mandatory: fold the branches' results onto the</span>
   <span class="c">// pre-fork base and return the COMPLETE post-join context</span>
   <span class="t">Order</span> <span class="f">merge</span>(<span class="k">@Context</span> <span class="t">Order</span> base,
-              <span class="k">@Arm</span>(<span class="s">"payment"</span>)  <span class="t">Order</span> pay,
-              <span class="k">@Arm</span>(<span class="s">"shipping"</span>) <span class="t">Order</span> ship) {
+              <span class="t">Order</span> payment,
+              <span class="t">Order</span> shipping) {
     <span class="k">return</span> base.<span class="f">withPaymentRef</span>(pay.<span class="f">paymentRef</span>())
                .<span class="f">withShipmentRef</span>(ship.<span class="f">shipmentRef</span>());
   }

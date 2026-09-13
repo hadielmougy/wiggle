@@ -48,7 +48,7 @@ public final class OrderFulfilment {
                     .thenApply(h::printLabel);
 
             // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
-            // its @Arm names are checked against these arms here, at definition time
+            // its shape is checked against these arms here, at definition time
             return Wiggle.allOf(payment, shipping)
                     .combineWithContext(h::merge)
                     .thenApply(h::notify)

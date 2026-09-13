@@ -4,7 +4,6 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -80,8 +79,8 @@ class ContextNullDeleteTest {
         public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
         public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("air") Map<String, Object> air,
-                                         @Arm("hotel") Map<String, Object> hotel) {
+                                         Map<String, Object> air,
+                                         Map<String, Object> hotel) {
             Map<String, Object> out = new LinkedHashMap<>(base);   // the return is the complete context
             out.put("total", price(air) + price(hotel));
             return out;

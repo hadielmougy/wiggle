@@ -94,7 +94,7 @@ public final class Worker implements AutoCloseable {
      * (case/style-insensitive, so {@code inStock} binds {@code in-stock}) is a handler, its signature
      * defining the step: one parameter is the input (decoded from JSON into that type), a
      * {@code boolean} return is a gate, {@code void} an effect, any other return type a task whose
-     * value becomes the next context. A method with {@link Arm @Arm} parameters is the combine for the
+     * value becomes the next context. A method taking one parameter per fork arm is the combine for the
      * matching {@code combine} node -- each branch's result decoded into its parameter's type, plus an
      * optional {@link Context @Context} parameter for the pre-fork context. A {@link Decode @Decode}
      * method is a custom decoder for its return type (versioning / upcasts / bespoke codecs).

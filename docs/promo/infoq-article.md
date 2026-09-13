@@ -143,7 +143,7 @@ context; siblings cannot see each other's writes. The only path back to the shar
 pre-fork context, and returns the complete post-join state:
 
 ```java
-Order merge(@Context Order base, @Arm("payment") Order pay, @Arm("shipping") Order ship) {
+Order merge(@Context Order base, Order payment, Order shipping) {
     return base.withPaymentRef(pay.paymentRef())
                .withShipmentRef(ship.shipmentRef());
 }

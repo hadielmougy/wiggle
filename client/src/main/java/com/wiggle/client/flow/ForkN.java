@@ -3,8 +3,7 @@ package com.wiggle.client.flow;
 /**
  * The stage an {@link Wiggle#allOf} of more than ten arms returns. Past ten the combine's parameter
  * list outruns the typed {@code FlowFnN} series, so the merge is named rather than referenced; the
- * handler is the usual one -- an {@link com.wiggle.client.worker.Arm @Arm} parameter per arm, or
- * unannotated parameters binding by position.
+ * handler is the usual one -- a parameter per arm, in fork order.
  */
 public final class ForkN {
 

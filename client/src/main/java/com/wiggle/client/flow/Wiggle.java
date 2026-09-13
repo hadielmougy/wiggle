@@ -130,9 +130,9 @@ public final class Wiggle {
      *
      * <p>An arm is named after its last step ({@code charge}, {@code label} above), which is how the
      * engine keys its result for the combine. Step names are already unique within a workflow, so the
-     * arm names are too, and nothing has to be declared: a combine that binds
-     * {@linkplain com.wiggle.client.worker.Arm by position} never sees them at all, and one that names
-     * them with {@code @Arm} uses those.
+     * arm names are too, and nothing has to be declared: a combine takes one parameter per arm in
+     * fork order and never names one, so they stay an engine detail (the keys each branch's result is
+     * staged under) and a console label.
      */
     public static <A, B> Fork2<A, B> allOf(WiggleFlow<A> a, WiggleFlow<B> b) {
         return new Fork2<>(Plan.fork(steps(a, b)));

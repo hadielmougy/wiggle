@@ -52,8 +52,8 @@ class FlowApiTest {
 
         public Label label(Order o) { return new Label("lbl-" + o.id()); }
 
-        public Fulfilment settle(@com.wiggle.client.worker.Arm("charge") Payment payment,
-                                 @com.wiggle.client.worker.Arm("label") Label label) {
+        public Fulfilment settle(Payment payment,
+                                 Label label) {
             return new Fulfilment(payment.reference().substring("auth-".length()),
                     payment.reference(), label.code());
         }
@@ -101,7 +101,7 @@ class FlowApiTest {
 
         public Label label(Order o) { return new Label("lbl-" + o.id()); }
 
-        /** No @Arm: the arms bind by position, in the order they were given to allOf. */
+        /** The arms bind by position, in the order they were given to allOf. */
         public Fulfilment settle(Payment payment, Label label) {
             return new Fulfilment(payment.reference().substring("auth-".length()),
                     payment.reference(), label.code());
@@ -109,7 +109,7 @@ class FlowApiTest {
     }
 
     @Test
-    @DisplayName("a combine with no @Arm binds its arms by fork order, end to end")
+    @DisplayName("a combine binds its arms by fork order, end to end")
     void positionalCombineBindsArmsInForkOrder() throws Exception {
         PositionalOrderFlow flow = new PositionalOrderFlow();
 

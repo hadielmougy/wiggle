@@ -42,9 +42,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>One difference is expected and is visible below. A typed step is named after its <em>method</em>
  * ({@code slowLeft}), where the conformance suite writes its graphs in kebab-case ({@code slow-left}).
  * Step binding folds the two together, so behaviour is unaffected -- but a fork arm's name is an exact
- * map key, so the fan-out cases compare against graphs named the way the method references name them,
- * and their combines bind {@linkplain com.wiggle.client.worker.Arm by position} rather than by an
- * {@code @Arm} that would have to spell the derived name out.
+ * map key -- the engine stages each branch's result under it -- so the fan-out cases compare against
+ * graphs named the way the method references name them.
  */
 class FlowApiRegressionTest {
 
@@ -269,9 +268,7 @@ class FlowApiRegressionTest {
 
     // ------------------------------------------------------------------ fan-out handlers
     //
-    // Same logic as the conformance suite's, with the combines binding by position instead of by
-    // @Arm -- which is what a fan-out defined through method references wants, since it never has to
-    // spell an arm name out.
+    // Same logic as the conformance suite's. A combine takes one parameter per arm, in fork order.
 
     @com.wiggle.client.worker.Handlers("fork-merge")
     public static final class ForkMerge {

@@ -1,6 +1,5 @@
 package com.wiggle.cookbook;
 
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 
@@ -54,10 +53,11 @@ public final class CookbookHandlers {
         public Map<String, Object> fastPath(Map<String, Object> ctx) {
             return with(ctx, "fraudChecked", false);
         }
+        // one parameter per arm, in fork order; the notice arm is an effect, so it folds nothing
         public Map<String, Object> largeMerge(@Context Map<String, Object> base,
-                                              @Arm("fraud-check") Map<String, Object> fraud) {
+                                              Map<String, Object> fraud, Map<String, Object> notice) {
             Map<String, Object> out = new LinkedHashMap<>(base);
-            if (fraud != null) out.putAll(fraud);   // manager-notice is an effect: nothing to fold
+            if (fraud != null) out.putAll(fraud);
             return out;
         }
         public Map<String, Object> settle(Map<String, Object> ctx) {
@@ -140,9 +140,9 @@ public final class CookbookHandlers {
             System.out.println("   [cookbook] provisioning audited");
         }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("provision") Map<String, Object> provision) {
+                                         Map<String, Object> provision, Map<String, Object> audit) {
             Map<String, Object> out = new LinkedHashMap<>(base);
-            if (provision != null) out.putAll(provision);   // audit is an effect: nothing to fold
+            if (provision != null) out.putAll(provision);   // the audit arm is an effect
             return out;
         }
     }
@@ -181,9 +181,9 @@ public final class CookbookHandlers {
             System.out.println("   [cookbook] VIP order held briefly");
         }
         public Map<String, Object> largeMerge(@Context Map<String, Object> base,
-                                              @Arm("priority-pack") Map<String, Object> pack) {
+                                              Map<String, Object> pack, Map<String, Object> notice) {
             Map<String, Object> out = new LinkedHashMap<>(base);
-            if (pack != null) out.putAll(pack);   // priority-notice is an effect: nothing to fold
+            if (pack != null) out.putAll(pack);   // the notice arm is an effect
             return out;
         }
         public Map<String, Object> packItem(Map<String, Object> item) {

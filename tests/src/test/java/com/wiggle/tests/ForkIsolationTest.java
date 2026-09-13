@@ -5,7 +5,6 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.flow.WorkflowBuilder;
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -116,8 +115,8 @@ class ForkIsolationTest {
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
         public Map<String, Object> r(Map<String, Object> ctx) { return put(ctx, "shared", "from-right"); }
         public Map<String, Object> decide(@Context Map<String, Object> base,
-                                          @Arm("left") Map<String, Object> left,
-                                          @Arm("right") Map<String, Object> right) {
+                                          Map<String, Object> left,
+                                          Map<String, Object> right) {
             // The return is the COMPLETE post-join context: base must be carried explicitly.
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("shared", "chosen");
@@ -131,7 +130,8 @@ class ForkIsolationTest {
     static final class IgnoreArmH {
         public Map<String, Object> k(Map<String, Object> ctx) { return put(ctx, "kept", true); }
         public Map<String, Object> d(Map<String, Object> ctx) { return put(ctx, "dropped", true); }
-        public Map<String, Object> pick(@Arm("keep") Map<String, Object> keep) {
+        // arms bind by position, so a combine takes them all -- and folds only the one it wants
+        public Map<String, Object> pick(Map<String, Object> keep, Map<String, Object> drop) {
             return new LinkedHashMap<>(keep);   // fold only "keep"; "drop" is discarded
         }
         public Map<String, Object> tail(Map<String, Object> ctx) { return ctx; }
@@ -142,7 +142,7 @@ class ForkIsolationTest {
         public Map<String, Object> seed(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1); }
         public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1); }
-        public Map<String, Object> pickOnly(@Arm("a") Map<String, Object> a, @Arm("b") Map<String, Object> b) {
+        public Map<String, Object> pickOnly(Map<String, Object> a, Map<String, Object> b) {
             return new LinkedHashMap<>(Map.of("picked", true));   // deliberately drops the pre-fork context
         }
     }

@@ -25,7 +25,7 @@ import com.wiggle.core.RetryPolicy;
  *     Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
  *     boolean inStock(Order o)   { return o.quantity() > 0; }
  *     Order   charge(Order o)    { ... }
- *     Order   settle(@Arm("payment") Order pay, @Arm("shipping") Order ship) { ... }
+ *     Order   settle(Order pay, Order ship) { ... }
  * }
  * }</pre>
  */

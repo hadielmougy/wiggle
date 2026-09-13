@@ -4,7 +4,6 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -165,8 +164,8 @@ class LocalBoundaryTest {
         public Map<String, Object> l2(Map<String, Object> ctx) { return counted(runs, "l2", put(ctx, "left2", "L2")); }
         public Map<String, Object> r1(Map<String, Object> ctx) { return counted(runs, "r1", put(ctx, "right", "R")); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("left") Map<String, Object> left,
-                                         @Arm("right") Map<String, Object> right) {
+                                         Map<String, Object> left,
+                                         Map<String, Object> right) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (left != null) out.putAll(left);
             if (right != null) out.putAll(right);

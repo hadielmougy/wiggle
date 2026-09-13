@@ -191,8 +191,7 @@ final class Plan {
     /**
      * What an arm is called: the name of the last step in it that has one, walking back past the
      * things that add no node of their own (a {@code withRetry}, a {@code compensate}). The engine
-     * keys this arm's result by that name, and a combine handler's {@link com.wiggle.client.worker.Arm
-     * @Arm} may name it -- though a combine that binds by position never has to.
+     * keys this arm's result by that name; a combine never names an arm, it takes them in order.
      *
      * <p>Deriving beats declaring here because step names are already unique within a workflow, so the
      * arm names are too, and there is nothing for the author to keep in sync.

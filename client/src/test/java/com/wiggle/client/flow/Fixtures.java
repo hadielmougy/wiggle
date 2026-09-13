@@ -1,6 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handles;
 
@@ -37,31 +36,26 @@ final class Fixtures {
 
         Label label(Order o) { return new Label(o.id()); }
 
-        Fulfilment settle(@Arm("charge") Payment payment, @Arm("label") Label label) {
+        Fulfilment settle(Payment payment, Label label) {
             return new Fulfilment("settled");
         }
 
-        Fulfilment settleWithBase(@Context Order base, @Arm("charge") Payment payment,
-                                  @Arm("label") Label label) {
+        Fulfilment settleWithBase(@Context Order base, Payment payment,
+                                  Label label) {
             return new Fulfilment("settled");
         }
 
-        Fulfilment audit(@Arm("charge") Payment payment, @Arm("label") Label label,
-                         @Arm("ship") Shipment shipment) {
+        Fulfilment audit(Payment payment, Label label,
+                         Shipment shipment) {
             return new Fulfilment("audited");
         }
 
-        /** No @Arm anywhere: the arms bind by position, in fork order. */
+        /** The arms bind by position, in fork order. */
         Fulfilment settlePositionally(Payment payment, Label label) { return new Fulfilment("settled"); }
 
         /** Right shape for a context-taking combine, but the context parameter is not annotated. */
-        Fulfilment unannotatedBase(Order base, @Arm("charge") Payment payment,
-                                   @Arm("label") Label label) {
-            return new Fulfilment("never");
-        }
-
-        /** Deliberately misnamed arm, to prove the fork checks its combine at definition time. */
-        Fulfilment mistyped(@Arm("charge") Payment payment, @Arm("labell") Label label) {
+        Fulfilment unannotatedBase(Order base, Payment payment,
+                                   Label label) {
             return new Fulfilment("never");
         }
 

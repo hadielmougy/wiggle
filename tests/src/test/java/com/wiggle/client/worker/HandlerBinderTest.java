@@ -189,7 +189,7 @@ class HandlerBinderTest {
                 .build().definition();
     }
 
-    @Test @DisplayName("fork combine: @Arm binding, ambient Step.base(), and a verbatim whole return")
+    @Test @DisplayName("fork combine: arms by position, ambient Step.base(), and a verbatim whole return")
     void forkCombine() throws Exception {
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new ForkCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
@@ -200,7 +200,7 @@ class HandlerBinderTest {
             // the staged context: pre-fork base + one key per arm
             Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
             assertEquals(Map.of("pre", "P", "x", 1L, "y", 2L), out,
-                    "combine reads arms as @Arm params and the base ambiently, returns verbatim");
+                    "combine reads its arms in fork order and the base ambiently, returns verbatim");
         } finally {
             Step.end();
         }
@@ -210,7 +210,7 @@ class HandlerBinderTest {
     static final class ForkCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(@Arm("a") Map<String, Object> a, @Arm("b") Map<String, Object> b) {
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) {
             Map<String, Object> out = new LinkedHashMap<>(Step.base());   // ambient style: no @Context param
             out.putAll(a);
             out.putAll(b);
@@ -218,7 +218,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("a combine with no @Arm takes the arms by position, in fork order")
+    @Test @DisplayName("a combine takes the arms by position, in fork order")
     void forkCombineBindsByPosition() throws Exception {
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new PositionalCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
@@ -238,7 +238,7 @@ class HandlerBinderTest {
     static final class PositionalCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        // no @Arm anywhere; @Context still needs its annotation, as it is not an arm
+        // @Context still needs its annotation -- it is what distinguishes the base from an arm
         public Map<String, Object> merge(@Context Map<String, Object> base,
                                          Map<String, Object> a, Map<String, Object> b) {
             Map<String, Object> out = new LinkedHashMap<>();
@@ -249,12 +249,14 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("a positional combine must take every arm")
-    void forkCombinePositionalMustTakeEveryArm() {
+    @Test @DisplayName("a combine must take every arm, since they bind by position")
+    void forkCombineMustTakeEveryArm() {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("by position"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("@Arm"), "and says how to take only some: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("[a, b], in that order"),
+                "the error names the arms and their order: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("ignore it"),
+                "and says what to do about an arm you do not need: " + ex.getMessage());
     }
 
     @Handlers("wf")
@@ -264,35 +266,19 @@ class HandlerBinderTest {
         public Map<String, Object> merge(Map<String, Object> notAnnotated) { return notAnnotated; }
     }
 
-    @Test @DisplayName("mixing @Arm with a plain parameter is rejected, naming both forms")
-    void forkCombineRejectsMixedForms() {
+    @Test @DisplayName("a combine that takes more parameters than the fork has arms is rejected")
+    void forkCombineRejectsTooManyArms() {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scan(new MixedCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("annotate every arm, or none"), ex.getMessage());
+                () -> HandlerBinder.bind(HandlerBinder.scan(new WideCombineH()), forked()));
+        assertTrue(ex.getMessage().contains("more arms than the fork has"), ex.getMessage());
     }
 
     @Handlers("wf")
-    static final class MixedCombineH {
+    static final class WideCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(@Arm("a") Map<String, Object> a, Map<String, Object> b) { return a; }
-    }
-
-    @Test @DisplayName("@Arm naming a branch the fork does not have is rejected at bind time")
-    void forkCombineRejectsUnknownArmName() {
-        // the engine stages results under the arm names, so an unknown name would just receive nothing
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scan(new UnknownArmCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("nope"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("[a, b]"), "and lists the real arms: " + ex.getMessage());
-    }
-
-    @Handlers("wf")
-    static final class UnknownArmCombineH {
-        public Map<String, Object> a1(Map<String, Object> c) { return c; }
-        public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(@Arm("a") Map<String, Object> a,
-                                         @Arm("nope") Map<String, Object> b) { return a; }
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b,
+                                         Map<String, Object> c) { return a; }
     }
 
     private static WorkflowDefinition eachGraph() {

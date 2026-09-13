@@ -338,7 +338,7 @@ class OrderHandlers {
     public Order   capture(Order o)      { return o.log("captured"); }
     // The combine is mandatory and explicit: fold what each branch produced onto the pre-fork
     // order and return the COMPLETE post-join context — nothing merges implicitly.
-    public Order   merge(@Context Order base, @Arm("payment") Order pay, @Arm("shipping") Order ship) {
+    public Order   merge(@Context Order base, Order payment, Order shipping) {   // arms, in fork order
         return base.withPaymentRef(pay.paymentRef())
                    .withShipmentRef(ship.shipmentRef()).withTrackingLabel(ship.trackingLabel());
     }

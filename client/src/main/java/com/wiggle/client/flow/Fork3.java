@@ -4,10 +4,10 @@ package com.wiggle.client.flow;
  * The stage a 3-armed {@link Wiggle#allOf} returns; its combine is mandatory, because the arms ran on
  * isolated copies of the context and a combine is the only way their results reach the flow.
  *
- * <p>A referenced combine is checked against the fan-out while the workflow is being defined: if the
- * handler's {@link com.wiggle.client.worker.Arm @Arm} parameters name the arms, they must name
- * <em>these</em> arms, in the order the handles were given to {@code allOf}. A handler with no
- * {@code @Arm} at all binds by position, which its own signature already fixes.
+ * <p>Arms bind by position: the combine takes one parameter per arm, in the order the handles were
+ * given to {@code allOf}. A referenced combine is checked against that shape while the workflow is
+ * being defined, so a handler written for a different fan-out is caught there rather than at
+ * worker startup.
  */
 public final class Fork3<A, B, C> {
 

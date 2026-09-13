@@ -34,7 +34,7 @@ import java.util.TreeSet;
  * A method's signature defines its step: one input parameter (decoded from JSON into its type),
  * plus an optional {@link Context @Context} parameter for the frozen base where one exists; a
  * {@code boolean} return is a gate, {@code void} an effect, anything else a task whose return
- * REPLACES the context. Combine methods bind {@link Arm @Arm} parameters (fork) or a collection
+ * REPLACES the context. Combine methods take one parameter per fork arm, in order (fork), or a collection
  * parameter (forEach); their return is the complete post-join context.
  */
 final class HandlerBinder {
@@ -348,50 +348,30 @@ final class HandlerBinder {
      * Works out, once at bind time, which fork arm each combine parameter receives -- the arm's name,
      * or null for the {@link Context @Context} parameter that takes the pre-fork context.
      *
-     * <p>Two forms are accepted. {@link Arm @Arm} on a parameter names its branch explicitly, and may
-     * take the arms in any order or skip the ones the merge ignores. A combine whose parameters carry
-     * <em>no</em> {@code @Arm} at all binds <b>by position</b> instead: parameter order is fork order,
-     * and every arm must be taken. Positional binding reads well when the arms are distinctly typed
-     * and the topology sits beside the handler (see {@code com.wiggle.client.flow}); naming the arms
-     * is the safer form when several arms share a type, since nothing then distinguishes two
-     * parameters but their order. The two forms cannot be mixed in one method.
+     * <p>Arms bind <b>by position</b>: parameter order is fork order, and a combine takes every arm.
+     * The arm names exist for the engine (they are the keys it stages each branch's result under) and
+     * for the console; a handler never spells one out. A {@code @Context} parameter may sit anywhere
+     * and does not count against the arms.
      */
     private static String[] combineSources(Node node, Method m, java.lang.reflect.Parameter[] params,
                                            List<String> arms) {
-        boolean named = false;
-        for (java.lang.reflect.Parameter p : params) {
-            if (p.isAnnotationPresent(Arm.class)) { named = true; break; }
-        }
-
         String[] sources = new String[params.length];
         int position = 0;
         for (int i = 0; i < params.length; i++) {
-            java.lang.reflect.Parameter p = params[i];
-            Arm arm = p.getAnnotation(Arm.class);
-            if (arm != null) {
-                if (!arms.contains(arm.value())) {
-                    throw new IllegalStateException(combineWhat(node, m) + " parameter " + i
-                            + " is @Arm(\"" + arm.value() + "\") but the fork's arms are " + arms);
-                }
-                sources[i] = arm.value();
-            } else if (p.isAnnotationPresent(Context.class)) {
+            if (params[i].isAnnotationPresent(Context.class)) {
                 sources[i] = null;
-            } else if (named) {
-                throw new IllegalStateException(combineWhat(node, m) + " parameter " + i
-                        + " must be @Arm(\"branch\") or @Context: annotate every arm, or none of them"
-                        + " to bind the arms " + arms + " by position");
-            } else {
-                if (position >= arms.size()) {
-                    throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the"
-                            + " fork has: its arms are " + arms);
-                }
-                sources[i] = arms.get(position++);
+                continue;
             }
+            if (position >= arms.size()) {
+                throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the fork"
+                        + " has: its arms, in order, are " + arms);
+            }
+            sources[i] = arms.get(position++);
         }
-        if (!named && position != arms.size()) {
-            throw new IllegalStateException(combineWhat(node, m) + " binds its arms by position, so it"
-                    + " must take all " + arms.size() + " of them " + arms + " (it takes " + position
-                    + "); use @Arm(\"branch\") to take only some");
+        if (position != arms.size()) {
+            throw new IllegalStateException(combineWhat(node, m) + " must take all " + arms.size()
+                    + " of the fork's arms " + arms + ", in that order; it takes " + position
+                    + ". Add a parameter for each arm you do not need and ignore it.");
         }
         return sources;
     }
@@ -409,7 +389,7 @@ final class HandlerBinder {
      * context with it (nothing from before the join survives unless the handler returned it, and
      * staged scratch keys are stripped). Two flavors, told apart by the node's itemsKey:
      * <ul>
-     *   <li><b>fork</b> (itemsKey = arm-name array): each {@link Arm @Arm} parameter gets that
+     *   <li><b>fork</b> (itemsKey = arm-name array): each parameter gets, in order, that
      *       branch's final context decoded to its type; an optional {@link Context @Context}
      *       parameter gets the pre-fork context.</li>
      *   <li><b>forEach</b> (itemsKey = a scratch-key string): one collection parameter receives

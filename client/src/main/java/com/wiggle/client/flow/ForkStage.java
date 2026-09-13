@@ -10,7 +10,7 @@ import java.util.List;
  *
  * <p>{@code combine} is topology only: it declares the combine node (by name) and records the arm
  * names. The merge itself is a handler bound on the worker -- a method named the same as the combine
- * whose {@link com.wiggle.client.worker.Arm @Arm} parameters receive each branch's typed result and
+ * whose the combine's matching parameter parameters receive each branch's typed result and
  * whose return is the COMPLETE post-join context. There is no default fold. The fork left the stream
  * with no open end, so a forgotten combine also fails at {@code build()}.
  *

@@ -4,7 +4,6 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -57,8 +56,8 @@ class ForkJoinContextMergeTest {
         public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "tracking", "DHL"); }
         /** Ambient style: the pre-fork base from Step.base() instead of a @Context parameter. */
-        public Map<String, Object> merge(@Arm("payment") Map<String, Object> payment,
-                                         @Arm("shipping") Map<String, Object> shipping) {
+        public Map<String, Object> merge(Map<String, Object> payment,
+                                         Map<String, Object> shipping) {
             Map<String, Object> out = new LinkedHashMap<>(com.wiggle.client.worker.Step.base());
             if (payment != null) out.putAll(payment);
             if (shipping != null) out.putAll(shipping);
@@ -141,7 +140,7 @@ class ForkJoinContextMergeTest {
         public Parcel validate(Parcel p) { return p; }
         public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
         public Parcel label(Parcel p) { return p.withTracking("DHL"); }
-        public Parcel merge(@Context Parcel base, @Arm("payment") Parcel payment, @Arm("shipping") Parcel shipping) {
+        public Parcel merge(@Context Parcel base, Parcel payment, Parcel shipping) {
             return base.withPayment(payment.payment()).withTracking(shipping.tracking());
         }
         public Parcel notify(Parcel p) { return p; }

@@ -191,9 +191,9 @@ class FlowEquivalenceTest {
     }
 
     @Test
-    void aCombineWithNoArmAnnotationsIsAcceptedAndBindsByPosition() {
-        // @Arm is optional: with none, the parameters take the arms in the order given to allOf --
-        // which the typed signature has already pinned, so there is nothing left to check here
+    void aCombineTakesItsArmsByPosition() {
+        // the parameters take the arms in the order given to allOf, which the typed signature has
+        // already pinned -- the arm names stay an engine detail
         FlowSpec flow = Wiggle.define("positional", Order.class, f -> {
             var payment = f.thenApply(h::charge);
             var shipping = f.thenApply(h::label);
@@ -204,24 +204,10 @@ class FlowEquivalenceTest {
     }
 
     @Test
-    void aCombineWhoseArmNamesDoNotMatchTheFanOutIsRejectedWhileDefining() {
-        // the engine keys each branch's result by arm name, so "shippping" would simply receive
-        // nothing at run time -- referencing the handler lets us say so now instead
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
-            Wiggle.define("mistyped", Order.class, f -> {
-                var payment = f.thenApply(h::charge);
-                var shipping = f.thenApply(h::label);
-                return Wiggle.allOf(payment, shipping).combine(h::mistyped);
-            });
-        });
-
-        assertTrue(ex.getMessage().contains("@Arm(\"labell\")"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("@Arm(\"label\")"), ex.getMessage());
-    }
-
-    @Test
     void aCombineMissingTheContextParameterIsRejectedWhileDefining() {
-        // the types line up, so only the missing annotation distinguishes it from a real combine
+        // the one shape mistake the compiler cannot catch: the types line up, so only the missing
+        // @Context distinguishes a context-taking combine from a three-armed one. A wrong *arity* is
+        // already a compile error on the typed path -- the binder test covers it for Wiggle.graph
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
             Wiggle.define("no-context", Order.class, f -> {
                 var payment = f.thenApply(h::charge);

@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Step;
@@ -70,8 +69,8 @@ class JdbcForkJoinStressTest {
         public Map<String, Object> reserve(Map<String, Object> ctx) { return put(ctx, "reserved", true); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "labelled", true); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("payment") Map<String, Object> payment,
-                                         @Arm("shipping") Map<String, Object> shipping) {
+                                         Map<String, Object> payment,
+                                         Map<String, Object> shipping) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (payment != null) out.putAll(payment);
             if (shipping != null) out.putAll(shipping);
