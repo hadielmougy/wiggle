@@ -319,7 +319,7 @@ public final class WorkflowBuilder {
         body0.tail().wireOpenEndsTo(condId);     // body tail -> condition
         pipeline.wireNext(condId, body0.start()); // condition true -> back to the body
         openAt(condId, Edge.ALT);                // condition false -> onward
-        lastStepId = null;
+        lastStepId = condId;   // so withRetry()/onQueue() can reach the condition, which a worker runs
         return this;
     }
 
@@ -337,7 +337,7 @@ public final class WorkflowBuilder {
 
         String[] guardIds = new String[guards];
         for (int i = 0; i < guards; i++) {
-            guardIds[i] = pipeline.addGuard(all.get(i).name(), null, null);
+            guardIds[i] = pipeline.addGuard(all.get(i).name(), all.get(i).retry(), all.get(i).queue());
         }
 
         routeInto(guardIds[0]);   // enter the first guard, leaving no open end -- we thread the edges below
@@ -425,6 +425,44 @@ public final class WorkflowBuilder {
     public WorkflowBuilder execution(ExecutionMode mode) {
         pipeline.executionMode(mode);
         return this;
+    }
+
+    /**
+     * Gives the node just added an explicit retry policy, overriding the workflow default. The
+     * inline forms ({@code step(name, retry)} and friends) cover the common case; this reaches the
+     * nodes that have no inline form -- a {@code combine}, and a {@code doWhile} condition -- and
+     * reads well when a policy is the exception rather than the rule:
+     *
+     * <pre>{@code
+     * .fork(...).combine("settle").withRetry(RetryPolicy.exponential(5, ofMillis(100)))
+     * .doWhile("hasMore", s -> s.step("drain")).withRetry(gentle)
+     * }</pre>
+     *
+     * Applies to whatever a worker runs -- step, effect, gate, combine or loop condition -- and
+     * fails on anything the engine runs itself (a sleep, a signal wait, a fork, a sub-workflow),
+     * which has no worker to retry on.
+     */
+    public WorkflowBuilder withRetry(RetryPolicy retry) {
+        pipeline.setRetry(requireLastStep("withRetry()"), retry);
+        return this;
+    }
+
+    /**
+     * Pins the node just added to a dedicated worker queue, overriding the workflow default. Like
+     * {@link #withRetry}, this reaches the nodes with no inline form and applies to whatever a
+     * worker runs.
+     */
+    public WorkflowBuilder onQueue(String queue) {
+        pipeline.setQueue(requireLastStep("onQueue()"), queue);
+        return this;
+    }
+
+    private String requireLastStep(String what) {
+        if (lastStepId == null) {
+            throw new IllegalStateException(what + " must directly follow a step, effect, gate, "
+                    + "combine or doWhile");
+        }
+        return lastStepId;
     }
 
     /**

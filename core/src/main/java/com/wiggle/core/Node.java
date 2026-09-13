@@ -74,6 +74,10 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
     }
 
+    public Node withRetry(RetryPolicy r) {
+        return new Node(id, kind, name, activity, queue, r, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+    }
+
     public Node withBranches(List<String> b) {
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
     }

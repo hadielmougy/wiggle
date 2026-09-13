@@ -362,6 +362,63 @@ class FlowEquivalenceTest {
     }
 
     @Test
+    void retryAndQueueReachTheNodesWithNoInlineForm() {
+        // a combine and a doWhile condition are worker-dispatched but have no (fn, retry, queue)
+        // overload to carry them, so they are amended after the fact -- in both APIs alike
+        RetryPolicy retry = RetryPolicy.exponential(6, Duration.ofMillis(80));
+
+        FlowSpec dsl = Workflow.define("amended")
+                .fork(Branch.of("payment", s -> s.step("charge")),
+                      Branch.of("shipping", s -> s.step("label")))
+                .combine("settle").withRetry(retry).onQueue("merges")
+                .doWhile("hasMore", s -> s.step("drain")).withRetry(retry).onQueue("loops")
+                .build();
+
+        FlowSpec flow = Wiggle.define("amended", Order.class, f -> {
+            var payment = f.thenApply(h::charge).named("payment");
+            var shipping = f.thenApply(h::label).named("shipping");
+            return Wiggle.allOf(payment, shipping)
+                    .combine("settle", Order.class).withRetry(retry).onQueue("merges")
+                    .repeatWhile(h::hasMore, a -> a.thenApply(h::drain)).withRetry(retry).onQueue("loops");
+        });
+
+        assertSameDefinition(dsl, flow);
+        assertTrue(flow.queues().containsAll(List.of("merges", "loops")), flow.queues().toString());
+        assertEquals("merges", named(flow.definition(), "settle").queue());
+        assertEquals("loops", named(flow.definition(), "hasMore").queue());
+    }
+
+    @Test
+    void eachChooseGuardCarriesItsOwnRetryAndQueue() {
+        // a choose records several guards at once, so there is no "the one just added" to amend --
+        // the settings ride on the case instead
+        RetryPolicy retry = RetryPolicy.exponential(2, Duration.ofMillis(40));
+
+        FlowSpec dsl = Workflow.define("triage")
+                .choose(Case.when("isVip", retry, "vip-checks", s -> s.step("vipPath")),
+                        Case.otherwise("standard", s -> s.step("standardPath")))
+                .build();
+
+        FlowSpec flow = Wiggle.define("triage", Order.class, f -> f
+                .thenChoose(Alt.when(h::isVip, retry, "vip-checks", a -> a.thenApply(h::vipPath)),
+                            Alt.otherwise("standard", a -> a.thenApply(h::standardPath))));
+
+        assertSameDefinition(dsl, flow);
+        assertEquals("vip-checks", named(flow.definition(), "isVip").queue());
+    }
+
+    @Test
+    void retryAndQueueAreRejectedOnAnythingTheEngineRunsItself() {
+        // a sleep is a server-side timer: no worker holds it, so there is nothing to retry or pin
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                Wiggle.define("timer", Order.class, f -> f
+                        .thenSleep(Duration.ofSeconds(1))
+                        .withRetry(RetryPolicy.exponential(2, Duration.ofMillis(10)))));
+
+        assertTrue(ex.getMessage().contains("must directly follow"), ex.getMessage());
+    }
+
+    @Test
     void asReTypesTheChainWithoutTouchingTheGraph() {
         FlowSpec plain = Wiggle.define("retyped", Order.class, f -> f.thenApply(h::validate));
         FlowSpec retyped = Wiggle.define("retyped", Order.class, f -> f

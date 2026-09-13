@@ -275,7 +275,9 @@ public final class WiggleFlow<T> {
         for (int i = 0; i < alts.length; i++) {
             Alt<T> alt = alts[i];
             UnaryOperator<WorkflowBuilder> branch = body(alt.body(), "the branch of case '" + alt.name() + "'");
-            cases[i] = alt.guarded() ? Case.when(alt.name(), branch) : Case.otherwise(alt.name(), branch);
+            cases[i] = alt.guarded()
+                    ? Case.when(alt.name(), alt.retry(), alt.queue(), branch)
+                    : Case.otherwise(alt.name(), branch);
         }
         return record(null, b -> b.choose(cases));
     }
@@ -301,6 +303,33 @@ public final class WiggleFlow<T> {
     }
 
     // ------------------------------------------------------------------ per-step and workflow settings
+
+    /**
+     * Gives the step just recorded an explicit retry policy, overriding the workflow default. The
+     * inline forms above cover the common case; this reaches what they cannot -- a combine, and a
+     * {@link #repeatWhile} condition:
+     *
+     * <pre>{@code
+     * Wiggle.allOf(payment, shipping).combine(h::settle).withRetry(patient)
+     * f.repeatWhile(h::hasMore, a -> a.thenApply(h::drain)).withRetry(gentle)
+     * }</pre>
+     *
+     * Applies to whatever a worker runs -- step, effect, gate, combine or loop condition -- and fails
+     * on anything the engine runs itself (a sleep, a signal wait, a sub-workflow), which has no
+     * worker to retry on.
+     */
+    public WiggleFlow<T> withRetry(RetryPolicy retry) {
+        return record(null, b -> b.withRetry(retry));
+    }
+
+    /**
+     * Pins the step just recorded to a dedicated worker queue, overriding the workflow default. Like
+     * {@link #withRetry}, this reaches the nodes with no inline form and applies to whatever a worker
+     * runs.
+     */
+    public WiggleFlow<T> onQueue(String queue) {
+        return record(null, b -> b.onQueue(queue));
+    }
 
     /**
      * Marks the step just added as compensable: if the instance later fails, its undo runs in the

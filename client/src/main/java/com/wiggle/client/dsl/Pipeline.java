@@ -140,6 +140,32 @@ final class Pipeline {
     /** Marks a guard as a doWhile loop condition with an iteration budget (-1 = engine default). */
     void markLoop(String guardId, int budget) { nodes.put(guardId, nodes.get(guardId).withLoopBudget(budget)); }
 
+    /**
+     * Replaces an already-added node's retry policy. Only a worker-dispatched node has one -- the
+     * engine runs the rest itself, so there is nothing to retry on a worker.
+     */
+    void setRetry(String nodeId, RetryPolicy retry) {
+        Node n = requireWorkerNode(nodeId, "a retry policy");
+        nodes.put(nodeId, n.withRetry(retryOr(retry)));
+    }
+
+    /** Replaces an already-added node's queue, registering it so workers discover it. */
+    void setQueue(String nodeId, String queue) {
+        Node n = requireWorkerNode(nodeId, "a queue");
+        String q = queueOr(queue);
+        queues.add(q);
+        nodes.put(nodeId, n.withQueue(q));
+    }
+
+    private Node requireWorkerNode(String nodeId, String what) {
+        Node n = nodes.get(nodeId);
+        if (!n.isWorkerDispatched()) {
+            throw new IllegalStateException(what + " applies to a step, effect, gate or combine -- "
+                    + n.kind() + " '" + n.name() + "' runs on the engine, not a worker");
+        }
+        return n;
+    }
+
     void wireNext(String from, String target) { nodes.put(from, nodes.get(from).withNext(target)); }
 
     /** Points {@code from}'s alternate (false / escalation) edge at {@code target}. */
