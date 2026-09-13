@@ -78,6 +78,37 @@ public final class Wiggle {
         return Plan.compile(name, defaultRetry, root);
     }
 
+    /**
+     * Describes a workflow as <em>topology alone</em> -- named steps and how they chain, branch and
+     * rejoin, with no handlers in sight:
+     *
+     * <pre>{@code
+     * FlowSpec order = Wiggle.graph("binding-order")
+     *         .step("validate")
+     *         .gate("in-stock")
+     *         .step("charge", "payments")
+     *         .effect("notify")
+     *         .build();
+     * }</pre>
+     *
+     * <p>This is the mode for a topology written where its handlers are not: registered by an author
+     * with no handler classes on its classpath, generated from data, or -- as the binding demos show --
+     * served by several independent workers that each bind a subset by name. There is nothing for a
+     * compiler to check in that situation, so nothing is lost by naming the steps.
+     *
+     * <p>{@link #define} is the better mode whenever the handlers <em>are</em> at hand: it checks each
+     * step against the handler that implements it and follows a rename. Both produce the same
+     * {@link FlowSpec} -- the graph has only ever held names -- and a worker cannot tell which was used.
+     */
+    public static WorkflowBuilder graph(String name) {
+        return Workflow.define(name);
+    }
+
+    /** {@link #graph(String)} with an explicit default retry policy for every step that names none. */
+    public static WorkflowBuilder graph(String name, RetryPolicy defaultRetry) {
+        return Workflow.define(name, defaultRetry);
+    }
+
     // ------------------------------------------------------------------ fan-out
 
     /**

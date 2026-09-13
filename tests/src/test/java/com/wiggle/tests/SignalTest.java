@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.worker.Handlers;
@@ -85,7 +85,7 @@ class SignalTest {
 
     @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
     void signalOverGrpc() throws Exception {
-        FlowSpec bp = Workflow.define("sig-approve")
+        FlowSpec bp = Wiggle.graph("sig-approve")
                 .awaitSignal("approval")
                 .step("after")
                 .build();
@@ -113,7 +113,7 @@ class SignalTest {
 
     @Test @DisplayName("signalling an instance that is not waiting for that name is a 409")
     void wrongSignalConflicts() throws Exception {
-        FlowSpec bp = Workflow.define("sig-wrong")
+        FlowSpec bp = Wiggle.graph("sig-wrong")
                 .awaitSignal("expected")
                 .step("after")
                 .build();
@@ -133,7 +133,7 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline runs the escalation branch, then rejoins the flow")
     void deadlineEscalates() throws Exception {
-        FlowSpec bp = Workflow.define("sig-escalate")
+        FlowSpec bp = Wiggle.graph("sig-escalate")
                 .awaitSignal("approval", Duration.ofMillis(250),
                         b -> b.step("escalate"))
                 .step("after")
@@ -155,7 +155,7 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline with no escalation fails the instance")
     void deadlineFails() throws Exception {
-        FlowSpec bp = Workflow.define("sig-timeout")
+        FlowSpec bp = Wiggle.graph("sig-timeout")
                 .awaitSignal("approval", Duration.ofMillis(250))
                 .step("after")
                 .build();

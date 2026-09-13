@@ -47,10 +47,11 @@ public final class TimerBench {
         boolean adaptive = Boolean.parseBoolean(env("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"));
 
         CountDownLatch done = new CountDownLatch(count);
-        FlowSpec bp = Wiggle.define("bench-timer", Map.class, f -> f
-                .thenApply("enter")
-                .thenSleep("hold", Duration.ofMillis(sleepMillis))
-                .thenAccept("exit"));
+        FlowSpec bp = Wiggle.graph("bench-timer")
+                .step("enter")
+                .sleep("hold", Duration.ofMillis(sleepMillis))
+                .effect("exit")
+                .build();
 
         ServerConfig config = new ServerConfig(0, "timer-bench", null, null, null, 16,
                 Duration.ofMillis(tickMillis), Duration.ofMillis(500), 3, Duration.ofSeconds(30),

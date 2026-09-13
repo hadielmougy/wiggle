@@ -36,11 +36,12 @@ public final class BindingOrder {
      * without running any worker at all.
      */
     public static FlowSpec flowSpec() {
-        return Wiggle.define(NAME, Map.class, f -> f
-                .thenApply("validate")
-                .thenFilter("in-stock")
-                .thenApply("charge").onQueue(PAYMENTS_QUEUE)
-                .thenApply("ship")
-                .thenAccept("notify"));
+        return Wiggle.graph(NAME)
+                .step("validate")
+                .gate("in-stock")
+                .step("charge", PAYMENTS_QUEUE)
+                .step("ship")
+                .effect("notify")
+                .build();
     }
 }

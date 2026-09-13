@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
@@ -52,7 +52,7 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            FlowSpec bp = Workflow.define("lb-fork")
+            FlowSpec bp = Wiggle.graph("lb-fork")
                     .execution(mode)
                     .step("seed")
                     .step("prep")
@@ -84,7 +84,7 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        FlowSpec bp = Workflow.define("lb-gate")
+        FlowSpec bp = Wiggle.graph("lb-gate")
                 .execution(ExecutionMode.LOCAL_SYNC)
                 .step("seed")
                 .gate("keep")
@@ -146,7 +146,7 @@ class LocalBoundaryTest {
 
     private static FlowSpec queueSplitFlowSpec(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return Workflow.define("lb-queues")
+        return Wiggle.graph("lb-queues")
                 .execution(mode)
                 .step("a")
                 .step("b")

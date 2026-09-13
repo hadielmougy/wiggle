@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -43,7 +43,7 @@ class LocalSyncTest {
 
     /** A five-step linear pipeline; each step's value depends on the previous. */
     private static FlowSpec linear(ExecutionMode mode) {
-        return Workflow.define("ls-linear")
+        return Wiggle.graph("ls-linear")
                 .execution(mode)
                 .step("a")
                 .step("b")
@@ -124,7 +124,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            FlowSpec bp = Workflow.define("async-batch")
+            FlowSpec bp = Wiggle.graph("async-batch")
                     .execution(ExecutionMode.LOCAL_ASYNC)
                     .step("x")
                     .step("y")

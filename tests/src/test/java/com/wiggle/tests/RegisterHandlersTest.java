@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -38,7 +38,7 @@ class RegisterHandlersTest {
 
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
     private FlowSpec authoredGraph() {
-        return Workflow.define("order-fulfilment")
+        return Wiggle.graph("order-fulfilment")
                 .step("validate")
                 .gate("in-stock")
                 .step("authorise", "payments")

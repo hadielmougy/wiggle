@@ -2,7 +2,7 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,7 +68,7 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ bind: kinds & signatures
 
     private static WorkflowDefinition linear() {
-        return Workflow.define("wf").step("work").gate("ok").effect("log").build().definition();
+        return Wiggle.graph("wf").step("work").gate("ok").effect("log").build().definition();
     }
 
     @Test @DisplayName("bind: task returns whole context, gate returns boolean, effect returns null")
@@ -129,7 +129,7 @@ class HandlerBinderTest {
 
     @Test @DisplayName("bind reports unserved steps and applies queue defaulting")
     void unservedAndQueues() {
-        WorkflowDefinition def = Workflow.define("wf")
+        WorkflowDefinition def = Wiggle.graph("wf")
                 .step("served", "special-queue")
                 .step("someone-elses")
                 .build().definition();
@@ -182,7 +182,7 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ combines
 
     private static WorkflowDefinition forked() {
-        return Workflow.define("wf")
+        return Wiggle.graph("wf")
                 .fork(Branch.of("a", s -> s.step("a1")),
                       Branch.of("b", s -> s.step("b1")))
                 .combine("merge")
@@ -296,7 +296,7 @@ class HandlerBinderTest {
     }
 
     private static WorkflowDefinition eachGraph() {
-        return Workflow.define("wf")
+        return Wiggle.graph("wf")
                 .forEach("per-item", "items", b -> b.step("norm"))
                 .combine("collect")
                 .build().definition();

@@ -17,10 +17,11 @@ public final class TypedBindingOrder {
     private TypedBindingOrder() {}
 
     public static FlowSpec flowSpec() {
-        return Wiggle.define(NAME, Purchase.class, f -> f
-                .thenApply("validate")                               // implemented by name, elsewhere
-                .thenFilter("in-stock")                              // predicate node; a worker supplies it
-                .thenApply("charge").onQueue(PAYMENTS_QUEUE)         // routed to the payments queue
-                .thenAccept("notify"));
+        return Wiggle.graph(NAME)
+                .step("validate")                                    // implemented by name, elsewhere
+                .gate("in-stock")                                    // predicate node; a worker supplies it
+                .step("charge", PAYMENTS_QUEUE)                      // routed to the payments queue
+                .effect("notify")
+                .build();
     }
 }

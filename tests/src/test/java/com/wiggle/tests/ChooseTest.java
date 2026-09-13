@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Case;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -39,7 +39,7 @@ class ChooseTest {
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
     private FlowSpec withDefault() {
-        return Workflow.define("choose-default")
+        return Wiggle.graph("choose-default")
                 .choose(
                         Case.when("is-gold", b -> b.step("gold")),
                         Case.when("is-premium", b -> b.step("premium")),   // also true for "gold": must not win
@@ -60,7 +60,7 @@ class ChooseTest {
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
     private FlowSpec withoutDefault() {
-        return Workflow.define("choose-skip")
+        return Wiggle.graph("choose-skip")
                 .choose(
                         Case.when("is-a", b -> b.step("a")))
                 .step("finalize")

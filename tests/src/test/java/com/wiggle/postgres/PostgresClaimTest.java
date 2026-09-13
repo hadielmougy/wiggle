@@ -1,7 +1,7 @@
 package com.wiggle.postgres;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Ids;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.jdbc.JdbcStorage;
@@ -48,7 +48,7 @@ class PostgresClaimTest {
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
     private static FlowSpec uniqueWorkflow() {
-        return Workflow.define("pg-claim-" + Ids.next("wf"))
+        return Wiggle.graph("pg-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
     }

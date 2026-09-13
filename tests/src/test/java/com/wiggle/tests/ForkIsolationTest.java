@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
@@ -31,7 +31,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("branch writes are isolated: no implicit merge, combine owns what lands")
     void branchesAreIsolatedAndCombineDecides() throws Exception {
-        FlowSpec bp = Workflow.define("isolation")
+        FlowSpec bp = Wiggle.graph("isolation")
                 .step("seed")
                 .fork(
                         // Both arms write the SAME key to different values, and each also asserts it
@@ -58,7 +58,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a branch that combine ignores contributes nothing to the context")
     void ignoredBranchLeavesNoTrace() throws Exception {
-        FlowSpec bp = Workflow.define("ignore-arm")
+        FlowSpec bp = Wiggle.graph("ignore-arm")
                 .fork(
                         Branch.of("keep", s -> s.step("k")),
                         Branch.of("drop", s -> s.step("d")))
@@ -75,7 +75,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine's return REPLACES the context: keys it omits do not survive the join")
     void combineReturnReplacesContext() throws Exception {
-        FlowSpec bp = Workflow.define("replace-check")
+        FlowSpec bp = Wiggle.graph("replace-check")
                 .step("seed")
                 .fork(
                         Branch.of("a", s -> s.step("a1")),
@@ -92,7 +92,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine with no handler fails the instance — there is no implicit union fold")
     void combineWithoutHandlerFails() throws Exception {
-        FlowSpec bp = Workflow.define("no-combine-handler")
+        FlowSpec bp = Wiggle.graph("no-combine-handler")
                 .fork(
                         Branch.of("x", s -> s.step("x1")),
                         Branch.of("y", s -> s.step("y1")))

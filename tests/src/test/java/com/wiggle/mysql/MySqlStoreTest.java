@@ -1,7 +1,7 @@
 package com.wiggle.mysql;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Ids;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
@@ -46,7 +46,7 @@ class MySqlStoreTest {
     }
 
     private static FlowSpec uniqueWorkflow() {
-        return Workflow.define("mysql-claim-" + Ids.next("wf"))
+        return Wiggle.graph("mysql-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
     }

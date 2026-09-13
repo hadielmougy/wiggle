@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -39,7 +39,7 @@ class SubFlowTest {
     }
 
     private static FlowSpec parent() {
-        return Workflow.define("sub-parent")
+        return Wiggle.graph("sub-parent")
                 .step("prepare")
                 .subWorkflow("delegate", "sub-child")
                 .step("wrap-up")
@@ -70,7 +70,7 @@ class SubFlowTest {
 
     @Test @DisplayName("the child runs with the parent's context and its result merges back")
     void childCompletes() throws Exception {
-        FlowSpec child = Workflow.define("sub-child")
+        FlowSpec child = Wiggle.graph("sub-child")
                 .step("child-work")
                 .step("child-done")
                 .build();
@@ -93,7 +93,7 @@ class SubFlowTest {
 
     @Test @DisplayName("a failing child fails the parent with the child's error")
     void childFailureFailsParent() throws Exception {
-        FlowSpec child = Workflow.define("sub-child")
+        FlowSpec child = Wiggle.graph("sub-child")
                 .step("child-work", com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1)))
                 .build();
 
@@ -123,7 +123,7 @@ class SubFlowTest {
 
     @Test @DisplayName("cancelling the parent cascades to the running child")
     void cancelCascades() throws Exception {
-        FlowSpec child = Workflow.define("sub-child")
+        FlowSpec child = Wiggle.graph("sub-child")
                 .awaitSignal("never-arrives")   // the child parks so it is definitely still running
                 .step("child-done")
                 .build();

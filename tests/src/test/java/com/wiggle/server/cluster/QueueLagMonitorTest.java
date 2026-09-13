@@ -1,7 +1,7 @@
 package com.wiggle.server.cluster;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -64,7 +64,7 @@ class QueueLagMonitorTest {
     }
 
     private WorkflowDefinition registerLagWorkflow(WorkflowEngine engine) {
-        FlowSpec bp = Workflow.define("lag-probe")
+        FlowSpec bp = Wiggle.graph("lag-probe")
                 .step("work")   // never claimed: no worker ever polls in this test
                 .build();
         return engine.definitions().register(bp.definition());

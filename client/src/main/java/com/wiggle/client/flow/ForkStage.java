@@ -16,7 +16,7 @@ import java.util.List;
  *
  * @see WorkflowBuilder#fork
  */
-final class ForkStage {
+public final class ForkStage {
 
     private final WorkflowBuilder stream;
     private final List<Branch> branches;
@@ -35,7 +35,7 @@ final class ForkStage {
      * @param name the step name of the combine node (must be unique in the workflow)
      * @return the stream, reopened after the combine node
      */
-    WorkflowBuilder combine(String name) {
+    public WorkflowBuilder combine(String name) {
         if (combined) throw new IllegalStateException("combine already applied to this fork");
         combined = true;
         stream.buildForkCombine(branches, name);

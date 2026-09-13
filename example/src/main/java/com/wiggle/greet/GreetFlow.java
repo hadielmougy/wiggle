@@ -3,8 +3,6 @@ package com.wiggle.greet;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 
-import java.util.Map;
-
 /**
  * The tiny "greet" flow used by {@link GreetWorker} and {@link GreetStart}. The flowSpec carries both
  * the topology (two task steps) and the step logic, so a worker that {@code register}s it is bound by
@@ -15,8 +13,9 @@ public final class GreetFlow {
     private GreetFlow() { }
 
     public static FlowSpec flowSpec() {
-        return Wiggle.define("greet", Map.class, f -> f
-                .thenApply("hello")
-                .thenApply("world"));
+        return Wiggle.graph("greet")
+                .step("hello")
+                .step("world")
+                .build();
     }
 }

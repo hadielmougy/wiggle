@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -26,7 +26,7 @@ class ScheduleTest {
     }
 
     private static FlowSpec probe() {
-        return Workflow.define("sched-probe").step("work").build();
+        return Wiggle.graph("sched-probe").step("work").build();
     }
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")

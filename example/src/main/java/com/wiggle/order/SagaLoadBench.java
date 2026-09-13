@@ -47,10 +47,11 @@ public final class SagaLoadBench {
 
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
-        return Wiggle.define("saga-load", Map.class, f -> f
-                .thenApply("reserve").compensate()
-                .thenApply("enrich").compensate()
-                .thenApply("boom"));
+        return Wiggle.graph("saga-load")
+                .step("reserve").compensate()
+                .step("enrich").compensate()
+                .step("boom")
+                .build();
     }
 
     @Handlers("saga-load")

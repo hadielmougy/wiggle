@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
@@ -41,7 +41,7 @@ class JdbcForkJoinStressTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Workflow.define("order-ish")
+        return Wiggle.graph("order-ish")
                 .step("validate")
                 .gate("in-stock")
                 .fork(

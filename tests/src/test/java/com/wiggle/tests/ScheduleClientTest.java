@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.ScheduleInfo;
 import com.wiggle.client.WiggleClient.WiggleApiException;
@@ -31,9 +31,9 @@ class ScheduleClientTest {
 
     @Test @DisplayName("a client creates, lists and deletes interval and cron schedules")
     void manageSchedules() throws Exception {
-        FlowSpec bpA = Workflow.define("schedc-probe-a")
+        FlowSpec bpA = Wiggle.graph("schedc-probe-a")
                 .step("work").build();
-        FlowSpec bpB = Workflow.define("schedc-probe-b")
+        FlowSpec bpB = Wiggle.graph("schedc-probe-b")
                 .step("work").build();
 
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -74,7 +74,7 @@ class ScheduleClientTest {
 
     @Test @DisplayName("re-creating a schedule for the same workflow updates it in place, no duplicate")
     void createIsIdempotentPerWorkflow() throws Exception {
-        FlowSpec bp = Workflow.define("schedc-probe-dup")
+        FlowSpec bp = Wiggle.graph("schedc-probe-dup")
                 .step("work").build();
 
         try (WiggleServer server = new WiggleServer(config()).start();

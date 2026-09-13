@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.PollResult;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.core.Ids;
@@ -36,7 +36,7 @@ class MemoryPollTest {
 
     @Test @DisplayName("over the memory threshold, a rejected poll returns empty + hold-off even when work exists")
     void rejectsUnderPressure() throws Exception {
-        FlowSpec bp = Workflow.define("mem-" + Ids.next("wf"))
+        FlowSpec bp = Wiggle.graph("mem-" + Ids.next("wf"))
                 .step("work")
                 .build();
         // 0.0001 is below any running JVM's live-set/max, so the guard is always under pressure;
@@ -90,7 +90,7 @@ class MemoryPollTest {
 
     @Test @DisplayName("under a normal threshold no poll is rejected and work flows")
     void noRejectUnderThreshold() throws Exception {
-        FlowSpec bp = Workflow.define("mem-ok-" + Ids.next("wf"))
+        FlowSpec bp = Wiggle.graph("mem-ok-" + Ids.next("wf"))
                 .step("work")
                 .build();
         // Threshold 0.999 is effectively never crossed, so even reject-ratio 1.0 never triggers.

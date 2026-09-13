@@ -125,25 +125,6 @@ public final class WiggleFlow<T> {
      * since there is no handler signature to read a new one from; say so with
      * {@link #thenApply(String, Class)} when it does change.
      */
-    public WiggleFlow<T> thenApply(String step) {
-        return record(step, b -> b.step(step));
-    }
-
-    /** {@link #thenApply(String)} declaring the type the step leaves in the context. */
-    public <R> WiggleFlow<R> thenApply(String step, Class<R> produces) {
-        return record(step, b -> b.step(step));
-    }
-
-    /** An effect step named directly. See {@link #thenApply(String)}. */
-    public WiggleFlow<T> thenAccept(String effect) {
-        return record(effect, b -> b.effect(effect));
-    }
-
-    /** A guard named directly. See {@link #thenApply(String)}. */
-    public WiggleFlow<T> thenFilter(String gate) {
-        return record(gate, b -> b.gate(gate));
-    }
-
     private <R> WiggleFlow<R> task(FlowFn<T, R> step, RetryPolicy retry, String queue) {
         String name = StepNames.of(step);
         return record(name, b -> b.step(name, retry, queue));
@@ -320,11 +301,6 @@ public final class WiggleFlow<T> {
         return guarded(guard, retry, queue);
     }
 
-    /** {@link #when(FlowGate)} with the guard named directly. See {@link #thenApply(String)}. */
-    public WiggleFlow<T> when(String guard) {
-        return new WiggleFlow<>(new Plan.Guard(step, guard, null, null, false));
-    }
-
     private WiggleFlow<T> guarded(FlowGate<T> guard, RetryPolicy retry, String queue) {
         return new WiggleFlow<>(new Plan.Guard(step, StepNames.of(guard), retry, queue, false));
     }
@@ -347,20 +323,6 @@ public final class WiggleFlow<T> {
         String name = StepNames.of(condition);
         UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + name + "'");
         return record(name, b -> b.doWhile(name, body));
-    }
-
-    /** {@link #repeatWhile(FlowGate, UnaryOperator)} with the condition named directly. See
-     *  {@link #thenApply(String)}. */
-    public WiggleFlow<T> repeatWhile(String condition, UnaryOperator<WiggleFlow<T>> loopBody) {
-        UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + condition + "'");
-        return record(condition, b -> b.doWhile(condition, body));
-    }
-
-    /** {@link #repeatWhile(String, UnaryOperator)} with an explicit iteration budget. */
-    public WiggleFlow<T> repeatWhile(String condition, int maxIterations,
-                                     UnaryOperator<WiggleFlow<T>> loopBody) {
-        UnaryOperator<WorkflowBuilder> body = body(loopBody, "the body of loop '" + condition + "'");
-        return record(condition, b -> b.doWhile(condition, maxIterations, body));
     }
 
     /** {@link #repeatWhile(FlowGate, UnaryOperator)} with an explicit iteration budget: one pass past

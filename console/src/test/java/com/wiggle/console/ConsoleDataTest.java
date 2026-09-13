@@ -5,7 +5,7 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisteredNode;
@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ConsoleDataTest {
 
     private static FlowSpec wf() {
-        return Workflow.define("wf").step("work").build();
+        return Wiggle.graph("wf").step("work").build();
     }
 
     private static ServerConfig config() {

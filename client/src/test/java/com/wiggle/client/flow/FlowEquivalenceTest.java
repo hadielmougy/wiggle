@@ -3,7 +3,7 @@ package com.wiggle.client.flow;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Case;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.flow.Fixtures.Fulfilment;
 import com.wiggle.client.flow.Fixtures.Line;
 import com.wiggle.client.flow.Fixtures.Order;
@@ -56,7 +56,7 @@ class FlowEquivalenceTest {
 
     @Test
     void stepsGatesFanOutAndSleepCompileToTheSameGraphAsTheDsl() {
-        FlowSpec dsl = Workflow.define("order-fulfilment")
+        FlowSpec dsl = Wiggle.graph("order-fulfilment")
                 .step("validate")
                 .gate("inStock")
                 .fork(Branch.of("charge", s -> s.step("charge")),
@@ -104,7 +104,7 @@ class FlowEquivalenceTest {
 
     @Test
     void threeArmedFanOutCombinesThroughTheTypedTriFunction() {
-        FlowSpec dsl = Workflow.define("audit")
+        FlowSpec dsl = Wiggle.graph("audit")
                 .fork(Branch.of("charge", s -> s.step("charge")),
                       Branch.of("label", s -> s.step("label")),
                       Branch.of("ship", s -> s.subWorkflow("ship", "carrier-flow")))
@@ -125,7 +125,7 @@ class FlowEquivalenceTest {
     void theTypedForkSeriesGoesWellPastAnyRealWorkflow() {
         // Fork2..Fork10 are generated, so a five-armed fan-out is typed end to end: five arms of five
         // different types, and a combine whose parameters must line up with them
-        FlowSpec dsl = Workflow.define("five")
+        FlowSpec dsl = Wiggle.graph("five")
                 .fork(Branch.of("armA", s -> s.step("armA")),
                       Branch.of("armB", s -> s.step("armB")),
                       Branch.of("armC", s -> s.step("armC")),
@@ -175,7 +175,7 @@ class FlowEquivalenceTest {
 
     @Test
     void aCombineMayTakeThePreForkContextAlongsideTheArms() {
-        FlowSpec dsl = Workflow.define("settle-with-base")
+        FlowSpec dsl = Wiggle.graph("settle-with-base")
                 .fork(Branch.of("charge", s -> s.step("charge")),
                       Branch.of("label", s -> s.step("label")))
                 .combine("settleWithBase")
@@ -237,7 +237,7 @@ class FlowEquivalenceTest {
 
     @Test
     void oneOfAndRepeatWhileCompileToTheSameGraphAsTheDsl() {
-        FlowSpec dsl = Workflow.define("triage")
+        FlowSpec dsl = Wiggle.graph("triage")
                 .step("validate")
                 .choose(Case.when("isVip", s -> s.step("vipPath")),
                         Case.otherwise("standard", s -> s.step("standardPath")))
@@ -266,7 +266,7 @@ class FlowEquivalenceTest {
 
     @Test
     void repeatWhileWithABudgetMatchesTheDslsBoundedDoWhile() {
-        FlowSpec dsl = Workflow.define("drain")
+        FlowSpec dsl = Wiggle.graph("drain")
                 .doWhile("hasMore", 5, s -> s.step("drain"))
                 .build();
 
@@ -280,7 +280,7 @@ class FlowEquivalenceTest {
 
     @Test
     void forEachCompilesToTheSameDynamicFanOutAsTheDsl() {
-        FlowSpec dsl = Workflow.define("pricing")
+        FlowSpec dsl = Wiggle.graph("pricing")
                 .step("validate")
                 .forEach("lines", s -> s.step("price"))
                 .combine("total")
@@ -310,7 +310,7 @@ class FlowEquivalenceTest {
 
     @Test
     void signalWaitsAndSubFlowsCompileToTheSameGraphAsTheDsl() {
-        FlowSpec dsl = Workflow.define("approval")
+        FlowSpec dsl = Wiggle.graph("approval")
                 .step("validate")
                 .awaitSignal("approved", Duration.ofMinutes(5))
                 .subWorkflow("ship", "shipping-flow")
@@ -340,7 +340,7 @@ class FlowEquivalenceTest {
 
     @Test
     void perStepQueueRetryCompensateAndCheckpointPassThroughUnchanged() {
-        FlowSpec dsl = Workflow.define("settings")
+        FlowSpec dsl = Wiggle.graph("settings")
                 .step("validate", "fast-queue").compensate()
                 .step("charge", com.wiggle.core.RetryPolicy.exponential(7, Duration.ofMillis(250)))
                 .checkpoint()
@@ -363,37 +363,37 @@ class FlowEquivalenceTest {
         RetryPolicy retry = RetryPolicy.exponential(4, Duration.ofMillis(150));
         String queue = "payments";
 
-        assertSameDefinition(Workflow.define("t").step("charge").build(),
+        assertSameDefinition(Wiggle.graph("t").step("charge").build(),
                 Wiggle.define("t", Order.class, f -> f.thenApply(h::charge)));
-        assertSameDefinition(Workflow.define("t").step("charge", retry).build(),
+        assertSameDefinition(Wiggle.graph("t").step("charge", retry).build(),
                 Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, retry)));
-        assertSameDefinition(Workflow.define("t").step("charge", queue).build(),
+        assertSameDefinition(Wiggle.graph("t").step("charge", queue).build(),
                 Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, queue)));
-        assertSameDefinition(Workflow.define("t").step("charge", retry, queue).build(),
+        assertSameDefinition(Wiggle.graph("t").step("charge", retry, queue).build(),
                 Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, retry, queue)));
-        assertSameDefinition(Workflow.define("t").step("charge", retry, queue).build(),
+        assertSameDefinition(Wiggle.graph("t").step("charge", retry, queue).build(),
                 Wiggle.define("t", Order.class, f -> f.thenApply(h::charge, queue, retry)));
 
-        assertSameDefinition(Workflow.define("t").effect("notifyCustomer").build(),
+        assertSameDefinition(Wiggle.graph("t").effect("notifyCustomer").build(),
                 Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer)));
-        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", retry).build(),
+        assertSameDefinition(Wiggle.graph("t").effect("notifyCustomer", retry).build(),
                 Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, retry)));
-        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", queue).build(),
+        assertSameDefinition(Wiggle.graph("t").effect("notifyCustomer", queue).build(),
                 Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, queue)));
-        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", retry, queue).build(),
+        assertSameDefinition(Wiggle.graph("t").effect("notifyCustomer", retry, queue).build(),
                 Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, retry, queue)));
-        assertSameDefinition(Workflow.define("t").effect("notifyCustomer", retry, queue).build(),
+        assertSameDefinition(Wiggle.graph("t").effect("notifyCustomer", retry, queue).build(),
                 Wiggle.define("t", Fulfilment.class, f -> f.thenAccept(h::notifyCustomer, queue, retry)));
 
-        assertSameDefinition(Workflow.define("t").gate("inStock").build(),
+        assertSameDefinition(Wiggle.graph("t").gate("inStock").build(),
                 Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock)));
-        assertSameDefinition(Workflow.define("t").gate("inStock", retry).build(),
+        assertSameDefinition(Wiggle.graph("t").gate("inStock", retry).build(),
                 Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, retry)));
-        assertSameDefinition(Workflow.define("t").gate("inStock", queue).build(),
+        assertSameDefinition(Wiggle.graph("t").gate("inStock", queue).build(),
                 Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, queue)));
-        assertSameDefinition(Workflow.define("t").gate("inStock", retry, queue).build(),
+        assertSameDefinition(Wiggle.graph("t").gate("inStock", retry, queue).build(),
                 Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, retry, queue)));
-        assertSameDefinition(Workflow.define("t").gate("inStock", retry, queue).build(),
+        assertSameDefinition(Wiggle.graph("t").gate("inStock", retry, queue).build(),
                 Wiggle.define("t", Order.class, f -> f.thenFilter(h::inStock, queue, retry)));
     }
 
@@ -401,7 +401,7 @@ class FlowEquivalenceTest {
     void retryAndQueueOnDifferentStepKindsReachTheGraphTogether() {
         RetryPolicy retry = RetryPolicy.exponential(4, Duration.ofMillis(150));
 
-        FlowSpec dsl = Workflow.define("pinned")
+        FlowSpec dsl = Wiggle.graph("pinned")
                 .gate("inStock", "checks")
                 .step("charge", retry, "payments")
                 .build();
@@ -422,7 +422,7 @@ class FlowEquivalenceTest {
         // overload to carry them, so they are amended after the fact -- in both APIs alike
         RetryPolicy retry = RetryPolicy.exponential(6, Duration.ofMillis(80));
 
-        FlowSpec dsl = Workflow.define("amended")
+        FlowSpec dsl = Wiggle.graph("amended")
                 .fork(Branch.of("charge", s -> s.step("charge")),
                       Branch.of("label", s -> s.step("label")))
                 .combine("settle").withRetry(retry).onQueue("merges")
@@ -449,7 +449,7 @@ class FlowEquivalenceTest {
         // the settings ride on the case instead
         RetryPolicy retry = RetryPolicy.exponential(2, Duration.ofMillis(40));
 
-        FlowSpec dsl = Workflow.define("triage")
+        FlowSpec dsl = Wiggle.graph("triage")
                 .choose(Case.when("isVip", retry, "vip-checks", s -> s.step("vipPath")),
                         Case.otherwise("otherwise", s -> s.step("standardPath")))
                 .build();
@@ -466,7 +466,7 @@ class FlowEquivalenceTest {
 
     @Test
     void oneOfWithNoOtherwiseArmSkipsPastWhenNothingMatched() {
-        FlowSpec dsl = Workflow.define("maybe")
+        FlowSpec dsl = Wiggle.graph("maybe")
                 .choose(Case.when("isVip", s -> s.step("vipPath")))
                 .step("drain")
                 .build();

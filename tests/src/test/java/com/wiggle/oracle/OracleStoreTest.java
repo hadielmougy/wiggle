@@ -1,7 +1,7 @@
 package com.wiggle.oracle;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Ids;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
@@ -49,7 +49,7 @@ class OracleStoreTest {
     }
 
     private static FlowSpec uniqueWorkflow() {
-        return Workflow.define("oracle-claim-" + Ids.next("wf"))
+        return Wiggle.graph("oracle-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
     }

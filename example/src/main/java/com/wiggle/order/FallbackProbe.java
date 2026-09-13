@@ -34,7 +34,7 @@ public final class FallbackProbe {
         int probes = Integer.parseInt(env("WIGGLE_BENCH_COUNT", "200"));
         int warmup = Integer.parseInt(env("WIGGLE_BENCH_WARMUP", "20"));
 
-        FlowSpec bp = Wiggle.define("fallback-probe", Map.class, f -> f.thenApply("ping"));
+        FlowSpec bp = Wiggle.graph("fallback-probe").step("ping").build();
 
         try (WiggleClient submit = new WiggleClient(submitUrl);
              WiggleClient workerClient = new WiggleClient(workerUrl)) {

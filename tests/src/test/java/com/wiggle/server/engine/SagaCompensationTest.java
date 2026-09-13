@@ -2,7 +2,7 @@ package com.wiggle.server.engine;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
@@ -79,7 +79,7 @@ class SagaCompensationTest {
     @DisplayName("a failed instance compensates its completed steps in reverse order -> COMPENSATED")
     void reverseOrderSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Workflow.define("saga")
+        FlowSpec bp = Wiggle.graph("saga")
                 .step("reserve").compensate()
                 .step("capture").compensate()
                 .step("boom")
@@ -120,7 +120,7 @@ class SagaCompensationTest {
     @DisplayName("locally-chained (LOCAL_SYNC) compensable steps capture snapshots and compensate too")
     void localSyncSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Workflow.define("saga-local")
+        FlowSpec bp = Wiggle.graph("saga-local")
                 .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
                 .step("reserve").compensate()
                 .step("capture").compensate()
@@ -146,7 +146,7 @@ class SagaCompensationTest {
     @Test @Timeout(30)
     @DisplayName("no declared compensation -> plain FAILED, exactly as before")
     void undeclaredStillFails() throws Exception {
-        FlowSpec bp = Workflow.define("plain-fail").step("work").step("boom").build();
+        FlowSpec bp = Wiggle.graph("plain-fail").step("work").step("boom").build();
         @Handlers("plain-fail")
         class H {
             public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
@@ -162,7 +162,7 @@ class SagaCompensationTest {
     @DisplayName("a compensator that fails permanently lands COMPENSATION_FAILED, loudly")
     void compensatorFailure() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Workflow.define("bad-undo")
+        FlowSpec bp = Wiggle.graph("bad-undo")
                 .step("reserve").compensate()
                 .step("boom")
                 .build();

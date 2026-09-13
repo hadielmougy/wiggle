@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -57,16 +57,16 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        FlowSpec plain = Workflow.define("cp")
+        FlowSpec plain = Wiggle.graph("cp")
                 .step("a").step("b").build();
-        FlowSpec checked = Workflow.define("cp")
+        FlowSpec checked = Wiggle.graph("cp")
                 .step("a").checkpoint().step("b").build();
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
         assertEquals(1, checked.definition().checkpoints().size(), "one checkpoint recorded");
         assertNotEquals(plain.version(), checked.version(), "checkpoint is part of the content hash");
 
-        assertThrows(IllegalStateException.class, () -> Workflow.define("bad").checkpoint(),
+        assertThrows(IllegalStateException.class, () -> Wiggle.graph("bad").checkpoint(),
                 "checkpoint() must follow a step");
     }
 
@@ -75,7 +75,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Workflow.define("cp-flush")
+        FlowSpec bp = Wiggle.graph("cp-flush")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a").checkpoint()
                 .step("b")
@@ -109,7 +109,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Workflow.define("cp-nobuf")
+        FlowSpec bp = Wiggle.graph("cp-nobuf")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a")   // no checkpoint
                 .step("b")

@@ -2,6 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
+import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -103,13 +104,11 @@ public final class Benchmark {
      * handler and counts the instance down exactly once.
      */
     private static FlowSpec linear(String name, int steps, ExecutionMode mode) {
-        return Wiggle.define(name, Map.class, f -> {
-            var chain = f.execution(mode);
-            for (int i = 0; i < steps - 1; i++) {
-                chain = chain.thenApply(hop(i));   // distinct raw name, all canonicalise to "hop"
-            }
-            return chain.thenApply("sink");
-        });
+        WorkflowBuilder s = Wiggle.graph(name).execution(mode);
+        for (int i = 0; i < steps - 1; i++) {
+            s = s.step(hop(i));   // distinct raw name, all canonicalise to the "hop" handler
+        }
+        return s.step("sink").build();
     }
 
     /** Distinct raw step names that all canonicalise to {@code hop} (punctuation is ignored on match). */

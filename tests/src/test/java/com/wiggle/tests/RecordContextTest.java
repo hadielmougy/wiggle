@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
@@ -41,7 +41,7 @@ class RecordContextTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Workflow.define("record-shipment")
+        return Wiggle.graph("record-shipment")
                 .step("validate")
                 .gate("has-items")
                 .fork(

@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ForkCombineTest {
 
     private static FlowSpec tripFlowSpec() {
-        return Workflow.define("trip")
+        return Wiggle.graph("trip")
                 .step("prep")
                 .fork(
                         Branch.of("air", s -> s.step("book-air")),
@@ -71,7 +71,7 @@ class ForkCombineTest {
 
     @Test
     void combineIsMandatory_forgottenCombineFailsBuild() {
-        WorkflowBuilder stream = Workflow.define("t").step("prep");
+        WorkflowBuilder stream = Wiggle.graph("t").step("prep");
         stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, stream::build);
@@ -81,7 +81,7 @@ class ForkCombineTest {
 
     @Test
     void combineTwiceThrows() {
-        WorkflowBuilder stream = Workflow.define("t").step("prep");
+        WorkflowBuilder stream = Wiggle.graph("t").step("prep");
         ForkStage stage = stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
         stage.combine("m");
         assertThrows(IllegalStateException.class, () -> stage.combine("m2"));

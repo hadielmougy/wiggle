@@ -2,7 +2,7 @@ package com.wiggle.server.engine;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
@@ -67,7 +67,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its explicit budget (SERVER dispatch)")
     void runawayServerMode() throws Exception {
-        FlowSpec bp = Workflow.define("loop-wf")
+        FlowSpec bp = Wiggle.graph("loop-wf")
                 .doWhile("forever", 7, b -> b.step("spin"))
                 .step("after")
                 .build();
@@ -81,7 +81,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its budget under local chaining too")
     void runawayLocalAsync() throws Exception {
-        FlowSpec bp = Workflow.define("loop-wf")
+        FlowSpec bp = Wiggle.graph("loop-wf")
                 .doWhile("forever", 7, b -> b.step("spin"))
                 .step("after")
                 .execution(ExecutionMode.LOCAL_ASYNC)
@@ -94,7 +94,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a loop that finishes within budget completes; the counter never reaches the context")
     void legitLoopUnaffected() throws Exception {
-        FlowSpec bp = Workflow.define("loop-wf")
+        FlowSpec bp = Wiggle.graph("loop-wf")
                 .doWhile("few-more", 10, b -> b.step("spin"))
                 .step("after")
                 .build();
@@ -109,12 +109,12 @@ class LoopBudgetTest {
     @Test
     @DisplayName("non-loop graphs serialize without the budget field — content hashes are stable")
     void hashStability() {
-        var def = Workflow.define("plain").step("a").gate("g").step("b").build().definition();
+        var def = Wiggle.graph("plain").step("a").gate("g").step("b").build().definition();
         for (Node n : def.nodes().values()) {
             assertFalse(n.toJson().containsKey("loopBudget"),
                     "non-loop node '" + n.name() + "' must not serialize a loopBudget");
         }
-        var loop = Workflow.define("looped").doWhile("g", 5, b -> b.step("a")).build().definition();
+        var loop = Wiggle.graph("looped").doWhile("g", 5, b -> b.step("a")).build().definition();
         assertTrue(loop.nodes().values().stream().anyMatch(n -> n.toJson().containsKey("loopBudget")),
                 "the loop guard serializes its budget");
     }

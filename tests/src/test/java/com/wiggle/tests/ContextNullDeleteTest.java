@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
@@ -31,7 +31,7 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("a step that drops a field removes it from the context (not left as null)")
     void droppedFieldIsRemoved() throws Exception {
-        FlowSpec bp = Workflow.define("trim")
+        FlowSpec bp = Wiggle.graph("trim")
                 .step("trim")
                 .build();
 
@@ -46,7 +46,7 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("branch combine clears its per-branch scratch keys from the final context")
     void combineScratchKeysAreRemoved() throws Exception {
-        FlowSpec bp = Workflow.define("trip")
+        FlowSpec bp = Wiggle.graph("trip")
                 .fork(
                         Branch.of("air", s -> s.step("air")),
                         Branch.of("hotel", s -> s.step("hotel")))

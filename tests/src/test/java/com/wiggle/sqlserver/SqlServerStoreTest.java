@@ -1,7 +1,7 @@
 package com.wiggle.sqlserver;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Ids;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
@@ -50,7 +50,7 @@ class SqlServerStoreTest {
     }
 
     private static FlowSpec uniqueWorkflow() {
-        return Workflow.define("sqlserver-claim-" + Ids.next("wf"))
+        return Wiggle.graph("sqlserver-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
     }

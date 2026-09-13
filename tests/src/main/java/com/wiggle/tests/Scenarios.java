@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
@@ -58,7 +58,7 @@ public final class Scenarios {
     }
 
     private static WorkflowBuilder json(String name) {
-        return Workflow.define(name);
+        return Wiggle.graph(name);
     }
 
     static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {

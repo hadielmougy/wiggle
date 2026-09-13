@@ -2,7 +2,7 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.flow.WorkflowBuilder;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -34,7 +34,7 @@ class WorkerPacingTest {
     }
 
     private static FlowSpec chain() {
-        WorkflowBuilder b = Workflow.define("pacing");
+        WorkflowBuilder b = Wiggle.graph("pacing");
         for (int i = 0; i < STEPS; i++) b = b.step("hop" + "-".repeat(i));
         return b.build();
     }

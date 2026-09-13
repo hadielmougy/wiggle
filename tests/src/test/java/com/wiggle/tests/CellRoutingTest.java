@@ -5,7 +5,7 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.IdCodec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
@@ -38,7 +38,7 @@ class CellRoutingTest {
     }
 
     private static FlowSpec workflow() {
-        return Workflow.define("wf").step("a").build();
+        return Wiggle.graph("wf").step("a").build();
     }
 
     @Test @DisplayName("resolver routes start + operate-by-id to the coordinator-resolved cell")

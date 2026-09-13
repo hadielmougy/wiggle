@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
@@ -38,7 +38,7 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Workflow.define("merge-check")
+        return Wiggle.graph("merge-check")
                 .step("validate")
                 .fork(
                         Branch.of("payment", s -> s
@@ -124,7 +124,7 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec typedFlowSpec() {
-        return Workflow.define("parcel-merge")
+        return Wiggle.graph("parcel-merge")
                 .step("validate")
                 .fork(
                         Branch.of("payment", s -> s.step("authorise")),

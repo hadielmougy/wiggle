@@ -394,7 +394,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, queue) honours the queue and declares a PREDICATE (bound by name)")
         void gateNameOnlyQueue() {
-            FlowSpec bp = Workflow.define("wf")
+            FlowSpec bp = Wiggle.graph("wf")
                     .gate("check", "gpu")
                     .step("run")
                     .build();
@@ -408,7 +408,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, retry, queue) honours both the retry policy and the queue")
         void gateNameOnlyRetryAndQueue() {
-            FlowSpec bp = Workflow.define("wf")
+            FlowSpec bp = Wiggle.graph("wf")
                     .gate("check", RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
                     .step("run")
                     .build();
@@ -420,7 +420,7 @@ class PipelineTest {
         @Test
         @DisplayName("step(name, queue) / effect(name) route correctly")
         void stepAndEffectNameOnly() {
-            FlowSpec bp = Workflow.define("wf")
+            FlowSpec bp = Wiggle.graph("wf")
                     .step("ingest", "gpu")
                     .effect("notify")
                     .build();
@@ -435,7 +435,7 @@ class PipelineTest {
         void nameOnlyDeclaresTopologyOnly() {
             // The DSL declares topology only; the worker binds the handler by name. The flowSpec
             // therefore carries just the graph -- there is no baked step logic to collide with.
-            FlowSpec bp = Workflow.define("wf").step("check").build();
+            FlowSpec bp = Wiggle.graph("wf").step("check").build();
             assertEquals(NodeKind.TASK, byActivity(bp.definition(), "wf#check").kind());
         }
     }
