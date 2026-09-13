@@ -138,17 +138,17 @@ class FlowApiTest {
         assertNull(flow.notified.get(), "and neither did the effect after the combine");
     }
 
-    /** Runs a single instance to completion on a one-node in-memory H2 server and returns its context. */
+    /** Runs a single instance to completion on a one-node server ({@link TestStorage}) and returns
+     *  its context. */
     private static Map<String, Object> run(FlowSpec bp, Object handlers, Map<String, Object> input) throws Exception {
-        String url = "jdbc:h2:mem:flowapi-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
-                0, "node-0", url, "sa", "", 8,
+                0, "node-0", TestStorage.url("flowapi"), TestStorage.user(), TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (com.wiggle.server.WiggleServer server =
                      new com.wiggle.server.WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
-            Worker w = new Worker(client, "w-0",
+            Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
             w.register(bp).handlers(handlers);
             w.start();

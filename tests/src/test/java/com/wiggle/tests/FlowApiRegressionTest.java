@@ -348,18 +348,23 @@ class FlowApiRegressionTest {
         return Json.asObject(v.context());
     }
 
-    /** Runs one instance to completion on a one-node in-memory H2 server. */
+    /**
+     * Runs one instance to completion on a one-node server.
+     *
+     * <p>Storage comes from {@link TestStorage}: H2 in PostgreSQL mode by default, or a real
+     * PostgreSQL when one is configured -- the same scenarios, over the real dialect and its
+     * {@code FOR UPDATE SKIP LOCKED} claim.
+     */
     private static InstanceView runToView(FlowSpec spec, Object handlers, Map<String, Object> input)
             throws Exception {
-        String url = "jdbc:h2:mem:flowreg-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
-                0, "node-0", url, "sa", "", 8,
+                0, "node-0", TestStorage.url("flowreg"), TestStorage.user(), TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (com.wiggle.server.WiggleServer server =
                      new com.wiggle.server.WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
-            Worker w = new Worker(client, "w-0",
+            Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
             w.register(spec).handlers(handlers);
             w.start();
