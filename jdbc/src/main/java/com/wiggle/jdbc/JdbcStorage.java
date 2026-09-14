@@ -295,7 +295,7 @@ public final class JdbcStorage implements Storage {
                                      String expectedBaseline, MigrationMode mode) throws SQLException {
         dialect.acquireMigrationLock(c);
         try (Statement st = c.createStatement()) {
-            execDdl(st, dialect, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
+            execDdl(st, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
                     "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL, " +
                     "checksum VARCHAR(64))");
         }
@@ -356,7 +356,7 @@ public final class JdbcStorage implements Storage {
         for (Migration m : pending) {
             try (Statement st = c.createStatement()) {
                 for (String stmt : m.sql().split(";")) {
-                    if (!stmt.isBlank()) execDdl(st, dialect, stmt);
+                    if (!stmt.isBlank()) execDdl(st, stmt);
                 }
             }
             try (PreparedStatement ins = c.prepareStatement(
@@ -378,7 +378,7 @@ public final class JdbcStorage implements Storage {
             try (ResultSet rs = md.getColumns(null, null, table, "CHECKSUM")) { if (rs.next()) return; }
         }
         try (Statement st = c.createStatement()) {
-            execDdl(st, dialect, "ALTER TABLE wf_schema_version ADD checksum VARCHAR(64)");
+            execDdl(st, "ALTER TABLE wf_schema_version ADD checksum VARCHAR(64)");
         }
     }
 
@@ -395,10 +395,10 @@ public final class JdbcStorage implements Storage {
         }
     }
 
-    /** Runs one dialect-translated DDL statement. Both dialects take {@code IF NOT EXISTS}, so a
-     *  re-run is idempotent and any error here is real. */
-    private static void execDdl(Statement st, Dialect dialect, String canonicalSql) throws SQLException {
-        st.execute(dialect.ddl(canonicalSql));
+    /** Runs one DDL statement. Both dialects take {@code IF NOT EXISTS}, so a re-run is idempotent
+     *  and any error here is real. */
+    private static void execDdl(Statement st, String sql) throws SQLException {
+        st.execute(sql);
     }
 
     @Override public <R> R inTx(Function<Tx, R> work) {
@@ -674,7 +674,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
             String sql = "SELECT * FROM wf_instance WHERE correlation_id=? ORDER BY created_at DESC LIMIT ?";
-            try (PreparedStatement p = ps(dialect.limit(sql))) {
+            try (PreparedStatement p = ps(sql)) {
                 p.setString(1, correlationId);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) {
@@ -690,7 +690,7 @@ public final class JdbcStorage implements Storage {
             if (workflow != null) sql.append(" AND workflow=?");
             if (status != null) sql.append(" AND status=?");
             sql.append(" ORDER BY created_at DESC LIMIT ?");
-            try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
+            try (PreparedStatement p = ps(sql.toString())) {
                 int idx = 1;
                 if (workflow != null) p.setString(idx++, workflow);
                 if (status != null) p.setString(idx++, status.name());
@@ -858,7 +858,7 @@ public final class JdbcStorage implements Storage {
             appendVersions(sql, versions);
             sql.append(" ORDER BY available_at, id LIMIT ?");
             List<Token> candidates = new ArrayList<>();
-            try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
+            try (PreparedStatement p = ps(sql.toString())) {
                 int idx = 1;
                 p.setLong(idx++, now);
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
@@ -901,8 +901,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> pendingSignals(int max) {
-            try (PreparedStatement p = ps(dialect.limit("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
-                    "ORDER BY created_at LIMIT ?"))) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
+                    "ORDER BY created_at LIMIT ?")) {
                 p.setInt(1, max);
                 try (ResultSet rs = p.executeQuery()) {
                     List<Token> out = new ArrayList<>();
@@ -967,8 +967,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            try (PreparedStatement p = ps(dialect.limit("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
-                    "ORDER BY next_fire_at LIMIT ?"))) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
+                    "ORDER BY next_fire_at LIMIT ?")) {
                 p.setLong(1, now); p.setInt(2, max);
                 try (ResultSet rs = p.executeQuery()) {
                     List<Rows.Schedule> out = new ArrayList<>();
@@ -1009,10 +1009,9 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
-            try (PreparedStatement p = ps(dialect.limit(
-                    "SELECT workflow, version, queue, COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
+            try (PreparedStatement p = ps("SELECT workflow, version, queue, COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
                     "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=? " +
-                    "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT ?"))) {
+                    "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT ?")) {
                 p.setLong(1, now);
                 p.setInt(2, max);
                 try (ResultSet rs = p.executeQuery()) {
@@ -1038,7 +1037,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private List<Token> query(String sql, long arg, int limit) {
-            try (PreparedStatement p = ps(dialect.limit(sql))) {
+            try (PreparedStatement p = ps(sql)) {
                 p.setLong(1, arg);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) {
@@ -1101,8 +1100,7 @@ public final class JdbcStorage implements Storage {
             List<String> ids = new ArrayList<>();
             // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
             // dialect a deterministic "oldest first" deletion order at no cost.
-            try (PreparedStatement p = ps(dialect.limit(
-                    "SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?"))) {
+            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?")) {
                 p.setLong(1, updatedBefore);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }

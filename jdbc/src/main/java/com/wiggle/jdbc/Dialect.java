@@ -8,28 +8,17 @@ import java.sql.SQLException;
  * {@link JdbcStorage}.
  *
  * <p>Two implementations, both in {@code wiggle-postgres}. PostgreSQL is the deployment target and
- * the canonical SQL the store writes. H2 (in PostgreSQL mode) is for tests and local runs: it takes
- * the same DDL and the same upserts, and differs in exactly one thing that matters -- it has neither
- * {@code SKIP LOCKED} nor {@code RETURNING}, so it claims tasks by compare-and-set instead of in a
- * single statement.
+ * the SQL the store writes; H2 (in PostgreSQL mode) is for tests and local runs. H2 takes that SQL
+ * verbatim -- the same DDL, the same {@code ON CONFLICT} upserts -- so there is no statement
+ * rewriting here at all. What is left are the few places the store has to ask rather than assume:
+ * whether {@code SKIP LOCKED} and {@code RETURNING} are available (they are not on H2, which claims
+ * by compare-and-set instead of in one statement), how to take the migration lock, and how a
+ * duplicate key surfaces.
  */
 public interface Dialect {
 
     /** Short identifier: {@code "postgresql"} or {@code "h2"}. */
     String id();
-
-    /**
-     * Rewrites one canonical (PostgreSQL-flavoured) DDL statement into this dialect's SQL. Identity
-     * for both dialects today, since H2 in PostgreSQL mode takes the canonical DDL as-is.
-     */
-    default String ddl(String canonicalSql) { return canonicalSql; }
-
-    /**
-     * Rewrites a {@code LIMIT ?} (or {@code LIMIT n}) row-limiting clause into the dialect's form,
-     * preserving the {@code ?} parameter position. Identity for both dialects today -- kept because
-     * it is the seam that lets the store body stay canonical PostgreSQL throughout.
-     */
-    default String limit(String sql) { return sql; }
 
     /** The single-row limiter for existence probes: {@code "LIMIT 1"} or {@code "FETCH FIRST 1 ROWS ONLY"}. */
     default String firstRow() { return "LIMIT 1"; }

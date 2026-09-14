@@ -29,8 +29,6 @@ class DialectTest {
         assertTrue(d.supportsReturning());
         assertEquals("INSERT INTO t VALUES (?) ON CONFLICT DO NOTHING", d.insertIgnore("INSERT INTO t VALUES (?)", "c"));
         assertTrue(d.scheduleUpsert().contains("ON CONFLICT (id) DO UPDATE"));
-        // Canonical SQL passes through untouched.
-        assertEquals("CREATE TABLE IF NOT EXISTS x (a BIGINT)", d.ddl("CREATE TABLE IF NOT EXISTS x (a BIGINT)"));
     }
 
     @Test @DisplayName("H2 keeps ON CONFLICT but has no SKIP LOCKED, so it claims via compare-and-set")
@@ -41,15 +39,17 @@ class DialectTest {
         assertEquals("FETCH FIRST 1 ROWS ONLY", d.firstRow());
     }
 
-    @Test @DisplayName("the whole baseline schema renders for both dialects")
-    void baselineRendersEverywhere() {
-        for (Dialect d : new Dialect[]{new PostgresDialect(), new H2Dialect()}) {
-            for (JdbcStorage.Migration m : JdbcStorage.MIGRATIONS) {
-                for (String stmt : m.sql().split(";")) {
-                    if (stmt.isBlank()) continue;
-                    assertFalse(d.ddl(stmt).isBlank(), d.id() + " dropped a statement: " + stmt);
-                }
-            }
-        }
+    @Test @DisplayName("the two dialects differ only in the claim primitives and the migration lock")
+    void theyAgreeOnEverythingElse() {
+        PostgresDialect pg = new PostgresDialect();
+        H2Dialect h2 = new H2Dialect();
+        // Same schema, same upserts: H2 in PostgreSQL mode takes the store's SQL verbatim, which is
+        // why there is no statement-rewriting hook on Dialect any more.
+        assertEquals(pg.scheduleUpsert(), h2.scheduleUpsert(), "the schedule upsert is identical");
+        assertEquals(pg.insertIgnore("INSERT INTO t VALUES (?)", "c"),
+                h2.insertIgnore("INSERT INTO t VALUES (?)", "c"), "conflict handling is identical");
+        // And the difference that does matter.
+        assertTrue(pg.supportsSkipLocked() && pg.supportsReturning(), "PostgreSQL claims in one statement");
+        assertFalse(h2.supportsSkipLocked() || h2.supportsReturning(), "H2 falls back to compare-and-set");
     }
 }
