@@ -341,8 +341,11 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            // staged: base + the collected results under the forEach's name ("per-item")
-            Object out = collect.invoke(Map.of("pre", "P", "per-item", List.of("x", "x", "y")));
+            // staged: base + the collected results under the forEach's reserved scratch key.
+            // Reserved, not the bare node name: the name defaults to the collection key, so a bare
+            // key would overwrite the very collection it fanned over. DynamicConstructsTest pins
+            // the format; this test only has to stage what the engine would.
+            Object out = collect.invoke(Map.of("pre", "P", "__forEach__per-item", List.of("x", "x", "y")));
             assertEquals(Map.of("pre", "P", "ordered", List.of("x", "x", "y"), "distinct", 2L), out);
         } finally {
             Step.end();

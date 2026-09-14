@@ -346,7 +346,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("forEach(Cart::items, …): the component name IS the persisted key, end to end")
     void accessorKeyResolvesAgainstRealJson() throws Exception {
         FlowSpec bp = FlowSpec.define("dyn-fan-typed", Cart.class, CartSteps.class, (f, s) -> f
-                .thenForEach("price-items", Cart::items, b -> b.thenApply(s::upper))
+                .thenForEach(Cart::items, b -> b.thenApply(s::upper))
                 .combine(s::collect));
 
         InstanceView v = runTyped(bp, new CartH(), new Cart(List.of("ab", "cde", "f"), null));
@@ -355,7 +355,23 @@ class DynamicConstructsTest {
                 "the engine found the collection under the component's own name");
         Map<String, Object> ctx = Json.asObject(v.context());
         assertEquals("AB,CDE,F", ctx.get("joined"), "every element ran its branch, in order");
-        assertEquals(List.of("ab", "cde", "f"), ctx.get("items"), "the input collection survives");
+        assertEquals(List.of("ab", "cde", "f"), ctx.get("items"),
+                "the input collection survives -- the node name defaults to the collection key here, "
+                + "so a bare scratch key would have overwritten it and then been stripped with it");
+        assertTrue(ctx.keySet().stream().noneMatch(k -> k.startsWith("__forEach__")),
+                "the scratch key never leaks downstream");
+    }
+
+    @Test @DisplayName("the results are staged under a reserved key, not the fan-out node's own name")
+    void scratchKeyIsReserved() {
+        FlowSpec bp = FlowSpec.define("dyn-scratch", Map.class, FanSteps.class, (f, s) -> f
+                .thenForEach("items", String.class, b -> b.thenApply(s::upper))
+                .combine(s::collect));
+        Node combine = bp.definition().nodes().values().stream()
+                .filter(n -> "collect".equals(n.name()))
+                .findFirst().orElseThrow(() -> new AssertionError("no combine node"));
+        assertEquals("\"__forEach__items\"", combine.itemsKey(),
+                "a bare 'items' would collide with the collection it fanned over");
     }
 
 }
