@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A worker needs handlers, not a topology. Publishing is the author's job -- {@code client.register}
@@ -107,4 +108,35 @@ class HandlerOnlyWorkerTest {
         }
     }
 
+    @Test
+    @DisplayName("a handler-only worker still runs locally: it holds the graph, so no server fallback")
+    void localModesDoNotFallBackToServerDriven() throws Exception {
+        // Worker.execute takes the local path only when it holds the definition for the task's exact
+        // version: graphs.get(workflow + ":" + version) != null. Completing the flow does not prove
+        // that -- a worker without the graph completes too, one server round trip per step. So assert
+        // the branch condition itself, which is the thing removing Worker.register could have broken.
+        for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
+            FlowSpec spec = linear(mode);
+            try (WiggleServer server = new WiggleServer(config()).start();
+                 WiggleClient client = new WiggleClient(server.baseUrl())) {
+
+                client.register(spec);
+
+                try (Worker w = new Worker(client, "w-" + Ids.next("x"),
+                        WorkerOptions.defaults().withConcurrency(4))
+                        .handlers(new LinearH(new AtomicInteger()))) {
+                    w.start();
+
+                    java.lang.reflect.Field f = Worker.class.getDeclaredField("graphs");
+                    f.setAccessible(true);
+                    Map<?, ?> graphs = (Map<?, ?>) f.get(w);
+
+                    String key = spec.name() + ":" + spec.version();
+                    assertTrue(graphs.containsKey(key),
+                            mode + ": the worker must hold " + key + " to run locally, but holds "
+                                    + graphs.keySet() + " -- it would fall back to server-driven");
+                }
+            }
+        }
+    }
 }
