@@ -14,7 +14,7 @@ It talks to the cluster two ways:
 ## What you can do
 
 - Create/tear down a kind cluster.
-- Deploy the **coordinator** (embedded Ratis + RocksDB store — no external DB).
+- Deploy the **coordinator** (in-memory store — no external DB; not durable, fine for a lab).
 - Create **cells**, each getting its **own Postgres container** and N wiggle nodes, wired to the
   coordinator and namespace.
 - **Reshard**: open a placement epoch with a `shard→cell` ring; opening a new epoch drains the old one
@@ -83,7 +83,7 @@ what makes a bug report actionable: same sequence, same failure, then a fix.
   (the `example` order workflow) is the natural next iteration.
 - Host↔cluster gRPC goes over `kubectl port-forward` (managed automatically): coordinator on
   `127.0.0.1:18099`, each cell on `127.0.0.1:1810x`.
-- The coordinator runs a **single-member** Ratis group on an `emptyDir` — ephemeral, fine for a lab.
+- The coordinator runs a **single process** with an in-memory store — ephemeral, fine for a lab.
 - Placement policy is cached from `OpenEpoch` responses (the coordinator has no read-policy RPC) and
   persisted to `~/.wiggle-lab/state.json`, so "start into namespace" needs an epoch opened first.
 

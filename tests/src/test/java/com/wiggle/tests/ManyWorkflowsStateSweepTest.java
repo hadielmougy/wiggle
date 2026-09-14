@@ -296,10 +296,17 @@ class ManyWorkflowsStateSweepTest {
                 assertEquals(PER_WORKFLOW, undos.getOrDefault("reserved", 0), "every reserve was undone");
                 assertEquals(PER_WORKFLOW, undos.getOrDefault("charged", 0), "every charge was undone");
 
-                // ---- totals hold when counted per workflow, not just per instance
+                // ---- totals hold when counted per workflow, not just per instance.
+                // Counted over this run's own ids: a live database keeps its rows, so an absolute
+                // count would pick up every previous run's instances too.
                 for (FlowSpec s : specs) {
-                    assertEquals(PER_WORKFLOW, client.listInstances(s.name(), null, 500).size(),
+                    List<String> mine = started.get(s.name());
+                    List<InstanceView> listed = client.listInstances(s.name(), null, 5_000);
+                    long found = listed.stream().map(InstanceView::id).filter(mine::contains).count();
+                    assertEquals(PER_WORKFLOW, found,
                             "every instance of " + s.name() + " is listed exactly once");
+                    assertEquals(mine.size(), mine.stream().distinct().count(),
+                            s.name() + " handed out a duplicate instance id");
                 }
 
                 // ---- and the coverage view, read across all of it, blames nothing

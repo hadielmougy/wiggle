@@ -10,10 +10,10 @@ import com.wiggle.server.Logging;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.coordinator.jdbc.JdbcCoordinatorStoreProvider;
-import com.wiggle.coordinator.ratis.RatisCoordinatorStoreProvider;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.coord.CoordinatorServer;
 import com.wiggle.server.coord.CoordinatorStore;
+import com.wiggle.server.coord.InMemoryCoordinatorStore;
 
 /**
  * Entry point for the standalone server distribution. Reads configuration from the environment,
@@ -102,23 +102,22 @@ public final class Main {
 
     /**
      * Runs the coordinator control plane: build its store, then a self-hosted {@link CoordinatorServer}.
-     * No engine, no cell. The store is the embedded Ratis + RocksDB backend — a consensus-backed control
-     * plane with no external store and no engine database. Its data directory (and, for a multi-node group,
-     * its peers) come from {@code WIGGLE_COORD_STORE=ratis://<dir>?peers=...}, defaulting to a single-member
-     * group at {@code /var/lib/wiggle/coord}. Leader election is a durable lease over that store, keyed on
-     * the node name.
+     * No engine, no cell.
+     *
+     * <p>{@code WIGGLE_COORD_STORE=jdbc:<url>} points it at its own (small) database; several
+     * coordinator processes may share one, and the leader election over that store keeps them
+     * single-writer. With the variable unset the coordinator keeps its state in memory, which is a
+     * single process with nothing to install -- fine for a local run, not for HA, since the control
+     * plane's state does not survive a restart.
      */
     private static void runCoordinator(ServerConfig config) throws Exception {
         String uri = System.getenv("WIGGLE_COORD_STORE");
-        if (uri == null || uri.isBlank()) uri = "ratis:///var/lib/wiggle/coord";
         String backend;
         CoordinatorStore store;
-        if (uri.startsWith("ratis:")) {
-            backend = "ratis " + uri;
-            store = new RatisCoordinatorStoreProvider(uri).coordinatorStore();
+        if (uri == null || uri.isBlank()) {
+            backend = "in-memory (not durable -- set WIGGLE_COORD_STORE=jdbc:<url> for HA)";
+            store = new InMemoryCoordinatorStore();
         } else if (uri.startsWith("jdbc:")) {
-            // Point the coordinator at its own (small) database. Several coordinator processes may
-            // share it; a durable leader lease in the store keeps them single-writer.
             backend = "jdbc " + uri;
             store = new JdbcCoordinatorStoreProvider(uri,
                     System.getenv("WIGGLE_COORD_JDBC_USER"),
@@ -126,7 +125,7 @@ public final class Main {
                     intEnv("WIGGLE_COORD_JDBC_POOL", 4)).coordinatorStore();
         } else {
             throw new IllegalArgumentException("unknown coordinator store; set "
-                    + "WIGGLE_COORD_STORE=ratis://<dir>?peers=...  or  WIGGLE_COORD_STORE=jdbc:<url> "
+                    + "WIGGLE_COORD_STORE=jdbc:<url>, or leave it unset for an in-memory one "
                     + "(got '" + uri + "')");
         }
         CoordinatorServer coordinator = new CoordinatorServer(store, config.port(), config.tls(),

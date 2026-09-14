@@ -5,6 +5,8 @@ import com.wiggle.server.coord.CoordDefinition;
 import com.wiggle.server.coord.CoordNamespace;
 import com.wiggle.server.coord.CoordNode;
 import com.wiggle.server.coord.CoordPolicy;
+import com.wiggle.election.ElectionStore;
+import com.wiggle.election.Member;
 import com.wiggle.server.coord.CoordinatorStore;
 import com.wiggle.server.coord.EpochCodec;
 import com.wiggle.server.coord.ProvisionState;
@@ -21,22 +23,23 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.function.Function;
 import java.util.Map;
 import java.util.Optional;
 
 /**
  * A {@link CoordinatorStore} backed by a relational database — the "stateless coordinator + your
- * existing database" backend, an alternative to the embedded Ratis+RocksDB one. The coordinator's
+ * existing database" backend -- the coordinator's only durable one. The coordinator's
  * state is small, read-mostly and rarely written (placement policy, node roster, definition and
  * namespace registries — never per-instance), so a database is a natural, operationally-boring fit
  * for teams that already run a managed HA database: they inherit its backup/DR/monitoring, and the
  * coordinator process becomes stateless and horizontally scalable, with single-writer coordination
- * provided by a durable leader lease ({@link #acquireLeadership}).
+ * provided by the shared announce-and-heartbeat election over {@code coord_member}.
  *
  * <p>All consistency is provided by the database. Every mutation is either a conditional {@code
  * UPDATE} (compare-and-set on a revision / lease, atomic on any engine) or an {@code INSERT} whose
  * primary key makes the claim atomic — no explicit locking, and portable across PostgreSQL, H2,
- * MySQL, and friends. The only per-database detail is the large-text column type, detected from the
+ * H2. The only per-database detail is the large-text column type, detected from the
  * JDBC metadata at migrate time. This module deliberately does NOT depend on the engine's {@code
  * jdbc} storage module (which would pull in {@code :server}); it talks to the database directly.
  */
@@ -78,21 +81,22 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                     "CREATE TABLE coord_cell_binding (" +
                             "namespace VARCHAR(200) NOT NULL, cell_id VARCHAR(200) NOT NULL, " +
                             "fingerprint VARCHAR(200) NOT NULL, PRIMARY KEY (namespace, cell_id))");
-            createIfAbsent(c, "coord_leader",
-                    "CREATE TABLE coord_leader (" +
-                            "id INT PRIMARY KEY, holder VARCHAR(200), expiry BIGINT NOT NULL)");
+            // The coordinator's own roster, for the shared announce-and-heartbeat election. Distinct
+            // from coord_node, which holds the cells reporting to this coordinator.
+            createIfAbsent(c, "coord_member",
+                    "CREATE TABLE coord_member (" +
+                            "id VARCHAR(200) PRIMARY KEY, name VARCHAR(200), " +
+                            "first_heartbeat BIGINT NOT NULL, last_heartbeat BIGINT NOT NULL, " +
+                            "leader SMALLINT NOT NULL)");
         } catch (SQLException e) {
             throw new RuntimeException("coordinator store migration failed", e);
         }
     }
 
-    /** The portable large-text column type for JSON blobs, per database. */
+    /** The large-text column type for JSON blobs: PostgreSQL to deploy on, H2 for tests. */
     private static String textType(Connection c) throws SQLException {
         String db = c.getMetaData().getDatabaseProductName().toLowerCase();
-        if (db.contains("postgres")) return "text";
-        if (db.contains("mysql") || db.contains("maria")) return "longtext";
-        if (db.contains("sql server") || db.contains("microsoft")) return "nvarchar(max)";
-        return "clob"; // H2, Oracle, and a safe default — getString/setString work everywhere
+        return db.contains("postgres") ? "text" : "clob";   // H2 takes clob; getString/setString both ways
     }
 
     private static void createIfAbsent(Connection c, String table, String ddl) throws SQLException {
@@ -351,7 +355,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 rs.getString("endpoint"), rs.getString("err"), rs.getLong("updated_at"));
     }
 
-    /** StorageConfig as a small JSON blob (field names match the Ratis backend's, for one on-disk form). */
+    /** StorageConfig as a small JSON blob. */
     private static String encodeStorage(StorageConfig sc) {
         if (sc == null) return null;
         Map<String, Object> m = new LinkedHashMap<>();
@@ -370,30 +374,94 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 Json.str(m, "user", null), Json.str(m, "secretRef", null), (int) Json.num(m, "poolSize", 0));
     }
 
-    // ---------------------------------------------------------------- leader election (durable lease)
+    // ---------------------------------------------------------------- leader election
 
-    @Override public boolean acquireLeadership(String nodeId, long nowMillis, long leaseMillis) {
-        long expiry = nowMillis + leaseMillis;
-        // Take or renew the single lease row: succeeds if unheld, expired, or already ours.
-        int updated = rowCount("UPDATE coord_leader SET holder = ?, expiry = ? " +
-                "WHERE id = 1 AND (holder IS NULL OR expiry <= ? OR holder = ?)",
-                ps -> { ps.setString(1, nodeId); ps.setLong(2, expiry); ps.setLong(3, nowMillis); ps.setString(4, nodeId); });
-        if (updated == 1) return true;
-        // Either the row is absent (first ever acquisition) or a valid holder owns it. Try to create it:
-        // an INSERT wins iff it was absent; a PK conflict means a valid holder got there first.
-        try {
-            rowCount("INSERT INTO coord_leader (id, holder, expiry) VALUES (1, ?, ?)",
-                    ps -> { ps.setString(1, nodeId); ps.setLong(2, expiry); });
-            return true;
-        } catch (RuntimeException e) {
-            if (rootIsConstraint(e)) return false;
-            throw e;
+    /**
+     * The coordinator roster, as the shared election needs it. The step runs in one transaction
+     * because the election's soundness rests on every process reading the same snapshot it wrote
+     * its own heartbeat into -- see {@link ElectionStore#step}.
+     */
+    @Override public ElectionStore election() {
+        return new ElectionStore() {
+
+            @Override
+            public List<Member> step(Member self, long pruneBefore, Function<List<Member>, String> elect) {
+                try (Connection c = ds.getConnection()) {
+                    boolean auto = c.getAutoCommit();
+                    c.setAutoCommit(false);
+                    try {
+                        upsertMember(c, self);
+                        try (PreparedStatement ps = c.prepareStatement(
+                                "DELETE FROM coord_member WHERE last_heartbeat < ?")) {
+                            ps.setLong(1, pruneBefore);
+                            ps.executeUpdate();
+                        }
+                        List<Member> roster = readMembers(c);
+                        String leader = elect.apply(roster);
+                        try (PreparedStatement ps = c.prepareStatement(
+                                "UPDATE coord_member SET leader = ? WHERE id = ?")) {
+                            ps.setInt(1, self.id().equals(leader) ? 1 : 0);
+                            ps.setString(2, self.id());
+                            ps.executeUpdate();
+                        }
+                        c.commit();
+                        return roster;
+                    } catch (SQLException | RuntimeException e) {
+                        try { c.rollback(); } catch (SQLException ignored) { }
+                        throw e;
+                    } finally {
+                        try { c.setAutoCommit(auto); } catch (SQLException ignored) { }
+                    }
+                } catch (SQLException e) {
+                    throw new JdbcException("coordinator election step", e);
+                }
+            }
+
+            @Override public void standDown(Member self) {
+                rowCount("UPDATE coord_member SET last_heartbeat = 0, leader = 0 WHERE id = ?",
+                        ps -> ps.setString(1, self.id()));
+            }
+
+            @Override public List<Member> members() {
+                try (Connection c = ds.getConnection()) {
+                    return readMembers(c);
+                } catch (SQLException e) {
+                    throw new JdbcException("coordinator roster read", e);
+                }
+            }
+        };
+    }
+
+    /** Insert-or-update without relying on a dialect-specific upsert: update, and insert if absent. */
+    private static void upsertMember(Connection c, Member m) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE coord_member SET name = ?, last_heartbeat = ? WHERE id = ?")) {
+            ps.setString(1, m.name());
+            ps.setLong(2, m.lastHeartbeat());
+            ps.setString(3, m.id());
+            if (ps.executeUpdate() > 0) return;
+        }
+        try (PreparedStatement ps = c.prepareStatement(
+                "INSERT INTO coord_member (id, name, first_heartbeat, last_heartbeat, leader) "
+                        + "VALUES (?, ?, ?, ?, 0)")) {
+            ps.setString(1, m.id());
+            ps.setString(2, m.name());
+            ps.setLong(3, m.firstHeartbeat());
+            ps.setLong(4, m.lastHeartbeat());
+            ps.executeUpdate();
         }
     }
 
-    @Override public void releaseLeadership(String nodeId) {
-        rowCount("UPDATE coord_leader SET holder = NULL, expiry = 0 WHERE id = 1 AND holder = ?",
-                ps -> ps.setString(1, nodeId));
+    private static List<Member> readMembers(Connection c) throws SQLException {
+        List<Member> out = new ArrayList<>();
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT id, name, first_heartbeat, last_heartbeat FROM coord_member");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                out.add(new Member(rs.getString(1), rs.getString(2), rs.getLong(3), rs.getLong(4)));
+            }
+        }
+        return out;
     }
 
     /** Closes the backing connection pool if it owns one (a HikariDataSource is AutoCloseable). */
@@ -437,7 +505,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
 
     /**
      * A duplicate-key / integrity violation, detected portably by SQLState. The SQL-standard class
-     * {@code 23} is "integrity constraint violation" — PostgreSQL uses {@code 23505}, MySQL
+     * {@code 23} is "integrity constraint violation" — PostgreSQL uses {@code 23505}, H2
      * {@code 23000}, H2 {@code 23505} — which is far more reliable across drivers than the exception
      * type (PostgreSQL throws a plain {@code SQLException}, not {@code SQLIntegrityConstraintViolationException}).
      */

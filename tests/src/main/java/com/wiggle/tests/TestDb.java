@@ -6,9 +6,9 @@ package com.wiggle.tests;
  * <p>There are two families of variable and the difference between them is deliberate.
  * {@code WIGGLE_TEST_DB_*} points the <em>generic</em> suite at one database -- see
  * {@link TestStorage} -- so the ordinary tests run against a real dialect instead of H2.
- * {@code WIGGLE_TEST_<BACKEND>_URL} separately opts in a backend's <em>dialect-specific</em> tests:
- * the {@code SKIP LOCKED} claim H2 cannot execute, Oracle's {@code MERGE}, and so on. Those URLs stay
- * per backend on purpose, because they name different servers and several can be enabled in one pass.
+ * {@code WIGGLE_TEST_PG_URL} separately opts in the PostgreSQL-only tests -- the
+ * {@code SKIP LOCKED} claim H2 cannot execute. It stays a separate variable because it names a
+ * specific server, which the generic URL need not be.
  *
  * <p>Credentials are the part that should not have been duplicated. {@code <BACKEND>_USER} /
  * {@code _PASSWORD} win where they are set, and otherwise fall back to the generic
@@ -34,11 +34,10 @@ public final class TestDb {
     }
 
     /**
-     * The JDBC URL for {@code backend} ({@code PG}, {@code MYSQL}, {@code ORACLE}, {@code SQLSERVER}),
-     * or null when that backend is not enabled.
+     * The JDBC URL for {@code backend} ({@code PG}), or null when that backend is not enabled.
      *
      * <p>No generic fallback here, unlike the credentials: a backend's URL has to name that backend's
-     * server, and falling back would aim the Oracle tests at whatever {@code WIGGLE_TEST_DB_URL} was.
+     * server, rather than inheriting whatever {@code WIGGLE_TEST_DB_URL} happens to be.
      */
     public static String url(String backend) {
         return env("WIGGLE_TEST_" + backend + "_URL");

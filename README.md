@@ -93,7 +93,7 @@ are built into the model, not bolted on.
   backpressure built in. Idiomatic **Java, Go, and Python** workers interoperate on one server —
   a single instance can have steps served by three languages, dispatched by activity name.
 - 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
-  (PostgreSQL / MySQL / Oracle / SQL Server, or in-memory for dev). Embed the server in your JVM
+  (PostgreSQL, or in-memory for dev). Embed the server in your JVM
   for tests; the coordinator is **opt-in** — a single cluster runs unchanged without one. No
   Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
 - 🖥 **Operable from day one** — a web **ops console** (live trace of every instance over the
@@ -193,7 +193,7 @@ helm install wiggle deploy/helm/wiggle \
 
 When one database is no longer enough — or tenants must not share blast radius — go cellular.
 A **namespace** maps to one or more **cells**; each cell is a full cluster with its **own
-database**. The **coordinator** (a Raft group over embedded Ratis + RocksDB — no external store)
+database**. The **coordinator** (stateless processes over a small PostgreSQL of their own)
 owns placement:
 
 - **Placement by epochs** — a namespace's instances spread over cells by consistent hashing over
@@ -204,7 +204,7 @@ owns placement:
 - **One binary, three roles** — the same image runs everything, chosen by env:
 
 ```bash
-WIGGLE_ROLE=coordinator WIGGLE_COORD_STORE=ratis:///var/lib/wiggle/coord  # control plane, :8099
+WIGGLE_ROLE=coordinator WIGGLE_COORD_STORE=jdbc:postgresql://db/wiggle_coord  # control plane, :8099
 WIGGLE_ROLE=cell WIGGLE_CELL_ID=cellA WIGGLE_NAMESPACE=orders \
   WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_JDBC_URL=jdbc:postgresql://dbA/wiggle  # a cell node
 WIGGLE_ROLE=console WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_NAMESPACE=orders     # the web UI
@@ -430,8 +430,8 @@ class per recipe where the other is a topology file plus a handlers file.
 | Component | Module | What it does |
 |---|---|---|
 | **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
-| **Storage** | `jdbc`, `postgres`, `mysql`, `oracle`, `sqlserver` | One HikariCP-pooled, dialect-aware JDBC store; backends are drop-in modules behind an explicit `StorageFactory`. No DB configured ⇒ in-memory. |
-| **Coordinator** | `coordinator` | Optional control plane: a Raft group (embedded Ratis + RocksDB — no external store) that allocates namespaces to cells, publishes epoch rings, tracks node health, and answers "where does this instance live?". |
+| **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
+| **Coordinator** | `coordinator` | Optional control plane: stateless processes over their own small database that allocate namespaces to cells, publish epoch rings, track node health, and answer "where does this instance live?". Several elect one leader with the same announce-and-heartbeat election the cells run (`election`). |
 | **Client & worker** | `client` | Workflow authoring (`Wiggle.define` ∣ `Wiggle.graph`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
 | **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
 | **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
@@ -491,7 +491,7 @@ combine → notify → audit, `LOCAL_ASYNC` mode), every step durably committed 
 |---|---|
 | Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
 | Cluster | kind (Kubernetes-in-Docker) inside a 10-CPU / 7.7 GB Docker Desktop VM |
-| Topology | 1 coordinator (Ratis) · 2 cells, **each its own server node + PostgreSQL 16** (fresh DBs) · no pod resource limits |
+| Topology | 1 coordinator · 2 cells, **each its own server node + PostgreSQL 16** (fresh DBs) · no pod resource limits |
 | Client side | submitter + 1 worker (`concurrency=100` per cell) on the host, gRPC via `kubectl port-forward` |
 | Runtime | OpenJDK 21 |
 
@@ -552,7 +552,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | Variable | Default | Meaning |
 |---|---|---|
 | `WIGGLE_PORT` | `8080` | gRPC port (`0` picks a free one) |
-| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set to cluster on a DB. Scheme picks the backend: `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:`, `jdbc:oracle:`, `jdbc:sqlserver:` |
+| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set to cluster on a DB. Scheme picks the backend: `jdbc:postgresql:` to deploy on, `jdbc:h2:` for tests and local runs |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | | database credentials |
 | `WIGGLE_SCHEMA_MODE` | `apply` | `apply` runs pending migrations on startup; `verify` applies nothing and fails fast if the schema is behind or has drifted (DBA/CI-owned schema) |
 | `WIGGLE_MIGRATE_ONLY` | `false` | `true` = apply migrations and exit (a one-shot job; then run the app with `WIGGLE_SCHEMA_MODE=verify`) |
@@ -582,7 +582,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 |---|---|---|
 | `WIGGLE_ROLE` | `cell` | set `coordinator` to run the control plane (no engine, no cell DB) |
 | `WIGGLE_PORT` | `8080` | coordinator gRPC port (`8099` by convention) |
-| `WIGGLE_COORD_STORE` | `ratis:///var/lib/wiggle/coord` | coordinator store. **Ratis** (self-contained, no external dep): `ratis://<dir>?peers=id0@host:port,…&id=<self>`. Or **JDBC** (point it at your own DB; stateless coordinators, single-writer via a durable lease): `jdbc:postgresql://host:5432/wiggle_coord` |
+| `WIGGLE_COORD_STORE` | *(unset)* | coordinator store. **unset = in-memory**, a single process with nothing to install — fine locally, not durable. Set to its own database for HA (stateless coordinators, one leader by election): `jdbc:postgresql://host:5432/wiggle_coord` |
 | `WIGGLE_COORD_JDBC_USER` / `WIGGLE_COORD_JDBC_PASSWORD` / `WIGGLE_COORD_JDBC_POOL` | — / — / `4` | credentials + pool size for the JDBC coordinator store |
 | `WIGGLE_MISSED_HEARTBEATS` / `WIGGLE_NODE_NAME` / `WIGGLE_TLS_*` | as above | shared knobs |
 

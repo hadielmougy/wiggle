@@ -10,14 +10,10 @@ dependencies {
     testImplementation(project(":server"))
     // The coordinator control plane (moved out of :server): its runtime + SPI (spi comes transitively).
     testImplementation(project(":coordinator"))
-    // The JDBC-backed store lives in its own module now; the JDBC/migration tests need it
-    // (and the postgres module brings the H2 driver transitively at runtime). The mysql/oracle
-    // modules supply their dialects + providers for the dialect and opt-in integration tests.
+    // The JDBC-backed store lives in its own module now; the JDBC/migration tests need it, and
+    // :postgres supplies both dialects -- PostgreSQL, and H2 for the runs with nothing installed.
     testImplementation(project(":jdbc"))
     testImplementation(project(":postgres"))
-    testImplementation(project(":mysql"))
-    testImplementation(project(":oracle"))
-    testImplementation(project(":sqlserver"))
     // The dist module supplies the explicit WiggleStorageFactory used to run a WiggleServer against
     // a real database in tests (the same one the standalone image uses).
     testImplementation(project(":dist"))

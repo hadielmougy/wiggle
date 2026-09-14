@@ -1,4 +1,6 @@
 dependencies {
+    // Leader election, shared with :coordinator. Neither knows about the other.
+    api(project(":election"))
     api(project(":core"))
     api(project(":proto"))
     // No storage dependency: the server core is storage-agnostic and builds its store from an

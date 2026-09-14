@@ -52,7 +52,7 @@ configure(subprojects.filter { it.name != "bom" }) {
 
 // The BOM is published by the shared block below. `client-all` (the shaded client) publishes a
 // SHADOW component with a dependency-free POM, so it wires its own publishing in client-all/build.gradle.kts.
-val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "mysql", "oracle", "sqlserver", "bom")
+val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "bom")
 
 val moduleDescriptions = mapOf(
     "core" to "Wiggle shared model: JSON, the compiled state-machine graph, retry policy, wire records.",
@@ -61,9 +61,6 @@ val moduleDescriptions = mapOf(
     "server" to "Wiggle server: the durable state-machine engine, cluster manager, cell coordinator, and control-plane API.",
     "jdbc" to "Wiggle JDBC storage core: the dialect-aware, HikariCP-pooled store shared by every database module.",
     "postgres" to "Wiggle PostgreSQL storage: PostgreSQL and H2 dialects for multi-node clustering.",
-    "mysql" to "Wiggle MySQL storage: the MySQL/MariaDB dialect for multi-node clustering.",
-    "oracle" to "Wiggle Oracle storage: the Oracle Database dialect for multi-node clustering.",
-    "sqlserver" to "Wiggle SQL Server storage: the Microsoft SQL Server dialect for multi-node clustering.",
     "bom" to "Wiggle BOM: a version-alignment platform for every wiggle module and its gRPC/protobuf stack.",
 )
 

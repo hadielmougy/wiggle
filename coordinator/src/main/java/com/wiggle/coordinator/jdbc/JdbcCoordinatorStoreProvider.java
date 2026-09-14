@@ -7,7 +7,7 @@ import com.zaxxer.hikari.HikariDataSource;
 
 /**
  * The {@link CoordinatorStoreProvider} seam for the JDBC backend — the "point the coordinator at your
- * existing database" option, resolved by {@code dist} the same way the Ratis backend is. It builds a
+ * existing database" option, resolved by {@code dist} from the store URI. It builds a
  * pooled {@link HikariDataSource} from a plain JDBC URL and hands back a {@link JdbcCoordinatorStore}
  * (which migrates its {@code coord_*} schema on construction and owns the pool). The JDBC driver is
  * supplied at runtime by the distribution (which bundles every backend's driver).

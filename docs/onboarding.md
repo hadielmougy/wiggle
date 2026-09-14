@@ -69,11 +69,9 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
 | `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
-| `postgres` | PostgreSQL + H2 dialects | `wiggle-postgres` |
-| `mysql` | MySQL / MariaDB dialect | `wiggle-mysql` |
-| `oracle` | Oracle Database dialect | `wiggle-oracle` |
-| `sqlserver` | Microsoft SQL Server dialect | `wiggle-sqlserver` |
-| `dist` | runnable standalone server bundling every backend (what the Docker image runs) | *(not published)* |
+| `postgres` | PostgreSQL dialect, plus H2 for tests and local runs | `wiggle-postgres` |
+| `election` | leader election by announce-and-heartbeat, shared by `server` and `coordinator` | *(not published)* |
+| `dist` | runnable standalone server (what the Docker image runs) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
@@ -538,12 +536,11 @@ any RPC; layer the console's login/Basic auth or an external gateway on top for 
 
 No URL → in-memory (single node, dev/test). With one, the server builds its store from an injected
 `StorageFactory` — **no `ServiceLoader`**: the distribution's `WiggleStorageFactory` maps the URL
-scheme to a backend at runtime. The JDBC backends — PostgreSQL / H2 (`wiggle-postgres`),
-MySQL / MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`), SQL Server (`wiggle-sqlserver`) — share
-one HikariCP-pooled, dialect-aware store (`wiggle-jdbc`). The `dist` module (the Docker image)
-bundles them all, so a single image serves any of `jdbc:postgresql:`, `jdbc:h2:`,
-`jdbc:mysql:` / `jdbc:mariadb:`, `jdbc:oracle:` or `jdbc:sqlserver:`. Another database is a new
-module — no engine change.
+scheme to a backend at runtime. Both dialects live in `wiggle-postgres` over one HikariCP-pooled
+store (`wiggle-jdbc`): **PostgreSQL** is what you deploy on, and **H2** (in PostgreSQL mode) is for
+tests and local runs — it takes the same schema but has no `SKIP LOCKED`, so it claims tasks by
+compare-and-set rather than in a single statement, and is not a deployment target. So the image
+serves `jdbc:postgresql:` and `jdbc:h2:`.
 
 Embedding the server in your own JVM? Pass the factory explicitly, e.g.
 `new WiggleServer(config, cfg -> new JdbcStorage(cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(),

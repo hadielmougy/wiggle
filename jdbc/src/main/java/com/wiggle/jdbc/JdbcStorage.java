@@ -22,8 +22,7 @@ import java.util.function.Function;
  *
  * <p>The store body is dialect-neutral: it writes canonical, PostgreSQL-flavoured SQL and
  * defers every non-portable fragment to a {@link Dialect}. That single body backs PostgreSQL
- * and H2 (via {@code wiggle-postgres}), MySQL/MariaDB (via {@code wiggle-mysql}) and Oracle
- * (via {@code wiggle-oracle}). Connection pooling is provided by HikariCP.
+ * and H2 (both via {@code wiggle-postgres}). Connection pooling is provided by HikariCP.
  */
 public final class JdbcStorage implements Storage {
 
@@ -396,18 +395,10 @@ public final class JdbcStorage implements Storage {
         }
     }
 
-    /**
-     * Runs one dialect-translated DDL statement, tolerating an "already exists" error the dialect
-     * deems benign. Needed for Oracle, which has no {@code IF NOT EXISTS} on older versions and
-     * auto-commits DDL, so a restart or a partially-applied migration can re-encounter an object
-     * that is already there. Any other error propagates.
-     */
+    /** Runs one dialect-translated DDL statement. Both dialects take {@code IF NOT EXISTS}, so a
+     *  re-run is idempotent and any error here is real. */
     private static void execDdl(Statement st, Dialect dialect, String canonicalSql) throws SQLException {
-        try {
-            st.execute(dialect.ddl(canonicalSql));
-        } catch (SQLException e) {
-            if (!dialect.isBenignMigrationError(e)) throw e;
-        }
+        st.execute(dialect.ddl(canonicalSql));
     }
 
     @Override public <R> R inTx(Function<Tx, R> work) {
@@ -660,14 +651,9 @@ public final class JdbcStorage implements Storage {
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
-            String sql;
-            if (forUpdate) {
-                String hint = dialect.forUpdateHint(), suffix = dialect.forUpdateSuffix();
-                sql = "SELECT * FROM wf_instance" + (hint.isEmpty() ? "" : " " + hint) + " WHERE id=?"
-                        + (suffix.isEmpty() ? "" : " " + suffix);
-            } else {
-                sql = "SELECT * FROM wf_instance WHERE id=?";
-            }
+            String sql = forUpdate
+                    ? "SELECT * FROM wf_instance WHERE id=? FOR UPDATE"
+                    : "SELECT * FROM wf_instance WHERE id=?";
             try (PreparedStatement p = ps(sql)) {
                 p.setString(1, id);
                 try (ResultSet rs = p.executeQuery()) {
@@ -791,13 +777,11 @@ public final class JdbcStorage implements Storage {
         @Override public List<Token> claimTasks(String workerId, Set<String> queues,
                                                 Set<WorkflowVersion> versions, int max, long now,
                                                 long leaseUntil) {
-            if (dialect.supportsSkipLocked() && dialect.supportsReturning()) {
-                return claimSkipLockedReturning(workerId, queues, versions, max, now, leaseUntil);
-            }
-            if (dialect.supportsSkipLocked()) {
-                return claimSkipLockedSelect(workerId, queues, versions, max, now, leaseUntil);
-            }
-            return claimCompareAndSet(workerId, queues, versions, max, now, leaseUntil);
+            // PostgreSQL claims in one statement; H2 has neither SKIP LOCKED nor RETURNING and
+            // falls back to compare-and-set.
+            return dialect.supportsSkipLocked() && dialect.supportsReturning()
+                    ? claimSkipLockedReturning(workerId, queues, versions, max, now, leaseUntil)
+                    : claimCompareAndSet(workerId, queues, versions, max, now, leaseUntil);
         }
 
         /**
@@ -862,50 +846,7 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /**
-         * Two-step claim for dialects that have SKIP LOCKED but not RETURNING (MySQL): lock the
-         * candidate rows with SELECT ... FOR UPDATE SKIP LOCKED, then flip them to RUNNING in the
-         * same transaction. The lock the SELECT took guarantees no other worker can claim the same
-         * rows before the UPDATE commits.
-         */
-        private List<Token> claimSkipLockedSelect(String workerId, Set<String> queues,
-                                                  Set<WorkflowVersion> versions, int max,
-                                                  long now, long leaseUntil) {
-            StringBuilder sel = new StringBuilder(
-                    "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
-            if (queues != null && !queues.isEmpty()) {
-                sel.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
-            }
-            appendVersions(sel, versions);
-            sel.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
-            List<Token> picked = new ArrayList<>();
-            try (PreparedStatement p = ps(dialect.limit(sel.toString()))) {
-                int idx = 1;
-                p.setLong(idx++, now);
-                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
-                idx = bindVersions(p, idx, versions);
-                p.setInt(idx, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) picked.add(readToken(rs));
-                }
-            } catch (SQLException e) { throw wrap(e); }
-            if (picked.isEmpty()) return picked;
-            try (PreparedStatement upd = ps("UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?," +
-                    "updated_at=? WHERE id=?")) {
-                for (Token t : picked) {
-                    upd.setString(1, workerId); upd.setLong(2, leaseUntil); upd.setLong(3, now); upd.setString(4, t.id);
-                    upd.addBatch();
-                    t.status = TokenStatus.RUNNING;
-                    t.leaseOwner = workerId;
-                    t.leaseExpiresAt = leaseUntil;
-                    t.updatedAt = now;
-                }
-                upd.executeBatch();
-            } catch (SQLException e) { throw wrap(e); }
-            return picked;
-        }
-
-        /** Portable fallback (H2, Oracle): over-fetch candidates, then compare-and-set each. */
+        /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
         private List<Token> claimCompareAndSet(String workerId, Set<String> queues,
                                                Set<WorkflowVersion> versions, int max,
                                                long now, long leaseUntil) {

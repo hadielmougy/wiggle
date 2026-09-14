@@ -23,8 +23,7 @@ dependencies {
         // --- wiggle's own modules, at this build's version ---
         listOf(
             "wiggle-core", "wiggle-proto", "wiggle-client", "wiggle-server",
-            "wiggle-jdbc", "wiggle-postgres", "wiggle-mysql", "wiggle-oracle",
-            "wiggle-sqlserver", "wiggle-client-all",
+            "wiggle-jdbc", "wiggle-postgres", "wiggle-client-all",
         ).forEach { api("sh.wiggle:$it:$version") }
 
         // --- the control-plane stack wiggle-proto exposes transitively ---
@@ -32,12 +31,9 @@ dependencies {
         api("io.github.hadielmougy:shield:${property("shieldVersion")}")
         api("com.zaxxer:HikariCP:${property("hikariVersion")}")
 
-        // --- JDBC drivers each wiggle-<db> module brings in at runtime ---
+        // --- JDBC drivers wiggle-postgres brings in at runtime (H2 is for tests/local runs) ---
         api("org.postgresql:postgresql:${property("postgresVersion")}")
         api("com.h2database:h2:${property("h2Version")}")
-        api("com.mysql:mysql-connector-j:${property("mysqlVersion")}")
-        api("com.oracle.database.jdbc:ojdbc11:${property("oracleVersion")}")
-        api("com.microsoft.sqlserver:mssql-jdbc:${property("sqlserverVersion")}")
     }
 }
 
