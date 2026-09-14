@@ -55,8 +55,8 @@ class FlowApiRegressionTest {
         Scenarios.SeqH h = new Scenarios.SeqH();
 
         FlowSpec graph = Wiggle.graph("seq").step("one").step("two").step("three").build();
-        FlowSpec typed = Wiggle.define("seq", Map.class, f -> f
-                .thenApply(h::one).thenApply(h::two).thenApply(h::three));
+        FlowSpec typed = Wiggle.define("seq", Map.class, SeqSteps.class, (f, s) -> f
+                .thenApply(s::one).thenApply(s::two).thenApply(s::three));
 
         assertSameGraph(graph, typed);
 
@@ -73,8 +73,8 @@ class FlowApiRegressionTest {
         Scenarios.GatedH h = new Scenarios.GatedH(downstream);
 
         FlowSpec graph = Wiggle.graph("gated").step("seed").gate("gate").step("never").build();
-        FlowSpec typed = Wiggle.define("gated", Map.class, f -> f
-                .thenApply(h::seed).thenFilter(h::gate).thenApply(h::never));
+        FlowSpec typed = Wiggle.define("gated", Map.class, GatedSteps.class, (f, s) -> f
+                .thenApply(s::seed).thenFilter(s::gate).thenApply(s::never));
 
         assertSameGraph(graph, typed);
 
@@ -99,11 +99,11 @@ class FlowApiRegressionTest {
                 .step("after")
                 .build();
 
-        FlowSpec typed = Wiggle.define("fork-merge", Map.class, f -> {
-            var seeded = f.thenApply(h::seed);
-            var left = seeded.thenApply(h::slowLeft);      // finishes last on purpose
-            var right = seeded.thenApply(h::fastRight);
-            return Wiggle.allOf(left, right).combineWithContext(h::merge).thenApply(h::after);
+        FlowSpec typed = Wiggle.define("fork-merge", Map.class, ForkMergeSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            var left = seeded.thenApply(s::slowLeft);      // finishes last on purpose
+            var right = seeded.thenApply(s::fastRight);
+            return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
         });
 
         assertSameGraph(graph, typed);
@@ -128,10 +128,10 @@ class FlowApiRegressionTest {
                 .step("after")
                 .build();
 
-        FlowSpec typed = Wiggle.define("join-once", Map.class, f ->
-                Wiggle.allOf(f.thenApply(h::a1), f.thenApply(h::b1), f.thenApply(h::c1))
-                        .combineWithContext(h::merge)
-                        .thenApply(h::after));
+        FlowSpec typed = Wiggle.define("join-once", Map.class, JoinOnceSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
+                        .combineWithContext(s::merge)
+                        .thenApply(s::after));
 
         assertSameGraph(graph, typed);
 
@@ -160,12 +160,12 @@ class FlowApiRegressionTest {
                 .step("outerDone")
                 .build();
 
-        FlowSpec typed = Wiggle.define("nested", Map.class, f -> {
-            var left = Wiggle.allOf(f.thenApply(h::innerA), f.thenApply(h::innerB))
-                    .combineWithContext(h::innerMerge)
-                    .thenApply(h::innerDone);
-            var right = f.thenApply(h::outerRight);
-            return Wiggle.allOf(left, right).combineWithContext(h::outerMerge).thenApply(h::outerDone);
+        FlowSpec typed = Wiggle.define("nested", Map.class, NestedSteps.class, (f, s) -> {
+            var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
+                    .combineWithContext(s::innerMerge)
+                    .thenApply(s::innerDone);
+            var right = f.thenApply(s::outerRight);
+            return Wiggle.allOf(left, right).combineWithContext(s::outerMerge).thenApply(s::outerDone);
         });
 
         assertSameGraph(graph, typed);
@@ -190,10 +190,10 @@ class FlowApiRegressionTest {
                 .step("after")
                 .build();
 
-        FlowSpec typed = Wiggle.define("branch-gate", Map.class, f -> {
-            var gated = f.thenFilter(h::gate).thenApply(h::skipped);
-            var other = f.thenApply(h::ran);
-            return Wiggle.allOf(gated, other).combineWithContext(h::merge).thenApply(h::after);
+        FlowSpec typed = Wiggle.define("branch-gate", Map.class, BranchGateSteps.class, (f, s) -> {
+            var gated = f.thenFilter(s::gate).thenApply(s::skipped);
+            var other = f.thenApply(s::ran);
+            return Wiggle.allOf(gated, other).combineWithContext(s::merge).thenApply(s::after);
         });
 
         assertSameGraph(graph, typed);
@@ -214,7 +214,8 @@ class FlowApiRegressionTest {
         RetryPolicy policy = RetryPolicy.fixed(5, Duration.ofMillis(50));
 
         FlowSpec graph = Wiggle.graph("retry").step("flaky", policy).build();
-        FlowSpec typed = Wiggle.define("retry", Map.class, f -> f.thenApply(h::flaky, policy));
+        FlowSpec typed = Wiggle.define("retry", Map.class, RetrySteps.class,
+                (f, s) -> f.thenApply(s::flaky, policy));
 
         assertSameGraph(graph, typed);
 
@@ -233,10 +234,10 @@ class FlowApiRegressionTest {
                 .step("after")
                 .build();
 
-        FlowSpec typed = Wiggle.define("sleeper", Map.class, f -> f
-                .thenApply(h::before)
+        FlowSpec typed = Wiggle.define("sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+                .thenApply(s::before)
                 .thenSleep("nap", Duration.ofMillis(400))
-                .thenApply(h::after));
+                .thenApply(s::after));
 
         assertSameGraph(graph, typed);
 
@@ -253,17 +254,85 @@ class FlowApiRegressionTest {
     void definitionIdentityIsUnchanged() {
         Scenarios.SeqH h = new Scenarios.SeqH();
 
-        FlowSpec a = Wiggle.define("versioned", Map.class, f -> f.thenApply(h::one));
-        FlowSpec b = Wiggle.define("versioned", Map.class, f -> f.thenApply(h::one));
-        FlowSpec c = Wiggle.define("versioned", Map.class, f -> f.thenApply(h::one).thenApply(h::two));
+        FlowSpec a = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec b = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec c = Wiggle.define("versioned", Map.class, SeqSteps.class,
+                (f, s) -> f.thenApply(s::one).thenApply(s::two));
 
         assertEquals(a.version(), b.version(), "the same topology twice is the same version");
         assertTrue(a.version() != c.version(), "a different topology is a different version");
 
         // and the graph-level rules still bite: a duplicate node name is still rejected
         assertTrue(org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                        () -> Wiggle.define("dup", Map.class, f -> f.thenApply(h::one).thenApply(h::one)))
+                        () -> Wiggle.define("dup", Map.class, SeqSteps.class,
+                                (f, s) -> f.thenApply(s::one).thenApply(s::one)))
                 .getMessage().contains("duplicate step name"));
+    }
+
+    // ------------------------------------------------------------------ step contracts
+    //
+    // What each spec names. The handlers below implement them, so the compiler checks that every step
+    // the spec declares exists with the right signature -- and none of these interfaces has, or needs,
+    // an implementation at definition time.
+
+    interface SeqSteps {
+        Map<String, Object> one(Map<String, Object> c);
+        Map<String, Object> two(Map<String, Object> c);
+        Map<String, Object> three(Map<String, Object> c);
+    }
+
+    interface GatedSteps {
+        Map<String, Object> seed(Map<String, Object> c);
+        boolean gate(Map<String, Object> c);
+        Map<String, Object> never(Map<String, Object> c);
+    }
+
+    interface ForkMergeSteps {
+        Map<String, Object> seed(Map<String, Object> c);
+        Map<String, Object> slowLeft(Map<String, Object> c);
+        Map<String, Object> fastRight(Map<String, Object> c);
+        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                  Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> after(Map<String, Object> c);
+    }
+
+    interface JoinOnceSteps {
+        Map<String, Object> a1(Map<String, Object> c);
+        Map<String, Object> b1(Map<String, Object> c);
+        Map<String, Object> c1(Map<String, Object> c);
+        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                  Map<String, Object> a, Map<String, Object> b, Map<String, Object> c);
+        Map<String, Object> after(Map<String, Object> c);
+    }
+
+    interface NestedSteps {
+        Map<String, Object> innerA(Map<String, Object> c);
+        Map<String, Object> innerB(Map<String, Object> c);
+        Map<String, Object> innerMerge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                       Map<String, Object> ia, Map<String, Object> ib);
+        Map<String, Object> innerDone(Map<String, Object> c);
+        Map<String, Object> outerRight(Map<String, Object> c);
+        Map<String, Object> outerMerge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                       Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> outerDone(Map<String, Object> c);
+    }
+
+    interface BranchGateSteps {
+        boolean gate(Map<String, Object> c);
+        Map<String, Object> skipped(Map<String, Object> c);
+        Map<String, Object> ran(Map<String, Object> c);
+        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                  Map<String, Object> gated, Map<String, Object> other);
+        Map<String, Object> after(Map<String, Object> c);
+    }
+
+    interface RetrySteps {
+        Map<String, Object> flaky(Map<String, Object> c);
+    }
+
+    interface SleeperSteps {
+        Map<String, Object> before(Map<String, Object> c);
+        Map<String, Object> after(Map<String, Object> c);
     }
 
     // ------------------------------------------------------------------ fan-out handlers
@@ -271,7 +340,7 @@ class FlowApiRegressionTest {
     // Same logic as the conformance suite's. A combine takes one parameter per arm, in fork order.
 
     @com.wiggle.client.worker.Handlers("fork-merge")
-    public static final class ForkMerge {
+    public static final class ForkMerge implements ForkMergeSteps {
         public Map<String, Object> seed(Map<String, Object> c) { return Scenarios.put(c, "seeded", true); }
         public Map<String, Object> slowLeft(Map<String, Object> c) {
             // finishes last on purpose; a FlowFn declares no checked exception, so absorb it here
@@ -287,7 +356,7 @@ class FlowApiRegressionTest {
     }
 
     @com.wiggle.client.worker.Handlers("join-once")
-    public static final class JoinOnce {
+    public static final class JoinOnce implements JoinOnceSteps {
         private final java.util.concurrent.atomic.AtomicInteger after;
         JoinOnce(java.util.concurrent.atomic.AtomicInteger after) { this.after = after; }
         public Map<String, Object> a1(Map<String, Object> c) { return Scenarios.put(c, "a", 1L); }
@@ -304,7 +373,7 @@ class FlowApiRegressionTest {
     }
 
     @com.wiggle.client.worker.Handlers("nested")
-    public static final class Nested {
+    public static final class Nested implements NestedSteps {
         public Map<String, Object> innerA(Map<String, Object> c) { return Scenarios.put(c, "ia", 1L); }
         public Map<String, Object> innerB(Map<String, Object> c) { return Scenarios.put(c, "ib", 1L); }
         public Map<String, Object> innerDone(Map<String, Object> c) { return Scenarios.put(c, "innerAfter", 1L); }
@@ -321,7 +390,7 @@ class FlowApiRegressionTest {
     }
 
     @com.wiggle.client.worker.Handlers("branch-gate")
-    public static final class BranchGate {
+    public static final class BranchGate implements BranchGateSteps {
         public boolean gate(Map<String, Object> c) { return false; }
         public Map<String, Object> skipped(Map<String, Object> c) { return Scenarios.put(c, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> c) { return Scenarios.put(c, "ran", true); }

@@ -22,17 +22,22 @@ one database is no longer enough.**
 </div>
 
 ```java
-OrderHandlers h = new OrderHandlers();
+interface OrderSteps {                                  // the steps, as a contract
+    Order   validate(Order o);
+    boolean inStock(Order o);
+    Order   authorise(Order o);
+    ...
+}
 
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, f -> {
-    var validated = f.thenApply(h::validate).thenFilter(h::inStock);
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+    var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
-    var payment  = validated.thenApply(h::authorise).thenApply(h::capture);
-    var shipping = validated.thenApply(h::reserveStock).thenApply(h::printLabel);
+    var payment  = validated.thenApply(s::authorise).thenApply(s::capture);
+    var shipping = validated.thenApply(s::reserveStock).thenApply(s::printLabel);
 
     return Wiggle.allOf(payment, shipping)          // both arms run, on isolated context copies
-            .combineWithContext(h::merge)           // and rejoin explicitly
-            .thenApply(h::notify);
+            .combineWithContext(s::merge)           // and rejoin explicitly
+            .thenApply(s::notify);
 });
 ```
 
@@ -40,9 +45,11 @@ That's a **complete, durable, parallel workflow**. No YAML, no DSL files, no det
 to memorize — a compiled graph the server owns, and plain Java methods (or Go, or Python) that
 serve its steps.
 
-Each step is a method reference to the handler that implements it, so the compiler checks that
-every step consumes what the one before it produced, and a rename carries the step name with it.
-Continuing `validated` twice is what makes the two parallel arms.
+A spec **names** its steps; it never runs them — the code is bound by name on a worker. So the steps
+are declared as an interface and named through it, which is why the compiler can check that each step
+consumes what the one before it produced. A handler that `implements OrderSteps` is then checked
+against the same contract, so the two halves cannot drift. Continuing `validated` twice is what makes
+the two parallel arms.
 
 ---
 
@@ -248,7 +255,7 @@ import java.util.Map;
 
 // 1. The logic lives in a @Handlers class. The signature defines the step.
 @Handlers("greet")
-class GreetHandlers {
+class GreetHandlers implements GreetSteps {
     public Map<String, Object> sayHello(Map<String, Object> ctx) {
         Map<String, Object> next = new HashMap<>(ctx);
         next.put("greeting", "hello, " + ctx.get("name"));
@@ -256,17 +263,18 @@ class GreetHandlers {
     }
 }
 
-// 2. The workflow names its steps by referencing them. Nothing runs here; the chain is
-//    walked once and compiled to a graph.
-GreetHandlers handlers = new GreetHandlers();
-FlowSpec greet = Wiggle.define("greet", Map.class, f -> f.thenApply(handlers::sayHello));
+// 2. The workflow names its steps through a contract. Nothing runs here -- the chain is walked
+//    once and compiled to a graph; the code that runs each step is bound by name on the worker.
+interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
+
+FlowSpec greet = Wiggle.define("greet", Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
 // 3. Embedded server + worker + one instance.
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
     try (Worker worker = new Worker(client, "worker-1")
-            .register(greet).handlers(handlers)) {
+            .register(greet).handlers(new GreetHandlers())) {
         worker.start();
 
         String id = client.start(greet, Map.of("name", "ada"));
@@ -281,24 +289,22 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 A real one — parallel branches, a guard, a retry policy, a server-side timer:
 
 ```java
-OrderHandlers h = new OrderHandlers();
-
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, f -> {
-    var validated = f.thenApply(h::validate)
-            .thenFilter(h::inStock);         // false ⇒ the instance ends cleanly, not an error
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+    var validated = f.thenApply(s::validate)
+            .thenFilter(s::inStock);         // false ⇒ the instance ends cleanly, not an error
 
     var payment = validated
-            .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
-            .thenApply(h::capture);
+            .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+            .thenApply(s::capture);
 
     var shipping = validated
-            .thenApply(h::reserveStock)
+            .thenApply(s::reserveStock)
             .thenSleep("await-warehouse", Duration.ofMillis(300))   // no worker held while waiting
-            .thenApply(h::printLabel);
+            .thenApply(s::printLabel);
 
     return Wiggle.allOf(payment, shipping)   // arms ran on isolated context copies...
-            .combineWithContext(h::merge)    // ...so rejoining them is explicit, never implicit
-            .thenApply(h::notify);
+            .combineWithContext(s::merge)    // ...so rejoining them is explicit, never implicit
+            .thenApply(s::notify);
 });
 ```
 

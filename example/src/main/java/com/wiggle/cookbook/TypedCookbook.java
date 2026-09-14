@@ -21,12 +21,18 @@ import java.util.List;
  *   ./gradlew :example:runTypedCookbook   # Wiggle.define — topology by method reference
  * </pre>
  *
- * <p><b>Notice the file layout.</b> The graph cookbook is two files — {@code Cookbook} holds the
- * topologies and {@code CookbookHandlers} the logic, because naming steps as strings is what lets
- * them be written apart. Here each recipe is <em>one class</em> that is both: the steps are method
- * references to its own methods, so the compiler checks that every step consumes what the one before
- * it produced. Recipe 1 changes context type mid-flow ({@code Signup → Classified}) and the chain
- * simply would not compile if a later step disagreed.
+ * <p><b>Notice what names what.</b> Each recipe is an <em>interface</em> declaring its steps, and a
+ * class implementing them. The spec names the steps through the interface — {@code s::normalise},
+ * never an implementation — because a spec does not run a step: it records the step's name, and a
+ * worker supplies the code by matching that name. The {@code s} handed to the body is inert; calling
+ * a method on it throws.
+ *
+ * <p>The implementation then declares {@code implements} that interface, so the compiler checks both
+ * halves against one contract: every step the spec declares exists on the worker, with the right
+ * types. Implementing it is a convenience, not a requirement — binding is by name, which is what lets
+ * a step be served by another service in another language — but taking the convenience means the two
+ * halves cannot drift. Recipe 1 changes context type mid-flow ({@code Signup → Classified}) and
+ * neither the spec nor the handler would compile if the other disagreed.
  *
  * <p><b>And the vocabulary.</b> A fan-out is {@code Wiggle.allOf} over handles that branched from a
  * common point; an exclusive choice is {@code Wiggle.oneOf} over arms opened with {@code when} /
@@ -64,18 +70,26 @@ public final class TypedCookbook {
     // ---------------------------------------------------------------------------------------
     // 1. step + effect + gate -- the smallest linear pipeline with a filter, and a type change.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-linear-gate names; LinearWithGate implements it. */
+    public interface LinearGateSteps {
+        Signup normalise(Signup s);
+        Classified classify(Signup s);
+        boolean eligible(Classified c);
+        void welcome(Classified c);
+    }
+
     @Handlers("tcb-linear-gate")
-    public static final class LinearWithGate {
+    public static final class LinearWithGate implements LinearGateSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-linear-gate", Signup.class, f -> f
-                    .thenApply(this::normalise)
+            return Wiggle.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+                    .thenApply(s::normalise)
                     // classify returns a different record, so the context type changes here; every
                     // step after it must consume Classified, and the compiler holds that
-                    .thenApply(this::classify)
+                    .thenApply(s::classify)
                     // a false gate ends the instance successfully as "gated:eligible" -- not an error
-                    .thenFilter(this::eligible)
-                    .thenAccept(this::welcome));
+                    .thenFilter(s::eligible)
+                    .thenAccept(s::welcome));
         }
 
         public Signup normalise(Signup s) { return new Signup(s.email().trim().toLowerCase()); }
@@ -92,23 +106,33 @@ public final class TypedCookbook {
     // ---------------------------------------------------------------------------------------
     // 2. oneOf + allOf + retry -- an exclusive branch whose arm itself fans out.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-choose-fork names; ChooseThenFork implements it. */
+    public interface ChooseForkSteps {
+        boolean isLarge(Purchase p);
+        Purchase fraudCheck(Purchase p);
+        void managerNotice(Purchase p);
+        Purchase largeMerge(@Context Purchase base, Purchase fraud, Purchase notice);
+        Purchase fastPath(Purchase p);
+        Purchase settle(Purchase p);
+    }
+
     @Handlers("tcb-choose-fork")
-    public static final class ChooseThenFork {
+    public static final class ChooseThenFork implements ChooseForkSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-choose-fork", Purchase.class, f -> {
+            return Wiggle.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
                 // the large arm fans out: a fan-out inside a choice arm is just a fan-out whose
                 // common point is the guard
-                var large = f.when(this::isLarge);
-                var fraud = large.thenApply(this::fraudCheck,
+                var large = f.when(s::isLarge);
+                var fraud = large.thenApply(s::fraudCheck,
                         RetryPolicy.exponential(3, Duration.ofMillis(50)));
-                var notice = large.thenAccept(this::managerNotice);
-                var largeArm = Wiggle.allOf(fraud, notice).combineWithContext(this::largeMerge);
+                var notice = large.thenAccept(s::managerNotice);
+                var largeArm = Wiggle.allOf(fraud, notice).combineWithContext(s::largeMerge);
 
-                var standard = f.otherwise().thenApply(this::fastPath);
+                var standard = f.otherwise().thenApply(s::fastPath);
 
                 // both arms end at Purchase, which is what lets oneOf give back a Purchase
-                return Wiggle.oneOf(largeArm, standard).thenApply(this::settle);
+                return Wiggle.oneOf(largeArm, standard).thenApply(s::settle);
             });
         }
 
@@ -134,18 +158,26 @@ public final class TypedCookbook {
     // 3. forEach + per-step queue -- dynamic fan-out with mixed worker pools. The element IS each
     //    item's context, so the body's steps take an Item, not the Basket.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-foreach-queues names; ForEachAcrossQueues implements it. */
+    public interface ForEachSteps {
+        Item price(Item i);
+        Item renderThumbnail(Item i);
+        Basket collectItems(@Context Basket base, List<Item> priced);
+        Basket summarise(Basket b);
+    }
+
     @Handlers("tcb-foreach-queues")
-    public static final class ForEachAcrossQueues {
+    public static final class ForEachAcrossQueues implements ForEachSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-foreach-queues", Basket.class, f -> f
+            return Wiggle.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
                     .defaultQueue("cpu")
                     .thenForEach("items", Item.class, item -> item
-                            .thenApply(this::price)
+                            .thenApply(s::price)
                             // only this step moves to the "gpu" queue; the default stays "cpu"
-                            .thenApply(this::renderThumbnail).onQueue("gpu"))
-                    .combine(this::collectItems)
-                    .thenApply(this::summarise));
+                            .thenApply(s::renderThumbnail).onQueue("gpu"))
+                    .combine(s::collectItems)
+                    .thenApply(s::summarise));
         }
 
         public Item price(Item i) { return new Item(i.sku(), i.sku().length() * 100L); }
@@ -168,18 +200,26 @@ public final class TypedCookbook {
     // 4. repeatWhile + gate -- poll-until-ready, with an inner gate short-circuiting a cancelled
     //    job straight out of the loop.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-poll-until-ready names; PollUntilReady implements it. */
+    public interface PollSteps {
+        boolean notCancelled(Job j);
+        Job poll(Job j);
+        boolean stillPending(Job j);
+        Job finish(Job j);
+    }
+
     @Handlers("tcb-poll-until-ready")
-    public static final class PollUntilReady {
+    public static final class PollUntilReady implements PollSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-poll-until-ready", Job.class, f -> f
+            return Wiggle.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
                     // the body runs once, then the condition is evaluated -- do-while, not while-do
-                    .repeatWhile(this::stillPending, b -> b
+                    .repeatWhile(s::stillPending, b -> b
                             // a gate short-circuits to the loop's exit, not just the body: a
                             // cancellation ends the whole instance here
-                            .thenFilter(this::notCancelled)
-                            .thenApply(this::poll))
-                    .thenApply(this::finish));
+                            .thenFilter(s::notCancelled)
+                            .thenApply(s::poll))
+                    .thenApply(s::finish));
         }
 
         public boolean notCancelled(Job j) { return !j.cancelled(); }
@@ -194,20 +234,29 @@ public final class TypedCookbook {
     // ---------------------------------------------------------------------------------------
     // 5. thenAwait (timeout + escalation) + oneOf -- branch on how the wait resolved.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-approval-escalation names; ApprovalWithEscalation implements it. */
+    public interface ApprovalSteps {
+        Expense submit(Expense e);
+        Expense autoEscalate(Expense e);
+        boolean wasEscalated(Expense e);
+        void notifyDirector(Expense e);
+        void notifySubmitter(Expense e);
+    }
+
     @Handlers("tcb-approval-escalation")
-    public static final class ApprovalWithEscalation {
+    public static final class ApprovalWithEscalation implements ApprovalSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-approval-escalation", Expense.class, f -> {
+            return Wiggle.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
                 var waited = f
-                        .thenApply(this::submit)
+                        .thenApply(s::submit)
                         // no worker is held while it waits; if nobody signals in time the
                         // escalation branch runs instead, then rejoins here
                         .thenAwait("manager-approval", Duration.ofMillis(200),
-                                esc -> esc.thenApply(this::autoEscalate));
+                                esc -> esc.thenApply(s::autoEscalate));
 
-                var escalated = waited.when(this::wasEscalated).thenAccept(this::notifyDirector);
-                var approved = waited.otherwise().thenAccept(this::notifySubmitter);
+                var escalated = waited.when(s::wasEscalated).thenAccept(s::notifyDirector);
+                var approved = waited.otherwise().thenAccept(s::notifySubmitter);
 
                 return Wiggle.oneOf(escalated, approved);
             });
@@ -227,21 +276,29 @@ public final class TypedCookbook {
     // ---------------------------------------------------------------------------------------
     // 6. thenSubFlow + gate + allOf -- compose a registered child workflow into a bigger one.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-parent names; ChildCheckThenFork implements it. */
+    public interface ParentSteps {
+        boolean childPassed(Classified c);
+        Classified provision(Classified c);
+        void audit(Classified c);
+        Classified merge(@Context Classified base, Classified provisioned, Classified audited);
+    }
+
     @Handlers("tcb-parent")
-    public static final class ChildCheckThenFork {
+    public static final class ChildCheckThenFork implements ParentSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-parent", Signup.class, f -> {
+            return Wiggle.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
                 var checked = f
                         // runs tcb-linear-gate as a child; its final context merges back here, which
                         // is why this continues as Classified
                         .thenSubFlow("run-eligibility", "tcb-linear-gate", Classified.class)
-                        .thenFilter(this::childPassed);
+                        .thenFilter(s::childPassed);
 
-                var provision = checked.thenApply(this::provision);
-                var audit = checked.thenAccept(this::audit);
+                var provision = checked.thenApply(s::provision);
+                var audit = checked.thenAccept(s::audit);
 
-                return Wiggle.allOf(provision, audit).combineWithContext(this::merge);
+                return Wiggle.allOf(provision, audit).combineWithContext(s::merge);
             });
         }
 
@@ -262,16 +319,23 @@ public final class TypedCookbook {
     // 7. execution(LOCAL_ASYNC) + checkpoint + repeatWhile -- batched local execution with a
     //    deliberate commit point, so a crash mid-loop only replays the current iteration.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-batched-loop names; BatchedLoopWithCheckpoint implements it. */
+    public interface BatchedSteps {
+        Batch processBatch(Batch b);
+        boolean moreBatches(Batch b);
+        Batch finalise(Batch b);
+    }
+
     @Handlers("tcb-batched-loop")
-    public static final class BatchedLoopWithCheckpoint {
+    public static final class BatchedLoopWithCheckpoint implements BatchedSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-batched-loop", Batch.class, f -> f
+            return Wiggle.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
                     .execution(ExecutionMode.LOCAL_ASYNC)
-                    .repeatWhile(this::moreBatches, b -> b
-                            .thenApply(this::processBatch)
+                    .repeatWhile(s::moreBatches, b -> b
+                            .thenApply(s::processBatch)
                             .checkpoint())   // flush the buffer before the next iteration
-                    .thenApply(this::finalise));
+                    .thenApply(s::finalise));
         }
 
         public Batch processBatch(Batch b) { return new Batch(b.done() + 1); }
@@ -286,31 +350,47 @@ public final class TypedCookbook {
     //    collection, sleep, signal + escalation, loop, checkpoint, queues. Not idiomatic; a
     //    deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
+    /** What tcb-kitchen-sink names; KitchenSink implements it. */
+    public interface KitchenSinkSteps {
+        Basket intake(Basket b);
+        boolean hasItems(Basket b);
+        boolean isVip(Basket b);
+        Basket pack(Basket b);
+        void notice(Basket b);
+        Basket priorityMerge(@Context Basket base, Basket packed, Basket held);
+        Item packItem(Item i);
+        Basket collectPacked(@Context Basket base, List<Item> items);
+        Basket autoClear(Basket b);
+        Basket runCheck(Basket b);
+        boolean moreChecks(Basket b);
+        Basket ship(Basket b);
+    }
+
     @Handlers("tcb-kitchen-sink")
-    public static final class KitchenSink {
+    public static final class KitchenSink implements KitchenSinkSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-kitchen-sink", Basket.class, f -> {
+            return Wiggle.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
                 var ready = f
                         .defaultQueue("default")
                         .execution(ExecutionMode.LOCAL_SYNC)
-                        .thenApply(this::intake)
-                        .thenFilter(this::hasItems);
+                        .thenApply(s::intake)
+                        .thenFilter(s::hasItems);
 
-                var vip = ready.when(this::isVip);
-                var packed = vip.thenApply(this::pack,
+                var vip = ready.when(s::isVip);
+                var packed = vip.thenApply(s::pack,
                         RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing");
-                var held = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept(this::notice);
-                var vipArm = Wiggle.allOf(packed, held).combineWithContext(this::priorityMerge);
+                var held = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept(s::notice);
+                var vipArm = Wiggle.allOf(packed, held).combineWithContext(s::priorityMerge);
 
                 var standard = ready.otherwise()
-                        .thenForEach("pack-items", "items", Item.class, item -> item.thenApply(this::packItem))
-                        .combine(this::collectPacked);
+                        .thenForEach("pack-items", "items", Item.class, item -> item.thenApply(s::packItem))
+                        .combine(s::collectPacked);
 
                 return Wiggle.oneOf(vipArm, standard)
-                        .thenAwait("dock-clear", Duration.ofMillis(150), esc -> esc.thenApply(this::autoClear))
-                        .repeatWhile(this::moreChecks, b -> b.thenApply(this::runCheck).checkpoint())
-                        .thenApply(this::ship);
+                        .thenAwait("dock-clear", Duration.ofMillis(150), esc -> esc.thenApply(s::autoClear))
+                        .repeatWhile(s::moreChecks, b -> b.thenApply(s::runCheck).checkpoint())
+                        .thenApply(s::ship);
             });
         }
 

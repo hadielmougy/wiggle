@@ -179,27 +179,40 @@ A definition compiles to pure **topology** — named nodes and their wiring. Wha
 is a `FlowSpec`: the graph, and nothing else. There are two ways to write one, and they differ only
 in where the step names come from.
 
-**`Wiggle.define` — when the handlers are at hand.** Each step is a method reference to the handler
-that implements it, so the compiler checks that every step consumes what the one before it produced,
-and a rename carries the step name with it:
+**`Wiggle.define` — when the steps can be declared as a contract.** Declare them as an interface and
+name them through it, and the compiler checks that every step consumes what the one before it
+produced, while a rename carries the step name with it:
 
 ```java
-OrderHandlers h = new OrderHandlers();
+interface OrderSteps {
+    Order   validate(Order o);
+    boolean inStock(Order o);
+    Order   authorise(Order o);
+    Order   merge(@Context Order base, Order payment, Order shipping);
+    ...
+}
 
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, f -> {
-    var validated = f.thenApply(h::validate).thenFilter(h::inStock);
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+    var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
-    var payment  = validated.thenApply(h::authorise, RetryPolicy.exponential(5, ofMillis(100)))
-                            .thenApply(h::capture);
-    var shipping = validated.thenApply(h::reserve)
+    var payment  = validated.thenApply(s::authorise, RetryPolicy.exponential(5, ofMillis(100)))
+                            .thenApply(s::capture);
+    var shipping = validated.thenApply(s::reserve)
                             .thenSleep("await", ofMillis(300))
-                            .thenApply(h::label);
+                            .thenApply(s::label);
 
     return Wiggle.allOf(payment, shipping)   // continuing `validated` twice is the fan-out
-            .combineWithContext(h::merge)    // arms are isolated, so rejoining is always explicit
-            .thenApply(h::notify);
+            .combineWithContext(s::merge)    // arms are isolated, so rejoining is always explicit
+            .thenApply(s::notify);
 });
 ```
+
+`s` is an inert stand-in: the body only *names* steps through it, and calling a method on it throws.
+That is the point — **a spec never runs a step**. It records the step's name, and a worker supplies
+the code by matching that name. A reference to a concrete class would name code the spec will never
+call, and go quietly wrong when the worker binds some other object; naming an interface method cannot
+mislead that way. On the worker, a handler *should* `implements OrderSteps`, which makes the compiler
+check both halves against one contract — but it is not required, since binding is by name.
 
 Nothing executes while the workflow is defined — the chain is walked once and recorded. There is no
 `get()` or `join()` on a handle, because there is nothing to wait for: the server drives the graph

@@ -7,7 +7,7 @@ import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.flow.Fixtures.Fulfilment;
 import com.wiggle.client.flow.Fixtures.Line;
 import com.wiggle.client.flow.Fixtures.Order;
-import com.wiggle.client.flow.Fixtures.OrderHandlers;
+import com.wiggle.client.flow.Fixtures.Steps;
 import com.wiggle.client.flow.Fixtures.Shipment;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
@@ -36,7 +36,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FlowEquivalenceTest {
 
-    private final OrderHandlers h = new OrderHandlers();
+    /** The contract the specs name their steps through -- inert, never invoked. */
+    private final Steps h = Steps.class.cast(java.lang.reflect.Proxy.newProxyInstance(
+            Steps.class.getClassLoader(), new Class<?>[] {Steps.class},
+            (p, m, a) -> { throw new IllegalStateException(m.getName()); }));
 
     private static Node named(WorkflowDefinition def, String name) {
         return def.nodes().values().stream().filter(n -> name.equals(n.name())).findFirst()

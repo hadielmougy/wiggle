@@ -4,6 +4,7 @@ import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -59,6 +60,47 @@ public final class Wiggle {
     public static <T> FlowSpec define(String name, Class<T> input,
                                        Function<WiggleFlow<T>, WiggleFlow<?>> body) {
         return define(name, null, input, body);
+    }
+
+    /**
+     * Defines a workflow whose steps are declared by {@code contract} -- an interface naming each
+     * step and its signature, with no implementation:
+     *
+     * <pre>{@code
+     * interface OrderSteps {
+     *     Order   validate(Order o);
+     *     boolean inStock(Order o);
+     *     Payment charge(Order o);
+     * }
+     *
+     * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
+     *         .thenApply(s::validate)
+     *         .thenFilter(s::inStock));
+     * }</pre>
+     *
+     * <p>{@code s} is an inert stand-in: the body only <em>names</em> steps through it, and calling a
+     * method on it throws. That is deliberate. A spec never runs a step -- it records the step's name,
+     * and a worker supplies the code by matching that name to a method on its {@code @Handlers}
+     * object. Naming the steps on an interface says exactly that, where a reference to a concrete
+     * class reads as though the spec will call it.
+     *
+     * <p>On the worker, a handler <em>should</em> implement the same interface -- then the compiler
+     * guarantees every step's name and signature match what the spec declared, and the two cannot
+     * drift. It is not required: binding is by name, as it always was, so a handler that merely
+     * happens to match still works.
+     */
+    public static <T, H> FlowSpec define(String name, Class<T> input, Class<H> contract,
+                                         BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
+        return define(name, null, input, contract, body);
+    }
+
+    /** {@link #define(String, Class, Class, BiFunction)} with an explicit default retry policy. */
+    public static <T, H> FlowSpec define(String name, RetryPolicy defaultRetry, Class<T> input,
+                                         Class<H> contract,
+                                         BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
+        if (body == null) throw new IllegalArgumentException("workflow '" + name + "' has no body");
+        H steps = Steps.of(contract);
+        return define(name, defaultRetry, input, f -> body.apply(f, steps));
     }
 
     /**

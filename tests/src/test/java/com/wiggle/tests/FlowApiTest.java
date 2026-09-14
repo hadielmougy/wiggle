@@ -39,39 +39,55 @@ class FlowApiTest {
 
     public record Fulfilment(String orderId, String paymentRef, String labelCode) {}
 
+    /** The steps of flow-order, as a contract: what the spec names, and what the handler implements. */
+    public interface OrderFlowSteps {
+        Order validate(Order o);
+        boolean inStock(Order o);
+        Payment charge(Order o);
+        Label label(Order o);
+        Fulfilment settle(Payment payment, Label label);
+        void notifyCustomer(Fulfilment f);
+    }
+
     @Handlers("flow-order")
-    public static final class OrderFlow {
+    public static final class OrderFlow implements OrderFlowSteps {
 
         final AtomicReference<Fulfilment> notified = new AtomicReference<>();
 
+        @Override
         public Order validate(Order o) { return new Order(o.id(), o.quantity(), "VALIDATED"); }
 
+        @Override
         public boolean inStock(Order o) { return o.quantity() > 0; }
 
+        @Override
         public Payment charge(Order o) { return new Payment("auth-" + o.id()); }
 
+        @Override
         public Label label(Order o) { return new Label("lbl-" + o.id()); }
 
+        @Override
         public Fulfilment settle(Payment payment,
                                  Label label) {
             return new Fulfilment(payment.reference().substring("auth-".length()),
                     payment.reference(), label.code());
         }
 
+        @Override
         public void notifyCustomer(Fulfilment f) { notified.set(f); }
     }
 
     /** The workflow, written as a chain of references to {@code flow}'s own methods. */
-    private static FlowSpec flowSpec(OrderFlow flow) {
-        return Wiggle.define("flow-order", Order.class, f -> {
-            var validated = f.thenApply(flow::validate).thenFilter(flow::inStock);
+    private static FlowSpec flowSpec() {
+        return Wiggle.define("flow-order", Order.class, OrderFlowSteps.class, (f, s) -> {
+            var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
-            var payment = validated.thenApply(flow::charge);
-            var shipping = validated.thenApply(flow::label);
+            var payment = validated.thenApply(s::charge);
+            var shipping = validated.thenApply(s::label);
 
             return Wiggle.allOf(payment, shipping)
-                    .combine(flow::settle)
-                    .thenAccept(flow::notifyCustomer);
+                    .combine(s::settle)
+                    .thenAccept(s::notifyCustomer);
         });
     }
 
@@ -80,7 +96,7 @@ class FlowApiTest {
     void methodReferenceNamesBindToTheirOwnMethodsOnAWorker() throws Exception {
         OrderFlow flow = new OrderFlow();
 
-        Map<String, Object> out = run(flowSpec(flow), flow, Map.of("id", "o1", "quantity", 2));
+        Map<String, Object> out = run(flowSpec(), flow, Map.of("id", "o1", "quantity", 2));
 
         // the combine's return is the whole post-join context, so these are the fields that survived
         assertEquals("o1", out.get("orderId"));
@@ -92,8 +108,15 @@ class FlowApiTest {
                 "the effect step bound to notifyCustomer and saw the final context");
     }
 
+    public interface PositionalSteps {
+        Order validate(Order o);
+        Payment charge(Order o);
+        Label label(Order o);
+        Fulfilment settle(Payment payment, Label label);
+    }
+
     @Handlers("positional-order")
-    public static final class PositionalOrderFlow {
+    public static final class PositionalOrderFlow implements PositionalSteps {
 
         public Order validate(Order o) { return new Order(o.id(), o.quantity(), "VALIDATED"); }
 
@@ -113,11 +136,11 @@ class FlowApiTest {
     void positionalCombineBindsArmsInForkOrder() throws Exception {
         PositionalOrderFlow flow = new PositionalOrderFlow();
 
-        FlowSpec bp = Wiggle.define("positional-order", Order.class, f -> {
-            var validated = f.thenApply(flow::validate);
-            var payment = validated.thenApply(flow::charge);
-            var shipping = validated.thenApply(flow::label);
-            return Wiggle.allOf(payment, shipping).combine(flow::settle);
+        FlowSpec bp = Wiggle.define("positional-order", Order.class, PositionalSteps.class, (f, s) -> {
+            var validated = f.thenApply(s::validate);
+            var payment = validated.thenApply(s::charge);
+            var shipping = validated.thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combine(s::settle);
         });
 
         Map<String, Object> out = run(bp, flow, Map.of("id", "o3", "quantity", 1));
@@ -131,7 +154,7 @@ class FlowApiTest {
     void gateShortCircuitsWhenTheReferencedGuardIsFalse() throws Exception {
         OrderFlow flow = new OrderFlow();
 
-        Map<String, Object> out = run(flowSpec(flow), flow, Map.of("id", "o2", "quantity", 0));
+        Map<String, Object> out = run(flowSpec(), flow, Map.of("id", "o2", "quantity", 0));
 
         assertEquals("VALIDATED", out.get("status"), "validate ran before the gate closed");
         assertNull(out.get("paymentRef"), "the gate closed, so the fork never ran");

@@ -51,6 +51,7 @@ final class StepNames {
                     + "a lambda body has no handler method for a worker to bind. If the step needs a "
                     + "different node name, annotate the handler method with @Handles(\"...\").");
         }
+        requireContract(lambda, impl);
         if (lambda.getCapturedArgCount() > 1) {
             throw new IllegalArgumentException(
                     "the method reference for '" + impl + "' captures " + (lambda.getCapturedArgCount() - 1)
@@ -101,6 +102,27 @@ final class StepNames {
         }
         return b.append(") to match the fork it merges -- one parameter per arm, in fork order")
                 .toString();
+    }
+
+    /**
+     * A step must be named through an interface, not a concrete class.
+     *
+     * <p>A spec never runs a step. It records the step's <em>name</em>, and a worker supplies the code
+     * by matching that name to a method on its {@code @Handlers} object. So a reference to a concrete
+     * method names code the spec will never call -- which reads as though it will, and goes quietly
+     * wrong when the worker binds some other object: the referenced method is simply not the one that
+     * runs. Naming an interface method cannot mislead that way, because there is nothing behind it.
+     */
+    private static void requireContract(SerializedLambda lambda, String impl) {
+        if (lambda.getImplMethodKind() == java.lang.invoke.MethodHandleInfo.REF_invokeInterface) return;
+        if (lambda.getImplMethodKind() == java.lang.invoke.MethodHandleInfo.REF_invokeStatic) return;
+        throw new IllegalArgumentException(
+                "'" + impl + "' is referenced on " + lambda.getImplClass().replace('/', '.')
+                + ", which is a class. Declare the steps as an interface and name them through it:"
+                + " Wiggle.define(name, Ctx.class, MySteps.class, (f, s) -> f.thenApply(s::" + impl + "))."
+                + " A spec only names its steps -- the code that runs them is bound by name on a"
+                + " worker, so referencing an implementation here promises something the spec cannot"
+                + " keep.");
     }
 
     /** The {@link Handles} name on the referenced method, if it has one; otherwise the method's name. */

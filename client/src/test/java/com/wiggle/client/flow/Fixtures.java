@@ -6,9 +6,9 @@ import com.wiggle.client.worker.Handles;
 import java.util.List;
 
 /**
- * The handler object the flow tests reference. Nothing here is ever invoked by the flow API -- the
- * methods exist to be <em>named</em> by method references and to give the chain its types, which is
- * exactly how a real handler class is used at definition time.
+ * The step contract the flow tests name their workflows through, and the records those steps move
+ * between. There is deliberately no implementation anywhere in this file: a spec only ever names its
+ * steps, so an interface is all it needs, and these tests never run one.
  */
 final class Fixtures {
 
@@ -24,75 +24,65 @@ final class Fixtures {
 
     record Shipment(String carrier) {}
 
-    static final class OrderHandlers {
+    interface Steps {
 
-        Order validate(Order o) { return o; }
+        Order validate(Order o);
 
-        boolean inStock(Order o) { return o.quantity() > 0; }
+        boolean inStock(Order o);
 
-        Payment charge(Order o) { return new Payment(o.id()); }
+        Payment charge(Order o);
 
-        Order reserve(Order o) { return o; }
+        Order reserve(Order o);
 
-        Label label(Order o) { return new Label(o.id()); }
+        Label label(Order o);
 
-        Fulfilment settle(Payment payment, Label label) {
-            return new Fulfilment("settled");
-        }
+        Fulfilment settle(Payment payment, Label label);
 
         Fulfilment settleWithBase(@Context Order base, Payment payment,
-                                  Label label) {
-            return new Fulfilment("settled");
-        }
+                                  Label label);
 
         Fulfilment audit(Payment payment, Label label,
-                         Shipment shipment) {
-            return new Fulfilment("audited");
-        }
+                         Shipment shipment);
 
         /** The arms bind by position, in fork order. */
-        Fulfilment settlePositionally(Payment payment, Label label) { return new Fulfilment("settled"); }
+        Fulfilment settlePositionally(Payment payment, Label label);
 
         /** Right shape for a context-taking combine, but the context parameter is not annotated. */
         Fulfilment unannotatedBase(Order base, Payment payment,
-                                   Label label) {
-            return new Fulfilment("never");
-        }
+                                   Label label);
 
-        void notifyCustomer(Fulfilment f) { }
+        void notifyCustomer(Fulfilment f);
 
-        boolean isVip(Order o) { return o.quantity() > 10; }
+        boolean isVip(Order o);
 
-        Order vipPath(Order o) { return o; }
+        Order vipPath(Order o);
 
-        Order standardPath(Order o) { return o; }
+        Order standardPath(Order o);
 
-        boolean hasMore(Order o) { return o.quantity() > 0; }
+        boolean hasMore(Order o);
 
-        Order drain(Order o) { return o; }
+        Order drain(Order o);
 
-        Line price(Line line) { return line; }
+        Line price(Line line);
 
-        Order total(List<Line> priced) { return new Order("x", priced.size(), priced); }
+        Order total(List<Line> priced);
 
-        Order totalWithBase(Order base, List<Line> priced) { return base; }
+        Order totalWithBase(Order base, List<Line> priced);
 
         /** A five-armed combine, to exercise the wider end of the typed series. */
-        Fulfilment settleFive(@Context Order base, Payment a, Label b, Shipment c, Order d, Line e) {
-            return new Fulfilment("five");
-        }
+        Fulfilment settleFive(@Context Order base, Payment a, Label b, Shipment c, Order d, Line e);
 
-        Payment armA(Order o) { return new Payment("a"); }
+        Payment armA(Order o);
 
-        Label armB(Order o) { return new Label("b"); }
+        Label armB(Order o);
 
-        Shipment armC(Order o) { return new Shipment("c"); }
+        Shipment armC(Order o);
 
-        Order armD(Order o) { return o; }
+        Order armD(Order o);
 
-        Line armE(Order o) { return new Line("e", 1); }
+        Line armE(Order o);
 
         @Handles("capture-payment")
-        Payment doCapture(Order o) { return new Payment(o.id()); }
+        Payment doCapture(Order o);
     }
 }

@@ -1,7 +1,7 @@
 package com.wiggle.client.flow;
 
 import com.wiggle.client.flow.Fixtures.Order;
-import com.wiggle.client.flow.Fixtures.OrderHandlers;
+import com.wiggle.client.flow.Fixtures.Steps;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -15,7 +15,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FlowGuardrailsTest {
 
-    private final OrderHandlers h = new OrderHandlers();
+    /** The contract the specs name their steps through -- inert, never invoked. */
+    private final Steps h = Steps.class.cast(java.lang.reflect.Proxy.newProxyInstance(
+            Steps.class.getClassLoader(), new Class<?>[] {Steps.class},
+            (p, m, a) -> { throw new IllegalStateException(m.getName()); }));
 
     @Test
     void aSplitThatIsNeverCombinedIsRejectedAndNamesBothEnds() {

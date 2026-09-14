@@ -33,26 +33,25 @@ public final class OrderFulfilment {
     }
 
     public static FlowSpec flowSpec() {
-        OrderHandlers h = new OrderHandlers();
-        return Wiggle.define("order-fulfilment", Order.class, f -> {
+        return Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
             var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
-                    .thenApply(h::validate)
-                    .thenFilter(h::inStock);
+                    .thenApply(s::validate)
+                    .thenFilter(s::inStock);
 
             // continuing `validated` twice is the fan-out; each arm runs on its own isolated copy
             var payment = validated
-                    .thenApply(h::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                    .thenApply(h::capture);
+                    .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+                    .thenApply(s::capture);
             var shipping = validated
-                    .thenApply(h::reserveStock)
-                    .thenApply(h::printLabel);
+                    .thenApply(s::reserveStock)
+                    .thenApply(s::printLabel);
 
             // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
             // its shape is checked against these arms here, at definition time
             return Wiggle.allOf(payment, shipping)
-                    .combineWithContext(h::merge)
-                    .thenApply(h::notify)
-                    .thenAccept(h::audit);
+                    .combineWithContext(s::merge)
+                    .thenApply(s::notify)
+                    .thenAccept(s::audit);
         });
     }
 }
