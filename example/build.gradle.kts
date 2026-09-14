@@ -63,6 +63,13 @@ tasks.register<JavaExec>("runCookbook") {
     mainClass.set("com.wiggle.cookbook.CookbookDemo")
 }
 
+tasks.register<JavaExec>("runTypedCookbook") {
+    group = "application"
+    description = "Runs every cookbook recipe defined with the typed API (Wiggle.define)."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.cookbook.TypedCookbookDemo")
+}
+
 tasks.register<JavaExec>("bench") {
     group = "application"
     description = "Throughput benchmark of a linear pipeline. Set WIGGLE_EXECUTION_MODE etc."

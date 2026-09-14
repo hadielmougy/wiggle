@@ -14,10 +14,48 @@ Eight small workflows, each pairing operators that don't otherwise appear togeth
 `CookbookDemo` starts an embedded server and one worker, registers every flow spec below and binds
 its handlers, runs one instance of each, and prints the resulting context.
 
+## The same recipe, both ways
+
+Recipe 1 below, written with `Wiggle.graph` — topology by name, logic in a separate `@Handlers` class,
+because naming steps as strings is exactly what lets the two be written apart:
+
+```java
+// Cookbook.java
+Wiggle.graph("cb-linear-gate").step("normalise").then("classify").gate("eligible").effect("welcome").build();
+
+// CookbookHandlers.java — matched to the graph by name
+Map<String, Object> normalise(Map<String, Object> ctx) { ... }
+boolean             eligible(Map<String, Object> ctx)  { ... }
+```
+
+and with `Wiggle.define` — one class that is both, each step a method reference to the method that
+implements it:
+
+```java
+@Handlers("tcb-linear-gate")
+class LinearWithGate {
+    FlowSpec spec() {
+        return Wiggle.define("tcb-linear-gate", Signup.class, f -> f
+                .thenApply(this::normalise)
+                .thenApply(this::classify)      // Signup -> Classified: the context type changes here
+                .thenFilter(this::eligible)     // and every step after it must consume Classified
+                .thenAccept(this::welcome));
+    }
+
+    Signup     normalise(Signup s)     { ... }
+    Classified classify(Signup s)      { ... }
+    boolean    eligible(Classified c)  { ... }
+    void       welcome(Classified c)   { ... }
+}
+```
+
+The chain would not compile if `eligible` still took a `Signup`. That is the trade: `graph` can
+describe a topology whose handlers do not exist yet, `define` cannot — but `define` is checked.
+
 > **These recipes use `Wiggle.graph`**, the mode for topology written apart from its handlers — it
-> shows each operator on its own, without a handler class in the way. Where the handlers *are* at
-> hand, `Wiggle.define` says the same thing with method references and gets it checked by the
-> compiler; both compile to the identical graph. See [onboarding](onboarding.md#5-authoring-workflows).
+> shows each operator on its own, without a handler class in the way. Every recipe below also exists
+> in the typed mode: [`TypedCookbook.java`](../example/src/main/java/com/wiggle/cookbook/TypedCookbook.java),
+> runnable with `./gradlew :example:runTypedCookbook`. Both compile to the identical graph.
 >
 > **Topology and logic are separate.** A flow spec is pure topology — named
 > nodes and their wiring, no logic and no context type. The step logic lives in a class annotated
