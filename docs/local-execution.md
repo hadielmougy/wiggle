@@ -115,7 +115,7 @@ env or re-derive the default — it just obeys what it was handed.
 ### 5.3 Optional future knobs (not v1)
 - `WIGGLE_LOCAL_MAX_STEPS` / `.execution(mode, maxSteps)` — cap a local run length for fairness.
 - `WIGGLE_LOCAL_ASYNC_FLUSH_MILLIS` — periodic flush cadence for `LOCAL_ASYNC`.
-- Per-step `.step(...).checkpoint()` — force a commit boundary even in async mode.
+- Per-step `.thenApply(...).checkpoint()` — force a commit boundary even in async mode.
 
 ## 6. Wire-protocol changes (`proto/wiggle.proto`)
 

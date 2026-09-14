@@ -274,22 +274,21 @@ Every operation is topology only — it names a node; the matching `@Handlers` m
 
 | Operation | Meaning |
 |---|---|
-| `step(name)` / `step(name, retry)` / `then(...)` | run the step's handler on a worker; its result becomes the new context |
-| `effect(name)` | the handler runs for a side effect (a `void` method); context unchanged |
-| `gate(name)` | continue only while the guard handler returns true; false ends the instance as `gated:<name>` |
-| `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
-| `fork(branches…).combine(name)` | run branches in parallel on isolated context copies, then rejoin at the mandatory `combine` |
-| `forEach(itemsKey, body).combine(name)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is available **either way — your choice**: declare a `@Context` parameter, or call `Step.base()` (the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`). Combines get the same choice: `@Context` parameter or `Step.base()`. The **mandatory** combine receives `@Context` plus the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `forEach(name, itemsKey, body)` names the node explicitly |
-| `doWhile(name, body)` | run `body`, then repeat while the guard handler named `name` holds (at least once) |
-| `sleep(name, duration)` | server-side timer; holds no worker |
-| `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
-| `subWorkflow(name, workflow)` | run another workflow as a child; result merges back, failure propagates |
-| `step(name, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
+| `thenApply(s::step)` | run the step's handler on a worker; its result becomes the new context |
+| `thenAccept(s::step)` | the handler runs for a side effect (a `void` method); context unchanged |
+| `thenFilter(s::guard)` | continue only while the guard returns true; false ends the instance as `gated:<name>` |
+| `Wiggle.oneOf(arms…)` + `when` / `otherwise` | switch/case: the first arm whose guard holds runs. Every arm opens with `f.when(s::guard)` or `f.otherwise()`; a single arm is legal and reads as "run this, or skip past it" |
+| `Wiggle.allOf(arms…).combine(s::merge)` | run arms in parallel on **isolated** context copies, then rejoin at the mandatory combine. Arms bind **by position**, in the order given to `allOf`; `combineWithContext` also takes the pre-fork context as a leading `@Context` parameter |
+| `thenForEach(itemsKey, Item.class, body).combine(s::collect)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is available **either way — your choice**: declare a `@Context` parameter, or call `Step.base()` (the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`). Combines get the same choice. The **mandatory** combine receives the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `thenForEach(name, itemsKey, …)` names the node explicitly |
+| `repeatWhile(s::guard, body)` | run `body`, then repeat while the guard holds (at least once). `repeatWhile(guard, maxIterations, body)` caps it |
+| `thenSleep(duration)` / `thenSleep(name, duration)` | server-side timer; holds no worker |
+| `thenAwait(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
+| `thenSubFlow(node, workflow, Result.class)` | run another workflow as a child; its result merges back, failure propagates |
+| `onQueue(q)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
 | `execution(mode)` | set the execution mode ([§6.4](#64-execution-modes)) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
-| `build()` | produce the `FlowSpec` |
 
-`step`/`effect`/`gate` take an optional trailing `RetryPolicy`. The context type is not fixed by the
+`thenApply`/`thenAccept`/`thenFilter` take an optional `RetryPolicy` and an optional queue, in either order. The context type is not fixed by the
 definition — each handler picks the type it works in by its signature (a typed record, or a
 `Map<String, Object>` for raw JSON), and a method may return a different type than it takes.
 
@@ -402,7 +401,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `false` | a sweep that fills its batch runs again immediately (drain mode) — removes the batch÷tick promotion ceiling under backlog (measured: 100 → ~1,700 timers/sec at defaults); idle cost unchanged |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
-| `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `doWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `doWhile(name, maxIterations, body)` |
+| `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `repeatWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `repeatWhile(guard, maxIterations, body)` |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog ([§7.6](#76-queue-lag-monitoring)) |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN once the backlog isn't draining within this budget |
 
@@ -590,13 +589,13 @@ rows and loses.
 
 ### 7.3 Signals, sub-workflows and schedules
 
-`awaitSignal(name)` parks an instance until the named signal arrives; no worker is held. Deliver
+`thenAwait(name)` parks an instance until the named signal arrives; no worker is held. Deliver
 via `client.signal(instanceId, name, payload)` (gRPC), the console's Signals tab, or
 `POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
-`awaitSignal(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
+`thenAwait(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
 branch instead. Signals are not buffered -- an early delivery is a retryable conflict.
 
-`subWorkflow(name, workflow)` runs a registered workflow as a child with the parent's context;
+`thenSubFlow(node, workflow, Result.class)` runs a registered workflow as a child with the parent's context;
 its final context merges back, its failure/cancellation fails the parent, and cancelling the
 parent cascades to children.
 

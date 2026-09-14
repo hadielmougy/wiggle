@@ -46,7 +46,7 @@ A step with no `.compensate(...)` is simply not compensated — its effect is ei
 (an email already sent) or immaterial (a read). That is a deliberate, visible choice in the graph,
 not a default.
 
-Works uniformly inside `fork` branches, `forEach` bodies, `choose` cases, and `doWhile` bodies —
+Works uniformly inside `allOf` arms, `thenForEach` bodies, `oneOf` arms, and `repeatWhile` bodies —
 any TASK node can carry a compensator.
 
 ---
