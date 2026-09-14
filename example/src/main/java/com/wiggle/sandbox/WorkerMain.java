@@ -4,9 +4,7 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.ForFlow;
-import com.wiggle.client.worker.Worker;
+import com.wiggle.client.worker.*;
 import com.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
@@ -19,7 +17,7 @@ public class WorkerMain {
         boolean inStock(Order o);
         Order   authorise(Order o);
         Order   capture(Order o);
-        Order   reserveStock(Order o);
+        CompensableActivity<Order, Order> reserveStock();
         Order   printLabel(Order o);
         Order   merge(@Context Order base, Order payment, Order shipping);
         Order   notify(Order o);
@@ -30,11 +28,15 @@ public class WorkerMain {
     public static void main(String[] args) throws InterruptedException {
         CoordinatedConnection conn = WiggleConnection.coordinator("127.0.0.1:18099");
         var client = conn.clientForNamespace("abc");
-        FlowSpec spec = FlowSpec.define("test-flow",Order.class, OrderSteps.class, (f, s) -> {
+        FlowSpec spec = FlowSpec.define("test-flow",RetryPolicy.fixed(1, Duration.ofSeconds(1)),Order.class, OrderSteps.class, (f, s) -> {
             var checked = f.apply(s::validate).thenFilter(s::inStock);
             var payment  = checked.thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
                     .thenApply(s::capture);
-            var shipping = checked.thenApply(s::reserveStock)
+            var shipping = checked.thenApplyCompensable(s::reserveStock)
+                    // thenApplyCompensable takes no retry argument, so without this the step inherits
+                    // the workflow default above -- fixed(1), a single attempt -- and the
+                    // attempt() <= 2 below could never pass.
+                    .withRetry(RetryPolicy.fixed(5, Duration.ofMillis(200)))
                     .thenApply(s::printLabel);
             return Wiggle.allOf(payment, shipping)
                     .combineWithContext(s::merge)    // mandatory — there is no implicit join
@@ -77,9 +79,25 @@ public class WorkerMain {
         }
 
         @Override
-        public WorkerMain.Order reserveStock(WorkerMain.Order o) {
-            System.out.println("reserveStock");
-            return o;
+        public CompensableActivity<Order, Order> reserveStock() {
+            // Printed once at registerHandler() time, before any step runs: the binder invokes each
+            // activity factory once to inventory what it returns. The step itself is execute().
+            System.out.println("reserveStock (factory)");
+            return new CompensableActivity<>() {
+                @Override
+                public Order execute(Order ctx) {
+                    System.out.println("reserveStock attempt " + Step.attempt());
+                    if (Step.attempt() <=2 )
+                        throw new RuntimeException("invalid attempt");
+                    return ctx;
+                }
+
+                @Override
+                public void compensate(Compensation<Order, Order> comp) {
+                    System.out.println("compensate");
+
+                }
+            };
         }
 
         @Override
