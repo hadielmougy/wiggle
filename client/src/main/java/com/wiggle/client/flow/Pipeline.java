@@ -144,18 +144,6 @@ final class Pipeline {
      * Replaces an already-added node's retry policy. Only a worker-dispatched node has one -- the
      * engine runs the rest itself, so there is nothing to retry on a worker.
      */
-    void setRetry(String nodeId, RetryPolicy retry) {
-        Node n = requireWorkerNode(nodeId, "a retry policy");
-        nodes.put(nodeId, n.withRetry(retryOr(retry)));
-    }
-
-    /** Replaces an already-added node's queue, registering it so workers discover it. */
-    void setQueue(String nodeId, String queue) {
-        Node n = requireWorkerNode(nodeId, "a queue");
-        String q = queueOr(queue);
-        queues.add(q);
-        nodes.put(nodeId, n.withQueue(q));
-    }
 
     private Node requireWorkerNode(String nodeId, String what) {
         Node n = nodes.get(nodeId);

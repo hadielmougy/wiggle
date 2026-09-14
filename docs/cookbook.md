@@ -108,7 +108,7 @@ FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -
         .thenForEach("items", Item.class, item -> item
                 .thenApply(s::price)
                 // only this step moves to the "gpu" queue; the default stays "cpu"
-                .thenApply(s::renderThumbnail).onQueue("gpu"))
+                .thenApply(s::renderThumbnail, "gpu"))
         .combine(s::collectItems)
         .thenApply(s::summarise));
 ```
@@ -253,5 +253,5 @@ thing.
 | `thenSleep` | 8 |
 | `checkpoint` | 7, 8 |
 | `execution(...)` | 7, 8 |
-| `defaultQueue` / `onQueue` | 3, 8 |
+| per-node queue / `defaultQueue` | 3, 8 |
 | `RetryPolicy` per step | 2, 8 |

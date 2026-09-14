@@ -20,7 +20,7 @@ public class WorkerMain {
         CompensableActivity<Order, Order> reserveStock();
         Order   printLabel(Order o);
         Order   merge(@Context Order base, Order payment, Order shipping);
-        Order   notify(Order o);
+        CompensableActivity<Order, Order>   notify0();
     }
 
     record Order() {}
@@ -28,19 +28,15 @@ public class WorkerMain {
     public static void main(String[] args) throws InterruptedException {
         CoordinatedConnection conn = WiggleConnection.coordinator("127.0.0.1:18099");
         var client = conn.clientForNamespace("abc");
-        FlowSpec spec = FlowSpec.define("test-flow",RetryPolicy.fixed(1, Duration.ofSeconds(1)),Order.class, OrderSteps.class, (f, s) -> {
+        FlowSpec spec = FlowSpec.define("test-flow",RetryPolicy.fixed(5, Duration.ofSeconds(1)),Order.class, OrderSteps.class, (f, s) -> {
             var checked = f.apply(s::validate).thenFilter(s::inStock);
             var payment  = checked.thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
                     .thenApply(s::capture);
             var shipping = checked.thenApplyCompensable(s::reserveStock)
-                    // thenApplyCompensable takes no retry argument, so without this the step inherits
-                    // the workflow default above -- fixed(1), a single attempt -- and the
-                    // attempt() <= 2 below could never pass.
-                    .withRetry(RetryPolicy.fixed(5, Duration.ofMillis(200)))
                     .thenApply(s::printLabel);
             return Wiggle.allOf(payment, shipping)
                     .combineWithContext(s::merge)    // mandatory — there is no implicit join
-                    .thenApply(s::notify);
+                    .thenApplyCompensable(s::notify0);
             });
             client.register(spec);
             client.start(spec, new Order());
@@ -94,7 +90,7 @@ public class WorkerMain {
 
                 @Override
                 public void compensate(Compensation<Order, Order> comp) {
-                    System.out.println("compensate");
+                    System.out.println("compensate reserveStock");
 
                 }
             };
@@ -113,9 +109,19 @@ public class WorkerMain {
         }
 
         @Override
-        public WorkerMain.Order notify(WorkerMain.Order o) {
-            System.out.println("notify");
-            return o;
+        public CompensableActivity<Order, Order> notify0() {
+            return new CompensableActivity<>() {
+
+                @Override
+                public void compensate(Compensation<Order, Order> comp) {
+                    System.out.println("compensate notify");
+                }
+
+                @Override
+                public Order execute(Order ctx) {
+                    throw new RuntimeException("not implemented");
+                }
+            };
         }
     }
 }

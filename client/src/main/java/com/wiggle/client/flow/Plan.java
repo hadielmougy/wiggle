@@ -57,14 +57,18 @@ final class Plan {
         final List<String> armNames;
         /** Set by the stage's combine(), before compilation reaches this step. */
         String combineName;
+        RetryPolicy combineRetry;
+        String combineQueue;
 
         /** A fan-out joins exactly once; a second combine on the same stage is a mistake, not an override. */
-        void combine(String name) {
+        void combine(String name, RetryPolicy retry, String queue) {
             if (combineName != null) {
                 throw new IllegalStateException("allOf(" + String.join(", ", armNames)
                         + ") already has a merge ('" + combineName + "'); a fan-out joins once");
             }
             combineName = name;
+            combineRetry = retry;
+            combineQueue = queue;
         }
 
         Fork(Step parent, List<List<Step>> arms, List<String> armNames) {
@@ -85,7 +89,7 @@ final class Plan {
                 String what = "arm '" + armNames.get(i) + "'";
                 branches[i] = Branch.of(armNames.get(i), sub -> replay(arm, sub, what));
             }
-            return builder.fork(branches).combine(combineName);
+            return builder.fork(branches).combine(combineName, combineRetry, combineQueue);
         }
     }
 
@@ -209,7 +213,7 @@ final class Plan {
 
     /**
      * What an arm is called: the name of the last step in it that has one, walking back past the
-     * things that add no node of their own (a {@code withRetry}, a {@code compensate}). The engine
+     * things that add no node of their own (a {@code compensate}, a {@code checkpoint}). The engine
      * keys this arm's result by that name; a combine never names an arm, it takes them in order.
      *
      * <p>Deriving beats declaring here because step names are already unique within a workflow, so the

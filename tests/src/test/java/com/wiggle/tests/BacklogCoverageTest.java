@@ -88,10 +88,8 @@ class BacklogCoverageTest {
 
             clear(client, QUEUES_WF);
             FlowSpec spec = FlowSpec.define(QUEUES_WF, Map.class, OneStep.class, (f, s) -> f
-                .thenApply(s::served)
-                .onQueue(QUEUES_WF + "-served")
-                .thenApply(s::orphan)
-                .onQueue(QUEUES_WF + "-orphan"));
+                .thenApply(s::served, QUEUES_WF + "-served")
+                .thenApply(s::orphan, QUEUES_WF + "-orphan"));
             client.register(spec);
 
             // a worker that serves ONLY the first queue -- nothing will ever claim "orphan"

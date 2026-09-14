@@ -280,15 +280,15 @@ Every operation is topology only — it names a node; the matching `@ForFlow` me
 | `Wiggle.oneOf(arms…)` + `when` / `otherwise` | switch/case: the first arm whose guard holds runs. Every arm opens with `f.when(s::guard)` or `f.otherwise()`; a single arm is legal and reads as "run this, or skip past it" |
 | `Wiggle.allOf(arms…).combine(s::merge)` | run arms in parallel on **isolated** context copies, then rejoin at the mandatory combine. Arms bind **by position**, in the order given to `allOf`; `combineWithContext` also takes the pre-fork context as a leading `@Context` parameter |
 | `thenForEach(itemsKey, Item.class, body).combine(s::collect)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is available **either way — your choice**: declare a `@Context` parameter, or call `Step.base()` (the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`). Combines get the same choice. The **mandatory** combine receives the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `thenForEach(name, itemsKey, …)` names the node explicitly |
-| `repeatWhile(s::guard, body)` | run `body`, then repeat while the guard holds (at least once). `repeatWhile(guard, maxIterations, body)` caps it |
+| `repeatWhile(s::guard, body)` | run `body`, then repeat while the guard holds (at least once). `repeatWhile(guard, maxIterations, body)` caps it; a trailing `"queue"` pins the condition |
 | `thenSleep(duration)` / `thenSleep(name, duration)` | server-side timer; holds no worker |
 | `thenAwait(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
 | `thenSubFlow(node, workflow, Result.class)` | run another workflow as a child; its result merges back, failure propagates |
-| `onQueue(q)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
+| a trailing `"queue"` argument / `defaultQueue(q)` | route one node (or every following step) to a dedicated worker pool |
 | `execution(mode)` | set the execution mode ([§6.4](#64-execution-modes)) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
 
-`thenApply`/`thenAccept`/`thenFilter` take an optional `RetryPolicy` and an optional queue, in either order. The context type is not fixed by the
+Retry and queue are trailing arguments on the call that creates the node, in either order, so they travel *with* the step they configure — there is no separate call to forget. A node you named with a handler takes both (`thenApply`, `thenAccept`, `thenFilter`, `thenApplyCompensable`, `when`, and the `combine` of an `allOf` or a `thenForEach`). A node a construct creates for you takes only the queue: `repeatWhile`'s condition, whose retry stays the workflow default. Omitting a retry never leaves a node bare — it inherits the default given to `FlowSpec.define`. The context type is not fixed by the
 definition — each handler picks the type it works in by its signature (a typed record, or a
 `Map<String, Object>` for raw JSON), and a method may return a different type than it takes.
 

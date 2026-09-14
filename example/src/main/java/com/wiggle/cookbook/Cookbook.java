@@ -170,7 +170,7 @@ public final class Cookbook {
                     .thenForEach("items", Item.class, item -> item
                             .thenApply(s::price)
                             // only this step moves to the "gpu" queue; the default stays "cpu"
-                            .thenApply(s::renderThumbnail).onQueue("gpu"))
+                            .thenApply(s::renderThumbnail, "gpu"))
                     .combine(s::collectItems)
                     .thenApply(s::summarise));
         }

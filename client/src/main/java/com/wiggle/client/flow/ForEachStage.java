@@ -1,5 +1,7 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.core.RetryPolicy;
+
 import java.util.function.UnaryOperator;
 
 /**
@@ -44,9 +46,14 @@ final class ForEachStage {
      * @return the stream, reopened after the combine node
      */
     public GraphBuilder combine(String name) {
+        return combine(name, null, null);
+    }
+
+    /** {@link #combine(String)} with the combine node's own retry policy and/or queue. */
+    public GraphBuilder combine(String name, RetryPolicy retry, String queue) {
         if (combined) throw new IllegalStateException("combine already applied to this forEach");
         combined = true;
-        stream.buildForEachCombine(this.name, itemsKey, body, name);
+        stream.buildForEachCombine(this.name, itemsKey, body, name, retry, queue);
         return stream;
     }
 }

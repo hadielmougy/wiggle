@@ -132,7 +132,7 @@ class ConsoleWebTest {
             // no worker is ever started here, so this token is dispatchable and unclaimable -- which is
             // exactly the state the rest of the console cannot show: the instance reads RUNNING.
             FlowSpec stranded = FlowSpec.define("stranded", Map.class, Steps.class,
-                    (f, s) -> f.thenApply(s::work).onQueue("nobody-polls-this"));
+                    (f, s) -> f.thenApply(s::work, "nobody-polls-this"));
             c.register(stranded);
             String id = c.start(stranded, Map.of());
 
