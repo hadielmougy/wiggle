@@ -7,7 +7,7 @@ import java.lang.annotation.Target;
 
 /**
  * Marks a class as the handler set for a workflow: its methods implement the workflow's steps. The
- * value is the workflow name the methods bind to (the same name passed to {@code Flow.define}).
+ * value is the workflow name the methods bind to (the same name passed to {@code FlowSpec.define}).
  *
  * <p>Each public instance method whose name matches a step (case/style-insensitive, so {@code
  * inStock} binds {@code in-stock}) is a handler; its <em>signature</em> defines the step:
@@ -22,10 +22,10 @@ import java.lang.annotation.Target;
  * A method annotated {@link Decode} is not a step but a custom decoder for its return type (the
  * seam for schema versioning / upcasts / bespoke codecs).
  *
- * @see Worker#handlers(Object)
+ * @see Worker#registerHandler(Object)
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
-public @interface Handlers {
+public @interface ForFlow {
     String value();
 }

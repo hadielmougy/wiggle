@@ -14,7 +14,7 @@ import java.util.Set;
  * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
  * {@link FlowSpec} on {@link #build()}. The flowSpec is pure topology -- no step logic -- so this
  * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
- * on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes.
+ * on a worker via {@link com.wiggle.client.worker.ForFlow @ForFlow} classes.
  */
 final class Pipeline {
 

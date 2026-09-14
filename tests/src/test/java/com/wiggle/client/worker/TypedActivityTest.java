@@ -2,7 +2,6 @@ package com.wiggle.client.worker;
 
 import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
@@ -23,10 +22,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Typed activities via <b>factory methods</b> on a {@link Handlers @Handlers} class — a
+ * Typed activities via <b>factory methods</b> on a {@link ForFlow @ForFlow} class — a
  * zero-parameter method returning {@link Activity}/{@link GateActivity}/{@link EffectActivity} is
  * invoked once at scan and its result serves the step named by the method (or by
- * {@link Handles @Handles}); {@link Compensable} on the result binds the undo. Everything still
+ * {@link ForFlow @ForFlow}); {@link Compensable} on the result binds the undo. Everything still
  * registers through the one {@code worker.handlers(...)} call, mixing freely with plain methods.
  */
 class TypedActivityTest {
@@ -55,7 +54,7 @@ class TypedActivityTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class MixedHandlers {
         final CapturePayment capture = new CapturePayment();
 
@@ -121,7 +120,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("@Handles renames a handler away from its method name — plain and factory alike")
     void handlesAnnotation() throws Exception {
-        @Handlers("wf")
+        @ForFlow("wf")
         class Renamed {
             @Handles("capture-payment")
             public Map<String, Object> doTheCharge(Map<String, Object> ctx) { return ctx; }
@@ -141,20 +140,20 @@ class TypedActivityTest {
 
     @Test @DisplayName("scan rejections: parameterized factories, null factories, double roles, @Handles collisions")
     void scanRejections() {
-        @Handlers("wf")
+        @ForFlow("wf")
         class ParamFactory {
             public Activity<Map<String, Object>> capturePayment(String oops) { return c -> c; }
         }
         assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new ParamFactory()),
                 "a factory must be zero-parameter");
 
-        @Handlers("wf")
+        @ForFlow("wf")
         class NullFactory {
             public Activity<Map<String, Object>> capturePayment() { return null; }
         }
         assertThrows(IllegalStateException.class, () -> HandlerBinder.scan(new NullFactory()));
 
-        @Handlers("wf")
+        @ForFlow("wf")
         class Collides {
             public Map<String, Object> capturePayment(Map<String, Object> c) { return c; }
             @Handles("capture-payment")
@@ -166,7 +165,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("kind mismatches fail fast for factory results too")
     void kindMismatch() {
-        @Handlers("wf")
+        @ForFlow("wf")
         class GateOnTask {
             public GateActivity<Map<String, Object>> capturePayment() { return ctx -> true; }
         }
@@ -177,7 +176,7 @@ class TypedActivityTest {
 
     // ------------------------------------------------------------------ end-to-end
 
-    @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
+    @Test @DisplayName("plain methods + factories + @ForFlow run a workflow to COMPLETED")
     void endToEnd() throws Exception {
         FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::capturePayment)
@@ -186,7 +185,7 @@ class TypedActivityTest {
                 .thenApply(s::summarise)
                 .thenAccept(s::auditLog));
 
-        @Handlers("wf")
+        @ForFlow("wf")
         class FlowHandlers {
             public boolean inStock(Map<String, Object> ctx) { return true; }
 
@@ -214,7 +213,7 @@ class TypedActivityTest {
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "typed-w")
                      
-                     .handlers(new FlowHandlers())) {
+                     .registerHandler(new FlowHandlers())) {
             client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of("orderId", "A-1"));

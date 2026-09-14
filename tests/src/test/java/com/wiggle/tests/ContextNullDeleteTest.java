@@ -4,7 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -63,7 +63,7 @@ class ContextNullDeleteTest {
         return ((Number) ((Map<String, Object>) branchOutput).get("price")).intValue();
     }
 
-    @Handlers("trim")
+    @ForFlow("trim")
     static final class TrimH {
         public Map<String, Object> trim(Map<String, Object> ctx) {
             Map<String, Object> next = new LinkedHashMap<>(ctx);
@@ -79,7 +79,7 @@ class ContextNullDeleteTest {
                                   Map<String, Object> air, Map<String, Object> hotel);
     }
 
-    @Handlers("trip")
+    @ForFlow("trip")
     static final class TripH {
         public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
         public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
@@ -105,7 +105,7 @@ class ContextNullDeleteTest {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
             client.register(bp);
-            w.handlers(handlers);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);

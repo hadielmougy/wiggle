@@ -24,7 +24,7 @@ public interface LinearGateSteps {
     void       welcome(Classified c);
 }
 
-@Handlers("tcb-linear-gate")
+@ForFlow("tcb-linear-gate")
 public static final class LinearWithGate implements LinearGateSteps { … }
 ```
 

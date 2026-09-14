@@ -70,7 +70,7 @@ final class CapturePayment implements Activity<Order>, Compensable<Order> {
     }
 }
 
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public boolean inStock(Order o) { ... }                 // plain methods coexist
 
@@ -105,7 +105,7 @@ bind time the pairing is verified **both ways**, failing fast:
 - step declared compensable, bound activity is not `Compensable` → bind error;
 - activity is `Compensable`, step not declared → bind error (a silent no-op undo is a lie).
 
-The `@Handlers` method-per-step style coexists on the same binder seam for concise flows and for
+The `@ForFlow` method-per-step style coexists on the same binder seam for concise flows and for
 combines; compensation requires the typed style, which is where per-step capabilities live.
 
 ## 3. Graph / data-model changes

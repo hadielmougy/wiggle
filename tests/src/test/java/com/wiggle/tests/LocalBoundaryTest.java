@@ -4,7 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
@@ -81,7 +81,7 @@ class LocalBoundaryTest {
 
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
-                 Worker w = new Worker(client, "lb-" + Ids.next("x")).handlers(new ForkH(runs))) {
+                 Worker w = new Worker(client, "lb-" + Ids.next("x")).registerHandler(new ForkH(runs))) {
                 client.register(bp);
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
@@ -109,7 +109,7 @@ class LocalBoundaryTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "lb-" + Ids.next("x")).handlers(new GateH(downstream))) {
+             Worker w = new Worker(client, "lb-" + Ids.next("x")).registerHandler(new GateH(downstream))) {
             client.register(bp);
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
@@ -146,10 +146,10 @@ class LocalBoundaryTest {
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker general = new Worker(client, "general",
                      WorkerOptions.defaults().withQueues("lb-queues"))
-                     .handlers(new QueuesH(ranOn, "general"));
+                     .registerHandler(new QueuesH(ranOn, "general"));
              Worker special = new Worker(client, "special",
                      WorkerOptions.defaults().withQueues("special"))
-                     .handlers(new QueuesH(ranOn, "special"))) {
+                     .registerHandler(new QueuesH(ranOn, "special"))) {
             client.register(generalBp);
             client.register(specialBp);
             general.start();
@@ -173,7 +173,7 @@ class LocalBoundaryTest {
                 .thenApply(s::d));
     }
 
-    @Handlers("lb-fork")
+    @ForFlow("lb-fork")
     static final class ForkH {
         final Map<String, AtomicInteger> runs;
         ForkH(Map<String, AtomicInteger> runs) { this.runs = runs; }
@@ -193,7 +193,7 @@ class LocalBoundaryTest {
         public Map<String, Object> after(Map<String, Object> ctx) { return counted(runs, "after", put(ctx, "joined", true)); }
     }
 
-    @Handlers("lb-gate")
+    @ForFlow("lb-gate")
     static final class GateH {
         final AtomicInteger downstream;
         GateH(AtomicInteger downstream) { this.downstream = downstream; }
@@ -202,7 +202,7 @@ class LocalBoundaryTest {
         public Map<String, Object> never(Map<String, Object> ctx) { downstream.incrementAndGet(); return ctx; }
     }
 
-    @Handlers("lb-queues")
+    @ForFlow("lb-queues")
     static final class QueuesH {
         final Map<String, String> ranOn;
         final String label;

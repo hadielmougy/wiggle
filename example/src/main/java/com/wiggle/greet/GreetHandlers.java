@@ -1,6 +1,6 @@
 package com.wiggle.greet;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.Map;
 
@@ -9,7 +9,7 @@ import java.util.Map;
  * each method takes and returns a {@code Map<String,Object>}; returning it unchanged leaves the
  * context as-is (the engine diffs the result against its input).
  */
-@Handlers("greet")
+@ForFlow("greet")
 public final class GreetHandlers {
 
     public Map<String, Object> hello(Map<String, Object> ctx) {

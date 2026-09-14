@@ -3,7 +3,7 @@ package com.wiggle.cookbook;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -73,7 +73,7 @@ public final class Cookbook {
         void welcome(Classified c);
     }
 
-    @Handlers("tcb-linear-gate")
+    @ForFlow("tcb-linear-gate")
     public static final class LinearWithGate implements LinearGateSteps {
 
         public FlowSpec spec() {
@@ -111,7 +111,7 @@ public final class Cookbook {
         Purchase settle(Purchase p);
     }
 
-    @Handlers("tcb-choose-fork")
+    @ForFlow("tcb-choose-fork")
     public static final class ChooseThenFork implements ChooseForkSteps {
 
         public FlowSpec spec() {
@@ -161,7 +161,7 @@ public final class Cookbook {
         Basket summarise(Basket b);
     }
 
-    @Handlers("tcb-foreach-queues")
+    @ForFlow("tcb-foreach-queues")
     public static final class ForEachAcrossQueues implements ForEachSteps {
 
         public FlowSpec spec() {
@@ -203,7 +203,7 @@ public final class Cookbook {
         Job finish(Job j);
     }
 
-    @Handlers("tcb-poll-until-ready")
+    @ForFlow("tcb-poll-until-ready")
     public static final class PollUntilReady implements PollSteps {
 
         public FlowSpec spec() {
@@ -238,7 +238,7 @@ public final class Cookbook {
         void notifySubmitter(Expense e);
     }
 
-    @Handlers("tcb-approval-escalation")
+    @ForFlow("tcb-approval-escalation")
     public static final class ApprovalWithEscalation implements ApprovalSteps {
 
         public FlowSpec spec() {
@@ -279,7 +279,7 @@ public final class Cookbook {
         Classified merge(@Context Classified base, Classified provisioned, Classified audited);
     }
 
-    @Handlers("tcb-parent")
+    @ForFlow("tcb-parent")
     public static final class ChildCheckThenFork implements ParentSteps {
 
         public FlowSpec spec() {
@@ -321,7 +321,7 @@ public final class Cookbook {
         Batch finalise(Batch b);
     }
 
-    @Handlers("tcb-batched-loop")
+    @ForFlow("tcb-batched-loop")
     public static final class BatchedLoopWithCheckpoint implements BatchedSteps {
 
         public FlowSpec spec() {
@@ -361,7 +361,7 @@ public final class Cookbook {
         Basket ship(Basket b);
     }
 
-    @Handlers("tcb-kitchen-sink")
+    @ForFlow("tcb-kitchen-sink")
     public static final class KitchenSink implements KitchenSinkSteps {
 
         public FlowSpec spec() {

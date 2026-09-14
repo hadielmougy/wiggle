@@ -10,7 +10,7 @@ import java.util.function.Function;
 /**
  * The output of {@code build()}: an immutable workflow topology (nodes, edges, kinds, queues, retry)
  * to register with the server. It carries no step logic and no context type -- the graph is the
- * whole artifact. Step implementations live in {@link com.wiggle.client.worker.Handlers @Handlers}
+ * whole artifact. Step implementations live in {@link com.wiggle.client.worker.ForFlow @ForFlow}
  * classes bound on a worker and matched to the graph by name.
  */
 public record FlowSpec(WorkflowDefinition definition) {
@@ -53,7 +53,7 @@ public record FlowSpec(WorkflowDefinition definition) {
      *
      * <p>{@code s} is an inert stand-in: the body only <em>names</em> steps through it, and calling a
      * method on it throws. That is deliberate. A spec never runs a step -- it records the step's name,
-     * and a worker supplies the code by matching that name to a method on its {@code @Handlers}
+     * and a worker supplies the code by matching that name to a method on its {@code @ForFlow}
      * object. Naming the steps on an interface says exactly that, where a reference to a concrete
      * class reads as though the spec will call it.
      *

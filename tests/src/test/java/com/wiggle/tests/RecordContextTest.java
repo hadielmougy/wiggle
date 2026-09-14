@@ -4,7 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.RecordMapper;
@@ -56,7 +56,7 @@ class RecordContextTest {
         Shipment dispatch(Shipment s);
     }
 
-    @Handlers("record-shipment")
+    @ForFlow("record-shipment")
     static final class ShipmentH {
         public Shipment validate(Shipment s) { return s.withStatus("VALIDATED"); }
         public boolean hasItems(Shipment s) { return s.items() > 0; }
@@ -81,7 +81,7 @@ class RecordContextTest {
         FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).handlers(new ShipmentH())) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
             client.register(bp);
             w.start();
             Shipment in = new Shipment("s-1", 3, new BigDecimal("19.99"), "NEW", null, null, List.of("created"));
@@ -104,7 +104,7 @@ class RecordContextTest {
         FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).handlers(new ShipmentH())) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
             client.register(bp);
             w.start();
             Shipment in = new Shipment("s-2", 0, new BigDecimal("1.00"), "NEW", null, null, List.of());

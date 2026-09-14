@@ -108,7 +108,7 @@ final class StepNames {
      * A step must be named through an interface, not a concrete class.
      *
      * <p>A spec never runs a step. It records the step's <em>name</em>, and a worker supplies the code
-     * by matching that name to a method on its {@code @Handlers} object. So a reference to a concrete
+     * by matching that name to a method on its {@code @ForFlow} object. So a reference to a concrete
      * method names code the spec will never call -- which reads as though it will, and goes quietly
      * wrong when the worker binds some other object: the referenced method is simply not the one that
      * runs. Naming an interface method cannot mislead that way, because there is nothing behind it.

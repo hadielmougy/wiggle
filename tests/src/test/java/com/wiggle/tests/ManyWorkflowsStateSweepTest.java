@@ -4,7 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -12,7 +12,6 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.core.RetryPolicy;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -24,7 +23,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -184,21 +182,21 @@ class ManyWorkflowsStateSweepTest {
 
     // ------------------------------------------------------------------ the handlers
 
-    @Handlers(PREFIX + "linear")
+    @ForFlow(PREFIX + "linear")
     public static final class LinearH {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public Map<String, Object> b(Map<String, Object> c) { return put(c, "b", 1L); }
         public Map<String, Object> c(Map<String, Object> c) { return put(c, "c", 1L); }
     }
 
-    @Handlers(PREFIX + "gated")
+    @ForFlow(PREFIX + "gated")
     public static final class GatedH {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public boolean never(Map<String, Object> c) { return false; }
         public Map<String, Object> unreachable(Map<String, Object> c) { return put(c, "bug", true); }
     }
 
-    @Handlers(PREFIX + "forked")
+    @ForFlow(PREFIX + "forked")
     public static final class ForkedH {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public Map<String, Object> left(Map<String, Object> c) { return put(c, "left", 1L); }
@@ -213,7 +211,7 @@ class ManyWorkflowsStateSweepTest {
         public Map<String, Object> c(Map<String, Object> c) { return put(c, "joined", true); }
     }
 
-    @Handlers(PREFIX + "foreach")
+    @ForFlow(PREFIX + "foreach")
     public static final class ForeachH {
         public Map<String, Object> a(Map<String, Object> c) { return c; }
         public Map<String, Object> each(Map<String, Object> item) { return put(item, "priced", true); }
@@ -222,7 +220,7 @@ class ManyWorkflowsStateSweepTest {
         }
     }
 
-    @Handlers(PREFIX + "branchy")
+    @ForFlow(PREFIX + "branchy")
     public static final class BranchyH {
         public boolean isBig(Map<String, Object> c) { return ((Number) c.getOrDefault("n", 0L)).intValue() > 5; }
         public Map<String, Object> big(Map<String, Object> c) { return put(c, "path", "big"); }
@@ -236,7 +234,7 @@ class ManyWorkflowsStateSweepTest {
         }
     }
 
-    @Handlers(PREFIX + "failing")
+    @ForFlow(PREFIX + "failing")
     public static final class FailingH {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public Map<String, Object> boom(Map<String, Object> c) {
@@ -244,7 +242,7 @@ class ManyWorkflowsStateSweepTest {
         }
     }
 
-    @Handlers(PREFIX + "saga")
+    @ForFlow(PREFIX + "saga")
     public static final class SagaH {
         final Map<String, Integer> undos;
         SagaH(Map<String, Integer> undos) { this.undos = undos; }
@@ -267,7 +265,7 @@ class ManyWorkflowsStateSweepTest {
         }
     }
 
-    @Handlers(PREFIX + "parked")
+    @ForFlow(PREFIX + "parked")
     public static final class ParkedH {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public Map<String, Object> after(Map<String, Object> c) { return put(c, "after", 1L); }
@@ -293,9 +291,9 @@ class ManyWorkflowsStateSweepTest {
 
             try (Worker w = new Worker(client, "sweep-" + Ids.next("x"),
                     WorkerOptions.defaults().withConcurrency(16))
-                    .handlers(new LinearH()).handlers(new GatedH()).handlers(new ForkedH())
-                    .handlers(new ForeachH()).handlers(new BranchyH()).handlers(new FailingH())
-                    .handlers(new SagaH(undos)).handlers(new ParkedH())) {
+                    .registerHandler(new LinearH()).registerHandler(new GatedH()).registerHandler(new ForkedH())
+                    .registerHandler(new ForeachH()).registerHandler(new BranchyH()).registerHandler(new FailingH())
+                    .registerHandler(new SagaH(undos)).registerHandler(new ParkedH())) {
                 w.start();
 
                 // ---- start everything at once, so the store holds every shape concurrently

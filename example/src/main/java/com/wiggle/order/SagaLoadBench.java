@@ -7,7 +7,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.NamespaceWorker;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.WorkerOptions;
@@ -16,7 +16,6 @@ import com.wiggle.core.Tls;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,7 +57,7 @@ public final class SagaLoadBench {
                 .thenApply(s::boom));
     }
 
-    @Handlers("saga-load")
+    @ForFlow("saga-load")
     public static final class SagaHandlers {
         public Activity<Map<String, Object>> reserve() { return compensable("reservationRef"); }
         public Activity<Map<String, Object>> enrich() { return compensable("enrichmentRef"); }
@@ -101,7 +100,7 @@ public final class SagaLoadBench {
                     WiggleClient::new,
                     "saga-load",
                     WorkerOptions.defaults().withConcurrency(100).withLongPollWait(Duration.ofSeconds(10)),
-                    w -> w.handlers(new SagaHandlers())
+                    w -> w.registerHandler(new SagaHandlers())
             ).start();
 
             System.out.printf("saga load: %d instances at %d/s (%d threads) via %s ns=%s%n",

@@ -50,7 +50,7 @@ class TlsTest {
     private static final FlowSpec BP =
             FlowSpec.define("tls-wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-    @com.wiggle.client.worker.Handlers("tls-wf")
+    @com.wiggle.client.worker.ForFlow("tls-wf")
     static final class WorkHandlers {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
     }
@@ -82,7 +82,7 @@ class TlsTest {
             Tls.Options clientTls = opts(null, trust);   // trusts the server, no client cert
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), clientTls);
-                 Worker w = new Worker(client, "tls-w").handlers(new WorkHandlers())) {
+                 Worker w = new Worker(client, "tls-w").registerHandler(new WorkHandlers())) {
                 client.register(BP);
                 w.start();
                 String id = client.start(BP, Map.of());
@@ -102,7 +102,7 @@ class TlsTest {
         try (WiggleServer server = new WiggleServer(config).start()) {
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust));   // presents a cert
-                 Worker w = new Worker(client, "mtls-w").handlers(new WorkHandlers())) {
+                 Worker w = new Worker(client, "mtls-w").registerHandler(new WorkHandlers())) {
                 client.register(BP);
                 w.start();
                 String id = client.start(BP, Map.of());

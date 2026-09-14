@@ -115,20 +115,17 @@ public final class LeaderElection implements AutoCloseable {
         try {
             beat();
         } catch (RuntimeException e) {
-            // Leave `leader` as it was: isLeader() is fenced on lastSuccessfulHeartbeat, so a run of
-            // failures stands this process down on its own once the window passes.
             LOG.log(System.Logger.Level.WARNING, role + " heartbeat failed: " + e);
         }
     }
 
     private void beat() {
         long now = System.currentTimeMillis();
-        self = self.withHeartbeat(now);
-
+        synchronized (this) {
+            self = self.withHeartbeat(now);
+        }
         Set<String> aliveIds = new LinkedHashSet<>();
         boolean[] won = {false};
-        // Prune only what is long dead -- four timeout windows -- so a process that is merely late,
-        // or one whose clock drifted, is not evicted from its own roster.
         store.step(self, now - deadAfterMillis() * 4, roster -> {
             for (Member m : roster) {
                 if (now - m.lastHeartbeat() < deadAfterMillis()) aliveIds.add(m.id());

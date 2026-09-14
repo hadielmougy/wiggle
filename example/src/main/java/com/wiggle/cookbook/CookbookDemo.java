@@ -52,14 +52,14 @@ public final class CookbookDemo {
             }
 
             try (Worker worker = new Worker(client, "typed-cookbook-worker")
-                    .handlers(linearGate)
-                    .handlers(chooseFork)
-                    .handlers(forEachQueues)
-                    .handlers(pollLoop)
-                    .handlers(approval)
-                    .handlers(parentChild)
-                    .handlers(batchedLoop)
-                    .handlers(kitchenSink)) {
+                    .registerHandler(linearGate)
+                    .registerHandler(chooseFork)
+                    .registerHandler(forEachQueues)
+                    .registerHandler(pollLoop)
+                    .registerHandler(approval)
+                    .registerHandler(parentChild)
+                    .registerHandler(batchedLoop)
+                    .registerHandler(kitchenSink)) {
                 worker.start();
 
                 run(client, "1. step + effect + gate (and a context type change)", linearGate.spec(),

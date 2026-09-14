@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Ids;
@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -63,19 +62,19 @@ class BacklogCoverageTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Handlers(QUEUES_WF)
+    @ForFlow(QUEUES_WF)
     public static final class QueueSteps {
         public Map<String, Object> served(Map<String, Object> c) { return put(c, "served", true); }
         public Map<String, Object> orphan(Map<String, Object> c) { return put(c, "orphan", true); }
     }
 
-    @Handlers(VERSION_WF)
+    @ForFlow(VERSION_WF)
     public static final class VersionSteps {
         public Map<String, Object> served(Map<String, Object> c) { return put(c, "served", true); }
         public Map<String, Object> extra(Map<String, Object> c) { return put(c, "extra", true); }
     }
 
-    @Handlers(UNSCOPED_WF)
+    @ForFlow(UNSCOPED_WF)
     public static final class UnscopedSteps {
         public Map<String, Object> served(Map<String, Object> c) { return put(c, "served", true); }
         public Map<String, Object> extra(Map<String, Object> c) { return put(c, "extra", true); }
@@ -98,7 +97,7 @@ class BacklogCoverageTest {
             // a worker that serves ONLY the first queue -- nothing will ever claim "orphan"
             try (Worker w = new Worker(client, "served-" + Ids.next("x"),
                     WorkerOptions.defaults().withConcurrency(2).withQueues(QUEUES_WF + "-served"))
-                    .handlers(new QueueSteps())) {
+                    .registerHandler(new QueueSteps())) {
                 w.start();
 
                 String id = client.start(spec, Map.of());
@@ -137,7 +136,7 @@ class BacklogCoverageTest {
 
             try (Worker onlyV1 = new Worker(client, "v1-" + Ids.next("x"),
                     WorkerOptions.defaults().withConcurrency(2))
-                    .handlers(new VersionSteps(), v1.version())) {
+                    .registerHandler(new VersionSteps(), v1.version())) {
                 onlyV1.start();
 
                 String stranded = client.start(v2, Map.of());   // nothing serves v2
@@ -150,7 +149,7 @@ class BacklogCoverageTest {
                 // stand up the worker that was missing: the same work becomes claimable and drains
                 try (Worker v2Worker = new Worker(client, "v2-" + Ids.next("x"),
                         WorkerOptions.defaults().withConcurrency(2))
-                        .handlers(new VersionSteps(), v2.version())) {
+                        .registerHandler(new VersionSteps(), v2.version())) {
                     v2Worker.start();
 
                     waitUntil(() -> {
@@ -183,7 +182,7 @@ class BacklogCoverageTest {
 
             try (Worker w = new Worker(client, "any-" + Ids.next("x"),
                     WorkerOptions.defaults().withConcurrency(2))
-                    .handlers(new UnscopedSteps())) {      // unscoped: serves both
+                    .registerHandler(new UnscopedSteps())) {      // unscoped: serves both
                 w.start();
 
                 assertEquals("COMPLETED", client.awaitCompletion(

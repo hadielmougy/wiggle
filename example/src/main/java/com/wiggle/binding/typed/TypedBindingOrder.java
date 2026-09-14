@@ -5,7 +5,7 @@ import com.wiggle.client.flow.FlowSpec;
 /**
  * The topology of the typed order flow, authored once. Same idea as {@code binding.BindingOrder},
  * but the context is a typed {@link Purchase} record instead of a JSON map. The steps carry no
- * implementation here — they are bound by name, with typed {@code @Handlers} methods
+ * implementation here — they are bound by name, with typed {@code @ForFlow} methods
  * ({@code Purchase -> Purchase}); see {@link TypedFulfilmentHandlers} and {@link TypedPaymentsHandlers}.
  */
 public final class TypedBindingOrder {

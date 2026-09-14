@@ -75,9 +75,9 @@ public final class DashboardSeed {
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "seed-worker")
-                     .handlers(new OnboardingHandlers())
-                     .handlers(new KycHandlers())
-                     .handlers(new NightlyReportHandlers())) {
+                     .registerHandler(new OnboardingHandlers())
+                     .registerHandler(new KycHandlers())
+                     .registerHandler(new NightlyReportHandlers())) {
             // the author publishes all three; the worker only implements their steps
             client.register(kyc);
             client.register(onboarding);

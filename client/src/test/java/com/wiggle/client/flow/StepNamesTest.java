@@ -32,7 +32,7 @@ class StepNamesTest {
 
     @Test
     void handlesAnnotationOnTheReferencedMethodWins() {
-        // the graph node is what the worker binds by, so @Handles has to reach the topology too
+        // the graph node is what the worker binds by, so @ForFlow has to reach the topology too
         assertEquals("capture-payment", StepNames.of((FlowFn<Order, Payment>) h::doCapture));
     }
 

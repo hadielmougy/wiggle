@@ -13,7 +13,7 @@ import com.wiggle.client.worker.Context;
  * one of them, with the right types. Neither half can drift without the build noticing.
  *
  * <p>Implementing it is not required, though: binding is by name, so a worker may serve these steps
- * with any {@code @Handlers} object whose methods happen to match. That is what lets a step be served
+ * with any {@code @ForFlow} object whose methods happen to match. That is what lets a step be served
  * by a different service, in a different language -- the interface is the convenience, the name is
  * the contract.
  */

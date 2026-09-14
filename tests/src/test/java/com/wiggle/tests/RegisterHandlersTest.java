@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -22,8 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Object-based handler binding ({@link Worker#handlers(Object)}): hand the worker a
- * {@link Handlers @Handlers} object whose methods are the steps. Each method is matched to a step by
+ * Object-based handler binding ({@link Worker#registerHandler(Object)}): hand the worker a
+ * {@link ForFlow @ForFlow} object whose methods are the steps. Each method is matched to a step by
  * case-insensitive name and its kind is taken from the signature (Map = task, boolean = gate, void =
  * effect); the graph confirms the exact name and gate-vs-task.
  */
@@ -63,7 +63,7 @@ class RegisterHandlersTest {
     }
 
     /** Methods in mixed case styles; the return type picks the kind. */
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     public static final class OrderHandlers {
         final AtomicReference<Object> audited;
         OrderHandlers(AtomicReference<Object> audited) { this.audited = audited; }
@@ -83,7 +83,7 @@ class RegisterHandlersTest {
 
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "obj-1")) {
-                impl.handlers(new OrderHandlers(audited));
+                impl.registerHandler(new OrderHandlers(audited));
                 impl.start();   // reconciles the handlers against the graph, discovers the payments queue
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
@@ -98,7 +98,7 @@ class RegisterHandlersTest {
         });
     }
 
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     public static final class DupHandlers {
         public boolean inStock(Map<String, Object> c) { return true; }
         public boolean in_stock(Map<String, Object> c) { return false; }  // folds to the same step name
@@ -109,11 +109,11 @@ class RegisterHandlersTest {
     void caseFoldDuplicateRejected() {
         Worker w = new Worker((WiggleClient) null, "obj-dup");
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> w.handlers(new DupHandlers()));
+                () -> w.registerHandler(new DupHandlers()));
         assertTrue(e.getMessage().contains("same step name 'instock'"), e.getMessage());
     }
 
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     public static final class ClashHandlers {
         // returns a Map (task) but the graph's "inStock" is a gate (PREDICATE)
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }
@@ -125,7 +125,7 @@ class RegisterHandlersTest {
         withServer((client, server) -> {
             client.register(authoredGraph());
             try (Worker impl = new Worker(client, "obj-clash")) {
-                impl.handlers(new ClashHandlers());
+                impl.registerHandler(new ClashHandlers());
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
                 assertTrue(e.getMessage().contains("inStock"), e.getMessage());
                 assertTrue(e.getMessage().contains("boolean"), e.getMessage());

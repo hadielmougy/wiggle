@@ -29,7 +29,7 @@ public final class GreetWorker {
         // It may well start first, so give it a window to wait for that registration.
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
                 WorkerOptions.defaults().withAwaitRegistration(Duration.ofMinutes(5)),
-                w -> w.handlers(new GreetHandlers())).start();
+                w -> w.registerHandler(new GreetHandlers())).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> { worker.close(); resolver.close(); }));
         System.out.println("greet worker '" + id + "' serving namespace '" + ns + "' via coordinator " + coord);

@@ -6,7 +6,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
@@ -76,7 +76,7 @@ class SagaCompensationTest {
     private static InstanceView run(FlowSpec bp, Object handlers) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker worker = new Worker(client, "saga-w").handlers(handlers)) {
+             Worker worker = new Worker(client, "saga-w").registerHandler(handlers)) {
             client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of("orderId", "A-1"));
@@ -95,7 +95,7 @@ class SagaCompensationTest {
                 .compensate()
                 .thenApply(s::boom));
 
-        @Handlers("saga")
+        @ForFlow("saga")
         class H {
             public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
             public Activity<Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
@@ -138,7 +138,7 @@ class SagaCompensationTest {
                 .compensate()
                 .thenApply(s::boom));
 
-        @Handlers("saga-local")
+        @ForFlow("saga-local")
         class H {
             public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
             public Activity<Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
@@ -160,7 +160,7 @@ class SagaCompensationTest {
         FlowSpec bp = FlowSpec.define("plain-fail", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::work)
                 .thenApply(s::boom));
-        @Handlers("plain-fail")
+        @ForFlow("plain-fail")
         class H {
             public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
             public Map<String, Object> boom(Map<String, Object> ctx) {
@@ -179,7 +179,7 @@ class SagaCompensationTest {
                 .thenApply(s::reserve)
                 .compensate()
                 .thenApply(s::boom));
-        @Handlers("bad-undo")
+        @ForFlow("bad-undo")
         class H {
             public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, true); }
             public Map<String, Object> boom(Map<String, Object> ctx) {

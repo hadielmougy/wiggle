@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
@@ -62,7 +62,7 @@ class LocalSyncTest {
                 .thenApply(s::d));
     }
 
-    @Handlers("ls-linear")
+    @ForFlow("ls-linear")
     static final class LinearH {
         final AtomicInteger runs;
         LinearH(AtomicInteger runs) { this.runs = runs; }
@@ -82,7 +82,7 @@ class LocalSyncTest {
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
-                         WorkerOptions.defaults().withConcurrency(4)).handlers(new LinearH(runs))) {
+                         WorkerOptions.defaults().withConcurrency(4)).registerHandler(new LinearH(runs))) {
                 client.register(bp);
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));

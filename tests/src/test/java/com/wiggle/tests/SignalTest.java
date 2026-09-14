@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -13,11 +13,6 @@ import com.wiggle.server.store.Rows.Token;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.net.ServerSocket;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,28 +44,28 @@ class SignalTest {
         return n;
     }
 
-    @Handlers("sig-approve")
+    @ForFlow("sig-approve")
     static final class ApproveH {
         public Map<String, Object> after(Map<String, Object> c) { return put(c, "advanced", true); }
     }
 
-    @Handlers("sig-wrong")
+    @ForFlow("sig-wrong")
     static final class WrongH {
         public Map<String, Object> after(Map<String, Object> c) { return c; }
     }
 
-    @Handlers("sig-escalate")
+    @ForFlow("sig-escalate")
     static final class EscalateH {
         public Map<String, Object> escalate(Map<String, Object> c) { return put(c, "escalated", true); }
         public Map<String, Object> after(Map<String, Object> c) { return put(c, "advanced", true); }
     }
 
-    @Handlers("sig-timeout")
+    @ForFlow("sig-timeout")
     static final class TimeoutH {
         public Map<String, Object> after(Map<String, Object> c) { return c; }
     }
 
-    @Handlers("sig-http")
+    @ForFlow("sig-http")
     static final class HttpH {
         public Map<String, Object> after(Map<String, Object> c) { return put(c, "advanced", true); }
     }
@@ -100,7 +95,7 @@ class SignalTest {
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w").handlers(new ApproveH())) {
+             Worker w = new Worker(client, "sig-w").registerHandler(new ApproveH())) {
             client.register(bp);
             w.start();
             String id = client.start(bp, Map.of("x", 1));
@@ -127,7 +122,7 @@ class SignalTest {
                 .thenApply(s::after));
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w2").handlers(new WrongH())) {
+             Worker w = new Worker(client, "sig-w2").registerHandler(new WrongH())) {
             client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
@@ -148,7 +143,7 @@ class SignalTest {
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w3").handlers(new EscalateH())) {
+             Worker w = new Worker(client, "sig-w3").registerHandler(new EscalateH())) {
             client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());   // never signalled; the deadline fires
@@ -169,7 +164,7 @@ class SignalTest {
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w4").handlers(new TimeoutH())) {
+             Worker w = new Worker(client, "sig-w4").registerHandler(new TimeoutH())) {
             client.register(bp);
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));

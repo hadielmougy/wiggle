@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Ids;
@@ -68,7 +68,7 @@ class VersionScopedWorkerTest {
     }
 
     /** Service A's code. Tags the context with which service ran it. */
-    @Handlers("vs-order")
+    @ForFlow("vs-order")
     public static final class ServiceA {
         final AtomicInteger runs;
         ServiceA(AtomicInteger runs) { this.runs = runs; }
@@ -79,7 +79,7 @@ class VersionScopedWorkerTest {
     }
 
     /** Service B's code -- the capability, moved. It also implements v2's new step. */
-    @Handlers("vs-order")
+    @ForFlow("vs-order")
     public static final class ServiceB {
         final AtomicInteger runs;
         ServiceB(AtomicInteger runs) { this.runs = runs; }
@@ -110,10 +110,10 @@ class VersionScopedWorkerTest {
 
             try (Worker a = new Worker(client, "service-a-" + Ids.next("x"),
                          WorkerOptions.defaults().withConcurrency(2))
-                         .handlers(new ServiceA(aRuns), one.version());
+                         .registerHandler(new ServiceA(aRuns), one.version());
                  Worker b = new Worker(client, "service-b-" + Ids.next("x"),
                          WorkerOptions.defaults().withConcurrency(2))
-                         .handlers(new ServiceB(bRuns), two.version())) {
+                         .registerHandler(new ServiceB(bRuns), two.version())) {
                 a.start();
                 b.start();
 
@@ -153,7 +153,7 @@ class VersionScopedWorkerTest {
 
             try (Worker w = new Worker(client, "any-" + Ids.next("x"),
                     WorkerOptions.defaults().withConcurrency(2))
-                    .handlers(new ServiceB(runs))) {       // no version: serves both
+                    .registerHandler(new ServiceB(runs))) {       // no version: serves both
                 w.start();
 
                 assertEquals("COMPLETED",
@@ -175,7 +175,7 @@ class VersionScopedWorkerTest {
             client.register(one);
 
             try (Worker w = new Worker(client, "wrong-" + Ids.next("x"))
-                    .handlers(new ServiceA(new AtomicInteger()), one.version() + 1)) {
+                    .registerHandler(new ServiceA(new AtomicInteger()), one.version() + 1)) {
                 // the whole value of naming a version: the mismatch surfaces here, where a deploy can
                 // fail, rather than as a decode error per task later
                 assertThrows(RuntimeException.class, w::start);

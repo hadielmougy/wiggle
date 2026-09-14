@@ -1,12 +1,12 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Step logic for the {@code kyc-checks} workflow seeded by {@link DashboardSeed}. */
-@Handlers("kyc-checks")
+@ForFlow("kyc-checks")
 public final class KycHandlers {
 
     public Map<String, Object> verifyId(Map<String, Object> ctx) {

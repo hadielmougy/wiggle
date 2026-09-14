@@ -240,14 +240,14 @@ public interface OrderSteps {
 FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
-The step logic is a separate class annotated `@Handlers("<workflow-name>")`, bound on a worker by
+The step logic is a separate class annotated `@ForFlow("<workflow-name>")`, bound on a worker by
 name. Each method whose name matches a step (case/style-insensitive, so `inStock` serves `in-stock`)
 is a handler; its signature defines the step — one parameter is the input (decoded from JSON), a
 `boolean` return is a gate, `void` is an effect, any other return is a task whose value becomes the
 next context (types may change from step to step, like `Stream.map`):
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
     public boolean inStock(Order o)   { return o.quantity() > 0; }        // gate
@@ -270,7 +270,7 @@ worker fails its task, and keys the handler does not return do not survive the j
 
 ### 5.1 Operations
 
-Every operation is topology only — it names a node; the matching `@Handlers` method supplies its logic.
+Every operation is topology only — it names a node; the matching `@ForFlow` method supplies its logic.
 
 | Operation | Meaning |
 |---|---|
@@ -301,7 +301,7 @@ wherever a step or combine parameter of that type is bound. It's the seam for sc
 or a bespoke codec:
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     @Decode
     public Order load(Map<String, Object> raw) {     // upcast an older shape to the current Order

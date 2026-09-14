@@ -32,7 +32,7 @@ public final class NamespaceWorkerMain {
                 WiggleClient::new,                         // clientFactory (same as the convenience ctor)
                 id,
                 opts,
-                w -> w.handlers(new OrderHandlers())
+                w -> w.registerHandler(new OrderHandlers())
         ).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

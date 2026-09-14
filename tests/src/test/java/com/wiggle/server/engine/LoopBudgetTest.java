@@ -3,7 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
@@ -53,7 +53,7 @@ class LoopBudgetTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Handlers("loop-wf")
+    @ForFlow("loop-wf")
     public static final class LoopHandlers {
         public boolean forever(Map<String, Object> ctx) { return true; }          // the bug
         public boolean fewMore(Map<String, Object> ctx) {
@@ -71,7 +71,7 @@ class LoopBudgetTest {
     private static InstanceView run(FlowSpec bp, Duration timeout) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker worker = new Worker(client, "loop-w").handlers(new LoopHandlers())) {
+             Worker worker = new Worker(client, "loop-w").registerHandler(new LoopHandlers())) {
             client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of());

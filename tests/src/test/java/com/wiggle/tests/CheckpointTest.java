@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
@@ -36,7 +36,7 @@ class CheckpointTest {
         return n;
     }
 
-    @Handlers("cp-flush")
+    @ForFlow("cp-flush")
     static final class FlushH {
         final CountDownLatch bRunning, releaseB;
         FlushH(CountDownLatch bRunning, CountDownLatch releaseB) { this.bRunning = bRunning; this.releaseB = releaseB; }
@@ -45,7 +45,7 @@ class CheckpointTest {
         public Map<String, Object> c(Map<String, Object> ctx) { return put(ctx, "c", 3L); }
     }
 
-    @Handlers("cp-nobuf")
+    @ForFlow("cp-nobuf")
     static final class NobufH {
         final CountDownLatch bRunning, releaseB;
         NobufH(CountDownLatch bRunning, CountDownLatch releaseB) { this.bRunning = bRunning; this.releaseB = releaseB; }
@@ -94,7 +94,7 @@ class CheckpointTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w").handlers(new FlushH(bRunning, releaseB))) {
+             Worker w = new Worker(client, "cp-w").registerHandler(new FlushH(bRunning, releaseB))) {
             client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
@@ -128,7 +128,7 @@ class CheckpointTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w2").handlers(new NobufH(bRunning, releaseB))) {
+             Worker w = new Worker(client, "cp-w2").registerHandler(new NobufH(bRunning, releaseB))) {
             client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());

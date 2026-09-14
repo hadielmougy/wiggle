@@ -2,10 +2,9 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
-import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -55,7 +54,7 @@ class CompetingConsumersTest {
      * worker's id and shares the recording structures, so the test can see which worker ran each
      * token and how many times each token ran.
      */
-    @Handlers("competing")
+    @ForFlow("competing")
     static final class CountingH {
         final String worker;
         final Map<Object, String> ranBy;         // instance key -> the worker that ran it
@@ -125,8 +124,8 @@ class CompetingConsumersTest {
 
             try (Worker a = new Worker(client, "consumer-a", serial());
                  Worker b = new Worker(client, "consumer-b", serial())) {
-                a.handlers(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, rendezvous, null));
-                b.handlers(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, rendezvous, null));
+                a.registerHandler(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, rendezvous, null));
+                b.registerHandler(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, rendezvous, null));
                 a.start();
                 b.start();
 
@@ -158,8 +157,8 @@ class CompetingConsumersTest {
 
             try (Worker a = new Worker(client, "consumer-a", serial());
                  Worker b = new Worker(client, "consumer-b", serial())) {
-                a.handlers(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, null, hold));
-                b.handlers(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, null, hold));
+                a.registerHandler(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, null, hold));
+                b.registerHandler(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, null, hold));
                 a.start();
                 b.start();
 

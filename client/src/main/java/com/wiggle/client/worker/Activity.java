@@ -5,13 +5,13 @@ package com.wiggle.client.worker;
  * and returns the next context — sent whole, it REPLACES the previous value server-side (a
  * {@code null} return leaves it untouched).
  *
- * <p>Registered via a <b>factory method</b> on a {@link Handlers @Handlers} class: a
+ * <p>Registered via a <b>factory method</b> on a {@link ForFlow @ForFlow} class: a
  * zero-parameter method returning an activity type is invoked once at registration and its result
- * serves the step named by the method (or by {@link Handles @Handles}) — so the workflow's whole
+ * serves the step named by the method (or by {@link ForFlow @ForFlow}) — so the workflow's whole
  * implementation still arrives through one {@code worker.handlers(...)} call:
  *
  * <pre>{@code
- * @Handlers("order-fulfilment")
+ * @ForFlow("order-fulfilment")
  * class OrderHandlers {
  *     public Order validate(Order o) { ... }              // plain method handler
  *

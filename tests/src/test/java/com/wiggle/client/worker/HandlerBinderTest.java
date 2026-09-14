@@ -1,7 +1,6 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.DisplayName;
@@ -35,13 +34,13 @@ class HandlerBinderTest {
 
     // ------------------------------------------------------------------ scan
 
-    @Test @DisplayName("scan rejects an object without @Handlers, and a blank workflow name")
+    @Test @DisplayName("scan rejects an object without @ForFlow, and a blank workflow name")
     void scanRejectsUnannotated() {
         assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new Object()));
         assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new BlankH()));
     }
 
-    @Handlers("")
+    @ForFlow("")
     static final class BlankH {
         public Map<String, Object> a(Map<String, Object> c) { return c; }
     }
@@ -53,7 +52,7 @@ class HandlerBinderTest {
         assertTrue(e.getMessage().contains("ambiguous"), e.getMessage());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class CollidingH {
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }
         public Map<String, Object> instock(Map<String, Object> c) { return c; }
@@ -67,7 +66,7 @@ class HandlerBinderTest {
         assertTrue(!set.byName().containsKey("helper"), "0-param method is a helper, not a handler");
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class DecoderH {
         @Decode public Map<String, Object> load(Map<String, Object> raw) { return raw; }
         public Map<String, Object> work(Map<String, Object> c) { return c; }
@@ -103,7 +102,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class KindsH {
         public Map<String, Object> work(Map<String, Object> c) {
             Map<String, Object> n = new LinkedHashMap<>(c);
@@ -124,17 +123,17 @@ class HandlerBinderTest {
                 () -> HandlerBinder.bind(HandlerBinder.scan(new TooManyParamsH()), linear()));
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class BadGateH {
         public Map<String, Object> ok(Map<String, Object> c) { return c; }   // gate must return boolean
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class BoolTaskH {
         public boolean work(Map<String, Object> c) { return true; }          // task must not return boolean
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class TooManyParamsH {
         public Map<String, Object> work(Map<String, Object> a, Map<String, Object> b) { return a; }
     }
@@ -150,7 +149,7 @@ class HandlerBinderTest {
         assertEquals(List.of("someoneElses"), r.unserved());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class SubsetH {
         public Map<String, Object> served(Map<String, Object> c) { return c; }
     }
@@ -181,7 +180,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class CtxParamH {
         public Map<String, Object> work(@Context Map<String, Object> base, String item) {
             return Map.of("v", base.get("rate"));
@@ -225,7 +224,7 @@ class HandlerBinderTest {
         Map<String, Object> collect(@Context Map<String, Object> base, List<String> items);
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class ForkCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -253,7 +252,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class PositionalCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -278,7 +277,7 @@ class HandlerBinderTest {
                 "and says what to do about an arm you do not need: " + ex.getMessage());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class BadCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -292,7 +291,7 @@ class HandlerBinderTest {
         assertTrue(ex.getMessage().contains("more arms than the fork has"), ex.getMessage());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class WideCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -322,7 +321,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class EachCombineH {
         public String norm(String item) { return item; }
         public Map<String, Object> collect(@Context Map<String, Object> base, List<String> items) {
@@ -348,7 +347,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class NoCollectionH {
         public String norm(String item) { return item; }
         public Map<String, Object> collect(@Context Map<String, Object> baseOnly) { return baseOnly; }

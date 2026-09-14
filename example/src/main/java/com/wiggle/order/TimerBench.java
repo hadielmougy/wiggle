@@ -2,7 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.server.ServerConfig;
@@ -74,7 +74,7 @@ public final class TimerBench {
             for (int i = 0; i < workers; i++) {
                 pool.add(new Worker(client, "timer-worker-" + i,
                         WorkerOptions.defaults().withConcurrency(concurrency))
-                        .handlers(new TimerHandlers(done)).start());
+                        .registerHandler(new TimerHandlers(done)).start());
             }
             done.await();
             long t1 = System.nanoTime();
@@ -88,7 +88,7 @@ public final class TimerBench {
         }
     }
 
-    @Handlers("bench-timer")
+    @ForFlow("bench-timer")
     public static final class TimerHandlers {
         private final CountDownLatch done;
         public TimerHandlers(CountDownLatch done) { this.done = done; }

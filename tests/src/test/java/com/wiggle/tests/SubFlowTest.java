@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -55,24 +55,24 @@ class SubFlowTest {
                 .thenApply(s::wrapUp));
     }
 
-    @Handlers("sub-parent")
+    @ForFlow("sub-parent")
     static final class ParentH {
         public Map<String, Object> prepare(Map<String, Object> c) { return put(c, "prepared", true); }
         public Map<String, Object> wrapUp(Map<String, Object> c) { return put(c, "wrapped", true); }
     }
 
-    @Handlers("sub-child")
+    @ForFlow("sub-child")
     static final class ChildOkH {
         public Map<String, Object> childWork(Map<String, Object> c) { return put(c, "childSaw", c.get("prepared")); }
         public Map<String, Object> childDone(Map<String, Object> c) { return put(c, "childResult", 42L); }
     }
 
-    @Handlers("sub-child")
+    @ForFlow("sub-child")
     static final class ChildFailH {
         public Map<String, Object> childWork(Map<String, Object> c) { throw new IllegalStateException("child broke"); }
     }
 
-    @Handlers("sub-child")
+    @ForFlow("sub-child")
     static final class ChildParkH {
         public Map<String, Object> childDone(Map<String, Object> c) { return c; }
     }
@@ -86,7 +86,7 @@ class SubFlowTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w")
-                     .handlers(new ParentH()).handlers(new ChildOkH())) {
+                     .registerHandler(new ParentH()).registerHandler(new ChildOkH())) {
             client.register(child);
             client.register(parent());
             w.start();
@@ -109,7 +109,7 @@ class SubFlowTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w2")
-                     .handlers(new ParentH()).handlers(new ChildFailH())) {
+                     .registerHandler(new ParentH()).registerHandler(new ChildFailH())) {
             client.register(child);
             client.register(parent());
             w.start();
@@ -124,7 +124,7 @@ class SubFlowTest {
     void unregisteredChildFailsParent() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w3").handlers(new ParentH())) {
+             Worker w = new Worker(client, "sub-w3").registerHandler(new ParentH())) {
             client.register(parent());   // the child is deliberately NOT registered
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
@@ -142,7 +142,7 @@ class SubFlowTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w4")
-                     .handlers(new ParentH()).handlers(new ChildParkH())) {
+                     .registerHandler(new ParentH()).registerHandler(new ChildParkH())) {
             client.register(child);
             client.register(parent());
             w.start();

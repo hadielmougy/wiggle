@@ -8,7 +8,7 @@ import java.lang.annotation.Target;
 /**
  * Names the graph node a handler method serves when the method's own name can't (or shouldn't)
  * match it. By default a method binds the step whose name matches its own, case/style-insensitively
- * ({@code inStock} ↔ {@code in-stock}); {@code @Handles} overrides that:
+ * ({@code inStock} ↔ {@code in-stock}); {@code @ForFlow} overrides that:
  *
  * <pre>{@code
  * @Handles("capture-payment")

@@ -94,7 +94,7 @@ step level, dispatch is exactly-once, and no code anywhere is subject to a deter
 The step logic lives in ordinary classes, matched to the graph **by name**:
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
     public boolean inStock(Order o)   { return o.quantity() > 0; }   // a gate: boolean return

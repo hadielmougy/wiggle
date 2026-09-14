@@ -8,7 +8,7 @@ produces byte-identical `WorkflowDefinition`s (same content-version) to the curr
 
 The build layer is **topology only** — it declares named nodes and how they chain, branch, and
 rejoin. No step logic and no context type live here; implementations are bound separately on a
-worker via `@Handlers` classes, matched to the graph by name.
+worker via `@ForFlow` classes, matched to the graph by name.
 
 ---
 

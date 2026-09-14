@@ -32,7 +32,7 @@ wiggle.client().register(flowSpec);
                         .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
                 
-                .handlers(new OrderHandlers());
+                .registerHandler(new OrderHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

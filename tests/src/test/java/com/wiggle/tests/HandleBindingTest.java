@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Handler binding via {@link Handlers @Handlers} + {@link Worker#handlers(Object)}: a workflow's
+ * Handler binding via {@link ForFlow @ForFlow} + {@link Worker#registerHandler(Object)}: a workflow's
  * topology is registered once by an author, and a worker implements the steps with an annotated
  * class whose method names match the steps and whose signatures define the kind (one param = input,
  * {@code boolean} = gate, {@code void} = effect). On {@link Worker#start()} the worker reconciles its
@@ -59,7 +59,7 @@ class HandleBindingTest {
     }
 
     /** The step logic, bound to {@code order-fulfilment} by name; signatures define each step's kind. */
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     static final class OrderImpl {
         final AtomicReference<Object> audited;
         OrderImpl(AtomicReference<Object> audited) { this.audited = audited; }
@@ -70,13 +70,13 @@ class HandleBindingTest {
     }
 
     /** Binds a gate step (in the graph a PREDICATE) with a task signature -- a kind clash. */
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     static final class BadKindImpl {
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }   // it's a PREDICATE in the graph
     }
 
     /** Handlers for a workflow that was never registered on the server. */
-    @Handlers("never-registered")
+    @ForFlow("never-registered")
     static final class OrphanImpl {
         public Map<String, Object> step(Map<String, Object> c) { return c; }
     }
@@ -92,14 +92,14 @@ class HandleBindingTest {
     }
 
     @Test
-    @DisplayName("a worker with no flowSpec drives a full instance via @Handlers bound by name")
+    @DisplayName("a worker with no flowSpec drives a full instance via @ForFlow bound by name")
     void handlersBindingRunsToCompletion() throws Exception {
         withServer((client, server) -> {
             client.register(authoredGraph());   // author registers topology only
 
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "impl-1")) {
-                impl.handlers(new OrderImpl(audited));   // binds by name, no flowSpec seen
+                impl.registerHandler(new OrderImpl(audited));   // binds by name, no flowSpec seen
                 impl.start();   // reconciles: validates names/kinds, discovers the "payments" queue too
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
@@ -120,7 +120,7 @@ class HandleBindingTest {
         withServer((client, server) -> {
             client.register(authoredGraph());
             try (Worker impl = new Worker(client, "impl-3")) {
-                impl.handlers(new BadKindImpl());   // inStock is a PREDICATE, bound as a task
+                impl.registerHandler(new BadKindImpl());   // inStock is a PREDICATE, bound as a task
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
                 assertTrue(e.getMessage().contains("inStock"), e.getMessage());
                 assertTrue(e.getMessage().contains("boolean"), e.getMessage());
@@ -133,7 +133,7 @@ class HandleBindingTest {
     void unregisteredWorkflowRejected() throws Exception {
         withServer((client, server) -> {
             try (Worker impl = new Worker(client, "impl-4")) {
-                impl.handlers(new OrphanImpl());
+                impl.registerHandler(new OrphanImpl());
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
                 assertTrue(e.getMessage().contains("is not registered"), e.getMessage());
             }
@@ -144,7 +144,7 @@ class HandleBindingTest {
     public record Item(String id, int qty, String state) {}
 
     /** Typed step logic: each method takes and returns the {@link Item} record (decoded via the codec). */
-    @Handlers("typed-wf")
+    @ForFlow("typed-wf")
     static final class TypedImpl {
         final AtomicReference<String> doneState;
         TypedImpl(AtomicReference<String> doneState) { this.doneState = doneState; }
@@ -164,7 +164,7 @@ class HandleBindingTest {
 
             AtomicReference<String> doneState = new AtomicReference<>();
             try (Worker impl = new Worker(client, "typed-impl")) {
-                impl.handlers(new TypedImpl(doneState));
+                impl.registerHandler(new TypedImpl(doneState));
                 impl.start();
 
                 String id = client.start("typed-wf", Map.of("id", "x1", "qty", 3));

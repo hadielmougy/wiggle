@@ -1,6 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -10,7 +10,7 @@ import java.util.concurrent.CountDownLatch;
  * many intermediate steps all canonicalise to {@link #hop} (an identity pass-through), while the final
  * {@code sink} step counts the instance down so the driver can time the drain.
  */
-@Handlers("bench-linear")
+@ForFlow("bench-linear")
 public final class BenchHandlers implements Benchmark.BenchSteps {
 
     private final CountDownLatch done;

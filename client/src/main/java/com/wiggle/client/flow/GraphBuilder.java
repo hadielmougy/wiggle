@@ -15,7 +15,7 @@ import java.util.function.UnaryOperator;
  * nodes and return the stream, and the terminal {@link #build()} produces the {@link FlowSpec}.
  * Nothing executes at definition time, and no step logic lives here -- every {@code step}/{@code
  * gate}/{@code effect}/{@code combine} is just a named node. The implementations are bound
- * separately on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes, matched to
+ * separately on a worker via {@link com.wiggle.client.worker.ForFlow @ForFlow} classes, matched to
  * the graph by name; a method's signature there defines its input/output types (types may change
  * from step to step, like {@code Stream.map}).
  *

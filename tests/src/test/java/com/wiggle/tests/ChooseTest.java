@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -60,7 +60,7 @@ class ChooseTest {
                 .thenApply(s::finalize));
     }
 
-    @Handlers("choose-default")
+    @ForFlow("choose-default")
     final class DefaultH {
         public boolean isGold(Map<String, Object> c) { return "gold".equals(c.get("tier")); }
         public boolean isPremium(Map<String, Object> c) { return c.get("tier") != null; }
@@ -76,7 +76,7 @@ class ChooseTest {
                 Wiggle.oneOf(f.when(s::isA).thenApply(s::a)).thenApply(s::finalize));
     }
 
-    @Handlers("choose-skip")
+    @ForFlow("choose-skip")
     static final class SkipH {
         public boolean isA(Map<String, Object> c) { return "a".equals(c.get("k")); }
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "path", "a"); }
@@ -90,7 +90,7 @@ class ChooseTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "w-choose").handlers(handlers)) {
+             Worker w = new Worker(client, "w-choose").registerHandler(handlers)) {
             client.register(bp);
             w.start();
             body.accept(client, bp);

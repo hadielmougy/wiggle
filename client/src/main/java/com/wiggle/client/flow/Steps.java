@@ -9,7 +9,7 @@ import java.lang.reflect.Proxy;
  * implementation.
  *
  * <p>That distinction is the whole point. A spec never runs a step: it records the step's name, and a
- * worker supplies the code by matching that name to a method on its {@code @Handlers} object. A
+ * worker supplies the code by matching that name to a method on its {@code @ForFlow} object. A
  * reference to a concrete class therefore names code the spec will never call, which reads as though
  * it will -- and if the worker binds a different object, the referenced method is silently not the one
  * that runs. An interface cannot mislead that way, because there is nothing behind it to run.

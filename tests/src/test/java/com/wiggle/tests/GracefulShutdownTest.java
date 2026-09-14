@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
@@ -43,7 +43,7 @@ class GracefulShutdownTest {
         return n;
     }
 
-    @Handlers("shutdown-drain")
+    @ForFlow("shutdown-drain")
     static final class DrainH {
         final AtomicInteger runsOfA, runsOfB, runsOfC;
         final CountDownLatch aStarted, proceed;
@@ -90,7 +90,7 @@ class GracefulShutdownTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
-            Worker worker = new Worker(client, "w-" + Ids.next("x")).handlers(drainH);
+            Worker worker = new Worker(client, "w-" + Ids.next("x")).registerHandler(drainH);
             worker.start();
             String id = client.start(bp, Map.of());
 
@@ -117,7 +117,7 @@ class GracefulShutdownTest {
 client.register(bp);
 
             // A fresh worker picks up right where the drain left off.
-            try (Worker second = new Worker(client, "w-" + Ids.next("x")).handlers(drainH)) {
+            try (Worker second = new Worker(client, "w-" + Ids.next("x")).registerHandler(drainH)) {
                 second.start();
                 InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status());

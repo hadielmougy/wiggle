@@ -24,7 +24,7 @@ public class TransactionWorker {
                 // SubmitTransactions publishes the topology; this worker only implements the steps,
                 // and may start before it does
                 .withAwaitRegistration(Duration.ofMinutes(5)))
-                .handlers(new AccountHandlers());
+                .registerHandler(new AccountHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

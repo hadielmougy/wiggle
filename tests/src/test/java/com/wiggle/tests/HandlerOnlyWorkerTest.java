@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
@@ -71,7 +71,7 @@ class HandlerOnlyWorkerTest {
                 .thenApply(s::d));
     }
 
-    @Handlers("how-linear")
+    @ForFlow("how-linear")
     public static final class LinearH {
         final AtomicInteger runs;
         LinearH(AtomicInteger runs) { this.runs = runs; }
@@ -97,7 +97,7 @@ class HandlerOnlyWorkerTest {
 
                 try (Worker w = new Worker(client, "w-" + Ids.next("x"),
                         WorkerOptions.defaults().withConcurrency(4))
-                        .handlers(new LinearH(runs))) {      // no register(spec): binds by name
+                        .registerHandler(new LinearH(runs))) {      // no register(spec): binds by name
                     w.start();
 
                     InstanceView v = client.awaitCompletion(client.start(spec, Map.of()),
@@ -131,7 +131,7 @@ class HandlerOnlyWorkerTest {
 
                 try (Worker w = new Worker(client, "w-" + Ids.next("x"),
                         WorkerOptions.defaults().withConcurrency(4))
-                        .handlers(new LinearH(new AtomicInteger()))) {
+                        .registerHandler(new LinearH(new AtomicInteger()))) {
                     w.start();
 
                     java.lang.reflect.Field f = Worker.class.getDeclaredField("graphs");

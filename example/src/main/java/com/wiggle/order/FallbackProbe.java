@@ -2,7 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -45,7 +45,7 @@ public final class FallbackProbe {
             submit.register(bp);
             try (Worker worker = new Worker(workerClient, "probe-worker",
                     WorkerOptions.defaults().withConcurrency(4))
-                    .handlers(new ProbeHandlers())) {
+                    .registerHandler(new ProbeHandlers())) {
                 worker.start();
                 Thread.sleep(1000);   // let the worker park its long-poll
 
@@ -79,7 +79,7 @@ public final class FallbackProbe {
         }
     }
 
-    @Handlers("fallback-probe")
+    @ForFlow("fallback-probe")
     public static final class ProbeHandlers {
         public Map<String, Object> ping(Map<String, Object> ctx) { return ctx; }
     }

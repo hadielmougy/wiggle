@@ -34,7 +34,7 @@ public final class Demo {
             client.register(flowSpec);   // the author publishes the topology, once
 
             try (Worker worker = new Worker(client, "worker-1")
-                    .handlers(new OrderHandlers())) {   // the worker only binds steps, by name
+                    .registerHandler(new OrderHandlers())) {   // the worker only binds steps, by name
                 worker.start();
 
                 System.out.println("\n--- happy path (retries through a flaky gateway) ---");

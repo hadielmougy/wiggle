@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
@@ -64,7 +64,7 @@ class JdbcForkJoinStressTest {
         Map<String, Object> notify(Map<String, Object> ctx);
     }
 
-    @Handlers("order-ish")
+    @ForFlow("order-ish")
     static final class OrderH {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public boolean inStock(Map<String, Object> ctx) { return true; }
@@ -109,7 +109,7 @@ class JdbcForkJoinStressTest {
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
                 client.register(bp);
-                w.handlers(new OrderH());
+                w.registerHandler(new OrderH());
                 workers.add(w.start());
             }
 

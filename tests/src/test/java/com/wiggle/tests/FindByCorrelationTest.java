@@ -2,7 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
@@ -28,7 +28,7 @@ class FindByCorrelationTest {
         Map<String, Object> work(Map<String, Object> ctx);
     }
 
-    @Handlers("corr")
+    @ForFlow("corr")
     static final class H {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
     }
@@ -48,7 +48,7 @@ class FindByCorrelationTest {
     private void run(String jdbcUrl) throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "corr-w").handlers(new H())) {
+             Worker w = new Worker(client, "corr-w").registerHandler(new H())) {
             client.register(wf());
             w.start();
             client.register(wf());

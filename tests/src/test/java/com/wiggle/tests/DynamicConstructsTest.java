@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
@@ -91,7 +91,7 @@ class DynamicConstructsTest {
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "dyn-" + Ids.next("x")).handlers(handlers)) {
+             Worker w = new Worker(client, "dyn-" + Ids.next("x")).registerHandler(handlers)) {
             client.register(bp);
             w.start();
             return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
@@ -108,7 +108,7 @@ class DynamicConstructsTest {
                 .thenApply(s::after));
     }
 
-    @Handlers("dyn-loop")
+    @ForFlow("dyn-loop")
     static final class LoopH {
         final AtomicInteger bodyRuns;
         LoopH(AtomicInteger bodyRuns) { this.bodyRuns = bodyRuns; }
@@ -147,7 +147,7 @@ class DynamicConstructsTest {
         assertEquals(true, Json.asObject(v.context()).get("done"));
     }
 
-    @Handlers("dyn-loop-once")
+    @ForFlow("dyn-loop-once")
     static final class LoopOnceH {
         final AtomicInteger bodyRuns;
         LoopOnceH(AtomicInteger bodyRuns) { this.bodyRuns = bodyRuns; }
@@ -172,7 +172,7 @@ class DynamicConstructsTest {
                 .thenApply(s::after));
     }
 
-    @Handlers("dyn-fan")
+    @ForFlow("dyn-fan")
     static final class FanH {
         /** The handler's parameter IS the element; base data and the index come from Step. */
         public Map<String, Object> upper(String item) {
@@ -245,7 +245,7 @@ class DynamicConstructsTest {
         assertEquals(true, ctx.get("done"));
     }
 
-    @Handlers("dyn-fan-map")
+    @ForFlow("dyn-fan-map")
     static final class MapFanH {
         /** Two-param style: the frozen base as a @Context parameter instead of Step.base(). */
         public String tag(@Context Map<String, Object> base, Long value) {
@@ -271,7 +271,7 @@ class DynamicConstructsTest {
         assertEquals(2L, Json.asObject(v.context()).get("distinct"), "duplicates collapse in a Set");
     }
 
-    @Handlers("dyn-fan-set")
+    @ForFlow("dyn-fan-set")
     static final class SetFanH {
         public String norm(String item) { return item.toUpperCase(); }   // scalar in, scalar out
         /** Ambient style: no @Context parameter — the base comes from Step.base() instead. */

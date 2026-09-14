@@ -4,7 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -52,7 +52,7 @@ class ForkJoinContextMergeTest {
         Map<String, Object> notify(Map<String, Object> ctx);
     }
 
-    @Handlers("merge-check")
+    @ForFlow("merge-check")
     static final class MergeH {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
@@ -88,7 +88,7 @@ class ForkJoinContextMergeTest {
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
                 client.register(bp);
-                w.handlers(new MergeH());
+                w.registerHandler(new MergeH());
                 workers.add(w.start());
             }
 
@@ -142,7 +142,7 @@ class ForkJoinContextMergeTest {
         Parcel notify(Parcel p);
     }
 
-    @Handlers("parcel-merge")
+    @ForFlow("parcel-merge")
     static final class ParcelH {
         public Parcel validate(Parcel p) { return p; }
         public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
@@ -173,7 +173,7 @@ class ForkJoinContextMergeTest {
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
                 client.register(bp);
-                w.handlers(new ParcelH());
+                w.registerHandler(new ParcelH());
                 workers.add(w.start());
             }
 

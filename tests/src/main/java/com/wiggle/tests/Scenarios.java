@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
@@ -26,14 +26,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * throws {@link AssertionError} on failure, so it can be driven either by
  * {@link #main} or by the JUnit wrapper in tests/src/test.
  *
- * <p>Each workflow is pure topology; its step logic lives in a {@code @Handlers} class below whose
+ * <p>Each workflow is pure topology; its step logic lives in a {@code @ForFlow} class below whose
  * method names match the steps and whose signatures define the types.
  */
 public final class Scenarios {
 
     private Scenarios() {}
 
-    // ---- step contracts: each scenario's steps, declared. The @Handlers classes below implement
+    // ---- step contracts: each scenario's steps, declared. The @ForFlow classes below implement
     // them by name; nothing here runs a step.
 
     interface SeqSteps {
@@ -124,7 +124,7 @@ public final class Scenarios {
         client.register(bp);
         Worker w = new Worker(client, "w-" + Ids.next("x"),
                 WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)))
-                .handlers(handlers);
+                .registerHandler(handlers);
         return w.start();
     }
 
@@ -160,7 +160,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("seq")
+    @ForFlow("seq")
     static final class SeqH {
         public Map<String, Object> one(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
         public Map<String, Object> two(Map<String, Object> ctx) { return put(ctx, "b", (Long) ctx.get("a") + 1); }
@@ -183,7 +183,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("gated")
+    @ForFlow("gated")
     static final class GatedH {
         final AtomicInteger downstream;
         GatedH(AtomicInteger downstream) { this.downstream = downstream; }
@@ -215,7 +215,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("fork-merge")
+    @ForFlow("fork-merge")
     static final class ForkMergeH {
         public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "seeded", true); }
         public Map<String, Object> slowLeft(Map<String, Object> ctx) {
@@ -248,7 +248,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("join-once")
+    @ForFlow("join-once")
     static final class JoinOnceH {
         final AtomicInteger afterCount;
         JoinOnceH(AtomicInteger afterCount) { this.afterCount = afterCount; }
@@ -290,7 +290,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("nested")
+    @ForFlow("nested")
     static final class NestedH {
         public Map<String, Object> innerA(Map<String, Object> ctx) { return put(ctx, "ia", 1L); }
         public Map<String, Object> innerB(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
@@ -327,7 +327,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("branch-gate")
+    @ForFlow("branch-gate")
     static final class BranchGateH {
         public boolean gate(Map<String, Object> ctx) { return false; }
         public Map<String, Object> skipped(Map<String, Object> ctx) { return put(ctx, "skipped", true); }
@@ -355,7 +355,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("retry")
+    @ForFlow("retry")
     static final class RetryH {
         final Map<String, AtomicInteger> attempts;
         RetryH(Map<String, AtomicInteger> attempts) { this.attempts = attempts; }
@@ -380,7 +380,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("retry-exhausted")
+    @ForFlow("retry-exhausted")
     static final class ExhaustedH {
         public Map<String, Object> alwaysFails(Map<String, Object> ctx) {
             throw new IllegalStateException("permanent trouble");
@@ -402,7 +402,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("permanent")
+    @ForFlow("permanent")
     static final class PermanentH {
         final AtomicInteger calls;
         PermanentH(AtomicInteger calls) { this.calls = calls; }
@@ -432,7 +432,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("sleeper")
+    @ForFlow("sleeper")
     static final class SleeperH {
         public Map<String, Object> before(Map<String, Object> ctx) { return put(ctx, "before", System.currentTimeMillis()); }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", System.currentTimeMillis()); }
@@ -508,7 +508,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("cancellable")
+    @ForFlow("cancellable")
     static final class CancellableH {
         public Map<String, Object> slow(Map<String, Object> ctx) {
             Check.sleep(2000);
@@ -533,7 +533,7 @@ public final class Scenarios {
                     WorkerOptions.defaults()
                             .withLease(Duration.ofMillis(300))          // heartbeat fires at ~100ms
                             .withLongPollWait(Duration.ofMillis(250)))
-                    .handlers(new HeartbeatH(invocations));
+                    .registerHandler(new HeartbeatH(invocations));
             try (w) {
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
@@ -544,7 +544,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("heartbeat")
+    @ForFlow("heartbeat")
     static final class HeartbeatH {
         final AtomicInteger invocations;
         HeartbeatH(AtomicInteger invocations) { this.invocations = invocations; }
@@ -633,7 +633,7 @@ public final class Scenarios {
         });
     }
 
-    @Handlers("distributed")
+    @ForFlow("distributed")
     static final class DistributedH {
         final AtomicInteger total;
         DistributedH(AtomicInteger total) { this.total = total; }

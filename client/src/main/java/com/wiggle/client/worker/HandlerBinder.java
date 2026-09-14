@@ -1,6 +1,5 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
@@ -18,7 +17,7 @@ import java.util.Map;
 import java.util.TreeSet;
 
 /**
- * The worker's reflective seam: turns a {@link Handlers @Handlers}-annotated object into
+ * The worker's reflective seam: turns a {@link ForFlow @ForFlow}-annotated object into
  * executable {@link ActivityHandler}s. Two pure operations, deliberately free of I/O and of the
  * worker's runtime state so every signature rule here is unit-testable against a compiled graph:
  *
@@ -42,7 +41,7 @@ final class HandlerBinder {
     private HandlerBinder() {}
 
     /** One step candidate: the object to invoke on and its handler method — a plain
-     *  {@code @Handlers} method (target = the handlers object) or a factory-produced typed
+     *  {@code @ForFlow} method (target = the handlers object) or a factory-produced typed
      *  activity (target = the activity instance, method = its execute/test/apply; compensate
      *  set when the instance implements {@link Compensable}). */
     record Candidate(Object target, Method method, Method compensate) {}
@@ -76,7 +75,7 @@ final class HandlerBinder {
     record Result(List<Binding> bindings, List<String> unserved) {}
 
     /**
-     * Inventories a {@link Handlers @Handlers}-annotated object. Each public instance method with
+     * Inventories a {@link ForFlow @ForFlow}-annotated object. Each public instance method with
      * parameters is a step candidate keyed by its canonical name; {@link Decode @Decode} methods
      * are collected as custom decoders; zero-parameter methods are helpers and ignored. Two
      * methods whose names collide under case-folding are rejected as ambiguous.
@@ -162,14 +161,14 @@ final class HandlerBinder {
 
     private static @NonNull String getWorkflowName(Object handlerObject) {
         if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
-        Handlers ann = handlerObject.getClass().getAnnotation(Handlers.class);
+        ForFlow ann = handlerObject.getClass().getAnnotation(ForFlow.class);
         if (ann == null) {
             throw new IllegalArgumentException(handlerObject.getClass().getName()
-                    + " is not annotated @Handlers(\"<workflow>\")");
+                    + " is not annotated @ForFlow(\"<workflow>\")");
         }
         String workflow = ann.value();
         if (workflow == null || workflow.isBlank()) {
-            throw new IllegalArgumentException("@Handlers on " + handlerObject.getClass().getName()
+            throw new IllegalArgumentException("@ForFlow on " + handlerObject.getClass().getName()
                     + " needs the workflow name");
         }
         return workflow;

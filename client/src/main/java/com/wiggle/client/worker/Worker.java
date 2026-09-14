@@ -1,8 +1,6 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.ActivityHandler;
-import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.*;
 
 import java.util.*;
@@ -33,7 +31,7 @@ public final class Worker implements AutoCloseable {
     private final Set<String> queues = ConcurrentHashMap.newKeySet();
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
-    /** {@link Handlers @Handlers} objects, matched to graph steps by name on start. */
+    /** {@link ForFlow @ForFlow} objects, matched to graph steps by name on start. */
     /** One {@code handlers(...)} call: the scanned methods, and the version they were bound for. */
     private record Registration(HandlerBinder.HandlerSet set, Integer version) {}
 
@@ -94,7 +92,7 @@ public final class Worker implements AutoCloseable {
     public boolean isRunning() { return running.get(); }
 
     /**
-     * Binds a {@link Handlers @Handlers}-annotated object's methods as this worker's step
+     * Binds a {@link ForFlow @ForFlow}-annotated object's methods as this worker's step
      * implementations. The annotation names the workflow; each method whose name matches a step
      * (case/style-insensitive, so {@code inStock} binds {@code in-stock}) is a handler, its signature
      * defining the step: one parameter is the input (decoded from JSON into that type), a
@@ -110,7 +108,7 @@ public final class Worker implements AutoCloseable {
      * default fold — every combine must have an explicit handler on some worker, and its return is
      * the complete post-join context.
      */
-    public Worker handlers(Object handlerObject) {
+    public Worker registerHandler(Object handlerObject) {
         handlerSets.add(new Registration(HandlerBinder.scan(handlerObject), null));
         servesEveryVersion.set(true);
         return this;
@@ -132,7 +130,7 @@ public final class Worker implements AutoCloseable {
      * a migration), and other workflows entirely. If <em>any</em> registration is unversioned, the
      * worker claims every version -- the scoping is only as narrow as its least specific binding.
      */
-    public Worker handlers(Object handlerObject, int version) {
+    public Worker registerHandler(Object handlerObject, int version) {
         HandlerBinder.HandlerSet set = HandlerBinder.scan(handlerObject);
         handlerSets.add(new Registration(set, version));
         servedVersions.add(new WorkflowVersion(set.workflow(), version));
@@ -157,7 +155,7 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Resolves a {@link Handlers @Handlers} object against the registered graph (fetched here — the
+     * Resolves a {@link ForFlow @ForFlow} object against the registered graph (fetched here — the
      * binder itself is pure) and installs the resulting bindings. See {@link HandlerBinder}.
      */
     private void matchHandlerSet(Registration registration) {

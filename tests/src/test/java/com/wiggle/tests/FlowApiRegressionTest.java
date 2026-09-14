@@ -269,7 +269,7 @@ class FlowApiRegressionTest {
     //
     // Same logic as the conformance suite's. A combine takes one parameter per arm, in fork order.
 
-    @com.wiggle.client.worker.Handlers("fork-merge")
+    @com.wiggle.client.worker.ForFlow("fork-merge")
     public static final class ForkMerge implements ForkMergeSteps {
         public Map<String, Object> seed(Map<String, Object> c) { return Scenarios.put(c, "seeded", true); }
         public Map<String, Object> slowLeft(Map<String, Object> c) {
@@ -285,7 +285,7 @@ class FlowApiRegressionTest {
         public Map<String, Object> after(Map<String, Object> c) { return Scenarios.put(c, "joined", true); }
     }
 
-    @com.wiggle.client.worker.Handlers("join-once")
+    @com.wiggle.client.worker.ForFlow("join-once")
     public static final class JoinOnce implements JoinOnceSteps {
         private final java.util.concurrent.atomic.AtomicInteger after;
         JoinOnce(java.util.concurrent.atomic.AtomicInteger after) { this.after = after; }
@@ -302,7 +302,7 @@ class FlowApiRegressionTest {
         }
     }
 
-    @com.wiggle.client.worker.Handlers("nested")
+    @com.wiggle.client.worker.ForFlow("nested")
     public static final class Nested implements NestedSteps {
         public Map<String, Object> innerA(Map<String, Object> c) { return Scenarios.put(c, "ia", 1L); }
         public Map<String, Object> innerB(Map<String, Object> c) { return Scenarios.put(c, "ib", 1L); }
@@ -319,7 +319,7 @@ class FlowApiRegressionTest {
         public Map<String, Object> outerDone(Map<String, Object> c) { return Scenarios.put(c, "outerAfter", 1L); }
     }
 
-    @com.wiggle.client.worker.Handlers("branch-gate")
+    @com.wiggle.client.worker.ForFlow("branch-gate")
     public static final class BranchGate implements BranchGateSteps {
         public boolean gate(Map<String, Object> c) { return false; }
         public Map<String, Object> skipped(Map<String, Object> c) { return Scenarios.put(c, "skipped", true); }
@@ -361,7 +361,7 @@ class FlowApiRegressionTest {
             Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
             client.register(spec);
-            w.handlers(handlers);
+            w.registerHandler(handlers);
             w.start();
             try {
                 InstanceView v = client.awaitCompletion(client.start(spec, input), Duration.ofSeconds(30));

@@ -253,8 +253,8 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
-// 1. The logic lives in a @Handlers class. The signature defines the step.
-@Handlers("greet")
+// 1. The logic lives in a @ForFlow class. The signature defines the step.
+@ForFlow("greet")
 class GreetHandlers implements GreetSteps {
     public Map<String, Object> sayHello(Map<String, Object> ctx) {
         Map<String, Object> next = new HashMap<>(ctx);
@@ -336,7 +336,7 @@ defines the step kind**: a `boolean` return is a gate, `void` is an effect, anyt
 task whose return value becomes the new context:
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public Order   validate(Order o)     { return o.withStatus("VALIDATED"); }
     public boolean inStock(Order o)      { return o.quantity() > 0; }          // gate: "in-stock"
@@ -369,7 +369,7 @@ Order collect(@Context Order base, List<Priced> priced) { /* you decide what lan
 ```
 
 Run it from any process — different teams can serve different steps of the *same* flow, each
-with its own `@Handlers` class and its own deploy, matched by name:
+with its own `@ForFlow` class and its own deploy, matched by name:
 
 ```java
 try (DirectConnection wiggle = WiggleConnection.direct("localhost:8080")) {
@@ -433,7 +433,7 @@ class per recipe where the other is a topology file plus a handlers file.
 | **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Coordinator** | `coordinator` | Optional control plane: stateless processes over their own small database that allocate namespaces to cells, publish epoch rings, track node health, and answer "where does this instance live?". Several elect one leader with the same announce-and-heartbeat election the cells run (`election`). |
-| **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
+| **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
 | **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
 | **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
 | **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ coordinator ∣ console`, every storage backend bundled. |

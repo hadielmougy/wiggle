@@ -41,7 +41,7 @@ class WorkerPacingTest {
         Map<String, Object> hop10(Map<String, Object> ctx);
     }
 
-    @Handlers("pacing")
+    @ForFlow("pacing")
     static final class PacingH {
         public Map<String, Object> hop1(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> hop2(Map<String, Object> ctx) { return ctx; }
@@ -78,7 +78,7 @@ client.register(chain());
 
             try (Worker w = new Worker(client, "pacing-w",
                     WorkerOptions.defaults().withConcurrency(CONCURRENCY))) {
-                w.handlers(new PacingH());
+                w.registerHandler(new PacingH());
                 long t0 = System.nanoTime();
                 w.start();
                 for (String id : ids) {

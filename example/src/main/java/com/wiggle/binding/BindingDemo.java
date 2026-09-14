@@ -46,11 +46,11 @@ public final class BindingDemo {
             try (Worker fulfilment = new Worker(client, "fulfilment-worker");
                  Worker payments = new Worker(client, "payments-worker")) {
 
-                fulfilment.handlers(new FulfilmentHandlers())
+                fulfilment.registerHandler(new FulfilmentHandlers())
                           .start();   // reconciles: validates names/kinds, discovers queues
                 System.out.println("[fulfilment] serving validate / in-stock / ship / notify by name");
 
-                payments.handlers(new PaymentsHandlers())
+                payments.registerHandler(new PaymentsHandlers())
                         .start();
                 System.out.println("[payments]   serving charge on the payments queue");
 

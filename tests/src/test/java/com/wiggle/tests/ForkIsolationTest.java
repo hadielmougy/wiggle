@@ -4,7 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -125,7 +125,7 @@ class ForkIsolationTest {
         return next;
     }
 
-    @Handlers("isolation")
+    @ForFlow("isolation")
     static final class IsolationH {
         public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "base", "B"); }
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
@@ -142,7 +142,7 @@ class ForkIsolationTest {
         }
     }
 
-    @Handlers("ignore-arm")
+    @ForFlow("ignore-arm")
     static final class IgnoreArmH {
         public Map<String, Object> k(Map<String, Object> ctx) { return put(ctx, "kept", true); }
         public Map<String, Object> d(Map<String, Object> ctx) { return put(ctx, "dropped", true); }
@@ -153,7 +153,7 @@ class ForkIsolationTest {
         public Map<String, Object> tail(Map<String, Object> ctx) { return ctx; }
     }
 
-    @Handlers("replace-check")
+    @ForFlow("replace-check")
     static final class ReplaceH {
         public Map<String, Object> seed(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1); }
@@ -163,7 +163,7 @@ class ForkIsolationTest {
         }
     }
 
-    @Handlers("no-combine-handler")
+    @ForFlow("no-combine-handler")
     static final class NoCombineH {
         public Map<String, Object> x1(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> y1(Map<String, Object> ctx) { return ctx; }
@@ -184,7 +184,7 @@ class ForkIsolationTest {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
             client.register(bp);
-            w.handlers(handlers);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);
@@ -208,7 +208,7 @@ class ForkIsolationTest {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
             client.register(bp);
-            w.handlers(handlers);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);
