@@ -31,11 +31,13 @@ public interface Dialect {
 
     /**
      * Wraps an {@code INSERT} so that a primary-key collision is silently ignored (idempotent
-     * re-registration). {@code noopColumn} is a non-key column self-assigned by dialects that
-     * express this as an upsert (MySQL's {@code ON DUPLICATE KEY UPDATE}). Dialects with no inline
-     * inline form would return the statement unchanged and rely on {@link #isDuplicateKey}.
+     * re-registration). Both dialects take PostgreSQL's {@code ON CONFLICT DO NOTHING}, so this is
+     * not a per-dialect choice; a backend with no inline form would override it to return the
+     * statement unchanged and lean on {@link #isDuplicateKey} instead.
      */
-    String insertIgnore(String insertSql, String noopColumn);
+    default String insertIgnore(String insertSql) {
+        return insertSql + " ON CONFLICT DO NOTHING";
+    }
 
     /** Whether the exception (or any in its chain) is a duplicate/unique-key violation. */
     default boolean isDuplicateKey(SQLException e) {
@@ -46,11 +48,17 @@ public interface Dialect {
     }
 
     /**
-     * The full upsert for {@code wf_schedule} keyed by {@code id}. Every dialect binds the same
-     * seven parameters in insert-column order: id, workflow, interval_millis, cron, context,
-     * next_fire_at, created_at -- so only the SQL text differs.
+     * The full upsert for {@code wf_schedule} keyed by {@code id}, binding seven parameters in
+     * insert-column order: id, workflow, interval_millis, cron, context, next_fire_at, created_at.
+     * Both dialects take this verbatim; a backend that spells its upsert differently (a {@code MERGE})
+     * would override it, keeping the same parameter order.
      */
-    String scheduleUpsert();
+    default String scheduleUpsert() {
+        return "INSERT INTO wf_schedule (id,workflow,interval_millis,cron,context,next_fire_at,created_at) " +
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET workflow=EXCLUDED.workflow, " +
+                "interval_millis=EXCLUDED.interval_millis, cron=EXCLUDED.cron, " +
+                "context=EXCLUDED.context, next_fire_at=EXCLUDED.next_fire_at";
+    }
 
     /**
      * Acquires a transaction-scoped lock serialising migrations across nodes. PostgreSQL uses an

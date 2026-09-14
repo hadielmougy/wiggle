@@ -27,7 +27,7 @@ class DialectTest {
         PostgresDialect d = new PostgresDialect();
         assertTrue(d.supportsSkipLocked());
         assertTrue(d.supportsReturning());
-        assertEquals("INSERT INTO t VALUES (?) ON CONFLICT DO NOTHING", d.insertIgnore("INSERT INTO t VALUES (?)", "c"));
+        assertEquals("INSERT INTO t VALUES (?) ON CONFLICT DO NOTHING", d.insertIgnore("INSERT INTO t VALUES (?)"));
         assertTrue(d.scheduleUpsert().contains("ON CONFLICT (id) DO UPDATE"));
     }
 
@@ -44,10 +44,10 @@ class DialectTest {
         PostgresDialect pg = new PostgresDialect();
         H2Dialect h2 = new H2Dialect();
         // Same schema, same upserts: H2 in PostgreSQL mode takes the store's SQL verbatim, which is
-        // why there is no statement-rewriting hook on Dialect any more.
+        // why both of these are now one shared default rather than two identical overrides.
         assertEquals(pg.scheduleUpsert(), h2.scheduleUpsert(), "the schedule upsert is identical");
-        assertEquals(pg.insertIgnore("INSERT INTO t VALUES (?)", "c"),
-                h2.insertIgnore("INSERT INTO t VALUES (?)", "c"), "conflict handling is identical");
+        assertEquals(pg.insertIgnore("INSERT INTO t VALUES (?)"),
+                h2.insertIgnore("INSERT INTO t VALUES (?)"), "conflict handling is identical");
         // And the difference that does matter.
         assertTrue(pg.supportsSkipLocked() && pg.supportsReturning(), "PostgreSQL claims in one statement");
         assertFalse(h2.supportsSkipLocked() || h2.supportsReturning(), "H2 falls back to compare-and-set");

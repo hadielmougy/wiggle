@@ -475,10 +475,10 @@ public final class JdbcStorage implements Storage {
             // The version is a content hash of the topology, so an existing (name,version) row
             // is byte-for-byte identical and re-registration is a genuine no-op. insertIgnore makes
             // that idempotent atomically -- unlike a DELETE-then-INSERT, it leaves no window in which
-            // two nodes registering the same graph collide on the primary key. Oracle has no inline
-            // ignore, so a genuine concurrent duplicate surfaces as a duplicate-key error we swallow.
+            // two nodes registering the same graph collide on the primary key. The isDuplicateKey
+            // catch below covers a backend whose ignore is not inline.
             try (PreparedStatement ins = ps(dialect.insertIgnore("INSERT INTO wf_definition " +
-                    "(name,version,body,registered_at) VALUES (?,?,?,?)", "registered_at"))) {
+                    "(name,version,body,registered_at) VALUES (?,?,?,?)"))) {
                 ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
                 ins.setLong(4, System.currentTimeMillis());
                 ins.executeUpdate();
@@ -494,9 +494,9 @@ public final class JdbcStorage implements Storage {
             if (graphExists(def.name(), def.version())) return;
             try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
                     "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key,loop_budget,compensable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
+                    "items_key,item_key,loop_budget,compensable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
                  PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
-                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)", "to_node"))) {
+                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)"))) {
                 for (Node n : def.nodes().values()) {
                     node.setString(1, def.name()); node.setInt(2, def.version()); node.setString(3, n.id());
                     node.setString(4, n.kind().name()); node.setString(5, n.name()); node.setString(6, n.activity());
