@@ -408,9 +408,12 @@ client.createCronSchedule("nightly-report", "0 3 * * *", null);
 client.cancel(id, "customer changed their mind");
 ```
 
-**More runnable code:** `./gradlew :example:run` (full order demo, one JVM) ·
-`./gradlew :example:runCookbook` — the **[DSL cookbook](docs/dsl-cookbook.md)**: eight
-workflows exercising every operator.
+**More runnable code:** `./gradlew :example:run` (full order demo, one JVM) · the
+**[cookbook](docs/dsl-cookbook.md)** — eight workflows exercising every operator, in both
+authoring modes: `./gradlew :example:runCookbook` ([by name](example/src/main/java/com/wiggle/cookbook/Cookbook.java))
+and `./gradlew :example:runTypedCookbook` ([by method reference](example/src/main/java/com/wiggle/cookbook/TypedCookbook.java)).
+The same eight graphs either way — worth reading side by side, since the typed one is a single
+class per recipe where the other is a topology file plus a handlers file.
 
 ---
 
@@ -622,7 +625,7 @@ Suggestions and PRs welcome — open an issue.
 | | |
 |---|---|
 | 🚀 **[Onboarding + full configuration reference](docs/onboarding.md)** | everything, one page |
-| 🧑‍🍳 **[DSL cookbook](docs/dsl-cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
+| 🧑‍🍳 **[Cookbook](docs/dsl-cookbook.md)** | every operator in runnable code, both ways — `./gradlew :example:runCookbook` ∣ `:example:runTypedCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | 🧫 **[Sharding & epochs](docs/sharding-and-epochs.md)** | the cellular model in depth |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
