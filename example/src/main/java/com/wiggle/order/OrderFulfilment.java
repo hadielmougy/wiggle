@@ -1,8 +1,7 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -11,6 +10,13 @@ import java.time.Duration;
 /**
  * The workflow <em>topology</em>: named steps and how they fork and rejoin. It compiles to a graph
  * the server drives; the step logic lives in {@link OrderHandlers}, bound on the worker by name.
+ *
+ * <p>Written with the future-shaped API in {@code com.wiggle.client.flow}: each step is a method
+ * reference to the handler that implements it, so the compiler checks that every step consumes what
+ * the one before it produced, and the node names come from the methods rather than from strings
+ * typed twice. Nothing runs here -- the chain is walked once, at definition time, and compiles to
+ * exactly the graph the equivalent {@code Wiggle.graph(...)} chain would (see
+ * {@code FlowEquivalenceTest}). The same {@link OrderHandlers} instance can serve the worker.
  */
 public final class OrderFulfilment {
 
@@ -26,20 +32,26 @@ public final class OrderFulfilment {
         return v == null || v.isBlank() ? ExecutionMode.SERVER : ExecutionMode.valueOf(v.trim());
     }
 
-    public static Blueprint blueprint() {
-        return Workflow.define("order-fulfilment").execution(ExecutionMode.LOCAL_ASYNC)
-                .step("validate")
-                .gate("in-stock")
-                .fork(
-                        Branch.of("payment", s -> s
-                                .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(100)))
-                                .step("capture")),
-                        Branch.of("shipping", s -> s
-                                .step("reserve-stock")
-                                .step("print-label")))
-                .combine("merge")
-                .step("notify")
-                .effect("audit")
-                .build();
+    public static FlowSpec flowSpec() {
+        return Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+            var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
+                    .thenApply(s::validate)
+                    .thenFilter(s::inStock);
+
+            // continuing `validated` twice is the fan-out; each arm runs on its own isolated copy
+            var payment = validated
+                    .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
+                    .thenApply(s::capture);
+            var shipping = validated
+                    .thenApply(s::reserveStock)
+                    .thenApply(s::printLabel);
+
+            // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
+            // its shape is checked against these arms here, at definition time
+            return Wiggle.allOf(payment, shipping)
+                    .combineWithContext(s::merge)
+                    .thenApply(s::notify)
+                    .thenAccept(s::audit);
+        });
     }
 }

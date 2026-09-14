@@ -1,7 +1,7 @@
 package com.wiggle.postgres;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Ids;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.jdbc.JdbcStorage;
@@ -47,8 +47,8 @@ class PostgresClaimTest {
     }
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
-    private static Blueprint uniqueWorkflow() {
-        return Workflow.define("pg-claim-" + Ids.next("wf"))
+    private static FlowSpec uniqueWorkflow() {
+        return Wiggle.graph("pg-claim-" + Ids.next("wf"))
                 .step("work")
                 .build();
     }
@@ -57,7 +57,7 @@ class PostgresClaimTest {
     void claimsWithLease() {
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint bp = uniqueWorkflow();
+            FlowSpec bp = uniqueWorkflow();
             engine.register(bp.definition());
             engine.start(bp.name(), bp.version(), Map.of(), null);
 
@@ -76,7 +76,7 @@ class PostgresClaimTest {
         int tasks = 20;
         try (JdbcStorage storage = storage()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
-            Blueprint bp = uniqueWorkflow();
+            FlowSpec bp = uniqueWorkflow();
             engine.register(bp.definition());
             for (int i = 0; i < tasks; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
 

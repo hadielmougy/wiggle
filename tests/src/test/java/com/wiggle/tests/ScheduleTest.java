@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -25,8 +25,8 @@ class ScheduleTest {
         return new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
     }
 
-    private static Blueprint probe() {
-        return Workflow.define("sched-probe").step("work").build();
+    private static FlowSpec probe() {
+        return Wiggle.graph("sched-probe").step("work").build();
     }
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")
@@ -34,7 +34,7 @@ class ScheduleTest {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
-            Blueprint bp = probe();
+            FlowSpec bp = probe();
             engine.register(bp.definition());
 
             String id = engine.createSchedule("sched-probe", Duration.ofMillis(50), Map.of("from", "schedule"));

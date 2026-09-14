@@ -1,6 +1,5 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 
@@ -28,8 +27,8 @@ public final class OnboardingHandlers {
     }
 
     public Map<String, Object> merge(@Context Map<String, Object> base,
-                                     @Arm("send-welcome") Map<String, Object> welcome,
-                                     @Arm("provision") Map<String, Object> provision) {
+                                     Map<String, Object> welcome,
+                                     Map<String, Object> provision) {
         Map<String, Object> out = new LinkedHashMap<>(base);
         if (welcome != null) out.putAll(welcome);
         if (provision != null) out.putAll(provision);

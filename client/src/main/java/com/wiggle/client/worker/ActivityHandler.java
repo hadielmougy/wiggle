@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.worker;
 
 /**
  * The JSON-level view of a step, produced by the DSL and consumed by the worker.

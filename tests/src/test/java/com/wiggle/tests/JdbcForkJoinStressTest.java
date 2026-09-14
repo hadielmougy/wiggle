@@ -1,9 +1,8 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.worker.Arm;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Step;
@@ -40,8 +39,8 @@ class JdbcForkJoinStressTest {
         return n;
     }
 
-    private static Blueprint blueprint() {
-        return Workflow.define("order-ish")
+    private static FlowSpec flowSpec() {
+        return Wiggle.graph("order-ish")
                 .step("validate")
                 .gate("in-stock")
                 .fork(
@@ -70,8 +69,8 @@ class JdbcForkJoinStressTest {
         public Map<String, Object> reserve(Map<String, Object> ctx) { return put(ctx, "reserved", true); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "labelled", true); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("payment") Map<String, Object> payment,
-                                         @Arm("shipping") Map<String, Object> shipping) {
+                                         Map<String, Object> payment,
+                                         Map<String, Object> shipping) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (payment != null) out.putAll(payment);
             if (shipping != null) out.putAll(shipping);
@@ -85,7 +84,7 @@ class JdbcForkJoinStressTest {
         // One shared database, three server nodes -- as close to the kind cluster as a single
         // JVM gets: real leader election, three engines driving the same store.
         String url = "jdbc:h2:mem:stress-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        Blueprint bp = blueprint();
+        FlowSpec bp = flowSpec();
 
         List<WiggleServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();

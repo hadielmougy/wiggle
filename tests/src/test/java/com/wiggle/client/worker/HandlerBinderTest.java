@@ -1,8 +1,8 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.ActivityHandler;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,7 +68,7 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ bind: kinds & signatures
 
     private static WorkflowDefinition linear() {
-        return Workflow.define("wf").step("work").gate("ok").effect("log").build().definition();
+        return Wiggle.graph("wf").step("work").gate("ok").effect("log").build().definition();
     }
 
     @Test @DisplayName("bind: task returns whole context, gate returns boolean, effect returns null")
@@ -129,7 +129,7 @@ class HandlerBinderTest {
 
     @Test @DisplayName("bind reports unserved steps and applies queue defaulting")
     void unservedAndQueues() {
-        WorkflowDefinition def = Workflow.define("wf")
+        WorkflowDefinition def = Wiggle.graph("wf")
                 .step("served", "special-queue")
                 .step("someone-elses")
                 .build().definition();
@@ -182,14 +182,14 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ combines
 
     private static WorkflowDefinition forked() {
-        return Workflow.define("wf")
+        return Wiggle.graph("wf")
                 .fork(Branch.of("a", s -> s.step("a1")),
                       Branch.of("b", s -> s.step("b1")))
                 .combine("merge")
                 .build().definition();
     }
 
-    @Test @DisplayName("fork combine: @Arm binding, ambient Step.base(), and a verbatim whole return")
+    @Test @DisplayName("fork combine: arms by position, ambient Step.base(), and a verbatim whole return")
     void forkCombine() throws Exception {
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new ForkCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
@@ -200,7 +200,7 @@ class HandlerBinderTest {
             // the staged context: pre-fork base + one key per arm
             Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
             assertEquals(Map.of("pre", "P", "x", 1L, "y", 2L), out,
-                    "combine reads arms as @Arm params and the base ambiently, returns verbatim");
+                    "combine reads its arms in fork order and the base ambiently, returns verbatim");
         } finally {
             Step.end();
         }
@@ -210,7 +210,7 @@ class HandlerBinderTest {
     static final class ForkCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(@Arm("a") Map<String, Object> a, @Arm("b") Map<String, Object> b) {
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) {
             Map<String, Object> out = new LinkedHashMap<>(Step.base());   // ambient style: no @Context param
             out.putAll(a);
             out.putAll(b);
@@ -218,17 +218,45 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("fork combine rejects a plain (un-annotated) parameter")
-    void forkCombineRejectsPlainParam() throws Exception {
-        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked());
+    @Test @DisplayName("a combine takes the arms by position, in fork order")
+    void forkCombineBindsByPosition() throws Exception {
+        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new PositionalCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
                 .filter(b -> b.step().equals("merge")).findFirst().orElseThrow().handler();
+
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            assertThrows(IllegalStateException.class, () -> merge.invoke(Map.of()));
+            Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
+            assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
+                    "parameter order is fork order: arm 'a' first, arm 'b' second");
         } finally {
             Step.end();
         }
+    }
+
+    @Handlers("wf")
+    static final class PositionalCombineH {
+        public Map<String, Object> a1(Map<String, Object> c) { return c; }
+        public Map<String, Object> b1(Map<String, Object> c) { return c; }
+        // @Context still needs its annotation -- it is what distinguishes the base from an arm
+        public Map<String, Object> merge(@Context Map<String, Object> base,
+                                         Map<String, Object> a, Map<String, Object> b) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("base", base.get("pre"));
+            out.put("first", a);
+            out.put("second", b);
+            return out;
+        }
+    }
+
+    @Test @DisplayName("a combine must take every arm, since they bind by position")
+    void forkCombineMustTakeEveryArm() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked()));
+        assertTrue(ex.getMessage().contains("[a, b], in that order"),
+                "the error names the arms and their order: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("ignore it"),
+                "and says what to do about an arm you do not need: " + ex.getMessage());
     }
 
     @Handlers("wf")
@@ -238,8 +266,23 @@ class HandlerBinderTest {
         public Map<String, Object> merge(Map<String, Object> notAnnotated) { return notAnnotated; }
     }
 
+    @Test @DisplayName("a combine that takes more parameters than the fork has arms is rejected")
+    void forkCombineRejectsTooManyArms() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new WideCombineH()), forked()));
+        assertTrue(ex.getMessage().contains("more arms than the fork has"), ex.getMessage());
+    }
+
+    @Handlers("wf")
+    static final class WideCombineH {
+        public Map<String, Object> a1(Map<String, Object> c) { return c; }
+        public Map<String, Object> b1(Map<String, Object> c) { return c; }
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b,
+                                         Map<String, Object> c) { return a; }
+    }
+
     private static WorkflowDefinition eachGraph() {
-        return Workflow.define("wf")
+        return Wiggle.graph("wf")
                 .forEach("per-item", "items", b -> b.step("norm"))
                 .combine("collect")
                 .build().definition();

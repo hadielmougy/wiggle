@@ -1,8 +1,8 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Case;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Case;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -38,8 +38,8 @@ class ChooseTest {
     }
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
-    private Blueprint withDefault() {
-        return Workflow.define("choose-default")
+    private FlowSpec withDefault() {
+        return Wiggle.graph("choose-default")
                 .choose(
                         Case.when("is-gold", b -> b.step("gold")),
                         Case.when("is-premium", b -> b.step("premium")),   // also true for "gold": must not win
@@ -59,8 +59,8 @@ class ChooseTest {
     }
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
-    private Blueprint withoutDefault() {
-        return Workflow.define("choose-skip")
+    private FlowSpec withoutDefault() {
+        return Wiggle.graph("choose-skip")
                 .choose(
                         Case.when("is-a", b -> b.step("a")))
                 .step("finalize")
@@ -74,8 +74,8 @@ class ChooseTest {
         public Map<String, Object> finalize(Map<String, Object> c) { return put(c, "done", true); }
     }
 
-    private void withServer(Blueprint bp, Object handlers,
-                            java.util.function.BiConsumer<WiggleClient, Blueprint> body) throws Exception {
+    private void withServer(FlowSpec bp, Object handlers,
+                            java.util.function.BiConsumer<WiggleClient, FlowSpec> body) throws Exception {
         ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -87,7 +87,7 @@ class ChooseTest {
         }
     }
 
-    private Map<String, Object> run(WiggleClient client, Blueprint bp, Map<String, Object> input) {
+    private Map<String, Object> run(WiggleClient client, FlowSpec bp, Map<String, Object> input) {
         InstanceView v = client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
         assertEquals("COMPLETED", v.status(), "status");
         return Json.asObject(v.context());

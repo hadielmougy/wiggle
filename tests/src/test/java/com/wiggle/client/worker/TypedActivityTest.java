@@ -1,9 +1,9 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.ActivityHandler;
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.worker.ActivityHandler;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.ServerConfig;
@@ -64,13 +64,13 @@ class TypedActivityTest {
 
     /** capture-payment declares .compensate() — pairs with MixedHandlers' Compensable factory. */
     private static WorkflowDefinition linear() {
-        return Workflow.define("wf").step("capture-payment").compensate().gate("in-stock")
+        return Wiggle.graph("wf").step("capture-payment").compensate().gate("in-stock")
                 .effect("audit-log").build().definition();
     }
 
     /** Same shape, nothing compensable — for handler classes whose activities carry no undo. */
     private static WorkflowDefinition linearPlain() {
-        return Workflow.define("wf").step("capture-payment").gate("in-stock")
+        return Wiggle.graph("wf").step("capture-payment").gate("in-stock")
                 .effect("audit-log").build().definition();
     }
 
@@ -166,7 +166,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        Blueprint bp = Workflow.define("wf")
+        FlowSpec bp = Wiggle.graph("wf")
                 .step("capture-payment").compensate().gate("in-stock").step("summarise").effect("audit-log")
                 .build();
 

@@ -47,7 +47,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
 
     /**
      * Restricts this worker to the given queues (worker specialization). Empty -- the default --
-     * means "serve every queue of the registered blueprints". A specialized worker never claims
+     * means "serve every queue of the registered flow specs". A specialized worker never claims
      * steps routed elsewhere, and a local-execution chain hands back at a step it does not serve.
      */
     public WorkerOptions withQueues(String... only) {

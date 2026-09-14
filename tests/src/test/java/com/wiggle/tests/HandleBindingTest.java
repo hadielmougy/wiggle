@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -40,8 +40,8 @@ class HandleBindingTest {
     }
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
-    private Blueprint authoredGraph() {
-        return Workflow.define("order-fulfilment")
+    private FlowSpec authoredGraph() {
+        return Wiggle.graph("order-fulfilment")
                 .step("validate")
                 .gate("in-stock")
                 .step("authorise", "payments")
@@ -83,14 +83,14 @@ class HandleBindingTest {
     }
 
     @Test
-    @DisplayName("a worker with no blueprint drives a full instance via @Handlers bound by name")
+    @DisplayName("a worker with no flowSpec drives a full instance via @Handlers bound by name")
     void handlersBindingRunsToCompletion() throws Exception {
         withServer((client, server) -> {
             client.register(authoredGraph());   // author registers topology only
 
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "impl-1")) {
-                impl.handlers(new OrderImpl(audited));   // binds by name, no blueprint seen
+                impl.handlers(new OrderImpl(audited));   // binds by name, no flowSpec seen
                 impl.start();   // reconciles: validates names/kinds, discovers the "payments" queue too
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
@@ -148,7 +148,7 @@ class HandleBindingTest {
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
     void typedHandlersBinding() throws Exception {
         withServer((client, server) -> {
-            client.register(Workflow.define("typed-wf")
+            client.register(Wiggle.graph("typed-wf")
                     .step("check")
                     .gate("available")
                     .effect("done")

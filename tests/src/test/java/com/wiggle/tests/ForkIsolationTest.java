@@ -1,11 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowBuilder;
-import com.wiggle.client.worker.Arm;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Wiggle;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -22,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * The design-B guarantee of {@link WorkflowBuilder#fork}: each branch runs on
+ * The design-B guarantee of {@link GraphBuilder#fork}: each branch runs on
  * its own isolated context copy, so a branch's writes are invisible to its siblings and never reach
  * the shared context implicitly -- the only thing that lands is what the mandatory {@code combine}
  * returns.
@@ -31,7 +30,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("branch writes are isolated: no implicit merge, combine owns what lands")
     void branchesAreIsolatedAndCombineDecides() throws Exception {
-        Blueprint bp = Workflow.define("isolation")
+        FlowSpec bp = Wiggle.graph("isolation")
                 .step("seed")
                 .fork(
                         // Both arms write the SAME key to different values, and each also asserts it
@@ -58,7 +57,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a branch that combine ignores contributes nothing to the context")
     void ignoredBranchLeavesNoTrace() throws Exception {
-        Blueprint bp = Workflow.define("ignore-arm")
+        FlowSpec bp = Wiggle.graph("ignore-arm")
                 .fork(
                         Branch.of("keep", s -> s.step("k")),
                         Branch.of("drop", s -> s.step("d")))
@@ -75,7 +74,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine's return REPLACES the context: keys it omits do not survive the join")
     void combineReturnReplacesContext() throws Exception {
-        Blueprint bp = Workflow.define("replace-check")
+        FlowSpec bp = Wiggle.graph("replace-check")
                 .step("seed")
                 .fork(
                         Branch.of("a", s -> s.step("a1")),
@@ -92,7 +91,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine with no handler fails the instance — there is no implicit union fold")
     void combineWithoutHandlerFails() throws Exception {
-        Blueprint bp = Workflow.define("no-combine-handler")
+        FlowSpec bp = Wiggle.graph("no-combine-handler")
                 .fork(
                         Branch.of("x", s -> s.step("x1")),
                         Branch.of("y", s -> s.step("y1")))
@@ -116,8 +115,8 @@ class ForkIsolationTest {
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
         public Map<String, Object> r(Map<String, Object> ctx) { return put(ctx, "shared", "from-right"); }
         public Map<String, Object> decide(@Context Map<String, Object> base,
-                                          @Arm("left") Map<String, Object> left,
-                                          @Arm("right") Map<String, Object> right) {
+                                          Map<String, Object> left,
+                                          Map<String, Object> right) {
             // The return is the COMPLETE post-join context: base must be carried explicitly.
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("shared", "chosen");
@@ -131,7 +130,8 @@ class ForkIsolationTest {
     static final class IgnoreArmH {
         public Map<String, Object> k(Map<String, Object> ctx) { return put(ctx, "kept", true); }
         public Map<String, Object> d(Map<String, Object> ctx) { return put(ctx, "dropped", true); }
-        public Map<String, Object> pick(@Arm("keep") Map<String, Object> keep) {
+        // arms bind by position, so a combine takes them all -- and folds only the one it wants
+        public Map<String, Object> pick(Map<String, Object> keep, Map<String, Object> drop) {
             return new LinkedHashMap<>(keep);   // fold only "keep"; "drop" is discarded
         }
         public Map<String, Object> tail(Map<String, Object> ctx) { return ctx; }
@@ -142,7 +142,7 @@ class ForkIsolationTest {
         public Map<String, Object> seed(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1); }
         public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1); }
-        public Map<String, Object> pickOnly(@Arm("a") Map<String, Object> a, @Arm("b") Map<String, Object> b) {
+        public Map<String, Object> pickOnly(Map<String, Object> a, Map<String, Object> b) {
             return new LinkedHashMap<>(Map.of("picked", true));   // deliberately drops the pre-fork context
         }
     }
@@ -155,7 +155,7 @@ class ForkIsolationTest {
     }
 
     /** Runs a single instance to a terminal state (COMPLETED or FAILED) and returns the view. */
-    private static InstanceView runToTerminal(Blueprint bp, Object handlers, Map<String, Object> input)
+    private static InstanceView runToTerminal(FlowSpec bp, Object handlers, Map<String, Object> input)
             throws Exception {
         String url = "jdbc:h2:mem:iso-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
@@ -179,7 +179,7 @@ class ForkIsolationTest {
     }
 
     /** Runs a single instance to completion on a one-node in-memory H2 server and returns its context. */
-    private static Map<String, Object> run(Blueprint bp, Object handlers, Map<String, Object> input) throws Exception {
+    private static Map<String, Object> run(FlowSpec bp, Object handlers, Map<String, Object> input) throws Exception {
         String url = "jdbc:h2:mem:iso-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
                 0, "node-0", url, "sa", "", 8,

@@ -1,7 +1,7 @@
 package com.wiggle.order;
 
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 
@@ -30,7 +30,7 @@ public final class NamespaceSubmitter {
         int count = args.length > 0 ? Integer.parseInt(args[0]) : 1000;
 
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
-            Blueprint bp = OrderFulfilment.blueprint();
+            FlowSpec bp = OrderFulfilment.flowSpec();
             resolver.registerWorkflow(ns, bp);   // allocate the definition to the namespace's cells (idempotent)
             // Cell addresses come from the coordinator as in-cluster pod IPs; to reach them from the host
             // AND spread starts across cells, set WIGGLE_ENDPOINT_REWRITE (each cell's pod IP -> its own

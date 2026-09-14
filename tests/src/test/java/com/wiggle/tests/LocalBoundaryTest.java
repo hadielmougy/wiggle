@@ -1,10 +1,9 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Arm;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -52,7 +51,7 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            Blueprint bp = Workflow.define("lb-fork")
+            FlowSpec bp = Wiggle.graph("lb-fork")
                     .execution(mode)
                     .step("seed")
                     .step("prep")
@@ -84,7 +83,7 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        Blueprint bp = Workflow.define("lb-gate")
+        FlowSpec bp = Wiggle.graph("lb-gate")
                 .execution(ExecutionMode.LOCAL_SYNC)
                 .step("seed")
                 .gate("keep")
@@ -114,15 +113,15 @@ class LocalBoundaryTest {
 
     /**
      * Two specialized workers: "general" serves the default queue, "special" serves only the
-     * dedicated one. Each worker registers its own blueprint whose handlers close over the
+     * dedicated one. Each worker registers its own flowSpec whose handlers close over the
      * worker's label -- the topology (and so the version) is identical, but the recorded label
      * proves which worker executed each step: the routing itself, and -- in LOCAL_SYNC -- the
      * OTHER_QUEUE handback mid-chain.
      */
     private void runQueueSplit(ExecutionMode mode) throws Exception {
         Map<String, String> ranOn = new ConcurrentHashMap<>();
-        Blueprint generalBp = queueSplitBlueprint(mode, "general", ranOn);
-        Blueprint specialBp = queueSplitBlueprint(mode, "special", ranOn);
+        FlowSpec generalBp = queueSplitFlowSpec(mode, "general", ranOn);
+        FlowSpec specialBp = queueSplitFlowSpec(mode, "special", ranOn);
         assertEquals(generalBp.version(), specialBp.version(), "same topology, same version");
 
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -144,9 +143,9 @@ class LocalBoundaryTest {
         }
     }
 
-    private static Blueprint queueSplitBlueprint(
+    private static FlowSpec queueSplitFlowSpec(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return Workflow.define("lb-queues")
+        return Wiggle.graph("lb-queues")
                 .execution(mode)
                 .step("a")
                 .step("b")
@@ -165,8 +164,8 @@ class LocalBoundaryTest {
         public Map<String, Object> l2(Map<String, Object> ctx) { return counted(runs, "l2", put(ctx, "left2", "L2")); }
         public Map<String, Object> r1(Map<String, Object> ctx) { return counted(runs, "r1", put(ctx, "right", "R")); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("left") Map<String, Object> left,
-                                         @Arm("right") Map<String, Object> right) {
+                                         Map<String, Object> left,
+                                         Map<String, Object> right) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (left != null) out.putAll(left);
             if (right != null) out.putAll(right);

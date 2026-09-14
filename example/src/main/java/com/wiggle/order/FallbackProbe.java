@@ -1,8 +1,8 @@
 package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -34,7 +34,7 @@ public final class FallbackProbe {
         int probes = Integer.parseInt(env("WIGGLE_BENCH_COUNT", "200"));
         int warmup = Integer.parseInt(env("WIGGLE_BENCH_WARMUP", "20"));
 
-        Blueprint bp = Workflow.define("fallback-probe").step("ping").build();
+        FlowSpec bp = Wiggle.graph("fallback-probe").step("ping").build();
 
         try (WiggleClient submit = new WiggleClient(submitUrl);
              WiggleClient workerClient = new WiggleClient(workerUrl)) {
@@ -63,7 +63,7 @@ public final class FallbackProbe {
     }
 
     /** One sequential probe: start via the submit node, tight-poll it to a terminal state. */
-    private static long probe(WiggleClient submit, Blueprint bp) throws InterruptedException {
+    private static long probe(WiggleClient submit, FlowSpec bp) throws InterruptedException {
         long t0 = System.nanoTime();
         String id = submit.start(bp, Map.of("t", t0));
         long deadline = t0 + 15_000_000_000L;

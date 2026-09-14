@@ -1,7 +1,7 @@
 package com.wiggle.binding.typed;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 
 /**
  * The topology of the typed order flow, authored once. Same idea as {@code binding.BindingOrder},
@@ -16,8 +16,8 @@ public final class TypedBindingOrder {
 
     private TypedBindingOrder() {}
 
-    public static Blueprint blueprint() {
-        return Workflow.define(NAME)
+    public static FlowSpec flowSpec() {
+        return Wiggle.graph(NAME)
                 .step("validate")                                    // implemented by name, elsewhere
                 .gate("in-stock")                                    // predicate node; a worker supplies it
                 .step("charge", PAYMENTS_QUEUE)                      // routed to the payments queue

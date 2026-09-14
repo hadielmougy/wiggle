@@ -23,7 +23,7 @@ public final class GreetWorker {
 
         var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null);
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
-                w -> w.register(GreetFlow.blueprint()).handlers(new GreetHandlers())).start();
+                w -> w.register(GreetFlow.flowSpec()).handlers(new GreetHandlers())).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> { worker.close(); resolver.close(); }));
         System.out.println("greet worker '" + id + "' serving namespace '" + ns + "' via coordinator " + coord);

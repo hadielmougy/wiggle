@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link Pipeline}, the package-private graph builder behind the DSL. These
- * drive its API directly (rather than through {@link WorkflowBuilder}) so each responsibility --
+ * drive its API directly (rather than through {@link GraphBuilder}) so each responsibility --
  * id assignment, name uniqueness, edge wiring, queue tracking, and the validation/content-versioning
  * done by {@link Pipeline#build()} -- is checked in isolation. The pipeline builds pure topology now:
  * it declares named nodes (task/guard/combine/...) with retry and queue, but no step logic.
@@ -394,7 +394,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, queue) honours the queue and declares a PREDICATE (bound by name)")
         void gateNameOnlyQueue() {
-            Blueprint bp = Workflow.define("wf")
+            FlowSpec bp = Wiggle.graph("wf")
                     .gate("check", "gpu")
                     .step("run")
                     .build();
@@ -408,7 +408,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, retry, queue) honours both the retry policy and the queue")
         void gateNameOnlyRetryAndQueue() {
-            Blueprint bp = Workflow.define("wf")
+            FlowSpec bp = Wiggle.graph("wf")
                     .gate("check", RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
                     .step("run")
                     .build();
@@ -420,7 +420,7 @@ class PipelineTest {
         @Test
         @DisplayName("step(name, queue) / effect(name) route correctly")
         void stepAndEffectNameOnly() {
-            Blueprint bp = Workflow.define("wf")
+            FlowSpec bp = Wiggle.graph("wf")
                     .step("ingest", "gpu")
                     .effect("notify")
                     .build();
@@ -433,9 +433,9 @@ class PipelineTest {
         @Test
         @DisplayName("a name-only workflow declares topology only (the worker binds handlers by name)")
         void nameOnlyDeclaresTopologyOnly() {
-            // The DSL declares topology only; the worker binds the handler by name. The blueprint
+            // The DSL declares topology only; the worker binds the handler by name. The flowSpec
             // therefore carries just the graph -- there is no baked step logic to collide with.
-            Blueprint bp = Workflow.define("wf").step("check").build();
+            FlowSpec bp = Wiggle.graph("wf").step("check").build();
             assertEquals(NodeKind.TASK, byActivity(bp.definition(), "wf#check").kind());
         }
     }

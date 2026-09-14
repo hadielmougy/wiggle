@@ -37,9 +37,9 @@ public final class BindingDemo {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             // (1) author: register the topology, once.
-            var blueprint = BindingOrder.blueprint();
-            client.register(blueprint);
-            System.out.println("[author] registered " + blueprint.name() + " v" + blueprint.version());
+            var flowSpec = BindingOrder.flowSpec();
+            client.register(flowSpec);
+            System.out.println("[author] registered " + flowSpec.name() + " v" + flowSpec.version());
 
             // (2) fulfilment worker: implements everything except payments, by name.
             // (3) payments worker: owns only `charge`, on its own queue.

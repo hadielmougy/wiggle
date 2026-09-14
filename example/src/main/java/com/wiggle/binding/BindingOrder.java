@@ -1,7 +1,7 @@
 package com.wiggle.binding;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 
 import java.util.LinkedHashMap;
@@ -32,11 +32,11 @@ public final class BindingOrder {
 
     /**
      * The graph, with placeholder handlers that only serve to register the topology. A worker never
-     * uses these -- it binds its own handlers by name -- so the author can register the blueprint
+     * uses these -- it binds its own handlers by name -- so the author can register the flowSpec
      * without running any worker at all.
      */
-    public static Blueprint blueprint() {
-        return Workflow.define(NAME)
+    public static FlowSpec flowSpec() {
+        return Wiggle.graph(NAME)
                 .step("validate")
                 .gate("in-stock")
                 .step("charge", PAYMENTS_QUEUE)

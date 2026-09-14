@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Sub-workflows: a node starts a child instance with the parent's context, the parent waits,
  * and the child's outcome (final context, failure, cancellation) propagates back.
  */
-class SubWorkflowTest {
+class SubFlowTest {
 
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
@@ -38,8 +38,8 @@ class SubWorkflowTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint parent() {
-        return Workflow.define("sub-parent")
+    private static FlowSpec parent() {
+        return Wiggle.graph("sub-parent")
                 .step("prepare")
                 .subWorkflow("delegate", "sub-child")
                 .step("wrap-up")
@@ -70,7 +70,7 @@ class SubWorkflowTest {
 
     @Test @DisplayName("the child runs with the parent's context and its result merges back")
     void childCompletes() throws Exception {
-        Blueprint child = Workflow.define("sub-child")
+        FlowSpec child = Wiggle.graph("sub-child")
                 .step("child-work")
                 .step("child-done")
                 .build();
@@ -93,7 +93,7 @@ class SubWorkflowTest {
 
     @Test @DisplayName("a failing child fails the parent with the child's error")
     void childFailureFailsParent() throws Exception {
-        Blueprint child = Workflow.define("sub-child")
+        FlowSpec child = Wiggle.graph("sub-child")
                 .step("child-work", com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1)))
                 .build();
 
@@ -123,7 +123,7 @@ class SubWorkflowTest {
 
     @Test @DisplayName("cancelling the parent cascades to the running child")
     void cancelCascades() throws Exception {
-        Blueprint child = Workflow.define("sub-child")
+        FlowSpec child = Wiggle.graph("sub-child")
                 .awaitSignal("never-arrives")   // the child parks so it is definitely still running
                 .step("child-done")
                 .build();

@@ -8,10 +8,10 @@ public class SubmitTransactions {
         String url = System.getenv().getOrDefault("WIGGLE_URL", "localhost:8080");
         try (var wiggle = WiggleConnection.direct(url)) {
             var client = wiggle.client();
-            client.register(TransactionWorkflow.blueprint());
+            client.register(TransactionWorkflow.flowSpec());
 
             Transaction trx = new Transaction("from", "to");
-            client.start(TransactionWorkflow.blueprint(), trx);
+            client.start(TransactionWorkflow.flowSpec(), trx);
 
         } catch (Exception e) {
             e.printStackTrace();

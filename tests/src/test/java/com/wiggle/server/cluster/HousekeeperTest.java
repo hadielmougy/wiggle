@@ -1,7 +1,7 @@
 package com.wiggle.server.cluster;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -31,8 +31,8 @@ class HousekeeperTest {
     }
 
     /** A one-sleep workflow whose timer parks the instance until the housekeeper fires it. */
-    private static Blueprint sleeper(long millis) {
-        return Workflow.define("hk-sleeper")
+    private static FlowSpec sleeper(long millis) {
+        return Wiggle.graph("hk-sleeper")
                 .sleep("nap", Duration.ofMillis(millis))
                 .step("after")
                 .build();
@@ -45,7 +45,7 @@ class HousekeeperTest {
             storage.migrate();
             cluster.start();
             WorkflowEngine engine = engine(storage);
-            Blueprint bp = sleeper(20);
+            FlowSpec bp = sleeper(20);
             engine.register(bp.definition());
             for (int i = 0; i < 25; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
             Thread.sleep(60);   // all 25 timers are now due; batch size below is 10
@@ -68,7 +68,7 @@ class HousekeeperTest {
             cluster.start();
             assertTrue(cluster.isLeader(), "a lone node leads");
             WorkflowEngine engine = engine(storage);
-            Blueprint bp = sleeper(30);
+            FlowSpec bp = sleeper(30);
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
 
@@ -95,7 +95,7 @@ class HousekeeperTest {
                 follower.start();
                 assertFalse(follower.isLeader(), "the newer node follows");
                 WorkflowEngine engine = engine(storage);
-                Blueprint bp = sleeper(10);
+                FlowSpec bp = sleeper(10);
                 engine.register(bp.definition());
                 engine.start(bp.name(), bp.version(), Map.of(), null);
                 Thread.sleep(40);
@@ -133,7 +133,7 @@ class HousekeeperTest {
             storage.migrate();
             cluster.start();
             WorkflowEngine engine = engine(storage);
-            Blueprint bp = sleeper(60_000);
+            FlowSpec bp = sleeper(60_000);
             engine.register(bp.definition());
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
             engine.cancel(id, "make it terminal");

@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
@@ -12,13 +12,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** {@link WorkflowBuilder#fork} with its mandatory {@link ForkStage#combine}: the topology it emits
+/** {@link GraphBuilder#fork} with its mandatory {@link ForkStage#combine}: the topology it emits
  *  (an isolated fork rejoined by a combine node that carries the arm names). The combine's merge
  *  logic is a worker concern, exercised end-to-end in the engine tests. */
 class ForkCombineTest {
 
-    private static Blueprint tripBlueprint() {
-        return Workflow.define("trip")
+    private static FlowSpec tripFlowSpec() {
+        return Wiggle.graph("trip")
                 .step("prep")
                 .fork(
                         Branch.of("air", s -> s.step("book-air")),
@@ -41,7 +41,7 @@ class ForkCombineTest {
 
     @Test
     void forkCombineWiresForkBranchesJoinCombine() {
-        WorkflowDefinition def = tripBlueprint().definition();
+        WorkflowDefinition def = tripFlowSpec().definition();
 
         Node fork = only(def, NodeKind.FORK);
         Node join = only(def, NodeKind.JOIN);
@@ -63,7 +63,7 @@ class ForkCombineTest {
 
     @Test
     void combineNodeCarriesArmNamesForTheEngineToKeyBranchResults() {
-        WorkflowDefinition def = tripBlueprint().definition();
+        WorkflowDefinition def = tripFlowSpec().definition();
         // The arm names ride on the combine node's itemsKey (a store-portable field) as a JSON array,
         // in fork order, so the engine can stage each isolated branch's result under its name.
         assertEquals("[\"air\",\"hotel\"]", named(def, "merge").itemsKey());
@@ -71,7 +71,7 @@ class ForkCombineTest {
 
     @Test
     void combineIsMandatory_forgottenCombineFailsBuild() {
-        WorkflowBuilder stream = Workflow.define("t").step("prep");
+        GraphBuilder stream = Wiggle.graph("t").step("prep");
         stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, stream::build);
@@ -81,7 +81,7 @@ class ForkCombineTest {
 
     @Test
     void combineTwiceThrows() {
-        WorkflowBuilder stream = Workflow.define("t").step("prep");
+        GraphBuilder stream = Wiggle.graph("t").step("prep");
         ForkStage stage = stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
         stage.combine("m");
         assertThrows(IllegalStateException.class, () -> stage.combine("m2"));
@@ -89,7 +89,7 @@ class ForkCombineTest {
 
     @Test
     void combineResumesNormalFlowAndBuilds() {
-        WorkflowDefinition def = tripBlueprint().definition();
+        WorkflowDefinition def = tripFlowSpec().definition();
         assertTrue(def.version() != 0);
         assertEquals(NodeKind.END, def.nodes().get(named(def, "book").next()).kind());
     }

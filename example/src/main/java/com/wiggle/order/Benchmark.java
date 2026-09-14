@@ -1,8 +1,8 @@
 package com.wiggle.order;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowBuilder;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -51,7 +51,7 @@ public final class Benchmark {
         String jdbcPassword = env("WIGGLE_JDBC_PASSWORD", null);
 
         CountDownLatch done = new CountDownLatch(count);
-        Blueprint bp = linear("bench-linear", steps, mode);
+        FlowSpec bp = linear("bench-linear", steps, mode);
 
         ServerConfig config = new ServerConfig(0, "bench", jdbcUrl, jdbcUser, jdbcPassword, 16,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
@@ -103,8 +103,8 @@ public final class Benchmark {
      * any length; the final {@code sink} step is the only distinctly-named node, so it maps to its own
      * handler and counts the instance down exactly once.
      */
-    private static Blueprint linear(String name, int steps, ExecutionMode mode) {
-        WorkflowBuilder s = Workflow.define(name).execution(mode);
+    private static FlowSpec linear(String name, int steps, ExecutionMode mode) {
+        GraphBuilder s = Wiggle.graph(name).execution(mode);
         for (int i = 0; i < steps - 1; i++) {
             s = s.step(hop(i));   // distinct raw name, all canonicalise to the "hop" handler
         }

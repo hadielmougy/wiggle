@@ -1,7 +1,7 @@
 package com.wiggle.order;
 
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 
@@ -24,13 +24,13 @@ public final class WorkerMain {
         int localBatch = Integer.parseInt(env("WIGGLE_LOCAL_BATCH_SIZE", "64"));   // LOCAL_ASYNC batch size
 
         var wiggle = WiggleConnection.direct(url);
-        Blueprint blueprint = OrderFulfilment.blueprint();
+        FlowSpec flowSpec = OrderFulfilment.flowSpec();
 
         Worker worker = new Worker(wiggle.client(), id, WorkerOptions.defaults()
                         .withConcurrency(concurrency)
                         .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
-                .register(blueprint)
+                .register(flowSpec)
                 .handlers(new OrderHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -39,7 +39,7 @@ public final class WorkerMain {
         }));
 
         worker.start();
-        System.out.println("worker " + id + " registered " + blueprint.name() + " v" + blueprint.version()
+        System.out.println("worker " + id + " registered " + flowSpec.name() + " v" + flowSpec.version()
                 + " against " + url + " (concurrency " + concurrency + ")");
         Thread.currentThread().join();
     }

@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.WorkflowDefinition;
 
@@ -10,7 +10,7 @@ import java.util.Set;
  * whole artifact. Step implementations live in {@link com.wiggle.client.worker.Handlers @Handlers}
  * classes bound on a worker and matched to the graph by name.
  */
-public record Blueprint(WorkflowDefinition definition) {
+public record FlowSpec(WorkflowDefinition definition) {
 
     public String name() { return definition.name(); }
 

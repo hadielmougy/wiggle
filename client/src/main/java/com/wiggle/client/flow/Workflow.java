@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.RetryPolicy;
 
@@ -12,7 +12,7 @@ import com.wiggle.core.RetryPolicy;
  *
  * <pre>{@code
  * // topology
- * Blueprint order = Workflow.define("order-fulfilment")
+ * FlowSpec order = Flow.define("order-fulfilment")
  *         .step("validate").gate("in-stock")
  *         .fork(Branch.of("payment",  s -> s.step("charge")),
  *               Branch.of("shipping", s -> s.step("reserve").sleep(Duration.ofSeconds(2)).step("label")))
@@ -25,19 +25,19 @@ import com.wiggle.core.RetryPolicy;
  *     Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
  *     boolean inStock(Order o)   { return o.quantity() > 0; }
  *     Order   charge(Order o)    { ... }
- *     Order   settle(@Arm("payment") Order pay, @Arm("shipping") Order ship) { ... }
+ *     Order   settle(Order pay, Order ship) { ... }
  * }
  * }</pre>
  */
-public final class Workflow {
+final class Workflow {
 
     private Workflow() {}
 
-    public static WorkflowBuilder define(String name) {
+    static GraphBuilder define(String name) {
         return define(name, RetryPolicy.exponential(3, java.time.Duration.ofMillis(500)));
     }
 
-    public static WorkflowBuilder define(String name, RetryPolicy defaultRetry) {
-        return WorkflowBuilder.root(new Pipeline(name, defaultRetry));
+    static GraphBuilder define(String name, RetryPolicy defaultRetry) {
+        return GraphBuilder.root(new Pipeline(name, defaultRetry));
     }
 }

@@ -3,8 +3,8 @@ package com.wiggle.order;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
@@ -46,8 +46,8 @@ public final class SagaLoadBench {
     static final AtomicLong UNDOS = new AtomicLong();
 
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
-    static Blueprint blueprint() {
-        return Workflow.define("saga-load")
+    static FlowSpec flowSpec() {
+        return Wiggle.graph("saga-load")
                 .step("reserve").compensate()
                 .step("enrich").compensate()
                 .step("boom")
@@ -89,7 +89,7 @@ public final class SagaLoadBench {
         int threads = Integer.parseInt(env("BENCH_THREADS", "8"));
 
         try (CoordinatedConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "saga")) {
-            Blueprint bp = blueprint();
+            FlowSpec bp = flowSpec();
             resolver.registerWorkflow(ns, bp);
 
             NamespaceWorker worker = new NamespaceWorker(

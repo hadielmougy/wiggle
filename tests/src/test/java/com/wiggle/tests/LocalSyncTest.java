@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -42,8 +42,8 @@ class LocalSyncTest {
     }
 
     /** A five-step linear pipeline; each step's value depends on the previous. */
-    private static Blueprint linear(ExecutionMode mode) {
-        return Workflow.define("ls-linear")
+    private static FlowSpec linear(ExecutionMode mode) {
+        return Wiggle.graph("ls-linear")
                 .execution(mode)
                 .step("a")
                 .step("b")
@@ -69,7 +69,7 @@ class LocalSyncTest {
         for (ExecutionMode mode : new ExecutionMode[]{
                 ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             AtomicInteger runs = new AtomicInteger();
-            Blueprint bp = linear(mode);
+            FlowSpec bp = linear(mode);
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
@@ -93,7 +93,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            Blueprint bp = linear(ExecutionMode.LOCAL_SYNC);
+            FlowSpec bp = linear(ExecutionMode.LOCAL_SYNC);
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();
 
@@ -124,7 +124,7 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            Blueprint bp = Workflow.define("async-batch")
+            FlowSpec bp = Wiggle.graph("async-batch")
                     .execution(ExecutionMode.LOCAL_ASYNC)
                     .step("x")
                     .step("y")

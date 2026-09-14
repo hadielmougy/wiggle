@@ -1,6 +1,6 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.dsl.ActivityHandler;
+import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
@@ -34,7 +34,7 @@ import java.util.TreeSet;
  * A method's signature defines its step: one input parameter (decoded from JSON into its type),
  * plus an optional {@link Context @Context} parameter for the frozen base where one exists; a
  * {@code boolean} return is a gate, {@code void} an effect, anything else a task whose return
- * REPLACES the context. Combine methods bind {@link Arm @Arm} parameters (fork) or a collection
+ * REPLACES the context. Combine methods take one parameter per fork arm, in order (fork), or a collection
  * parameter (forEach); their return is the complete post-join context.
  */
 final class HandlerBinder {
@@ -344,6 +344,42 @@ final class HandlerBinder {
         return node.kind() == NodeKind.TASK && node.itemsKey() != null;
     }
 
+    /**
+     * Works out, once at bind time, which fork arm each combine parameter receives -- the arm's name,
+     * or null for the {@link Context @Context} parameter that takes the pre-fork context.
+     *
+     * <p>Arms bind <b>by position</b>: parameter order is fork order, and a combine takes every arm.
+     * The arm names exist for the engine (they are the keys it stages each branch's result under) and
+     * for the console; a handler never spells one out. A {@code @Context} parameter may sit anywhere
+     * and does not count against the arms.
+     */
+    private static String[] combineSources(Node node, Method m, java.lang.reflect.Parameter[] params,
+                                           List<String> arms) {
+        String[] sources = new String[params.length];
+        int position = 0;
+        for (int i = 0; i < params.length; i++) {
+            if (params[i].isAnnotationPresent(Context.class)) {
+                sources[i] = null;
+                continue;
+            }
+            if (position >= arms.size()) {
+                throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the fork"
+                        + " has: its arms, in order, are " + arms);
+            }
+            sources[i] = arms.get(position++);
+        }
+        if (position != arms.size()) {
+            throw new IllegalStateException(combineWhat(node, m) + " must take all " + arms.size()
+                    + " of the fork's arms " + arms + ", in that order; it takes " + position
+                    + ". Add a parameter for each arm you do not need and ignore it.");
+        }
+        return sources;
+    }
+
+    private static String combineWhat(Node node, Method m) {
+        return "combine '" + node.name() + "' handler '" + m.getName() + "'";
+    }
+
     private static List<String> armNames(Node node) {
         return Json.asArray(Json.parse(node.itemsKey())).stream().map(String::valueOf).toList();
     }
@@ -353,7 +389,7 @@ final class HandlerBinder {
      * context with it (nothing from before the join survives unless the handler returned it, and
      * staged scratch keys are stripped). Two flavors, told apart by the node's itemsKey:
      * <ul>
-     *   <li><b>fork</b> (itemsKey = arm-name array): each {@link Arm @Arm} parameter gets that
+     *   <li><b>fork</b> (itemsKey = arm-name array): each parameter gets, in order, that
      *       branch's final context decoded to its type; an optional {@link Context @Context}
      *       parameter gets the pre-fork context.</li>
      *   <li><b>forEach</b> (itemsKey = a scratch-key string): one collection parameter receives
@@ -369,22 +405,16 @@ final class HandlerBinder {
         if (parsedKey instanceof String scratch) return forEachCombineHandler(node, m, target, decoderOwner, decoders, scratch);
         List<String> arms = armNames(node);
         java.lang.reflect.Parameter[] params = m.getParameters();
+        String[] sources = combineSources(node, m, params, arms);
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Map<String, Object> base = new LinkedHashMap<>(map);
             arms.forEach(base::remove);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
-                java.lang.reflect.Parameter p = params[i];
-                Arm arm = p.getAnnotation(Arm.class);
-                if (arm != null) {
-                    args[i] = decode(map.get(arm.value()), p.getType(), decoderOwner, decoders);
-                } else if (p.isAnnotationPresent(Context.class)) {
-                    args[i] = decode(base, p.getType(), decoderOwner, decoders);
-                } else {
-                    throw new IllegalStateException("combine '" + node.name() + "' handler '" + m.getName()
-                            + "' parameter " + i + " must be @Arm(\"branch\") or @Context");
-                }
+                args[i] = sources[i] == null
+                        ? decode(base, params[i].getType(), decoderOwner, decoders)
+                        : decode(map.get(sources[i]), params[i].getType(), decoderOwner, decoders);
             }
             // Both access styles work: the @Context parameter above, or Step.base() inside the method.
             Object out = Step.withBase(base, () -> call(m, target, args));

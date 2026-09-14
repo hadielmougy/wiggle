@@ -1,28 +1,28 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import java.util.List;
 
 /**
- * The mandatory stage after a {@link WorkflowBuilder#fork}: the branches fanned out, each on its own
+ * The mandatory stage after a {@link GraphBuilder#fork}: the branches fanned out, each on its own
  * isolated copy of the context, and now must be rejoined by an explicit {@link #combine}. There is
  * no implicit merge -- a branch's writes never touch the shared context, so the only way a branch's
  * result reaches the flow is through the combine.
  *
  * <p>{@code combine} is topology only: it declares the combine node (by name) and records the arm
  * names. The merge itself is a handler bound on the worker -- a method named the same as the combine
- * whose {@link com.wiggle.client.worker.Arm @Arm} parameters receive each branch's typed result and
+ * whose the combine's matching parameter parameters receive each branch's typed result and
  * whose return is the COMPLETE post-join context. There is no default fold. The fork left the stream
  * with no open end, so a forgotten combine also fails at {@code build()}.
  *
- * @see WorkflowBuilder#fork
+ * @see GraphBuilder#fork
  */
 public final class ForkStage {
 
-    private final WorkflowBuilder stream;
+    private final GraphBuilder stream;
     private final List<Branch> branches;
     private boolean combined;
 
-    ForkStage(WorkflowBuilder sb, List<Branch> branches) {
+    ForkStage(GraphBuilder sb, List<Branch> branches) {
         this.stream = sb;
         this.branches = branches;
     }
@@ -35,7 +35,7 @@ public final class ForkStage {
      * @param name the step name of the combine node (must be unique in the workflow)
      * @return the stream, reopened after the combine node
      */
-    public WorkflowBuilder combine(String name) {
+    public GraphBuilder combine(String name) {
         if (combined) throw new IllegalStateException("combine already applied to this fork");
         combined = true;
         stream.buildForkCombine(branches, name);

@@ -1,6 +1,6 @@
 package com.wiggle.client;
 
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.PollResult;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.NodeKind;
@@ -61,9 +61,9 @@ public final class WiggleClient implements AutoCloseable {
         return i < 0 ? target : target.substring(i + 3);
     }
 
-    public void register(Blueprint blueprint) {
+    public void register(FlowSpec flowSpec) {
         call(() -> stub.registerWorkflow(WorkflowDefinition.newBuilder()
-                .setDefinition(ProtoJson.toStruct(blueprint.definition().toJson()))
+                .setDefinition(ProtoJson.toStruct(flowSpec.definition().toJson()))
                 .build()));
     }
 
@@ -82,8 +82,8 @@ public final class WiggleClient implements AutoCloseable {
         return start(workflow, context, null, null);
     }
 
-    public String start(Blueprint blueprint, Object context) {
-        return start(blueprint.name(), com.wiggle.core.RecordMapper.toJson(context), blueprint.version(), null);
+    public String start(FlowSpec flowSpec, Object context) {
+        return start(flowSpec.name(), com.wiggle.core.RecordMapper.toJson(context), flowSpec.version(), null);
     }
 
     public String start(String workflow, Object context, Integer version, String correlationId) {

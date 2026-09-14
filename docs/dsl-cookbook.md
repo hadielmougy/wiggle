@@ -11,10 +11,61 @@ Eight small workflows, each pairing operators that don't otherwise appear togeth
 ./gradlew :example:runCookbook
 ```
 
-`CookbookDemo` starts an embedded server and one worker, registers every blueprint below and binds
+`CookbookDemo` starts an embedded server and one worker, registers every flow spec below and binds
 its handlers, runs one instance of each, and prints the resulting context.
 
-> **Topology and logic are separate.** A `Workflow.define(...)` blueprint is pure topology — named
+## The same recipe, both ways
+
+Recipe 1 below, written with `Wiggle.graph` — topology by name, logic in a separate `@Handlers` class,
+because naming steps as strings is exactly what lets the two be written apart:
+
+```java
+// Cookbook.java
+Wiggle.graph("cb-linear-gate").step("normalise").then("classify").gate("eligible").effect("welcome").build();
+
+// CookbookHandlers.java — matched to the graph by name
+Map<String, Object> normalise(Map<String, Object> ctx) { ... }
+boolean             eligible(Map<String, Object> ctx)  { ... }
+```
+
+and with `Wiggle.define` — an interface declaring the steps, named through it by the spec and
+implemented on the worker:
+
+```java
+interface LinearGateSteps {                     // the contract: names and signatures, no code
+    Signup     normalise(Signup s);
+    Classified classify(Signup s);
+    boolean    eligible(Classified c);
+    void       welcome(Classified c);
+}
+
+FlowSpec spec = Wiggle.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+        .thenApply(s::normalise)
+        .thenApply(s::classify)          // Signup -> Classified: the context type changes here
+        .thenFilter(s::eligible)         // and every step after it must consume Classified
+        .thenAccept(s::welcome));
+
+@Handlers("tcb-linear-gate")
+class LinearWithGate implements LinearGateSteps { ... }   // checked against the same contract
+```
+
+The chain would not compile if `eligible` still took a `Signup`, and the handler would not compile if
+it disagreed with the interface.
+
+Why an interface and not the handler itself: **a spec never runs a step.** It records the step's name,
+and a worker supplies the code by matching that name — so `s` above is an inert stand-in whose methods
+throw if called. A reference to a concrete class would name code the spec will never call, and go
+quietly wrong the moment the worker bound a different object.
+
+That is the trade between the two modes: `graph` can describe a topology whose steps have no
+declaration at all, `define` needs one — and gets it checked in return.
+
+> **These recipes use `Wiggle.graph`**, the mode for topology written apart from its handlers — it
+> shows each operator on its own, without a handler class in the way. Every recipe below also exists
+> in the typed mode: [`TypedCookbook.java`](../example/src/main/java/com/wiggle/cookbook/TypedCookbook.java),
+> runnable with `./gradlew :example:runTypedCookbook`. Both compile to the identical graph.
+>
+> **Topology and logic are separate.** A flow spec is pure topology — named
 > nodes and their wiring, no logic and no context type. The step logic lives in a class annotated
 > `@Handlers("<workflow-name>")`, one per workflow, whose methods are matched to the graph by name
 > (case/style-insensitive, so `isLarge` serves `is-large`). Each method's signature defines its step:
@@ -34,7 +85,7 @@ its handlers, runs one instance of each, and prints the resulting context.
 The smallest useful pipeline: two transforms, a side effect, and a filter.
 
 ```java
-Workflow.define("cb-linear-gate")
+Wiggle.graph("cb-linear-gate")
     .step("normalise")
     .then("classify")
     .gate("eligible")
@@ -70,7 +121,7 @@ context is unchanged.
 An exclusive switch/case whose matched branch itself fans out in parallel.
 
 ```java
-Workflow.define("cb-choose-fork")
+Wiggle.graph("cb-choose-fork")
     .choose(
         Case.when("is-large", b -> b
             .fork(
@@ -115,7 +166,7 @@ have no implicit fold; the effect arm contributes nothing).
 Runtime fan-out over a list, with one step in the branch pinned to a different worker pool.
 
 ```java
-Workflow.define("cb-foreach-queues").defaultQueue("cpu")
+Wiggle.graph("cb-foreach-queues").defaultQueue("cpu")
     .forEach("charge-items", "items", b -> b
         // the element IS each item's context (Step.base()/Step.itemIndex() for the rest);
         // the mandatory combine receives the collected final values.
@@ -150,7 +201,7 @@ fan-out entirely.
 A retry-until-ready loop, with an inner gate that can end the whole instance from inside the loop body.
 
 ```java
-Workflow.define("cb-poll-until-ready")
+Wiggle.graph("cb-poll-until-ready")
     .doWhile("still-pending", b -> b
         .gate("not-cancelled")
         .step("poll"))
@@ -195,7 +246,7 @@ the next iteration — a cancellation ends the instance immediately rather than 
 Wait for a human, escalate if nobody acts, then branch on which one happened.
 
 ```java
-Workflow.define("cb-approval-escalation")
+Wiggle.graph("cb-approval-escalation")
     .step("submit")
     .awaitSignal("manager-approval", Duration.ofMillis(200),
         esc -> esc.step("auto-escalate"))
@@ -235,7 +286,7 @@ here is a short deadline for the demo; in production it might be `Duration.ofHou
 Composing a *registered* workflow as a reusable child.
 
 ```java
-Workflow.define("cb-parent")
+Wiggle.graph("cb-parent")
     .subWorkflow("run-eligibility", "cb-linear-gate")   // example 1, reused as a child
     .gate("child-passed")
     .fork(
@@ -262,7 +313,7 @@ class Parent {
 
 The child starts with the parent's current context and its final context merges back on completion;
 a failed or cancelled child fails the parent. The child workflow (`cb-linear-gate` here) must already
-be registered on the server — `CookbookDemo` registers all eight blueprints before starting any
+be registered on the server — `CookbookDemo` registers all eight flow specs before starting any
 instance for exactly this reason. The parent's own `merge` combine is an explicit
 handler folding the `provision` arm onto the pre-fork context (there is no implicit union).
 
@@ -271,7 +322,7 @@ handler folding the `provision` arm onto the pre-fork context (there is no impli
 Batched local execution, with an explicit commit point inside a loop.
 
 ```java
-Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
+Wiggle.graph("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
     .doWhile("more-batches", b -> b
         .step("process-batch")
         .checkpoint())   // flush the buffer before the next iteration
@@ -308,7 +359,7 @@ commit every step.
 `defaultQueue` — one graph, every operator except the `fixed`/`forever` retry variants:
 
 ```java
-Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
+Wiggle.graph("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
     .step("intake")
     .gate("has-items")
     .subWorkflow("run-eligibility", "cb-linear-gate")

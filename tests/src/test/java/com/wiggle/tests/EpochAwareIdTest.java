@@ -1,8 +1,8 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.IdCodec;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -28,8 +28,8 @@ class EpochAwareIdTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    private static Blueprint workflow() {
-        return Workflow.define("wf").step("a").build();
+    private static FlowSpec workflow() {
+        return Wiggle.graph("wf").step("a").build();
     }
 
     @Test @DisplayName("a namespace-configured cell mints ns.e0.s0.<ulid> ids")

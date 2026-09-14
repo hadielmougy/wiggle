@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.IdCodec;
 import com.wiggle.server.coord.CoordNamespace;
 import com.wiggle.server.coord.EmbeddedCellDeployer;
@@ -35,7 +35,7 @@ class EmbeddedCellDeployerTest {
 
             // the recorded endpoint is a live cell: register + start, and the id is epoch-aware for "shop"
             try (WiggleClient client = new WiggleClient(ns.endpoint())) {
-                client.register(Workflow.define("wf").step("a").build());
+                client.register(Wiggle.graph("wf").step("a").build());
                 String id = client.start("wf", Map.of());
                 assertEquals("shop", IdCodec.parse(id)
                         .orElseThrow(() -> new AssertionError("expected an epoch-aware id, got " + id))
@@ -46,7 +46,7 @@ class EmbeddedCellDeployerTest {
             deployer.teardown("shop");
             try (WiggleClient dead = new WiggleClient(ns.endpoint())) {
                 assertThrows(RuntimeException.class,
-                        () -> dead.register(Workflow.define("wf").step("a").build()),
+                        () -> dead.register(Wiggle.graph("wf").step("a").build()),
                         "a torn-down cell should not answer");
             }
         }

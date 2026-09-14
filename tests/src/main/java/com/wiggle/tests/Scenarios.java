@@ -1,10 +1,9 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Workflow;
-import com.wiggle.client.dsl.WorkflowBuilder;
-import com.wiggle.client.worker.Arm;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Wiggle;
+import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.PermanentActivityException;
@@ -50,15 +49,15 @@ public final class Scenarios {
         }
     }
 
-    private static Worker startWorker(WiggleClient client, Blueprint bp, Object handlers) {
+    private static Worker startWorker(WiggleClient client, FlowSpec bp, Object handlers) {
         Worker w = new Worker(client, "w-" + Ids.next("x"),
                 WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)))
                 .register(bp).handlers(handlers);
         return w.start();
     }
 
-    private static WorkflowBuilder json(String name) {
-        return Workflow.define(name);
+    private static GraphBuilder json(String name) {
+        return Wiggle.graph(name);
     }
 
     static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {
@@ -78,7 +77,7 @@ public final class Scenarios {
 
     /** A linear pipeline runs its steps in order and the context accumulates. */
     public static void sequentialPipeline() throws Exception {
-        Blueprint bp = json("seq")
+        FlowSpec bp = json("seq")
                 .step("one")
                 .step("two")
                 .step("three")
@@ -106,7 +105,7 @@ public final class Scenarios {
     /** A false gate ends the instance successfully and skips everything downstream. */
     public static void gateShortCircuits() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        Blueprint bp = json("gated")
+        FlowSpec bp = json("gated")
                 .step("seed")
                 .gate("gate")
                 .step("never")
@@ -136,7 +135,7 @@ public final class Scenarios {
 
     /** Parallel branches merge field-by-field instead of clobbering each other. */
     public static void forkMergesDisjointWrites() throws Exception {
-        Blueprint bp = json("fork-merge")
+        FlowSpec bp = json("fork-merge")
                 .step("seed")
                 .fork(
                         Branch.of("left", s -> s.step("slow-left")),
@@ -166,8 +165,8 @@ public final class Scenarios {
         }
         public Map<String, Object> fastRight(Map<String, Object> ctx) { return put(ctx, "right", "R"); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("left") Map<String, Object> left,
-                                         @Arm("right") Map<String, Object> right) {
+                                         Map<String, Object> left,
+                                         Map<String, Object> right) {
             return fold(base, left, right);   // explicit: the return is the complete post-join context
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "joined", true); }
@@ -176,7 +175,7 @@ public final class Scenarios {
     /** The step after a fork runs exactly once, no matter how many branches there were. */
     public static void joinRunsContinuationOnce() throws Exception {
         AtomicInteger afterCount = new AtomicInteger();
-        Blueprint bp = json("join-once")
+        FlowSpec bp = json("join-once")
                 .fork(
                         Branch.of("a", s -> s.step("a1")),
                         Branch.of("b", s -> s.step("b1")),
@@ -203,9 +202,9 @@ public final class Scenarios {
         public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1L); }
         public Map<String, Object> c1(Map<String, Object> ctx) { return put(ctx, "c", 1L); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("a") Map<String, Object> a,
-                                         @Arm("b") Map<String, Object> b,
-                                         @Arm("c") Map<String, Object> c) {
+                                         Map<String, Object> a,
+                                         Map<String, Object> b,
+                                         Map<String, Object> c) {
             return fold(base, a, b, c);
         }
         public Map<String, Object> after(Map<String, Object> ctx) {
@@ -216,7 +215,7 @@ public final class Scenarios {
 
     /** Forks nest: the join stack pops back to the right barrier. */
     public static void nestedForks() throws Exception {
-        Blueprint bp = json("nested")
+        FlowSpec bp = json("nested")
                 .fork(
                         Branch.of("outer-left", s -> s.fork(
                                 Branch.of("inner-a", t -> t.step("ia")),
@@ -247,13 +246,13 @@ public final class Scenarios {
         public Map<String, Object> innerAfter(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
         public Map<String, Object> or(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
         public Map<String, Object> innerMerge(@Context Map<String, Object> base,
-                                              @Arm("inner-a") Map<String, Object> ia,
-                                              @Arm("inner-b") Map<String, Object> ib) {
+                                              Map<String, Object> ia,
+                                              Map<String, Object> ib) {
             return fold(base, ia, ib);
         }
         public Map<String, Object> outerMerge(@Context Map<String, Object> base,
-                                              @Arm("outer-left") Map<String, Object> left,
-                                              @Arm("outer-right") Map<String, Object> right) {
+                                              Map<String, Object> left,
+                                              Map<String, Object> right) {
             return fold(base, left, right);
         }
         public Map<String, Object> outerAfter(Map<String, Object> ctx) { return put(ctx, "outerAfter", 1L); }
@@ -261,7 +260,7 @@ public final class Scenarios {
 
     /** A gate inside a branch short-circuits that branch only; siblings still join. */
     public static void gateInsideBranchDoesNotStrandSiblings() throws Exception {
-        Blueprint bp = json("branch-gate")
+        FlowSpec bp = json("branch-gate")
                 .fork(
                         Branch.of("gated", s -> s
                                 .gate("gate")
@@ -289,8 +288,8 @@ public final class Scenarios {
         public Map<String, Object> skipped(Map<String, Object> ctx) { return put(ctx, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> ctx) { return put(ctx, "ran", true); }
         public Map<String, Object> merge(@Context Map<String, Object> base,
-                                         @Arm("gated") Map<String, Object> gated,
-                                         @Arm("other") Map<String, Object> other) {
+                                         Map<String, Object> gated,
+                                         Map<String, Object> other) {
             return fold(base, gated, other);   // the gated arm ended early; its (empty) result folds harmlessly
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", true); }
@@ -299,7 +298,7 @@ public final class Scenarios {
     /** A transient failure is retried according to the step's policy. */
     public static void retriesTransientFailures() throws Exception {
         Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
-        Blueprint bp = json("retry")
+        FlowSpec bp = json("retry")
                 .step("flaky", RetryPolicy.fixed(5, Duration.ofMillis(50)))
                 .build();
 
@@ -325,7 +324,7 @@ public final class Scenarios {
 
     /** Retries stop at the policy limit and the instance fails with the last error. */
     public static void exhaustedRetriesFailInstance() throws Exception {
-        Blueprint bp = json("retry-exhausted")
+        FlowSpec bp = json("retry-exhausted")
                 .step("always-fails", RetryPolicy.fixed(2, Duration.ofMillis(20)))
                 .build();
 
@@ -348,7 +347,7 @@ public final class Scenarios {
     /** PermanentActivityException skips retries entirely. */
     public static void permanentFailureSkipsRetries() throws Exception {
         AtomicInteger calls = new AtomicInteger();
-        Blueprint bp = json("permanent")
+        FlowSpec bp = json("permanent")
                 .step("fatal", RetryPolicy.fixed(5, Duration.ofMillis(20)))
                 .build();
 
@@ -373,7 +372,7 @@ public final class Scenarios {
 
     /** A sleep is a server-side timer: the instance waits without occupying a worker. */
     public static void sleepDefersWithoutHoldingAWorker() throws Exception {
-        Blueprint bp = json("sleeper")
+        FlowSpec bp = json("sleeper")
                 .step("before")
                 .sleep(Duration.ofMillis(600))
                 .step("after")
@@ -405,7 +404,7 @@ public final class Scenarios {
      * reclaims the expired lease and the task becomes dispatchable again.
      */
     public static void expiredLeaseIsReclaimed() throws Exception {
-        Blueprint bp = json("orphan")
+        FlowSpec bp = json("orphan")
                 .step("work", RetryPolicy.fixed(5, Duration.ofMillis(20)))
                 .build();
 
@@ -437,7 +436,7 @@ public final class Scenarios {
 
     /** A task may only be completed by the worker holding its lease. */
     public static void staleLeaseIsRejected() throws Exception {
-        Blueprint bp = json("lease-guard")
+        FlowSpec bp = json("lease-guard")
                 .step("work")
                 .build();
 
@@ -459,7 +458,7 @@ public final class Scenarios {
 
     /** Cancelling an instance stops it and abandons its in-flight work. */
     public static void cancelStopsAnInstance() throws Exception {
-        Blueprint bp = json("cancellable")
+        FlowSpec bp = json("cancellable")
                 .step("slow")
                 .build();
 
@@ -491,7 +490,7 @@ public final class Scenarios {
      */
     public static void heartbeatKeepsLongTaskAlive() throws Exception {
         AtomicInteger invocations = new AtomicInteger();
-        Blueprint bp = json("heartbeat")
+        FlowSpec bp = json("heartbeat")
                 .step("long-running")
                 .build();
 
@@ -524,9 +523,9 @@ public final class Scenarios {
 
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
     public static void definitionVersionIsContentAddressed() {
-        Blueprint a = json("versioned").step("one").build();
-        Blueprint b = json("versioned").step("one").build();
-        Blueprint c = json("versioned")
+        FlowSpec a = json("versioned").step("one").build();
+        FlowSpec b = json("versioned").step("one").build();
+        FlowSpec c = json("versioned")
                 .step("one").step("two").build();
 
         Check.equal(a.version(), b.version(), "identical topologies share a version");
@@ -584,7 +583,7 @@ public final class Scenarios {
     /** Two workers on one server share the work rather than duplicating it. */
     public static void workDistributesAcrossWorkers() throws Exception {
         AtomicInteger total = new AtomicInteger();
-        Blueprint bp = json("distributed")
+        FlowSpec bp = json("distributed")
                 .step("work")
                 .build();
 

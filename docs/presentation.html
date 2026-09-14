@@ -187,7 +187,7 @@
         <h2 class="rise">A workflow is a chain of steps.</h2>
         <p class="body rise" style="margin-top:14px">
           Nothing runs while you build it. <span class="accent">build()</span> produces an
-          immutable <span class="accent">Blueprint</span> you register and start. The context
+          immutable <span class="accent">FlowSpec</span> you register and start. The context
           is one type from first step to last — typed records or JSON maps.
         </p>
         <div class="meta rise" style="margin-top:22px">
@@ -197,7 +197,7 @@
           <span><b class="teal">sleep</b> timer</span>
         </div>
       </div>
-      <pre class="rise" aria-label="Workflow definition example"><code><span class="c-typ">Blueprint</span>&lt;Order&gt; orders = <span class="c-fn">Workflow</span>.define(<span class="c-str">"order-fulfilment"</span>,
+      <pre class="rise" aria-label="Workflow definition example"><code><span class="c-typ">FlowSpec</span>&lt;Order&gt; orders = <span class="c-fn">Wiggle</span>.graph(<span class="c-str">"order-fulfilment"</span>,
         <span class="c-fn">ContextCodec</span>.records(Order.class))
 
     .<span class="c-fn">step</span>(<span class="c-str">"validate"</span>, o -&gt; o.withStatus(<span class="c-str">"VALIDATED"</span>))
@@ -262,7 +262,7 @@
       </div>
       <div class="card">
         <span class="k">Workers</span><h3>Pull-based execution</h3>
-        <p>Register blueprints, long-poll for steps, run them with configurable concurrency &amp; leases. Add processes to scale — they share load automatically.</p>
+        <p>Register flow specs, long-poll for steps, run them with configurable concurrency &amp; leases. Add processes to scale — they share load automatically.</p>
       </div>
       <div class="card">
         <span class="k">Storage</span><h3>Pluggable</h3>
@@ -329,7 +329,7 @@
           <li><span class="mk">⛓</span><div><b>Lease recovery</b><p>A worker dies mid-step → its lease expires → another picks it up.</p></div></li>
         </ul>
       </div>
-      <pre class="rise" aria-label="Signal example"><code><span class="c-fn">Workflow</span>.defineJson(<span class="c-str">"expense"</span>)
+      <pre class="rise" aria-label="Signal example"><code><span class="c-fn">Wiggle</span>.graph(<span class="c-str">"expense"</span>)
     .<span class="c-fn">step</span>(<span class="c-str">"submit"</span>, Expenses::record)
 
     <span class="c-com">// wait up to 48h for a human;</span>
@@ -370,7 +370,7 @@ client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approva
     .<span class="c-fn">upcast</span>(<span class="c-key">2</span>, m -&gt; { m.put(<span class="c-str">"total"</span>, m.remove(<span class="c-str">"amount"</span>)); <span class="c-key">return</span> m; })
     .<span class="c-fn">build</span>();
 
-<span class="c-fn">Workflow</span>.define(<span class="c-str">"order"</span>, codec)
+<span class="c-fn">Wiggle</span>.graph(<span class="c-str">"order"</span>, codec)
     .<span class="c-fn">step</span>(<span class="c-str">"price"</span>, o -&gt; o.withTotal(...));
 <span class="c-com">// a v1 instance is upcast and finished by a v3 worker</span></code></pre>
     </div>
@@ -448,8 +448,8 @@ client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approva
           <span class="kicker">io.github.hadielmougy:wiggle-client:2.1.2</span>
         </div>
       </div>
-      <pre class="rise" aria-label="Quick start example"><code><span class="c-typ">Blueprint</span>&lt;Map&lt;String,Object&gt;&gt; greet =
-    <span class="c-fn">Workflow</span>.defineJson(<span class="c-str">"greet"</span>)
+      <pre class="rise" aria-label="Quick start example"><code><span class="c-typ">FlowSpec</span>&lt;Map&lt;String,Object&gt;&gt; greet =
+    <span class="c-fn">Wiggle</span>.graph(<span class="c-str">"greet"</span>)
         .<span class="c-fn">step</span>(<span class="c-str">"hello"</span>, ctx -&gt;
             <span class="c-fn">Map</span>.of(<span class="c-str">"greeting"</span>,
                    <span class="c-str">"hello, "</span> + ctx.get(<span class="c-str">"name"</span>)))

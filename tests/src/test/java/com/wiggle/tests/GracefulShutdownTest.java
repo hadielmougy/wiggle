@@ -1,7 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -73,7 +73,7 @@ class GracefulShutdownTest {
 
         // Default batch size (64) means step "a" alone never triggers a flush -- its result sits
         // only in the worker's in-memory buffer until a boundary, a full batch, or a drain.
-        Blueprint bp = Workflow.define("shutdown-drain")
+        FlowSpec bp = Wiggle.graph("shutdown-drain")
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .step("a")
                 .step("b")

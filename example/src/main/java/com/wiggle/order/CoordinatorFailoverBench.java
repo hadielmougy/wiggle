@@ -3,7 +3,7 @@ package com.wiggle.order;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 
@@ -55,7 +55,7 @@ public final class CoordinatorFailoverBench {
         int threads = Integer.parseInt(env("BENCH_THREADS", "16"));
 
         try (var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "us")) {
-            Blueprint bp = OrderFulfilment.blueprint();
+            FlowSpec bp = OrderFulfilment.flowSpec();
             resolver.registerWorkflow(ns, bp);
 
             System.out.printf("coordinator-failover bench: coordinator=%s ns=%s rate=%d/s run=%ds threads=%d%n",
@@ -178,7 +178,7 @@ public final class CoordinatorFailoverBench {
     }
 
     /** Start one probe instance and poll it to a terminal state; -1 on any failure or timeout. */
-    private static long probeSojourn(CoordinatedConnection resolver, String ns, Blueprint bp) {
+    private static long probeSojourn(CoordinatedConnection resolver, String ns, FlowSpec bp) {
         long s = System.nanoTime();
         try {
             Order order = Order.of("FP-" + s, "probe", 1, new BigDecimal("1.00"));
@@ -196,7 +196,7 @@ public final class CoordinatorFailoverBench {
     private static final Map<String, WiggleClient> CELLS = new ConcurrentHashMap<>();
 
     /** Post-run integrity: wait until RUNNING across every active cell stays ~0 — nothing stuck. */
-    private static void drain(CoordinatedConnection resolver, String ns, Blueprint bp) throws Exception {
+    private static void drain(CoordinatedConnection resolver, String ns, FlowSpec bp) throws Exception {
         long s = System.currentTimeMillis();
         int consecutive = 0;
         String perCell = "";

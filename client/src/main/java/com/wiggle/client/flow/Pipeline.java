@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.*;
 
@@ -10,9 +10,9 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * The accumulating build model behind the {@link WorkflowBuilder} DSL: it owns the graph's nodes and
+ * The accumulating build model behind the {@link GraphBuilder} DSL: it owns the graph's nodes and
  * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
- * {@link Blueprint} on {@link #build()}. The blueprint is pure topology -- no step logic -- so this
+ * {@link FlowSpec} on {@link #build()}. The flowSpec is pure topology -- no step logic -- so this
  * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
  * on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes.
  */
@@ -45,7 +45,7 @@ final class Pipeline {
     /** Records the graph's entry node. Called once, for the first node attached to the root stream. */
     void startAt(String id) { this.startNode = id; }
 
-    /** Marks an already-added step as a checkpoint (see {@link WorkflowBuilder#checkpoint()}). */
+    /** Marks an already-added step as a checkpoint (see {@link GraphBuilder#checkpoint()}). */
     void markCheckpoint(String nodeId) { checkpoints.add(nodeId); }
 
     /** The step's own queue, or the workflow default when none is given. */
@@ -140,6 +140,32 @@ final class Pipeline {
     /** Marks a guard as a doWhile loop condition with an iteration budget (-1 = engine default). */
     void markLoop(String guardId, int budget) { nodes.put(guardId, nodes.get(guardId).withLoopBudget(budget)); }
 
+    /**
+     * Replaces an already-added node's retry policy. Only a worker-dispatched node has one -- the
+     * engine runs the rest itself, so there is nothing to retry on a worker.
+     */
+    void setRetry(String nodeId, RetryPolicy retry) {
+        Node n = requireWorkerNode(nodeId, "a retry policy");
+        nodes.put(nodeId, n.withRetry(retryOr(retry)));
+    }
+
+    /** Replaces an already-added node's queue, registering it so workers discover it. */
+    void setQueue(String nodeId, String queue) {
+        Node n = requireWorkerNode(nodeId, "a queue");
+        String q = queueOr(queue);
+        queues.add(q);
+        nodes.put(nodeId, n.withQueue(q));
+    }
+
+    private Node requireWorkerNode(String nodeId, String what) {
+        Node n = nodes.get(nodeId);
+        if (!n.isWorkerDispatched()) {
+            throw new IllegalStateException(what + " applies to a step, effect, gate or combine -- "
+                    + n.kind() + " '" + n.name() + "' runs on the engine, not a worker");
+        }
+        return n;
+    }
+
     void wireNext(String from, String target) { nodes.put(from, nodes.get(from).withNext(target)); }
 
     /** Points {@code from}'s alternate (false / escalation) edge at {@code target}. */
@@ -151,17 +177,17 @@ final class Pipeline {
     }
 
     /**
-     * Assembles the accumulated nodes into a validated, content-addressed {@link Blueprint}. The
-     * caller ({@link WorkflowBuilder#build()}) has already appended the terminal end node and wired
+     * Assembles the accumulated nodes into a validated, content-addressed {@link FlowSpec}. The
+     * caller ({@link GraphBuilder#build()}) has already appended the terminal end node and wired
      * every open edge to it.
      */
-    Blueprint build() {
+    FlowSpec build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);
-        return new Blueprint(def);
+        return new FlowSpec(def);
     }
 
     private Set<String> copyOf(Set<String> set) {

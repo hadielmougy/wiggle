@@ -1,7 +1,7 @@
 package com.wiggle.account;
 
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 
@@ -16,12 +16,12 @@ public class TransactionWorker {
 
         var wiggle = WiggleConnection.direct(url);
 
-        Blueprint blueprint = TransactionWorkflow.blueprint();
+        FlowSpec flowSpec = TransactionWorkflow.flowSpec();
 
         Worker worker = new Worker(wiggle.client(), id, WorkerOptions.defaults()
                 .withConcurrency(concurrency)
                 .withLongPollWait(Duration.ofSeconds(10)))
-                .register(blueprint)
+                .register(flowSpec)
                 .handlers(new AccountHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -30,7 +30,7 @@ public class TransactionWorker {
         }));
 
         worker.start();
-        System.out.println("worker " + id + " registered " + blueprint.name() + " v" + blueprint.version()
+        System.out.println("worker " + id + " registered " + flowSpec.name() + " v" + flowSpec.version()
                 + " against " + url + " (concurrency " + concurrency + ")");
         Thread.currentThread().join();
     }

@@ -201,7 +201,7 @@ footer .fin { margin-top: 34px; font-size: 13px; }
 
   <div class="codecard">
     <div class="bar"><i></i><i></i><i></i><span>OrderWorkflow.java</span></div>
-<pre><span class="t">Blueprint</span> orders = <span class="t">Workflow</span>.<span class="f">define</span>(<span class="s">"order-fulfilment"</span>)
+<pre><span class="t">FlowSpec</span> orders = <span class="t">Wiggle</span>.<span class="f">graph</span>(<span class="s">"order-fulfilment"</span>)
         .<span class="f">step</span>(<span class="s">"validate"</span>)
         .<span class="f">gate</span>(<span class="s">"in-stock"</span>)
         .<span class="f">fork</span>(<span class="t">Branch</span>.<span class="f">of</span>(<span class="s">"payment"</span>,  s -&gt; s.<span class="f">step</span>(<span class="s">"authorise"</span>).<span class="f">step</span>(<span class="s">"capture"</span>)),
@@ -254,7 +254,7 @@ footer .fin { margin-top: 34px; font-size: 13px; }
   <div class="duo">
     <div>
       <div class="codecard"><div class="bar"><i></i><i></i><i></i><span>topology — what happens, in what order</span></div>
-<pre><span class="t">Blueprint</span> orders = <span class="t">Workflow</span>.<span class="f">define</span>(<span class="s">"order-fulfilment"</span>)
+<pre><span class="t">FlowSpec</span> orders = <span class="t">Wiggle</span>.<span class="f">graph</span>(<span class="s">"order-fulfilment"</span>)
     .<span class="f">step</span>(<span class="s">"validate"</span>)
     .<span class="f">gate</span>(<span class="s">"in-stock"</span>)      <span class="c">// false ⇒ ends cleanly</span>
     .<span class="f">fork</span>(
@@ -283,8 +283,8 @@ footer .fin { margin-top: 34px; font-size: 13px; }
   <span class="c">// the combine is mandatory: fold the branches' results onto the</span>
   <span class="c">// pre-fork base and return the COMPLETE post-join context</span>
   <span class="t">Order</span> <span class="f">merge</span>(<span class="k">@Context</span> <span class="t">Order</span> base,
-              <span class="k">@Arm</span>(<span class="s">"payment"</span>)  <span class="t">Order</span> pay,
-              <span class="k">@Arm</span>(<span class="s">"shipping"</span>) <span class="t">Order</span> ship) {
+              <span class="t">Order</span> payment,
+              <span class="t">Order</span> shipping) {
     <span class="k">return</span> base.<span class="f">withPaymentRef</span>(pay.<span class="f">paymentRef</span>())
                .<span class="f">withShipmentRef</span>(ship.<span class="f">shipmentRef</span>());
   }

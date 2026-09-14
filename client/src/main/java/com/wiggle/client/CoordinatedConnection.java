@@ -1,7 +1,7 @@
 package com.wiggle.client;
 
 import com.google.protobuf.ByteString;
-import com.wiggle.client.dsl.Blueprint;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;
@@ -75,16 +75,16 @@ public final class CoordinatedConnection implements AutoCloseable {
 
     /** Registers a workflow for a namespace: the coordinator fans the definition out to every cell of
      *  the namespace (R23). */
-    public void registerWorkflow(String namespace, Blueprint blueprint) {
-        String json = Json.write(blueprint.definition().toJson());
+    public void registerWorkflow(String namespace, FlowSpec flowSpec) {
+        String json = Json.write(flowSpec.definition().toJson());
         try {
             coordCall(() -> coord.registerWorkflow(RegisterWorkflowRequest.newBuilder()
                     .setNamespace(namespace)
-                    .setName(blueprint.name())
+                    .setName(flowSpec.name())
                     .setDefinition(ByteString.copyFromUtf8(json))
                     .build()));
         }  catch (Exception e) {
-            throw new WorkflowRegistrationException("Workflow can't be registered", e);
+            throw new WorkflowRegistrationException("Flow can't be registered", e);
         }
     }
 

@@ -1,4 +1,4 @@
-package com.wiggle.client.dsl;
+package com.wiggle.client.flow;
 
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
@@ -12,7 +12,7 @@ import java.util.function.UnaryOperator;
 
 /**
  * A lazily-built workflow <em>topology</em> with a Stream-shaped API: intermediate operations append
- * nodes and return the stream, and the terminal {@link #build()} produces the {@link Blueprint}.
+ * nodes and return the stream, and the terminal {@link #build()} produces the {@link FlowSpec}.
  * Nothing executes at definition time, and no step logic lives here -- every {@code step}/{@code
  * gate}/{@code effect}/{@code combine} is just a named node. The implementations are bound
  * separately on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes, matched to
@@ -25,7 +25,7 @@ import java.util.function.UnaryOperator;
  * bookkeeping at the bottom). Each nested branch/case/loop is built by a child builder that captures
  * its own start node and falls back to an enclosing join for a short-circuit.
  */
-public final class WorkflowBuilder {
+public final class GraphBuilder {
 
     /** Which outgoing edge of a node an open end occupies. */
     private enum Edge { NEXT, ALT }
@@ -46,65 +46,65 @@ public final class WorkflowBuilder {
     private boolean forkPending;
     private boolean consumed;
 
-    private WorkflowBuilder(Pipeline pipeline, Consumer<String> startSink, String enclosingJoinId) {
+    private GraphBuilder(Pipeline pipeline, Consumer<String> startSink, String enclosingJoinId) {
         this.pipeline = pipeline;
         this.startSink = startSink;
         this.enclosingJoinId = enclosingJoinId;
     }
 
-    static WorkflowBuilder root(Pipeline pipeline) {
-        return new WorkflowBuilder(pipeline, pipeline::startAt, null);
+    static GraphBuilder root(Pipeline pipeline) {
+        return new GraphBuilder(pipeline, pipeline::startAt, null);
     }
 
     // ------------------------------------------------------ step / effect (both TASK nodes)
 
     /** A task step; its handler is bound on the worker by {@code name}. */
-    public WorkflowBuilder step(String name) {
+    public GraphBuilder step(String name) {
         return wireStep(pipeline.addTask(name, null, null));
     }
 
     /** A task step pinned to a dedicated {@code queue} (worker specialisation). */
-    public WorkflowBuilder step(String name, String queue) {
+    public GraphBuilder step(String name, String queue) {
         return wireStep(pipeline.addTask(name, null, queue));
     }
 
     /** A task step with an explicit retry policy. */
-    public WorkflowBuilder step(String name, RetryPolicy retry) {
+    public GraphBuilder step(String name, RetryPolicy retry) {
         return wireStep(pipeline.addTask(name, retry, null));
     }
 
     /** A task step with both an explicit retry policy and a dedicated queue. */
-    public WorkflowBuilder step(String name, RetryPolicy retry, String queue) {
+    public GraphBuilder step(String name, RetryPolicy retry, String queue) {
         return wireStep(pipeline.addTask(name, retry, queue));
     }
 
     /** Alias for {@link #step(String)} that reads well when sequencing ("do this, then that"). */
-    public WorkflowBuilder then(String name) {
+    public GraphBuilder then(String name) {
         return step(name);
     }
 
     /** An effect step (its handler returns void, leaving the context unchanged). Topologically a task. */
-    public WorkflowBuilder effect(String name) {
+    public GraphBuilder effect(String name) {
         return wireStep(pipeline.addTask(name, null, null));
     }
 
     /** {@link #effect} pinned to a dedicated {@code queue}. */
-    public WorkflowBuilder effect(String name, String queue) {
+    public GraphBuilder effect(String name, String queue) {
         return wireStep(pipeline.addTask(name, null, queue));
     }
 
     /** {@link #effect} with an explicit retry policy. */
-    public WorkflowBuilder effect(String name, RetryPolicy retry) {
+    public GraphBuilder effect(String name, RetryPolicy retry) {
         return wireStep(pipeline.addTask(name, retry, null));
     }
 
     /** {@link #effect} with both an explicit retry policy and a dedicated queue. */
-    public WorkflowBuilder effect(String name, RetryPolicy retry, String queue) {
+    public GraphBuilder effect(String name, RetryPolicy retry, String queue) {
         return wireStep(pipeline.addTask(name, retry, queue));
     }
 
     /** Shared wiring for a task node: attach it to the open edge and mark it the last step. */
-    private WorkflowBuilder wireStep(String id) {
+    private GraphBuilder wireStep(String id) {
         attach(id);
         lastStepId = id;
         return this;
@@ -113,28 +113,28 @@ public final class WorkflowBuilder {
     // ------------------------------------------------------ gate
 
     /** A guard; its boolean handler is bound on the worker by {@code name}. */
-    public WorkflowBuilder gate(String name) {
+    public GraphBuilder gate(String name) {
         return wireGate(pipeline.addGuard(name, null, null), name);
     }
 
     /** {@link #gate} pinned to a dedicated {@code queue}. */
-    public WorkflowBuilder gate(String name, String queue) {
+    public GraphBuilder gate(String name, String queue) {
         return wireGate(pipeline.addGuard(name, null, queue), name);
     }
 
     /** {@link #gate} with an explicit retry policy for the guard. */
-    public WorkflowBuilder gate(String name, RetryPolicy retry) {
+    public GraphBuilder gate(String name, RetryPolicy retry) {
         return wireGate(pipeline.addGuard(name, retry, null), name);
     }
 
     /** {@link #gate} with both an explicit retry policy and a dedicated queue. */
-    public WorkflowBuilder gate(String name, RetryPolicy retry, String queue) {
+    public GraphBuilder gate(String name, RetryPolicy retry, String queue) {
         return wireGate(pipeline.addGuard(name, retry, queue), name);
     }
 
     /** Shared wiring for a guard node: attach it, route its false edge (to the enclosing join, else a
      *  {@code gated:<name>} end), and open the true edge. */
-    private WorkflowBuilder wireGate(String id, String name) {
+    private GraphBuilder wireGate(String id, String name) {
         attach(id);
         String falseTarget = enclosingJoinId != null ? enclosingJoinId : pipeline.addEnd("gated:" + name);
         pipeline.wireAlt(id, falseTarget);
@@ -146,11 +146,11 @@ public final class WorkflowBuilder {
     // ------------------------------------------------------ sleep / signal / sub-workflow
 
     /** Server-side timer. No worker is occupied while the instance waits. */
-    public WorkflowBuilder sleep(Duration duration) {
+    public GraphBuilder sleep(Duration duration) {
         return sleep("sleep-" + duration.toMillis() + "ms", duration);
     }
 
-    public WorkflowBuilder sleep(String stepName, Duration duration) {
+    public GraphBuilder sleep(String stepName, Duration duration) {
         if (duration.isNegative()) throw new IllegalArgumentException("sleep duration must not be negative");
         attach(pipeline.addSleep(stepName, duration.toMillis()));
         lastStepId = null;
@@ -161,12 +161,12 @@ public final class WorkflowBuilder {
      * Waits for the named signal from an external actor -- the flow then continues down the following
      * step. No worker is held while it waits; the payload merges into the context like a step result.
      */
-    public WorkflowBuilder awaitSignal(String name) {
+    public GraphBuilder awaitSignal(String name) {
         return awaitSignal(name, null, null);
     }
 
     /** A signal wait with a deadline; on timeout the instance fails. */
-    public WorkflowBuilder awaitSignal(String name, Duration timeout) {
+    public GraphBuilder awaitSignal(String name, Duration timeout) {
         return awaitSignal(name, timeout, null);
     }
 
@@ -175,7 +175,7 @@ public final class WorkflowBuilder {
      * {@code timeout}, the {@code escalation} branch runs instead, then rejoins the flow after the
      * wait (exactly one of delivery / escalation happens).
      */
-    public WorkflowBuilder awaitSignal(String name, Duration timeout, UnaryOperator<WorkflowBuilder> escalation) {
+    public GraphBuilder awaitSignal(String name, Duration timeout, UnaryOperator<GraphBuilder> escalation) {
         if (timeout != null && timeout.isNegative()) throw new IllegalArgumentException("timeout must not be negative");
         if (timeout == null && escalation != null) throw new IllegalArgumentException("escalation needs a timeout");
         String id = pipeline.addSignal(name, timeout == null ? 0 : timeout.toMillis());
@@ -195,7 +195,7 @@ public final class WorkflowBuilder {
      * current context, and on completion its final context merges back here. The child must be
      * registered on the server; its latest version is used.
      */
-    public WorkflowBuilder subWorkflow(String name, String workflow) {
+    public GraphBuilder subWorkflow(String name, String workflow) {
         java.util.Objects.requireNonNull(workflow, "workflow");
         attach(pipeline.addSubWorkflow(name, workflow));
         lastStepId = null;
@@ -224,7 +224,7 @@ public final class WorkflowBuilder {
      * sub-pipeline; the combine node carries the arm names so a worker's combine handler can key
      * each branch's result by name. Reopens the stream at the combine node.
      */
-    void buildForkCombine(List<Branch> branches, String combineName) {
+    public void buildForkCombine(List<Branch> branches, String combineName) {
         forkPending = false;
         String forkId = pipeline.addFork();
         attach(forkId);
@@ -249,7 +249,7 @@ public final class WorkflowBuilder {
      * {@code itemsKey}. Use the named form when the same collection key is fanned over twice in one
      * workflow (node names must be unique), or for a nicer label in the console diagram.
      */
-    public ForEachStage forEach(String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+    public ForEachStage forEach(String itemsKey, UnaryOperator<GraphBuilder> body) {
         return forEach(itemsKey, itemsKey, body);
     }
 
@@ -267,15 +267,15 @@ public final class WorkflowBuilder {
      * a map input -- and hands the collection to the combine handler together with the pre-forEach
      * context. An empty collection skips the body and the combine entirely.
      */
-    public ForEachStage forEach(String name, String itemsKey, UnaryOperator<WorkflowBuilder> body) {
+    public ForEachStage forEach(String name, String itemsKey, UnaryOperator<GraphBuilder> body) {
         java.util.Objects.requireNonNull(itemsKey, "itemsKey");
         forkPending = true;   // cleared only when the returned ForEachStage's combine() runs
         return new ForEachStage(this, name, itemsKey, body);
     }
 
     /** Builds the forEach with its mandatory combine node. See {@link ForEachStage}. */
-    void buildForEachCombine(String name, String itemsKey,
-                             UnaryOperator<WorkflowBuilder> body, String combineName) {
+    public void buildForEachCombine(String name, String itemsKey,
+                                    UnaryOperator<GraphBuilder> body, String combineName) {
         forkPending = false;
         String forkId = pipeline.addDynFork(name, itemsKey, itemsKey);
         attach(forkId);
@@ -294,7 +294,7 @@ public final class WorkflowBuilder {
      * on a worker; while it holds, the body runs again. Compiles to a plain cycle in the graph, so it
      * works identically under every execution mode.
      */
-    public WorkflowBuilder doWhile(String conditionName, UnaryOperator<WorkflowBuilder> body) {
+    public GraphBuilder doWhile(String conditionName, UnaryOperator<GraphBuilder> body) {
         return doWhile(conditionName, -1, body);   // -1: budgeted by the engine default
     }
 
@@ -307,7 +307,7 @@ public final class WorkflowBuilder {
      * the database and grows the instance's token rows without limit. A loop that legitimately
      * needs more iterations says so here.
      */
-    public WorkflowBuilder doWhile(String conditionName, int maxIterations, UnaryOperator<WorkflowBuilder> body) {
+    public GraphBuilder doWhile(String conditionName, int maxIterations, UnaryOperator<GraphBuilder> body) {
         if (maxIterations == 0 || maxIterations < -1) {
             throw new IllegalArgumentException("doWhile '" + conditionName + "' maxIterations must be positive");
         }
@@ -319,7 +319,7 @@ public final class WorkflowBuilder {
         body0.tail().wireOpenEndsTo(condId);     // body tail -> condition
         pipeline.wireNext(condId, body0.start()); // condition true -> back to the body
         openAt(condId, Edge.ALT);                // condition false -> onward
-        lastStepId = null;
+        lastStepId = condId;   // so withRetry()/onQueue() can reach the condition, which a worker runs
         return this;
     }
 
@@ -329,7 +329,7 @@ public final class WorkflowBuilder {
      * to an {@link Case#otherwise} branch when one is given, otherwise straight to the step after
      * {@code choose}. Exactly one branch ever runs.
      */
-    public WorkflowBuilder choose(Case... cases) {
+    public GraphBuilder choose(Case... cases) {
         List<Case> all = new ArrayList<>(cases.length);
         Collections.addAll(all, cases);
         boolean hasDefault = validateChoose(all);
@@ -337,7 +337,7 @@ public final class WorkflowBuilder {
 
         String[] guardIds = new String[guards];
         for (int i = 0; i < guards; i++) {
-            guardIds[i] = pipeline.addGuard(all.get(i).name(), null, null);
+            guardIds[i] = pipeline.addGuard(all.get(i).name(), all.get(i).retry(), all.get(i).queue());
         }
 
         routeInto(guardIds[0]);   // enter the first guard, leaving no open end -- we thread the edges below
@@ -394,17 +394,17 @@ public final class WorkflowBuilder {
     }
 
     /** A built nested sub-stream: its first node ({@code start}) and its open-ended {@code tail}. */
-    private record Sub(String start, WorkflowBuilder tail) {}
+    private record Sub(String start, GraphBuilder tail) {}
 
     /**
      * Builds a nested sub-stream from {@code body} over the same pipeline, falling back to
      * {@code joinId} for any short-circuit and capturing the branch's start node. Throws with
      * {@code what} if the body defines no steps.
      */
-    private Sub subStream(UnaryOperator<WorkflowBuilder> body, String joinId, String what) {
+    private Sub subStream(UnaryOperator<GraphBuilder> body, String joinId, String what) {
         String[] start = new String[1];
-        WorkflowBuilder sub = new WorkflowBuilder(pipeline, id -> start[0] = id, joinId);
-        WorkflowBuilder tail = body.apply(sub);
+        GraphBuilder sub = new GraphBuilder(pipeline, id -> start[0] = id, joinId);
+        GraphBuilder tail = body.apply(sub);
         if (start[0] == null) throw new IllegalArgumentException(what + " defines no steps");
         if (tail.forkPending) throw new IllegalStateException(what + " has a fork(...) with no combine()");
         return new Sub(start[0], tail);
@@ -413,7 +413,7 @@ public final class WorkflowBuilder {
     // ------------------------------------------------------ workflow-level settings / terminal
 
     /** Sets the queue used by every subsequently defined step (per-step {@code queue} overrides it). */
-    public WorkflowBuilder defaultQueue(String queue) {
+    public GraphBuilder defaultQueue(String queue) {
         pipeline.defaultQueue(queue);
         return this;
     }
@@ -422,9 +422,47 @@ public final class WorkflowBuilder {
      * Sets how this workflow's steps are driven (default {@link ExecutionMode#DEFAULT}). The mode is
      * part of the definition's content hash, so an in-flight instance keeps the mode it started on.
      */
-    public WorkflowBuilder execution(ExecutionMode mode) {
+    public GraphBuilder execution(ExecutionMode mode) {
         pipeline.executionMode(mode);
         return this;
+    }
+
+    /**
+     * Gives the node just added an explicit retry policy, overriding the workflow default. The
+     * inline forms ({@code step(name, retry)} and friends) cover the common case; this reaches the
+     * nodes that have no inline form -- a {@code combine}, and a {@code doWhile} condition -- and
+     * reads well when a policy is the exception rather than the rule:
+     *
+     * <pre>{@code
+     * .fork(...).combine("settle").withRetry(RetryPolicy.exponential(5, ofMillis(100)))
+     * .doWhile("hasMore", s -> s.step("drain")).withRetry(gentle)
+     * }</pre>
+     *
+     * Applies to whatever a worker runs -- step, effect, gate, combine or loop condition -- and
+     * fails on anything the engine runs itself (a sleep, a signal wait, a fork, a sub-workflow),
+     * which has no worker to retry on.
+     */
+    public GraphBuilder withRetry(RetryPolicy retry) {
+        pipeline.setRetry(requireLastStep("withRetry()"), retry);
+        return this;
+    }
+
+    /**
+     * Pins the node just added to a dedicated worker queue, overriding the workflow default. Like
+     * {@link #withRetry}, this reaches the nodes with no inline form and applies to whatever a
+     * worker runs.
+     */
+    public GraphBuilder onQueue(String queue) {
+        pipeline.setQueue(requireLastStep("onQueue()"), queue);
+        return this;
+    }
+
+    private String requireLastStep(String what) {
+        if (lastStepId == null) {
+            throw new IllegalStateException(what + " must directly follow a step, effect, gate, "
+                    + "combine or doWhile");
+        }
+        return lastStepId;
     }
 
     /**
@@ -432,7 +470,7 @@ public final class WorkflowBuilder {
      * flushes its buffer to the server immediately after this step. A no-op under SERVER and
      * LOCAL_SYNC. Must directly follow a step.
      */
-    public WorkflowBuilder checkpoint() {
+    public GraphBuilder checkpoint() {
         if (lastStepId == null) {
             throw new IllegalStateException("checkpoint() must directly follow step(), effect() or gate()");
         }
@@ -449,7 +487,7 @@ public final class WorkflowBuilder {
      * {@code step()} or {@code effect()}. Under {@code LOCAL_ASYNC} a compensable step is a flush
      * boundary, so its snapshots are always durably captured before anything later can fail.
      */
-    public WorkflowBuilder compensate() {
+    public GraphBuilder compensate() {
         if (lastStepId == null) {
             throw new IllegalStateException("compensate() must directly follow step() or effect()");
         }
@@ -457,7 +495,7 @@ public final class WorkflowBuilder {
         return this;
     }
 
-    public Blueprint build() {
+    public FlowSpec build() {
         if (consumed) throw new IllegalStateException("this workflow has already been built");
         if (forkPending) throw new IllegalStateException(
                 "a fork(...) has no merge: follow it with combine(...) before build()");
@@ -504,7 +542,7 @@ public final class WorkflowBuilder {
     }
 
     /** Absorbs another (sub-)builder's open ends into this one -- to merge branch/case/escalation tails. */
-    private void absorb(WorkflowBuilder other) {
+    private void absorb(GraphBuilder other) {
         openEnds.addAll(other.openEnds);
     }
 }

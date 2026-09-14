@@ -1,9 +1,9 @@
 package com.wiggle.cookbook;
 
-import com.wiggle.client.dsl.Blueprint;
-import com.wiggle.client.dsl.Branch;
-import com.wiggle.client.dsl.Case;
-import com.wiggle.client.dsl.Workflow;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.Case;
+import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -17,7 +17,7 @@ import java.util.Map;
  * {@code docs/dsl-cookbook.md}, which explains what each one demonstrates and why. Run them
  * all with {@code ./gradlew :example:runCookbook} ({@link CookbookDemo}).
  *
- * <p>Every blueprint uses {@link Workflow#define}. A step's return REPLACES the context: it must
+ * <p>Every flowSpec uses {@link Workflow#define}. A step's return REPLACES the context: it must
  * be the <b>whole</b> next document, not just the fields it touched -- {@link #with} builds that
  * full copy, and a partial map (e.g. bare {@code Map.of("k", v)}) deliberately clears every other
  * key. Nothing merges implicitly anywhere: fork branches rejoin at an explicit combine handler,
@@ -44,8 +44,8 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 1. step + then + effect + gate -- the smallest linear pipeline with a filter.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint linearWithGate() {
-        return Workflow.define("cb-linear-gate")
+    public static FlowSpec linearWithGate() {
+        return Wiggle.graph("cb-linear-gate")
 
                 .step("normalise")
 
@@ -62,8 +62,8 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 2. choose + fork + retry -- an exclusive branch whose body itself fans out in parallel.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint chooseThenFork() {
-        return Workflow.define("cb-choose-fork")
+    public static FlowSpec chooseThenFork() {
+        return Wiggle.graph("cb-choose-fork")
 
                 .choose(
                         Case.when("is-large",
@@ -83,8 +83,8 @@ public final class Cookbook {
     //    item's context (handlers take it directly; the base rides on Step.base()); the mandatory
     //    combine receives the collected final values.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint forEachAcrossQueues() {
-        return Workflow.define("cb-foreach-queues").defaultQueue("cpu")
+    public static FlowSpec forEachAcrossQueues() {
+        return Wiggle.graph("cb-foreach-queues").defaultQueue("cpu")
 
                 .forEach("charge-items", "items", b -> b
                         .step("price")
@@ -100,8 +100,8 @@ public final class Cookbook {
     // 4. doWhile + gate -- retry-until-ready loop, with an inner gate short-circuiting a
     //    cancelled draw straight out of the loop.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint pollUntilReady() {
-        return Workflow.define("cb-poll-until-ready")
+    public static FlowSpec pollUntilReady() {
+        return Wiggle.graph("cb-poll-until-ready")
 
                 .doWhile("still-pending", b -> b
                         // gate() short-circuits to the loop's exit (the enclosing join/end),
@@ -116,8 +116,8 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 5. awaitSignal (timeout + escalation) + choose -- branch on how the wait resolved.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint approvalWithEscalation() {
-        return Workflow.define("cb-approval-escalation")
+    public static FlowSpec approvalWithEscalation() {
+        return Wiggle.graph("cb-approval-escalation")
 
                 .step("submit")
 
@@ -136,8 +136,8 @@ public final class Cookbook {
     // ---------------------------------------------------------------------------------------
     // 6. subWorkflow + gate + fork -- compose a registered child workflow into a bigger one.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint childCheckThenFork() {
-        return Workflow.define("cb-parent")
+    public static FlowSpec childCheckThenFork() {
+        return Wiggle.graph("cb-parent")
 
                 // Runs cb-linear-gate as a child; its final context (incl. "vip") merges back here.
                 .subWorkflow("run-eligibility", "cb-linear-gate")
@@ -155,8 +155,8 @@ public final class Cookbook {
     // 7. execution(LOCAL_ASYNC) + checkpoint + doWhile -- batched local execution with a
     //    deliberate commit point so a crash mid-loop only replays the current iteration.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint batchedLoopWithCheckpoint() {
-        return Workflow.define("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
+    public static FlowSpec batchedLoopWithCheckpoint() {
+        return Wiggle.graph("cb-batched-loop").execution(ExecutionMode.LOCAL_ASYNC)
 
                 .doWhile("more-batches", b -> b
                         .step("process-batch")
@@ -171,8 +171,8 @@ public final class Cookbook {
     //    sleep, awaitSignal + escalation, subWorkflow, doWhile, defaultQueue, and checkpoint,
     //    in a single graph. Not idiomatic; a deliberate stress test of the combination space.
     // ---------------------------------------------------------------------------------------
-    public static Blueprint kitchenSink() {
-        return Workflow.define("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
+    public static FlowSpec kitchenSink() {
+        return Wiggle.graph("cb-kitchen-sink").defaultQueue("default").execution(ExecutionMode.LOCAL_SYNC)
 
                 .step("intake")
 
