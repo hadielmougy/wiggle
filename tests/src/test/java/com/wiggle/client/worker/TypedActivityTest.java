@@ -33,6 +33,10 @@ class TypedActivityTest {
     /** The steps this spec names; a worker binds them by name. */
     interface OneStep {
         void auditLog(Map<String, Object> ctx);
+        // Both declarations of the same step name, because this file builds the node both ways: the
+        // zero-arg factory declares an undo, the one-arg form does not. A method reference picks
+        // between them by target type -- thenActivity takes the factory, thenApply the step.
+        CompensableActivity<Map<String, Object>> capturePayment();
         Map<String, Object> capturePayment(Map<String, Object> ctx);
         boolean inStock(Map<String, Object> ctx);
         Map<String, Object> summarise(Map<String, Object> ctx);
@@ -69,11 +73,10 @@ class TypedActivityTest {
         }
     }
 
-    /** capturePayment declares .compensate() -- pairs with MixedHandlers' Compensable factory. */
+    /** capturePayment declares its undo in its return type -- MixedHandlers supplies the factory. */
     private static WorkflowDefinition linear() {
         return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
-                .thenApply(s::capturePayment)
-                .compensate()
+                .thenActivity(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenAccept(s::auditLog)).definition();
     }
@@ -179,8 +182,7 @@ class TypedActivityTest {
     @Test @DisplayName("plain methods + factories + @ForFlow run a workflow to COMPLETED")
     void endToEnd() throws Exception {
         FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
-                .thenApply(s::capturePayment)
-                .compensate()
+                .thenActivity(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenApply(s::summarise)
                 .thenAccept(s::auditLog));

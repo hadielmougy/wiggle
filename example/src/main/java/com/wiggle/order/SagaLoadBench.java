@@ -6,6 +6,7 @@ import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
+import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.client.worker.Compensation;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.NamespaceWorker;
@@ -42,8 +43,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class SagaLoadBench {
 
     interface SagaSteps {
-        Map<String, Object> reserve(Map<String, Object> ctx);
-        Map<String, Object> enrich(Map<String, Object> ctx);
+        CompensableActivity<Map<String, Object>> reserve();
+        CompensableActivity<Map<String, Object>> enrich();
         Map<String, Object> boom(Map<String, Object> ctx);
     }
 
@@ -52,21 +53,21 @@ public final class SagaLoadBench {
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
         return FlowSpec.define("saga-load", Map.class, SagaSteps.class, (f, s) -> f
-                .thenApply(s::reserve).compensate()
-                .thenApply(s::enrich).compensate()
+                .thenActivity(s::reserve)
+                .thenActivity(s::enrich)
                 .thenApply(s::boom));
     }
 
     @ForFlow("saga-load")
     public static final class SagaHandlers {
-        public Activity<Map<String, Object>> reserve() { return compensable("reservationRef"); }
-        public Activity<Map<String, Object>> enrich() { return compensable("enrichmentRef"); }
+        public CompensableActivity<Map<String, Object>> reserve() { return compensable("reservationRef"); }
+        public CompensableActivity<Map<String, Object>> enrich() { return compensable("enrichmentRef"); }
         public Map<String, Object> boom(Map<String, Object> ctx) {
             throw new PermanentActivityException("saga-load: forced failure");
         }
 
-        private static Activity<Map<String, Object>> compensable(String key) {
-            final class Step implements Activity<Map<String, Object>>, Compensable<Map<String, Object>> {
+        private static CompensableActivity<Map<String, Object>> compensable(String key) {
+            final class Step implements CompensableActivity<Map<String, Object>> {
                 public Map<String, Object> execute(Map<String, Object> ctx) {
                     Map<String, Object> next = new LinkedHashMap<>(ctx);
                     next.put(key, "ref-" + ctx.get("seq"));

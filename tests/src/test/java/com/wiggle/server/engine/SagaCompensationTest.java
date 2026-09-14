@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
@@ -39,8 +40,8 @@ class SagaCompensationTest {
     /** The steps this spec names; a worker binds them by name. */
     interface OneStep {
         Map<String, Object> boom(Map<String, Object> ctx);
-        Map<String, Object> capture(Map<String, Object> ctx);
-        Map<String, Object> reserve(Map<String, Object> ctx);
+        CompensableActivity<Map<String, Object>> capture();
+        CompensableActivity<Map<String, Object>> reserve();
         Map<String, Object> work(Map<String, Object> ctx);
     }
 
@@ -51,8 +52,8 @@ class SagaCompensationTest {
     }
 
     /** A compensable step: marks the context, records its undo invocation with both snapshots. */
-    static Activity<Map<String, Object>> compensableStep(String mark, Recording rec, boolean undoFails) {
-        final class Step implements Activity<Map<String, Object>>, Compensable<Map<String, Object>> {
+    static CompensableActivity<Map<String, Object>> compensableStep(String mark, Recording rec, boolean undoFails) {
+        final class Step implements CompensableActivity<Map<String, Object>> {
             public Map<String, Object> execute(Map<String, Object> ctx) {
                 Map<String, Object> next = new LinkedHashMap<>(ctx);
                 next.put(mark, true);
@@ -89,16 +90,14 @@ class SagaCompensationTest {
     void reverseOrderSaga() throws Exception {
         Recording rec = new Recording();
         FlowSpec bp = FlowSpec.define("saga", Map.class, OneStep.class, (f, s) -> f
-                .thenApply(s::reserve)
-                .compensate()
-                .thenApply(s::capture)
-                .compensate()
+                .thenActivity(s::reserve)
+                .thenActivity(s::capture)
                 .thenApply(s::boom));
 
         @ForFlow("saga")
         class H {
-            public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
-            public Activity<Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
+            public CompensableActivity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
+            public CompensableActivity<Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
             public Map<String, Object> boom(Map<String, Object> ctx) {
                 throw new PermanentActivityException("downstream exploded");
             }
@@ -132,16 +131,14 @@ class SagaCompensationTest {
         Recording rec = new Recording();
         FlowSpec bp = FlowSpec.define("saga-local", Map.class, OneStep.class, (f, s) -> f
                 .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
-                .thenApply(s::reserve)
-                .compensate()
-                .thenApply(s::capture)
-                .compensate()
+                .thenActivity(s::reserve)
+                .thenActivity(s::capture)
                 .thenApply(s::boom));
 
         @ForFlow("saga-local")
         class H {
-            public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
-            public Activity<Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
+            public CompensableActivity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
+            public CompensableActivity<Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
             public Map<String, Object> boom(Map<String, Object> ctx) {
                 throw new PermanentActivityException("downstream exploded");
             }
@@ -176,12 +173,11 @@ class SagaCompensationTest {
     void compensatorFailure() throws Exception {
         Recording rec = new Recording();
         FlowSpec bp = FlowSpec.define("bad-undo", Map.class, OneStep.class, (f, s) -> f
-                .thenApply(s::reserve)
-                .compensate()
+                .thenActivity(s::reserve)
                 .thenApply(s::boom));
         @ForFlow("bad-undo")
         class H {
-            public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, true); }
+            public CompensableActivity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, true); }
             public Map<String, Object> boom(Map<String, Object> ctx) {
                 throw new PermanentActivityException("downstream exploded");
             }

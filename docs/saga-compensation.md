@@ -3,8 +3,8 @@
 **Status:** implemented (client model + engine reverse pass; see `SagaCompensationTest`).
 Previously a failed instance stopped in place — sibling tokens cancelled, instance `FAILED`
 (`WorkflowEngine.failInstance`), no undo. This design adds **declared, explicit compensation**: a
-step may declare `.compensate()` and its activity implements `Compensable`; when the instance
-fails, the engine runs the compensators of the already-completed steps, in reverse completion
+step may declare an undo -- by naming it through a `CompensableActivity` factory -- and its
+activity implements `Compensable`; when the instance fails, the engine runs the compensators of the already-completed steps, in reverse completion
 order, as real durable tokens.
 
 The design is shaped by one hard fact about Wiggle and one principle.
@@ -23,28 +23,36 @@ The design is shaped by one hard fact about Wiggle and one principle.
 
 ## 1. Author's surface (DSL)
 
-A step optionally declares a compensating activity, attached to the just-added step exactly the way
-`checkpoint()` attaches today (`WorkflowBuilder.java:418`):
+A step optionally declares a compensating activity. It is declared in the step's own signature:
+the contract names it as a zero-argument factory returning a `CompensableActivity`, which is the
+same shape the handler implements, so the two cannot drift.
 
 ```java
 FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
         .thenApply(s::validate)
-        .thenApply(s::authorise).compensate()
-        .thenApply(s::capture).compensate()
-        .thenApply(s::reserveStock).compensate()
+        .thenActivity(s::authorise)
+        .thenActivity(s::capture)
+        .thenActivity(s::reserveStock)
         .thenApply(s::printLabel)                  // no compensator — nothing to undo
         .thenApply(s::confirm));
 ```
 
-- `compensate(String activity)` — names the compensator for the preceding step.
-- `compensate(String activity, RetryPolicy retry)` — compensators get their own retry policy
-  (a refund is worth retrying hard; default = the workflow's default retry).
-- `compensate(String activity, RetryPolicy retry, String queue)` — a compensator can run on a
-  different worker pool than its forward step.
+```java
+interface OrderSteps {
+    Order validate(Order o);
+    CompensableActivity<Order> authorise();     // declares an undo
+    Order printLabel(Order o);                  // does not
+}
+```
 
-A step with no `.compensate(...)` is simply not compensated — its effect is either irreversible
-(an email already sent) or immaterial (a read). That is a deliberate, visible choice in the graph,
-not a default.
+- The declaration is the whole of it: `thenActivity` reads the factory's return type and sets
+  `compensable` on the node. There is no second place to say it, and so no way for the topology and
+  the handler to disagree about whether an undo exists.
+- The undo runs as an ordinary claimable activity under `<activity>#compensate`, so it retries under
+  the step's own policy and is visible on the console like any other work.
+- A step named with `thenApply`, or through a factory returning a plain `Activity`, is simply not
+  compensated — its effect is either irreversible (an email already sent) or immaterial (a read).
+  That is a deliberate, visible choice in the graph, not a default.
 
 Works uniformly inside `allOf` arms, `thenForEach` bodies, `oneOf` arms, and `repeatWhile` bodies —
 any TASK node can carry a compensator.
@@ -97,7 +105,7 @@ is an effect: it undoes an external side effect, never steers the (already faile
 Compensators are **at-least-once**, like every handler; they must be idempotent.
 
 **The topology stays the contract; the class provides the implementation.** A step is compensated
-on failure only if the workflow declares it (`.compensate()` on the step — a marker now, since the
+on failure only if the workflow declares it (a `CompensableActivity` factory — the declaration is the marker, since the
 activity carries the code), because the *engine* must know compensability at completion time (to
 snapshot) and the declaration must fold into the content-hash version and show on the console. At
 bind time the pairing is verified **both ways**, failing fast:

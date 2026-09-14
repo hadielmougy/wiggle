@@ -1,5 +1,6 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.client.worker.Activity;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -149,6 +150,36 @@ public final class WiggleFlow<T> {
     private <R> WiggleFlow<R> task(FlowFn<T, R> step, RetryPolicy retry, String queue) {
         String name = StepNames.of(step);
         return record(name, b -> b.step(name, retry, queue));
+    }
+
+    /**
+     * A task step named by a zero-argument factory -- the shape a typed activity takes on the
+     * worker, so the contract that names it here has the same signature the handler implements.
+     *
+     * <p>The factory's declared return type is what says whether the step has an undo: a
+     * {@link com.wiggle.client.worker.CompensableActivity CompensableActivity} marks the node
+     * compensable, so its input and result are captured and its {@code compensate} runs in the
+     * reverse pass if the instance later fails. A plain {@link com.wiggle.client.worker.Activity
+     * Activity} names an ordinary step.
+     *
+     * <pre>{@code
+     * interface OrderSteps {
+     *     CompensableActivity<Order> reserve();   // declared with an undo
+     *     Order                      confirm(Order o);
+     * }
+     *
+     * f.thenActivity(s::reserve).thenApply(s::confirm)
+     * }</pre>
+     *
+     * <p>Retry and queue come from {@link #withRetry} and {@link #onQueue}, as for any other step.
+     */
+    public <R> WiggleFlow<R> thenActivity(FlowFactory<? extends Activity<R>> factory) {
+        String name = StepNames.of(factory);
+        boolean compensable = StepNames.declaresCompensation(factory);
+        return record(name, b -> {
+            GraphBuilder step = b.step(name, null, null);
+            return compensable ? step.compensate() : step;
+        });
     }
 
     /** An effect step: the handler returns {@code void}, so the context is unchanged. */
@@ -382,14 +413,6 @@ public final class WiggleFlow<T> {
      */
     public WiggleFlow<T> onQueue(String queue) {
         return record(null, b -> b.onQueue(queue));
-    }
-
-    /**
-     * Marks the step just added as compensable: if the instance later fails, its undo runs in the
-     * reverse pass. Must directly follow {@link #thenApply} or {@link #thenAccept}.
-     */
-    public WiggleFlow<T> compensate() {
-        return record(null, GraphBuilder::compensate);
     }
 
     /** Marks the step just added as a flush boundary under {@code LOCAL_ASYNC}. */

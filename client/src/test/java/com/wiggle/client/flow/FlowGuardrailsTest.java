@@ -87,9 +87,9 @@ class FlowGuardrailsTest {
 
     @Test
     void anArmIsNamedPastTheStepsThatAddNoNode() {
-        // compensate() adds no node of its own, so the arm is still "capture", not nameless
+        // checkpoint() adds no node of its own, so the arm is still "charge", not nameless
         var flow = FlowSpec.define("past-markers", Order.class, f -> {
-            var a = f.thenApply(h::charge).compensate();
+            var a = f.thenApply(h::charge).checkpoint();
             var b = f.thenApply(h::label);
             return Wiggle.allOf(a, b).combine("merge", Order.class);
         });

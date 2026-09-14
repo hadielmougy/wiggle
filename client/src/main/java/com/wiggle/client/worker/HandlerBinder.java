@@ -199,13 +199,13 @@ final class HandlerBinder {
                 continue;
             }
             if (node.compensable() && c.compensate() == null) {
-                throw new IllegalStateException("step '" + node.name() + "' declares .compensate() "
+                throw new IllegalStateException("step '" + node.name() + "' declares an undo "
                         + "but its handler is not Compensable — implement Compensable on the "
                         + "activity (or drop the declaration)");
             }
             if (!node.compensable() && c.compensate() != null) {
                 throw new IllegalStateException("activity for step '" + node.name() + "' is "
-                        + "Compensable but the step does not declare .compensate() — a silently "
+                        + "Compensable but the step does not declare an undo — a silently "
                         + "unused undo is a lie; declare it in the topology (or drop Compensable)");
             }
             bindings.add(new Binding(node.activity(), node.name(),
