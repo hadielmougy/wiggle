@@ -57,11 +57,28 @@ def test_cell_manifest_baseline_and_override():
 
 def test_coordinator_tunables_merge():
     docs = manifests.coordinator_manifests(1, {"WIGGLE_LOG_LEVEL": "DEBUG"})
-    sts = next(d for d in docs if d["kind"] == "StatefulSet")
-    env = {e["name"]: e["value"] for e in sts["spec"]["template"]["spec"]["containers"][0]["env"]
+    dep = next(d for d in docs if d["kind"] == "Deployment")
+    env = {e["name"]: e["value"] for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]
            if "value" in e}
     assert env["WIGGLE_LOG_LEVEL"] == "DEBUG"
     assert env["WIGGLE_ROLE"] == "coordinator"           # structural env intact
+    assert env["WIGGLE_COORD_STORE"].startswith("jdbc:postgresql://")
+
+
+def test_coordinator_is_stateless():
+    """The control plane holds no per-pod state, so none of the Raft-era scaffolding should return:
+    no StatefulSet, no volumes, no peer-transport port, no headless Service."""
+    docs = manifests.coordinator_manifests(3)
+    assert {d["kind"] for d in docs} == {"Deployment", "Service"}
+    dep = next(d for d in docs if d["kind"] == "Deployment")
+    pod = dep["spec"]["template"]["spec"]
+    assert dep["spec"]["replicas"] == 3                  # a plain scale, not a fixed group size
+    assert "volumeClaimTemplates" not in dep["spec"]
+    assert "volumes" not in pod and "volumeMounts" not in pod["containers"][0]
+    assert [p["name"] for p in pod["containers"][0]["ports"]] == ["grpc"]
+    svc = next(d for d in docs if d["kind"] == "Service")
+    assert svc["spec"].get("clusterIP") != "None"        # not headless
+    assert "publishNotReadyAddresses" not in svc["spec"]
 
 
 def test_state_roundtrip(tmp_path, monkeypatch):

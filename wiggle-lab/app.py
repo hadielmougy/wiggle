@@ -126,9 +126,10 @@ with st.sidebar:
         if c2.button("② Load image → kind", use_container_width=True, disabled=not img):
             action("Load image into kind", lab.load_image, spinner="kind load docker-image…")
         if st.button("③ Deploy coordinator", use_container_width=True, disabled=not img,
-                     help="Deploys a Ratis group; redeploying re-forms it fresh (wipes nodes/epochs/policies)."):
+                     help="Deploys the control-plane database and the coordinator pods over it. "
+                          "Redeploying keeps the state -- it lives in that database."):
             action("Deploy coordinator", lab.deploy_coordinator,
-                   st.session_state.get("coord_size", C.COORD_DEFAULT_GROUP_SIZE), lab.coord_config)
+                   st.session_state.get("coord_replicas", C.COORD_DEFAULT_REPLICAS), lab.coord_config)
             st.rerun()
         with st.expander("🗄 disk"):
             st.caption("Postgres `initdb` fails with \"No space left on device\" when the node fills — "
@@ -506,31 +507,43 @@ with coord_tab:
     st.subheader("Coordinator")
     cpods = lab.pods(role="coordinator")
     ready = sum(1 for p in cpods if p["ready"])
-    size = lab.coordinator_group_size()
+    replicas = lab.coordinator_replicas()
+    dbup = lab.coordinator_db_ready()
     s1, s2, s3 = st.columns([2, 1, 1])
-    s1.markdown(f"Ratis group: **{ready}/{len(cpods)}** ready" + (f" · size {size}" if size else " · (none)"))
-    opts = [1, 3, 5]
-    cur = st.session_state.get("coord_size", C.COORD_DEFAULT_GROUP_SIZE)
-    chosen = s2.selectbox("size", opts, index=opts.index(cur) if cur in opts else 1,
-                          key="coord-size-sel", label_visibility="collapsed")
-    st.session_state["coord_size"] = chosen
-    st.caption("One replicated Ratis group — any pod serves consistent state. The peer list is fixed, so "
-               "it is not dynamically scalable: choose a size (odd for a majority); redeploying re-forms it "
-               "fresh.")
+    s1.markdown(f"Coordinators: **{ready}/{len(cpods)}** ready"
+                + (f" · replicas {replicas}" if replicas else " · (none)")
+                + (" · db ✅" if dbup else " · db ⏳"))
+    opts = [1, 2, 3]
+    cur = st.session_state.get("coord_replicas", C.COORD_DEFAULT_REPLICAS)
+    chosen = s2.selectbox("replicas", opts, index=opts.index(cur) if cur in opts else 0,
+                          key="coord-replicas-sel", label_visibility="collapsed")
+    st.session_state["coord_replicas"] = chosen
+    st.caption("Coordinators are stateless — their state is in the control-plane database, so any pod "
+               "serves the same thing and the replica count is just a scale. No group to re-form, no "
+               "size pinned at deploy time, and a redeploy keeps the state.")
     with st.form("coordcfg"):
         st.caption("Coordinator config (applied on deploy). It runs the control plane, not the engine, "
-                   "so it has few knobs. **Deploy re-forms the group fresh** (store wiped).")
+                   "so it has few knobs. Deploying does **not** wipe the store.")
         coord_vals = render_tunables(C.COORD_TUNABLES, lab.coordinator_config(), "coordcfg", cols=3)
-        if st.form_submit_button(f"Deploy group ({chosen}) with this config"):
-            action(f"Deploy coordinator group ({chosen})", lab.deploy_coordinator, int(chosen), coord_vals,
-                   spinner="Re-forming the Ratis group…")
+        if st.form_submit_button(f"Deploy {chosen} coordinator(s) with this config"):
+            action(f"Deploy {chosen} coordinator(s)", lab.deploy_coordinator, int(chosen), coord_vals,
+                   spinner="Applying the coordinator Deployment…")
             st.rerun()
-    if s3.button("Deploy", key="coord-deploy-btn", help="(re)form the group at this size — fresh state"):
-        action(f"Deploy coordinator group ({chosen})", lab.deploy_coordinator, int(chosen), lab.coord_config)
+    if s3.button("Deploy", key="coord-deploy-btn", help="apply at this replica count — state is kept"):
+        action(f"Deploy {chosen} coordinator(s)", lab.deploy_coordinator, int(chosen), lab.coord_config)
         st.rerun()
     if cpods:
         st.dataframe([{"pod": p["name"], "phase": p["phase"], "ready": "✅" if p["ready"] else "⏳",
                        "restarts": p["restarts"]} for p in cpods], use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("**Election** — who is in the coordinator roster and who leads")
+    st.caption("The same announce-and-heartbeat election the cells run: every process announces itself "
+               "and heartbeats, the longest-running live one leads (ties by id), and one whose own "
+               "heartbeat goes stale stands down. Only the leader runs the reconcile/retire loop — so "
+               "with several coordinators, delete the leader's pod and watch it move.")
+    if st.button("Show roster", disabled=not dbup):
+        st.code(lab.coordinator_roster(), language="text")
 
     st.divider()
     st.markdown("**Store contents** — policies / namespaces / node roster / definitions "
@@ -542,10 +555,13 @@ with coord_tab:
             st.error(f"dump failed: {e}")
 
     st.divider()
-    st.markdown("**Store files per pod** — the Ratis log + RocksDB in each coordinator pod")
-    for p in cpods:
-        with st.expander(p["name"]):
-            st.code(lab.coordinator_store_files(p["name"]), language="text")
+    st.markdown("**Reset the control plane** — drop the database and start blank")
+    st.caption("A redeploy no longer wipes anything, so this is the deliberate way to clear policies, "
+               "epochs, the node roster and the definition registry.")
+    if st.button("🧨 Reset control-plane store", disabled=not dbup):
+        action("Reset control-plane store", lab.reset_coordinator_store,
+               spinner="Recreating the control-plane database…")
+        st.rerun()
 
 # ---- Database ----
 with db_tab:

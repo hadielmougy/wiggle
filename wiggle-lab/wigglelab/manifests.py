@@ -1,6 +1,6 @@
 """Kubernetes manifest builders. Everything is one image (the wiggle dist), specialised by env:
-a coordinator (WIGGLE_ROLE=coordinator, Ratis store) and per-cell (its own Postgres + wiggle nodes
-pointed at that DB and at the coordinator)."""
+a coordinator (WIGGLE_ROLE=coordinator, over its own small Postgres) and per-cell (its own Postgres +
+wiggle nodes pointed at that DB and at the coordinator)."""
 from __future__ import annotations
 
 import yaml
@@ -56,95 +56,61 @@ def namespace_manifest() -> dict:
             "metadata": {"name": C.K8S_NAMESPACE, "labels": {"app.kubernetes.io/part-of": C.PART_OF}}}
 
 
-def coordinator_manifests(size: int = C.COORD_DEFAULT_GROUP_SIZE,
+def coordinator_db_manifests() -> list[dict]:
+    """The control plane's own Postgres. Separate from every cell's database on purpose -- a cell must
+    never know about coordinators -- and, like the cell databases here, it has no volume: this is a lab,
+    and deleting the pod is how you reset the control plane."""
+    labels = C.labels("coord-db")
+    container = {
+        "name": "postgres", "image": "postgres:16-alpine",
+        "env": _env({"POSTGRES_DB": C.COORD_DB, "POSTGRES_USER": C.COORD_DB_USER,
+                     "POSTGRES_PASSWORD": C.COORD_DB_PASSWORD}),
+        "ports": [{"containerPort": C.DB_PORT}],
+        # TCP probe, not the unix socket -- see cell_db_manifests for why.
+        "readinessProbe": {"exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-U", C.COORD_DB_USER]},
+                           "initialDelaySeconds": 3, "periodSeconds": 3},
+    }
+    return [_deployment(C.COORD_DB_NAME, labels, 1, container),
+            _service(C.COORD_DB_NAME, labels, C.DB_PORT, C.DB_PORT)]
+
+
+def coordinator_manifests(replicas: int = C.COORD_DEFAULT_REPLICAS,
                           tunables: dict | None = None) -> list[dict]:
-    """A single Apache Ratis group of ``size`` coordinator pods, as a StatefulSet behind a headless
-    Service. Every pod serves the CellCoordinator gRPC (8099) backed by the SAME replicated store, so a
-    client reaching any pod sees consistent state -- unlike independent single-member coordinators.
-    A fixed peer list means this is not dynamically scalable: choose ``size`` at deploy time (odd for a
-    majority); redeploying re-forms the group."""
+    """``replicas`` coordinator pods over one shared database, as an ordinary Deployment behind an
+    ordinary Service.
+
+    Coordinators hold no state of their own, so there is nothing here that used to be needed when the
+    control plane was an embedded Raft group: no StatefulSet, no per-pod volume, no peer transport
+    port, no headless Service publishing not-ready addresses to break a bootstrap deadlock, and no
+    fixed peer list pinning the size at deploy time. Any pod serves the same state because they read
+    the same database, and scaling is just a replica count.
+
+    They elect one leader between themselves -- the same announce-and-heartbeat election the cells run
+    -- and only the leader runs the reconcile/retire loop."""
     labels = C.labels("coordinator")
-    ns = C.K8S_NAMESPACE
-
-    def peer(i: int) -> str:
-        host = f"coordinator-{i}.coordinator.{ns}.svc.cluster.local"
-        return f"coordinator-{i}@{host}:{C.COORD_RAFT_PORT}"
-
-    peers = ",".join(peer(i) for i in range(size))
-    # Each pod's Raft id is its own name; peers is the whole group. k8s expands $(POD_NAME) from the env
-    # defined just above it.
-    store_uri = f"ratis://{C.COORD_DATA_DIR}?peers={peers}&id=$(POD_NAME)"
 
     container = {
         "name": "coordinator", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
-        "ports": [{"containerPort": C.COORD_GRPC_PORT, "name": "grpc"},
-                  {"containerPort": C.COORD_RAFT_PORT, "name": "raft"}],
+        "ports": [{"containerPort": C.COORD_GRPC_PORT, "name": "grpc"}],
         "env": [
-            {"name": "POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+            # The id this pod announces in the coordinator roster, and so what the election names.
             {"name": "WIGGLE_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
             *_env({
                 "WIGGLE_ROLE": "coordinator",
                 "WIGGLE_PORT": C.COORD_GRPC_PORT,
-                "WIGGLE_COORD_STORE": store_uri,
+                "WIGGLE_COORD_STORE": C.COORD_STORE_URI,
+                "WIGGLE_COORD_JDBC_USER": C.COORD_DB_USER,
+                "WIGGLE_COORD_JDBC_PASSWORD": C.COORD_DB_PASSWORD,
             }),
             # Operational tunables from the UI (thin for the coordinator -- it runs CoordinatorServer,
             # not the engine); unset ones fall back to server defaults.
             *_env(C.to_env(C.COORD_TUNABLES, tunables)),
         ],
-        "volumeMounts": [{"name": "coord-data", "mountPath": C.COORD_DATA_DIR}],
         "readinessProbe": {"tcpSocket": {"port": C.COORD_GRPC_PORT},
                            "initialDelaySeconds": 5, "periodSeconds": 3},
     }
-    sts = {
-        "apiVersion": "apps/v1", "kind": "StatefulSet",
-        "metadata": {"name": "coordinator", "namespace": ns, "labels": labels},
-        "spec": {
-            "serviceName": "coordinator",
-            "replicas": size,
-            "podManagementPolicy": "Parallel",   # start all peers together so the group can form quorum
-            "selector": {"matchLabels": {"app": "coordinator"}},
-            "template": {
-                "metadata": {"labels": {**labels, "app": "coordinator"}},
-                "spec": {
-                    "containers": [container],
-                    # Run as root so the embedded Ratis+RocksDB store can write its data dir on the volume.
-                    "securityContext": {"runAsUser": 0, "runAsGroup": 0},
-                },
-            },
-            # A PVC per pod (kind's local-path provisioner), NOT an emptyDir: the Raft log + RocksDB
-            # survive pod restarts AND reschedules, so a bounced coordinator recovers its state instead
-            # of booting blank (losing every policy/epoch/definition and breaking routing until someone
-            # re-provisions). The control-plane state is tiny; 1Gi is generous.
-            "volumeClaimTemplates": [{
-                "metadata": {"name": "coord-data", "labels": labels},
-                "spec": {"accessModes": ["ReadWriteOnce"],
-                         "resources": {"requests": {"storage": "1Gi"}}},
-            }],
-            # Deleting the StatefulSet (the lab's redeploy/teardown path) also deletes the PVCs, keeping
-            # the documented "redeploying re-forms the group" semantics — stale Raft storage must not
-            # leak into a redeploy with a different group size.
-            "persistentVolumeClaimRetentionPolicy": {"whenDeleted": "Delete", "whenScaled": "Delete"},
-        },
-    }
-    # Headless Service: gives each pod stable DNS (coordinator-i.coordinator...) for the Raft peers, and
-    # also fronts the gRPC API for clients (any pod serves the same replicated state).
-    svc = {
-        "apiVersion": "v1", "kind": "Service",
-        "metadata": {"name": "coordinator", "namespace": ns, "labels": labels},
-        "spec": {
-            "clusterIP": "None",
-            # Publish each pod's DNS as soon as it has an IP, before it is Ready. Without this the Raft
-            # peers cannot resolve coordinator-N.coordinator until they are Ready -- but they cannot become
-            # Ready until they resolve each other and form the group. A bootstrap deadlock (UnknownHost).
-            "publishNotReadyAddresses": True,
-            "selector": {"app": "coordinator"},
-            "ports": [
-                {"name": "grpc", "port": C.COORD_GRPC_PORT, "targetPort": C.COORD_GRPC_PORT},
-                {"name": "raft", "port": C.COORD_RAFT_PORT, "targetPort": C.COORD_RAFT_PORT},
-            ],
-        },
-    }
-    return [svc, sts]
+    return [_service("coordinator", labels, C.COORD_GRPC_PORT, C.COORD_GRPC_PORT),
+            _deployment("coordinator", labels, replicas, container)]
 
 
 def cell_db_manifests(cell: str) -> list[dict]:
