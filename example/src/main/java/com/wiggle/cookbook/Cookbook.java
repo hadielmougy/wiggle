@@ -167,7 +167,7 @@ public final class Cookbook {
         public FlowSpec spec() {
             return FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
                     .defaultQueue("cpu")
-                    .thenForEach("items", Item.class, item -> item
+                    .thenForEach(Basket::items, item -> item
                             .thenApply(s::price)
                             // only this step moves to the "gpu" queue; the default stays "cpu"
                             .thenApply(s::renderThumbnail, "gpu"))
@@ -379,7 +379,7 @@ public final class Cookbook {
                 var vipArm = Wiggle.allOf(packed, held).combineWithContext(s::priorityMerge);
 
                 var standard = ready.otherwise()
-                        .thenForEach("pack-items", "items", Item.class, item -> item.thenApply(s::packItem))
+                        .thenForEach("pack-items", Basket::items, item -> item.thenApply(s::packItem))
                         .combine(s::collectPacked);
 
                 return Wiggle.oneOf(vipArm, standard)

@@ -105,7 +105,7 @@ Dynamic fan-out with mixed worker pools. The element *is* each branch's context.
 ```java
 FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
         .defaultQueue("cpu")
-        .thenForEach("items", Item.class, item -> item
+        .thenForEach(Basket::items, item -> item
                 .thenApply(s::price)
                 // only this step moves to the "gpu" queue; the default stays "cpu"
                 .thenApply(s::renderThumbnail, "gpu"))
@@ -116,6 +116,13 @@ FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -
 The collection is read from the context at run time, so the fan-out width is decided per instance,
 not at definition. Inside the body the **item is the context** — `price` takes an `Item`, not the
 `Basket`. An empty or missing collection skips the body *and* the combine.
+
+`Basket::items` is a reference to the context record's own component, not to a step: nothing runs to
+produce the collection — it is already in the context, put there by the step before. The reference
+gives the key (`items`, exactly as the component is persisted) and the element type (`Item`, from its
+return type), so there is no `Class<E>` to pass and renaming the component carries the key with it.
+Maps and arrays work the same way. When the context is a `Map<String, Object>` there is no accessor
+to reference, so name the key: `thenForEach("items", Item.class, body)`.
 
 The combine's collection parameter decides how results arrive: a `List` keeps order, a `Set`
 deduplicates, a `Map` is keyed like the input.
@@ -223,7 +230,7 @@ FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s)
     var vipArm = Wiggle.allOf(packed, held).combineWithContext(s::priorityMerge);
 
     var standard = ready.otherwise()
-            .thenForEach("pack-items", "items", Item.class, item -> item.thenApply(s::packItem))
+            .thenForEach("pack-items", Basket::items, item -> item.thenApply(s::packItem))
             .combine(s::collectPacked);
 
     return Wiggle.oneOf(vipArm, standard)

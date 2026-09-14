@@ -368,8 +368,79 @@ public final class WiggleFlow<T> {
      *  same collection key is fanned over twice (node names must be unique). */
     public <E> Items thenForEach(String name, String itemsKey, Class<E> itemType,
                                  Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, itemsKey, loopBody);
+    }
+
+    /** One forEach node, however its key and element type were given. */
+    private <E> Items fanOut(String name, String itemsKey, Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
         UnaryOperator<GraphBuilder> body = body(loopBody, "the forEach body for '" + name + "'");
         return new Items(this, name, itemsKey, body);
+    }
+
+    /**
+     * Runtime fan-out over a collection named by the context's own accessor: {@code Basket::items}.
+     * The same node as {@link #thenForEach(String, Class, Function)} -- the graph has only ever held
+     * the key as a string -- but the compiler supplies what the string form has to be told. The
+     * accessor's return type gives the element type, so there is no {@code Class<E>} witness; the
+     * component's name gives the key, so renaming the component carries the key with it and a typo is
+     * a compile error rather than a run-time "context key ... is missing".
+     *
+     * <p>The reference names the <b>context type</b>, not the step contract: the collection is
+     * already in the context when the instance reaches this node, put there by the step before, and
+     * no handler runs to produce it. Nothing is invoked here -- see {@link FlowItems}.
+     *
+     * <p>Use the string form when the context is a {@code Map<String, Object>}: raw JSON has no
+     * accessor to reference.
+     */
+    public <E> Items thenForEach(FlowItems<T, E> items, Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        String key = StepNames.ofKey(items);
+        return fanOut(key, key, loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItems, Function)} under an explicit node name -- needed when the same
+     *  collection is fanned over twice (node names must be unique). */
+    public <E> Items thenForEach(String name, FlowItems<T, E> items,
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, StepNames.ofKey(items), loopBody);
+    }
+
+    /**
+     * {@link #thenForEach(FlowItems, Function)} for a map-valued collection: the branches run over
+     * the map's values and the combine receives a {@code Map} keyed like the input.
+     *
+     * <p>The three accessor shapes all erase to {@code (Object, Function)}, so javac reports them as
+     * potentially ambiguous. The ambiguity it has in mind is an implicitly typed lambda argument,
+     * which none of them accepts: {@link StepNames#ofKey} rejects a lambda outright, because a key
+     * must name a real component. An exact accessor reference resolves on its return type --
+     * {@code ForEachAccessorTest} covers all three.
+     */
+    @SuppressWarnings("overloads")   // erasure clash with the other accessor shapes; see above
+    public <K, V> Items thenForEach(FlowItemsMap<T, K, V> items,
+                                    Function<WiggleFlow<V>, WiggleFlow<?>> loopBody) {
+        String key = StepNames.ofKey(items);
+        return fanOut(key, key, loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItemsMap, Function)} under an explicit node name. */
+    @SuppressWarnings("overloads")   // erasure clash with the other accessor shapes; see above
+    public <K, V> Items thenForEach(String name, FlowItemsMap<T, K, V> items,
+                                    Function<WiggleFlow<V>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, StepNames.ofKey(items), loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItems, Function)} for an array-valued collection. */
+    @SuppressWarnings("overloads")   // see the note on the list form above
+    public <E> Items thenForEach(FlowItemsArray<T, E> items,
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        String key = StepNames.ofKey(items);
+        return fanOut(key, key, loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItemsArray, Function)} under an explicit node name. */
+    @SuppressWarnings("overloads")   // see the note on the list form above
+    public <E> Items thenForEach(String name, FlowItemsArray<T, E> items,
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, StepNames.ofKey(items), loopBody);
     }
 
     // ------------------------------------------------------------------ branching and looping

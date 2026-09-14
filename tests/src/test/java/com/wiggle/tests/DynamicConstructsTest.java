@@ -87,6 +87,17 @@ class DynamicConstructsTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
+    /** The same harness for a record context, which a typed accessor needs. */
+    private InstanceView runTyped(FlowSpec bp, Object handlers, Object input) throws Exception {
+        try (WiggleServer server = new WiggleServer(config(null), new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl());
+             Worker w = new Worker(client, "dyn-" + Ids.next("x")).registerHandler(handlers)) {
+            client.register(bp);
+            w.start();
+            return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
+        }
+    }
+
     private InstanceView run(FlowSpec bp, Object handlers, Map<String, Object> input, String jdbcUrl)
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
@@ -314,4 +325,37 @@ class DynamicConstructsTest {
         assertEquals(2L, ctx.get("len1"));
         assertFalse(ctx.containsKey("per-item"), "scratch stayed out of the shared context on JDBC too");
     }
+
+    // ---------------------------------------------------------------- forEach by accessor
+
+    public record Cart(List<String> items, String joined) {}
+
+    interface CartSteps {
+        String upper(String item);
+        Cart collect(@Context Cart base, List<String> upper);
+    }
+
+    @ForFlow("dyn-fan-typed")
+    public static final class CartH implements CartSteps {
+        @Override public String upper(String item) { return item.toUpperCase(); }
+        @Override public Cart collect(@Context Cart base, List<String> upper) {
+            return new Cart(base.items(), String.join(",", upper));
+        }
+    }
+
+    @Test @DisplayName("forEach(Cart::items, …): the component name IS the persisted key, end to end")
+    void accessorKeyResolvesAgainstRealJson() throws Exception {
+        FlowSpec bp = FlowSpec.define("dyn-fan-typed", Cart.class, CartSteps.class, (f, s) -> f
+                .thenForEach("price-items", Cart::items, b -> b.thenApply(s::upper))
+                .combine(s::collect));
+
+        InstanceView v = runTyped(bp, new CartH(), new Cart(List.of("ab", "cde", "f"), null));
+
+        assertEquals("COMPLETED", v.status(),
+                "the engine found the collection under the component's own name");
+        Map<String, Object> ctx = Json.asObject(v.context());
+        assertEquals("AB,CDE,F", ctx.get("joined"), "every element ran its branch, in order");
+        assertEquals(List.of("ab", "cde", "f"), ctx.get("items"), "the input collection survives");
+    }
+
 }
