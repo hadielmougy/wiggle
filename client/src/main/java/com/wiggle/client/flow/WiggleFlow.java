@@ -1,5 +1,6 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -11,7 +12,7 @@ import java.util.function.UnaryOperator;
  * A handle on the point the flow has reached while it is being <em>defined</em> -- shaped like
  * {@link java.util.concurrent.CompletableFuture} so a workflow reads as a chain, but it is not a
  * future over a running computation. Nothing executes here. Each {@code then*} call records a step
- * and returns a handle on the new end; {@link Wiggle#define} walks the recording once and compiles it
+ * and returns a handle on the new end; {@link FlowSpec#define} walks the recording once and compiles it
  * to the same {@link com.wiggle.client.flow.FlowSpec FlowSpec} the name-based DSL produces. The
  * engine, the graph rows and the worker binding are unchanged -- this is a typed front-end, not a
  * second execution model.
@@ -21,7 +22,7 @@ import java.util.function.UnaryOperator;
  * node name with the method.
  *
  * <pre>{@code
- * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge);
@@ -79,12 +80,35 @@ public final class WiggleFlow<T> {
 
     // ------------------------------------------------------------------ steps
 
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step) {
+        return task(step, null, null);
+    }
+
+    /** {@link #thenApply(FlowFn)} with an explicit retry policy for the step. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, RetryPolicy retry) {
+        return task(step, retry, null);
+    }
+
+    /** {@link #thenApply(FlowFn)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, String queue) {
+        return task(step, null, queue);
+    }
+
+    /** {@link #thenApply(FlowFn)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, RetryPolicy retry, String queue) {
+        return task(step, retry, queue);
+    }
+
+    /** {@link #thenApply(FlowFn, RetryPolicy, String)}, queue first. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, String queue, RetryPolicy retry) {
+        return task(step, retry, queue);
+    }
     /**
      * A task step: the handler's return value becomes the new context.
      *
      * <p>Every step kind below takes an optional {@link RetryPolicy} and an optional queue, in either
      * order, so any combination reads the way you want to write it. A step with no policy inherits the
-     * workflow default given to {@link Wiggle#define(String, RetryPolicy, Class, Function)}; a step
+     * workflow default given to {@link FlowSpec#define(String, RetryPolicy, Class, Function)}; a step
      * with no queue uses the workflow's {@link #defaultQueue}.
      */
     public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step) {
@@ -118,14 +142,103 @@ public final class WiggleFlow<T> {
      *
      * <p>The method-reference forms above are better when the handlers are at hand: they are checked
      * by the compiler and follow a rename. This is the same node either way -- the graph has only ever
-     * held names -- so the two forms mix freely in one workflow. Retry and queue come from
-     * {@link #withRetry} and {@link #onQueue}. A named step leaves the context type as it found it,
+     * held names -- so the two forms mix freely in one workflow. Retry and queue are arguments to the
+     * step itself. A named step leaves the context type as it found it,
      * since there is no handler signature to read a new one from; say so with
      * {@link #thenApply(String, Class)} when it does change.
      */
     private <R> WiggleFlow<R> task(FlowFn<T, R> step, RetryPolicy retry, String queue) {
         String name = StepNames.of(step);
         return record(name, b -> b.step(name, retry, queue));
+    }
+
+    /**
+     * A task step whose handler is an object carrying its own undo, named by the zero-argument
+     * factory that supplies it -- the same signature the handler implements, so the contract and the
+     * worker cannot drift.
+     *
+     * <p>This is the only way a step is marked compensable: the parameter type admits nothing but a
+     * {@link CompensableActivity}, so the declaration and the flag on the node are the same fact.
+     * The engine captures the step's input and result when it completes, and runs {@code compensate}
+     * in the reverse pass if the instance later fails.
+     *
+     * <pre>{@code
+     * interface OrderSteps {
+     *     CompensableActivity<Order, Payment> authorise();
+     *     Payment                             confirm(Payment p);
+     * }
+     *
+     * f.thenApplyCompensable(s::authorise).thenApply(s::confirm)
+     * }</pre>
+     *
+     * <p>Like {@link #thenApply}, the step may change the context type: the activity consumes the
+     * flow's current type and the flow continues as whatever it produces. The input position is
+     * wildcarded rather than pinned to {@code T} because a context given as a raw {@code Map.class}
+     * cannot convert inside a nested generic -- the same looseness {@code thenApply} already has
+     * there. The worker checks the input type against the persisted context regardless.
+     *
+     * <p>Retry and queue are arguments here, as on every other step.
+     */
+    public <R> WiggleFlow<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory) {
+        return compensableTask(factory, null, null);
+    }
+
+    /** {@link #thenApplyCompensable(FlowFactory)} with an explicit retry policy for the step. */
+    public <R> WiggleFlow<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                                  RetryPolicy retry) {
+        return compensableTask(factory, retry, null);
+    }
+
+    /** {@link #thenApplyCompensable(FlowFactory)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                                  String queue) {
+        return compensableTask(factory, null, queue);
+    }
+
+    /** {@link #thenApplyCompensable(FlowFactory)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                                  RetryPolicy retry, String queue) {
+        return compensableTask(factory, retry, queue);
+    }
+
+    /** {@link #thenApplyCompensable(FlowFactory)} with both, queue first. */
+    public <R> WiggleFlow<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                                  String queue, RetryPolicy retry) {
+        return compensableTask(factory, retry, queue);
+    }
+
+    private <R> WiggleFlow<R> compensableTask(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                              RetryPolicy retry, String queue) {
+        String name = StepNames.of(factory);
+        return record(name, b -> b.step(name, retry, queue).compensate());
+    }
+
+    public <R> WiggleFlow<R> applyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory) {
+        return compensableTask(factory, null, null);
+    }
+
+    /** {@link #applyCompensable(FlowFactory)} with an explicit retry policy for the step. */
+    public <R> WiggleFlow<R> applyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                              RetryPolicy retry) {
+        return compensableTask(factory, retry, null);
+    }
+
+    /** {@link #applyCompensable(FlowFactory)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> applyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                              String queue) {
+        return compensableTask(factory, null, queue);
+    }
+
+    /** {@link #applyCompensable(FlowFactory)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> applyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                              RetryPolicy retry, String queue) {
+        return compensableTask(factory, retry, queue);
+    }
+
+    /** {@link #applyCompensable(FlowFactory)} with both, queue first. */
+    public <R> WiggleFlow<R> applyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
+                                              String queue, RetryPolicy retry) {
+        return compensableTask(factory, retry, queue);
     }
 
     /** An effect step: the handler returns {@code void}, so the context is unchanged. */
@@ -255,8 +368,79 @@ public final class WiggleFlow<T> {
      *  same collection key is fanned over twice (node names must be unique). */
     public <E> Items thenForEach(String name, String itemsKey, Class<E> itemType,
                                  Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, itemsKey, loopBody);
+    }
+
+    /** One forEach node, however its key and element type were given. */
+    private <E> Items fanOut(String name, String itemsKey, Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
         UnaryOperator<GraphBuilder> body = body(loopBody, "the forEach body for '" + name + "'");
         return new Items(this, name, itemsKey, body);
+    }
+
+    /**
+     * Runtime fan-out over a collection named by the context's own accessor: {@code Basket::items}.
+     * The same node as {@link #thenForEach(String, Class, Function)} -- the graph has only ever held
+     * the key as a string -- but the compiler supplies what the string form has to be told. The
+     * accessor's return type gives the element type, so there is no {@code Class<E>} witness; the
+     * component's name gives the key, so renaming the component carries the key with it and a typo is
+     * a compile error rather than a run-time "context key ... is missing".
+     *
+     * <p>The reference names the <b>context type</b>, not the step contract: the collection is
+     * already in the context when the instance reaches this node, put there by the step before, and
+     * no handler runs to produce it. Nothing is invoked here -- see {@link FlowItems}.
+     *
+     * <p>Use the string form when the context is a {@code Map<String, Object>}: raw JSON has no
+     * accessor to reference.
+     */
+    public <E> Items thenForEach(FlowItems<T, E> items, Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        String key = StepNames.ofKey(items);
+        return fanOut(key, key, loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItems, Function)} under an explicit node name -- needed when the same
+     *  collection is fanned over twice (node names must be unique). */
+    public <E> Items thenForEach(String name, FlowItems<T, E> items,
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, StepNames.ofKey(items), loopBody);
+    }
+
+    /**
+     * {@link #thenForEach(FlowItems, Function)} for a map-valued collection: the branches run over
+     * the map's values and the combine receives a {@code Map} keyed like the input.
+     *
+     * <p>The three accessor shapes all erase to {@code (Object, Function)}, so javac reports them as
+     * potentially ambiguous. The ambiguity it has in mind is an implicitly typed lambda argument,
+     * which none of them accepts: {@link StepNames#ofKey} rejects a lambda outright, because a key
+     * must name a real component. An exact accessor reference resolves on its return type --
+     * {@code ForEachAccessorTest} covers all three.
+     */
+    @SuppressWarnings("overloads")   // erasure clash with the other accessor shapes; see above
+    public <K, V> Items thenForEach(FlowItemsMap<T, K, V> items,
+                                    Function<WiggleFlow<V>, WiggleFlow<?>> loopBody) {
+        String key = StepNames.ofKey(items);
+        return fanOut(key, key, loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItemsMap, Function)} under an explicit node name. */
+    @SuppressWarnings("overloads")   // erasure clash with the other accessor shapes; see above
+    public <K, V> Items thenForEach(String name, FlowItemsMap<T, K, V> items,
+                                    Function<WiggleFlow<V>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, StepNames.ofKey(items), loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItems, Function)} for an array-valued collection. */
+    @SuppressWarnings("overloads")   // see the note on the list form above
+    public <E> Items thenForEach(FlowItemsArray<T, E> items,
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        String key = StepNames.ofKey(items);
+        return fanOut(key, key, loopBody);
+    }
+
+    /** {@link #thenForEach(FlowItemsArray, Function)} under an explicit node name. */
+    @SuppressWarnings("overloads")   // see the note on the list form above
+    public <E> Items thenForEach(String name, FlowItemsArray<T, E> items,
+                                 Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
+        return fanOut(name, StepNames.ofKey(items), loopBody);
     }
 
     // ------------------------------------------------------------------ branching and looping
@@ -318,56 +502,38 @@ public final class WiggleFlow<T> {
      * a plain cycle in the graph; the iteration budget is the engine default.
      */
     public WiggleFlow<T> repeatWhile(FlowGate<T> condition, UnaryOperator<WiggleFlow<T>> loopBody) {
-        String name = StepNames.of(condition);
-        UnaryOperator<GraphBuilder> body = body(loopBody, "the body of loop '" + name + "'");
-        return record(name, b -> b.doWhile(name, body));
+        return loop(condition, -1, loopBody, null);
     }
 
-    /** {@link #repeatWhile(FlowGate, UnaryOperator)} with an explicit iteration budget: one pass past
-     *  {@code maxIterations} fails the instance rather than spinning. */
+    /**
+     * {@link #repeatWhile(FlowGate, UnaryOperator)} with the condition pinned to a worker queue.
+     * The condition takes no retry policy -- it is a node the loop creates, not one you wrote as a
+     * step, so it runs under the workflow default.
+     */
+    public WiggleFlow<T> repeatWhile(FlowGate<T> condition, UnaryOperator<WiggleFlow<T>> loopBody,
+                                     String queue) {
+        return loop(condition, -1, loopBody, queue);
+    }
+
     public WiggleFlow<T> repeatWhile(FlowGate<T> condition, int maxIterations,
-                                       UnaryOperator<WiggleFlow<T>> loopBody) {
+                                     UnaryOperator<WiggleFlow<T>> loopBody) {
+        return loop(condition, maxIterations, loopBody, null);
+    }
+
+    /** {@link #repeatWhile(FlowGate, int, UnaryOperator)} with the condition pinned to a worker queue. */
+    public WiggleFlow<T> repeatWhile(FlowGate<T> condition, int maxIterations,
+                                     UnaryOperator<WiggleFlow<T>> loopBody, String queue) {
+        return loop(condition, maxIterations, loopBody, queue);
+    }
+
+    private WiggleFlow<T> loop(FlowGate<T> condition, int maxIterations,
+                               UnaryOperator<WiggleFlow<T>> loopBody, String queue) {
         String name = StepNames.of(condition);
         UnaryOperator<GraphBuilder> body = body(loopBody, "the body of loop '" + name + "'");
-        return record(name, b -> b.doWhile(name, maxIterations, body));
+        return record(name, b -> b.doWhile(name, maxIterations, body, queue));
     }
 
     // ------------------------------------------------------------------ per-step and workflow settings
-
-    /**
-     * Gives the step just recorded an explicit retry policy, overriding the workflow default. The
-     * inline forms above cover the common case; this reaches what they cannot -- a combine, and a
-     * {@link #repeatWhile} condition:
-     *
-     * <pre>{@code
-     * Wiggle.allOf(payment, shipping).combine(h::settle).withRetry(patient)
-     * f.repeatWhile(h::hasMore, a -> a.thenApply(h::drain)).withRetry(gentle)
-     * }</pre>
-     *
-     * Applies to whatever a worker runs -- step, effect, gate, combine or loop condition -- and fails
-     * on anything the engine runs itself (a sleep, a signal wait, a sub-workflow), which has no
-     * worker to retry on.
-     */
-    public WiggleFlow<T> withRetry(RetryPolicy retry) {
-        return record(null, b -> b.withRetry(retry));
-    }
-
-    /**
-     * Pins the step just recorded to a dedicated worker queue, overriding the workflow default. Like
-     * {@link #withRetry}, this reaches the nodes with no inline form and applies to whatever a worker
-     * runs.
-     */
-    public WiggleFlow<T> onQueue(String queue) {
-        return record(null, b -> b.onQueue(queue));
-    }
-
-    /**
-     * Marks the step just added as compensable: if the instance later fails, its undo runs in the
-     * reverse pass. Must directly follow {@link #thenApply} or {@link #thenAccept}.
-     */
-    public WiggleFlow<T> compensate() {
-        return record(null, GraphBuilder::compensate);
-    }
 
     /** Marks the step just added as a flush boundary under {@code LOCAL_ASYNC}. */
     public WiggleFlow<T> checkpoint() {
@@ -404,8 +570,9 @@ public final class WiggleFlow<T> {
      */
     /** How {@link Items} records the forEach once its combine is known. */
     <R> WiggleFlow<R> recordForEach(String name, String itemsKey, UnaryOperator<GraphBuilder> loopBody,
-                                    String combineName) {
-        return record(name, b -> b.forEach(name, itemsKey, loopBody).combine(combineName));
+                                    String combineName, RetryPolicy combineRetry, String combineQueue) {
+        return record(name, b -> b.forEach(name, itemsKey, loopBody)
+                .combine(combineName, combineRetry, combineQueue));
     }
 
     private static <A> UnaryOperator<GraphBuilder> body(Function<WiggleFlow<A>, ? extends WiggleFlow<?>> body,

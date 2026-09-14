@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.core.TaskActivation;
@@ -25,8 +24,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class GrpcErrorMappingTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+        boolean check(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
-        return new ServerConfig(0, "err-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "err-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -49,9 +55,7 @@ class GrpcErrorMappingTest {
 
     @Test @DisplayName("settling a task without its lease surfaces as 409 over gRPC")
     void conflict() throws Exception {
-        FlowSpec bp = Wiggle.graph("err-conflict")
-                .step("work")
-                .build();
+        FlowSpec bp = FlowSpec.define("err-conflict", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
@@ -67,10 +71,9 @@ class GrpcErrorMappingTest {
 
     @Test @DisplayName("a non-boolean predicate result surfaces as 400 over gRPC")
     void badRequest() throws Exception {
-        FlowSpec bp = Wiggle.graph("err-bad")
-                .gate("check")
-                .step("after")
-                .build();
+        FlowSpec bp = FlowSpec.define("err-bad", Map.class, OneStep.class, (f, s) -> f
+                .thenFilter(s::check)
+                .thenApply(s::after));
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);

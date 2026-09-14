@@ -46,6 +46,17 @@ final class DashboardJson {
         return m;
     }
 
+    static Map<String, Object> backlog(DashboardData.BacklogView b) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("workflow", b.workflow());
+        m.put("version", b.version());
+        m.put("queue", b.queue());
+        m.put("readyCount", b.readyCount());
+        m.put("oldestAvailableAt", b.oldestAvailableAt());
+        m.put("covered", b.covered());
+        return m;
+    }
+
     static Map<String, Object> signal(SignalView t) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("instanceId", t.instanceId());

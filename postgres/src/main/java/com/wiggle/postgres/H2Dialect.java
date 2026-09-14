@@ -4,24 +4,17 @@ import com.wiggle.jdbc.Dialect;
 
 /**
  * H2 in PostgreSQL-compatibility mode: the embedded database used for development and the test
- * suite. It accepts the canonical PostgreSQL DDL and {@code ON CONFLICT} syntax, but cannot run
- * {@code FOR UPDATE SKIP LOCKED}, so the task claim falls back to the portable compare-and-set
- * path. It has no cross-node migration lock (development and tests are single-node).
+ * suite, not a deployment target. It takes the store's DDL and {@code ON CONFLICT} syntax verbatim,
+ * so it inherits every {@link Dialect} default and overrides nothing. What it does not inherit is
+ * the two capabilities PostgreSQL declares: it has no {@code FOR UPDATE SKIP LOCKED} and no
+ * {@code RETURNING}, so the task claim falls back to compare-and-set, and no cheap cross-node
+ * migration lock, which is moot because development and tests are single-node.
+ *
+ * <p>So this class is now only a name for "the defaults, and none of the capabilities". That is the
+ * point rather than an accident: it is what makes H2 a faithful stand-in for the suite -- every
+ * statement it runs is the statement PostgreSQL will run.
  */
 public final class H2Dialect implements Dialect {
 
     @Override public String id() { return "h2"; }
-
-    @Override public String firstRow() { return "FETCH FIRST 1 ROWS ONLY"; }
-
-    @Override public String insertIgnore(String insertSql, String noopColumn) {
-        return insertSql + " ON CONFLICT DO NOTHING";
-    }
-
-    @Override public String scheduleUpsert() {
-        return "INSERT INTO wf_schedule (id,workflow,interval_millis,cron,context,next_fire_at,created_at) " +
-                "VALUES (?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET workflow=EXCLUDED.workflow, " +
-                "interval_millis=EXCLUDED.interval_millis, cron=EXCLUDED.cron, " +
-                "context=EXCLUDED.context, next_fire_at=EXCLUDED.next_fire_at";
-    }
 }

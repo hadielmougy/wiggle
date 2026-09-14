@@ -32,7 +32,7 @@ class StepNamesTest {
 
     @Test
     void handlesAnnotationOnTheReferencedMethodWins() {
-        // the graph node is what the worker binds by, so @Handles has to reach the topology too
+        // the graph node is what the worker binds by, so @ForFlow has to reach the topology too
         assertEquals("capture-payment", StepNames.of((FlowFn<Order, Payment>) h::doCapture));
     }
 
@@ -75,7 +75,7 @@ class StepNamesTest {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> StepNames.of((FlowFn<Order, Order>) impl::validate));
         assertTrue(ex.getMessage().contains("which is a class"), ex.getMessage());
-        assertTrue(ex.getMessage().contains("Wiggle.define"), "and shows the interface form: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("FlowSpec.define"), "and shows the interface form: " + ex.getMessage());
     }
 
     @Test

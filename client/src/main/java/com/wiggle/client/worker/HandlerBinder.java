@@ -1,12 +1,13 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.core.ScratchKeys;
 import org.checkerframework.checker.nullness.qual.NonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -18,7 +19,7 @@ import java.util.Map;
 import java.util.TreeSet;
 
 /**
- * The worker's reflective seam: turns a {@link Handlers @Handlers}-annotated object into
+ * The worker's reflective seam: turns a {@link ForFlow @ForFlow}-annotated object into
  * executable {@link ActivityHandler}s. Two pure operations, deliberately free of I/O and of the
  * worker's runtime state so every signature rule here is unit-testable against a compiled graph:
  *
@@ -42,7 +43,7 @@ final class HandlerBinder {
     private HandlerBinder() {}
 
     /** One step candidate: the object to invoke on and its handler method — a plain
-     *  {@code @Handlers} method (target = the handlers object) or a factory-produced typed
+     *  {@code @ForFlow} method (target = the handlers object) or a factory-produced typed
      *  activity (target = the activity instance, method = its execute/test/apply; compensate
      *  set when the instance implements {@link Compensable}). */
     record Candidate(Object target, Method method, Method compensate) {}
@@ -50,7 +51,11 @@ final class HandlerBinder {
     /** A handler source's inventory: its step candidates keyed by canonical name, and its
      *  {@link Decode @Decode} decoders (living on the handlers object) keyed by decoded type. */
     record HandlerSet(String workflow, Object target, Map<String, Candidate> byName,
-                      Map<Class<?>, Method> decoders) {}
+                      Map<Class<?>, Method> decoders) {
+        public HandlerSet withFlowName(String flowName) {
+            return new HandlerSet(flowName, target, byName, decoders);
+        }
+    }
 
     /** Invokes a step's undo with both of its snapshots (raw JSON-shaped objects); the wrapper
      *  decodes them into the activity's context type and hands a {@link Compensation} to
@@ -76,7 +81,7 @@ final class HandlerBinder {
     record Result(List<Binding> bindings, List<String> unserved) {}
 
     /**
-     * Inventories a {@link Handlers @Handlers}-annotated object. Each public instance method with
+     * Inventories a {@link ForFlow @ForFlow}-annotated object. Each public instance method with
      * parameters is a step candidate keyed by its canonical name; {@link Decode @Decode} methods
      * are collected as custom decoders; zero-parameter methods are helpers and ignored. Two
      * methods whose names collide under case-folding are rejected as ambiguous.
@@ -160,16 +165,15 @@ final class HandlerBinder {
         return new Candidate(typed, concreteMethod(typed, primary), compensate);
     }
 
-    private static @NonNull String getWorkflowName(Object handlerObject) {
+    private static @Nullable String getWorkflowName(Object handlerObject) {
         if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
-        Handlers ann = handlerObject.getClass().getAnnotation(Handlers.class);
+        ForFlow ann = handlerObject.getClass().getAnnotation(ForFlow.class);
         if (ann == null) {
-            throw new IllegalArgumentException(handlerObject.getClass().getName()
-                    + " is not annotated @Handlers(\"<workflow>\")");
+            return null;
         }
         String workflow = ann.value();
         if (workflow == null || workflow.isBlank()) {
-            throw new IllegalArgumentException("@Handlers on " + handlerObject.getClass().getName()
+            throw new IllegalArgumentException("@ForFlow on " + handlerObject.getClass().getName()
                     + " needs the workflow name");
         }
         return workflow;
@@ -196,13 +200,13 @@ final class HandlerBinder {
                 continue;
             }
             if (node.compensable() && c.compensate() == null) {
-                throw new IllegalStateException("step '" + node.name() + "' declares .compensate() "
+                throw new IllegalStateException("step '" + node.name() + "' declares an undo "
                         + "but its handler is not Compensable — implement Compensable on the "
                         + "activity (or drop the declaration)");
             }
             if (!node.compensable() && c.compensate() != null) {
                 throw new IllegalStateException("activity for step '" + node.name() + "' is "
-                        + "Compensable but the step does not declare .compensate() — a silently "
+                        + "Compensable but the step does not declare an undo — a silently "
                         + "unused undo is a lie; declare it in the topology (or drop Compensable)");
             }
             bindings.add(new Binding(node.activity(), node.name(),
@@ -218,16 +222,20 @@ final class HandlerBinder {
      *  no return). Null when the step has no compensator. */
     private static Compensator compensatorHandler(HandlerSet set, Candidate c) {
         if (c.compensate() == null) return null;
-        Class<?> ctxType = c.method().getParameterTypes()[0];   // the activity's C, from execute/test/apply
+        // An activity maps A -> B, so the two snapshots decode into different types: the input into
+        // execute's parameter, the result into its return.
+        Class<?> inType = c.method().getParameterTypes()[0];
+        Class<?> outType = c.method().getReturnType();
+        Class<?> resultType = outType == void.class || outType.isPrimitive() ? inType : outType;
         return (input, result) -> {
-            Object in = decode(input, ctxType, set.target(), set.decoders());
-            Object out = decode(result, ctxType, set.target(), set.decoders());
+            Object in = decode(input, inType, set.target(), set.decoders());
+            Object out = decode(result, resultType, set.target(), set.decoders());
             call(c.compensate(), c.target(), new Object[]{new Snapshots(in, out)});
         };
     }
 
     /** The {@link Compensation} handed to a compensator: both snapshots, already decoded. */
-    private record Snapshots(Object input, Object result) implements Compensation<Object> {}
+    private record Snapshots(Object input, Object result) implements Compensation<Object, Object> {}
 
     /** The concrete (non-bridge) single-parameter implementation of an interface method, with its
      *  reified parameter type — what the decode machinery needs. */
@@ -366,7 +374,7 @@ final class HandlerBinder {
                 throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the fork"
                         + " has: its arms, in order, are " + arms);
             }
-            sources[i] = arms.get(position++);
+            sources[i] = ScratchKeys.arm(arms.get(position++));
         }
         if (position != arms.size()) {
             throw new IllegalStateException(combineWhat(node, m) + " must take all " + arms.size()
@@ -409,7 +417,7 @@ final class HandlerBinder {
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Map<String, Object> base = new LinkedHashMap<>(map);
-            arms.forEach(base::remove);
+            arms.stream().map(ScratchKeys::arm).forEach(base::remove);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
                 args[i] = sources[i] == null

@@ -20,7 +20,7 @@ import java.util.concurrent.Callable;
 /**
  * The {@code wiggle} command-line tool: manage a coordinator's namespace allocations and placement
  * epochs, and choose which server the CLI talks to. Workflows themselves are defined and registered
- * in Java (topology via the DSL, handlers via {@code @Handlers} classes on a worker), not from the
+ * in Java (topology via the DSL, handlers via {@code @ForFlow} classes on a worker), not from the
  * CLI.
  */
 @Command(name = "wiggle", mixinStandardHelpOptions = true, version = "wiggle 2.1.9",

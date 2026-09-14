@@ -20,12 +20,22 @@ public final class WiggleConnection {
 
     /** One standalone server, no TLS. */
     public static DirectConnection direct(String target) {
-        return new DirectConnection(target, Tls.Options.DISABLED);
+        return direct(target, Tls.Options.DISABLED);
     }
 
     /** One standalone server. */
     public static DirectConnection direct(String target, Tls.Options tls) {
         return new DirectConnection(target, tls);
+    }
+
+    /** A sharded namespace, routed through the coordinator at {@code coordinatorUrl}. */
+    public static CoordinatedConnection coordinator(String coordinatorUrl) {
+        return coordinator(coordinatorUrl, null);
+    }
+
+    /** A sharded namespace, routed through the coordinator at {@code coordinatorUrl}. */
+    public static CoordinatedConnection coordinator(String coordinatorUrl, Tls.Options tls) {
+        return coordinator(coordinatorUrl, tls, null);
     }
 
     /** A sharded namespace, routed through the coordinator at {@code coordinatorUrl}. */

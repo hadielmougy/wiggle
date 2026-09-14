@@ -1,6 +1,6 @@
 package com.wiggle.binding.typed;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 /**
  * The fulfilment worker's slice of {@code typed-order}: every step but {@code charge}, with a typed
@@ -8,7 +8,7 @@ import com.wiggle.client.worker.Handlers;
  * makes {@code in-stock} a gate, {@code void} makes {@code notify} an effect). With no {@code charge}
  * method, a worker bound here never serves the payments queue -- see {@link TypedPaymentsHandlers}.
  */
-@Handlers("typed-order")
+@ForFlow("typed-order")
 public final class TypedFulfilmentHandlers {
 
     public Purchase validate(Purchase p) {

@@ -5,16 +5,16 @@
 # ready, runs the store's test against it, then destroys the container -- pass or fail. At the end
 # it prints a per-store PASS/FAIL summary and exits non-zero if any store failed.
 #
-#   scripts/regression-storage.sh                 # all stores
-#   scripts/regression-storage.sh postgres mysql  # a subset
+#   scripts/regression-storage.sh            # both stores
+#   scripts/regression-storage.sh postgres   # just one
 #
-# H2 is embedded (no container). Oracle's first run pulls a large image and takes a few minutes to
-# start; be patient. Requires Docker for every store except h2.
+# H2 is embedded (no container) and is for tests and local runs, not a deployment target; PostgreSQL
+# is what a cluster runs on, and needs Docker.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-ALL_STORES=(h2 postgres mysql oracle sqlserver cassandra)
+ALL_STORES=(h2 postgres)
 STORES=("${ALL_STORES[@]}")
 [ "$#" -gt 0 ] && STORES=("$@")
 
@@ -91,65 +91,9 @@ store_postgres() {
     docker rm -f "$name" >/dev/null 2>&1
 }
 
-store_mysql() {
-    local t0=$SECONDS name="$PREFIX-mysql"
-    require_docker mysql || { record mysql SKIP "$t0"; return; }
-    log "mysql: starting container"
-    docker run -d --name "$name" -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=wiggle \
-        -e MYSQL_USER=wiggle -e MYSQL_PASSWORD=wiggle -p 55306:3306 mysql:8.4 >/dev/null 2>&1 || { record mysql FAIL "$t0"; return; }
-    STARTED+=("$name")
-    wait_until "mysql" 180 docker exec "$name" mysql -uwiggle -pwiggle -e "SELECT 1" wiggle || { record mysql FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
-    export WIGGLE_TEST_MYSQL_URL="jdbc:mysql://localhost:55306/wiggle" WIGGLE_TEST_MYSQL_USER=wiggle WIGGLE_TEST_MYSQL_PASSWORD=wiggle
-    log "mysql: running com.wiggle.mysql.MySqlStoreTest"
-    if run_tests mysql com.wiggle.mysql.MySqlStoreTest; then record mysql PASS "$t0"; else record mysql FAIL "$t0"; fi
-    docker rm -f "$name" >/dev/null 2>&1
-}
 
-oracle_healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = "healthy" ]; }
-store_oracle() {
-    local t0=$SECONDS name="$PREFIX-oracle"
-    require_docker oracle || { record oracle SKIP "$t0"; return; }
-    log "oracle: starting container (first run pulls a large image; startup takes a few minutes)"
-    docker run -d --name "$name" -e ORACLE_PASSWORD=oracle -e APP_USER=wiggle -e APP_USER_PASSWORD=wiggle \
-        -p 55521:1521 gvenzl/oracle-free:slim-faststart >/dev/null 2>&1 || { record oracle FAIL "$t0"; return; }
-    STARTED+=("$name")
-    wait_until "oracle" 420 oracle_healthy "$name" || { record oracle FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
-    export WIGGLE_TEST_ORACLE_URL="jdbc:oracle:thin:@//localhost:55521/FREEPDB1" WIGGLE_TEST_ORACLE_USER=wiggle WIGGLE_TEST_ORACLE_PASSWORD=wiggle
-    log "oracle: running com.wiggle.oracle.OracleStoreTest"
-    if run_tests oracle com.wiggle.oracle.OracleStoreTest; then record oracle PASS "$t0"; else record oracle FAIL "$t0"; fi
-    docker rm -f "$name" >/dev/null 2>&1
-}
 
-store_sqlserver() {
-    local t0=$SECONDS name="$PREFIX-sqlserver" pw='Wiggle!Passw0rd'
-    require_docker sqlserver || { record sqlserver SKIP "$t0"; return; }
-    log "sqlserver: starting container"
-    docker run -d --name "$name" -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$pw" \
-        -p 51433:1433 mcr.microsoft.com/mssql/server:2022-latest >/dev/null 2>&1 || { record sqlserver FAIL "$t0"; return; }
-    STARTED+=("$name")
-    local sqlcmd="/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $pw"
-    wait_until "sqlserver" 180 docker exec "$name" bash -lc "$sqlcmd -Q 'SELECT 1' -b" || { record sqlserver FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
-    docker exec "$name" bash -lc "$sqlcmd -Q \"IF DB_ID('wiggle') IS NULL CREATE DATABASE wiggle\" -b" >/dev/null 2>&1
-    export WIGGLE_TEST_SQLSERVER_URL="jdbc:sqlserver://localhost:51433;databaseName=wiggle;encrypt=false" \
-           WIGGLE_TEST_SQLSERVER_USER=sa WIGGLE_TEST_SQLSERVER_PASSWORD="$pw"
-    log "sqlserver: running com.wiggle.sqlserver.SqlServerStoreTest"
-    if run_tests sqlserver com.wiggle.sqlserver.SqlServerStoreTest; then record sqlserver PASS "$t0"; else record sqlserver FAIL "$t0"; fi
-    docker rm -f "$name" >/dev/null 2>&1
-}
 
-store_cassandra() {
-    local t0=$SECONDS name="$PREFIX-cassandra"
-    require_docker cassandra || { record cassandra SKIP "$t0"; return; }
-    log "cassandra: starting container (startup takes ~1 minute)"
-    docker run -d --name "$name" -e MAX_HEAP_SIZE=1024M -e HEAP_NEWSIZE=256M \
-        -p 59042:9042 cassandra:5.0 >/dev/null 2>&1 || { record cassandra FAIL "$t0"; return; }
-    STARTED+=("$name")
-    wait_until "cassandra" 240 docker exec "$name" cqlsh -e "SELECT now() FROM system.local" || { record cassandra FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
-    export WIGGLE_TEST_CASSANDRA_URL="cassandra://localhost:59042/wiggle?dc=datacenter1&rf=1"
-    log "cassandra: running com.wiggle.cassandra.CassandraStoreTest"
-    if run_tests cassandra com.wiggle.cassandra.CassandraStoreTest; then record cassandra PASS "$t0"; else record cassandra FAIL "$t0"; fi
-    docker rm -f "$name" >/dev/null 2>&1
-}
 
 # --- run ---------------------------------------------------------------------------------------
 
@@ -158,10 +102,6 @@ for store in "${STORES[@]}"; do
     case "$store" in
         h2)        store_h2 ;;
         postgres)  store_postgres ;;
-        mysql)     store_mysql ;;
-        oracle)    store_oracle ;;
-        sqlserver) store_sqlserver ;;
-        cassandra) store_cassandra ;;
         *) warn "unknown store '$store' (known: ${ALL_STORES[*]})"; SUMMARY+=("$store|SKIP|0") ;;
     esac
 done

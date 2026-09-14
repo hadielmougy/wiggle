@@ -1,8 +1,6 @@
 package com.wiggle.order;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -15,6 +13,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import com.wiggle.client.flow.FlowFn;
+import com.wiggle.client.flow.WiggleFlow;
 
 /**
  * A throughput micro-benchmark for the execution modes on the case that actually exercises
@@ -70,7 +70,7 @@ public final class Benchmark {
             for (int i = 0; i < workers; i++) {
                 pool.add(new Worker(client, "bench-worker-" + i, WorkerOptions.defaults()
                         .withConcurrency(concurrency).withLocalBatchSize(batch))
-                        .register(bp).handlers(new BenchHandlers(done)).start());
+                        .registerHandler(new BenchHandlers(done)).start());
             }
             done.await();
             long t1 = System.nanoTime();
@@ -95,25 +95,105 @@ public final class Benchmark {
                 cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), dialect)).start();
     }
 
+    /** The longest pipeline this benchmark can build -- one declared step method per hop. */
+    public static final int MAX_STEPS = 32;
+
     /**
-     * A linear chain of {@code steps} trivial same-queue task steps ending in a {@code sink} step.
-     * The chain is pure topology; the logic lives in {@link BenchHandlers}. Every non-final step is
-     * named so it canonicalises to the single {@code hop} handler (the worker matches steps to handler
-     * methods by canonical name, ignoring punctuation), which lets one identity method serve a chain of
-     * any length; the final {@code sink} step is the only distinctly-named node, so it maps to its own
-     * handler and counts the instance down exactly once.
+     * The chain's steps, declared. A step is named by referencing a method, so the pipeline's length
+     * is bounded by how many are declared here rather than being generated -- hence {@link #MAX_STEPS}.
+     * They are all the same identity hop; the distinct names exist only so each is its own node.
      */
-    private static FlowSpec linear(String name, int steps, ExecutionMode mode) {
-        GraphBuilder s = Wiggle.graph(name).execution(mode);
-        for (int i = 0; i < steps - 1; i++) {
-            s = s.step(hop(i));   // distinct raw name, all canonicalise to the "hop" handler
-        }
-        return s.step("sink").build();
+    public interface BenchSteps {
+        Map<String, Object> hop1(Map<String, Object> ctx);
+        Map<String, Object> hop2(Map<String, Object> ctx);
+        Map<String, Object> hop3(Map<String, Object> ctx);
+        Map<String, Object> hop4(Map<String, Object> ctx);
+        Map<String, Object> hop5(Map<String, Object> ctx);
+        Map<String, Object> hop6(Map<String, Object> ctx);
+        Map<String, Object> hop7(Map<String, Object> ctx);
+        Map<String, Object> hop8(Map<String, Object> ctx);
+        Map<String, Object> hop9(Map<String, Object> ctx);
+        Map<String, Object> hop10(Map<String, Object> ctx);
+        Map<String, Object> hop11(Map<String, Object> ctx);
+        Map<String, Object> hop12(Map<String, Object> ctx);
+        Map<String, Object> hop13(Map<String, Object> ctx);
+        Map<String, Object> hop14(Map<String, Object> ctx);
+        Map<String, Object> hop15(Map<String, Object> ctx);
+        Map<String, Object> hop16(Map<String, Object> ctx);
+        Map<String, Object> hop17(Map<String, Object> ctx);
+        Map<String, Object> hop18(Map<String, Object> ctx);
+        Map<String, Object> hop19(Map<String, Object> ctx);
+        Map<String, Object> hop20(Map<String, Object> ctx);
+        Map<String, Object> hop21(Map<String, Object> ctx);
+        Map<String, Object> hop22(Map<String, Object> ctx);
+        Map<String, Object> hop23(Map<String, Object> ctx);
+        Map<String, Object> hop24(Map<String, Object> ctx);
+        Map<String, Object> hop25(Map<String, Object> ctx);
+        Map<String, Object> hop26(Map<String, Object> ctx);
+        Map<String, Object> hop27(Map<String, Object> ctx);
+        Map<String, Object> hop28(Map<String, Object> ctx);
+        Map<String, Object> hop29(Map<String, Object> ctx);
+        Map<String, Object> hop30(Map<String, Object> ctx);
+        Map<String, Object> hop31(Map<String, Object> ctx);
+        Map<String, Object> hop32(Map<String, Object> ctx);
+        Map<String, Object> sink(Map<String, Object> ctx);
     }
 
-    /** Distinct raw step names that all canonicalise to {@code hop} (punctuation is ignored on match). */
-    private static String hop(int i) {
-        return "hop" + "-".repeat(i);
+    /**
+     * A linear chain of {@code steps} trivial same-queue task steps ending in a {@code sink} step.
+     * The chain is pure topology; the logic lives in {@link BenchHandlers}. Every step but the last is
+     * an identity hop, so the pipeline measures dispatch and commit rather than step work; the final
+     * {@code sink} counts the instance down exactly once.
+     */
+    private static FlowSpec linear(String name, int steps, ExecutionMode mode) {
+        if (steps < 1 || steps > MAX_STEPS) {
+            throw new IllegalArgumentException("WIGGLE_BENCH_STEPS must be 1.." + MAX_STEPS + ", got " + steps);
+        }
+        return FlowSpec.define(name, Map.class, BenchSteps.class, (f, s) -> {
+            List<FlowFn<Map, Map>> hops = hops(s);
+            WiggleFlow<Map> chain = f.execution(mode);
+            for (int i = 0; i < steps - 1; i++) {
+                chain = chain.thenApply(hops.get(i));
+            }
+            return chain.thenApply(s::sink);
+        });
+    }
+
+    /** The declared hops in order, so the chain can take the first {@code steps - 1} of them. */
+    private static List<FlowFn<Map, Map>> hops(BenchSteps s) {
+        return List.of(
+                s::hop1,
+                s::hop2,
+                s::hop3,
+                s::hop4,
+                s::hop5,
+                s::hop6,
+                s::hop7,
+                s::hop8,
+                s::hop9,
+                s::hop10,
+                s::hop11,
+                s::hop12,
+                s::hop13,
+                s::hop14,
+                s::hop15,
+                s::hop16,
+                s::hop17,
+                s::hop18,
+                s::hop19,
+                s::hop20,
+                s::hop21,
+                s::hop22,
+                s::hop23,
+                s::hop24,
+                s::hop25,
+                s::hop26,
+                s::hop27,
+                s::hop28,
+                s::hop29,
+                s::hop30,
+                s::hop31,
+                s::hop32);
     }
 
     private static String env(String key, String def) {

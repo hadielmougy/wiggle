@@ -1,10 +1,9 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Case;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -25,6 +24,21 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 /** Exclusive-choice ({@code choose}) behaviour: first match wins, exactly one branch runs. */
 class ChooseTest {
 
+    interface DefaultSteps {
+        boolean isGold(Map<String, Object> c);
+        boolean isPremium(Map<String, Object> c);
+        Map<String, Object> gold(Map<String, Object> c);
+        Map<String, Object> premium(Map<String, Object> c);
+        Map<String, Object> plain(Map<String, Object> c);
+        Map<String, Object> finalize(Map<String, Object> c);
+    }
+
+    interface SkipSteps {
+        boolean isA(Map<String, Object> c);
+        Map<String, Object> a(Map<String, Object> c);
+        Map<String, Object> finalize(Map<String, Object> c);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -39,16 +53,14 @@ class ChooseTest {
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
     private FlowSpec withDefault() {
-        return Wiggle.graph("choose-default")
-                .choose(
-                        Case.when("is-gold", b -> b.step("gold")),
-                        Case.when("is-premium", b -> b.step("premium")),   // also true for "gold": must not win
-                        Case.otherwise("plain", b -> b.step("plain")))
-                .step("finalize")
-                .build();
+        return FlowSpec.define("choose-default", Map.class, DefaultSteps.class, (f, s) -> Wiggle.oneOf(
+                        f.when(s::isGold).thenApply(s::gold),
+                        f.when(s::isPremium).thenApply(s::premium),   // also true for "gold": must not win
+                        f.otherwise().thenApply(s::plain))
+                .thenApply(s::finalize));
     }
 
-    @Handlers("choose-default")
+    @ForFlow("choose-default")
     final class DefaultH {
         public boolean isGold(Map<String, Object> c) { return "gold".equals(c.get("tier")); }
         public boolean isPremium(Map<String, Object> c) { return c.get("tier") != null; }
@@ -60,14 +72,11 @@ class ChooseTest {
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
     private FlowSpec withoutDefault() {
-        return Wiggle.graph("choose-skip")
-                .choose(
-                        Case.when("is-a", b -> b.step("a")))
-                .step("finalize")
-                .build();
+        return FlowSpec.define("choose-skip", Map.class, SkipSteps.class, (f, s) ->
+                Wiggle.oneOf(f.when(s::isA).thenApply(s::a)).thenApply(s::finalize));
     }
 
-    @Handlers("choose-skip")
+    @ForFlow("choose-skip")
     static final class SkipH {
         public boolean isA(Map<String, Object> c) { return "a".equals(c.get("k")); }
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "path", "a"); }
@@ -76,12 +85,13 @@ class ChooseTest {
 
     private void withServer(FlowSpec bp, Object handlers,
                             java.util.function.BiConsumer<WiggleClient, FlowSpec> body) throws Exception {
-        ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "w-choose").register(bp).handlers(handlers)) {
+             Worker w = new Worker(client, "w-choose").registerHandler(handlers)) {
+            client.register(bp);
             w.start();
             body.accept(client, bp);
         }

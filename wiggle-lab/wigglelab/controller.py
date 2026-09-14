@@ -135,55 +135,75 @@ class Lab:
 
     # ---- coordinator ----
     @record
-    def deploy_coordinator(self, size: int = C.COORD_DEFAULT_GROUP_SIZE, tunables: dict | None = None):
-        """(Re)deploy the coordinator as one Ratis group of ``size`` pods (a StatefulSet behind a headless
-        Service). Every pod serves the same replicated store, so a client reaching any pod sees consistent
-        state. Each pod keeps its Raft log + RocksDB on its own PVC, so a restarted or rescheduled pod
-        recovers its state. Redeploying still deletes the old group — PVCs included — and re-forms a
-        fresh one, wiping prior nodes/epochs/policies. A fixed peer list means it is not dynamically
-        scalable — pick a size at deploy time (odd for a majority)."""
+    def deploy_coordinator(self, replicas: int = C.COORD_DEFAULT_REPLICAS, tunables: dict | None = None):
+        """(Re)deploy the coordinator as ``replicas`` pods over one shared database.
+
+        Coordinators are stateless, so this is an ordinary Deployment and a redeploy is NOT
+        destructive: policies, epochs, the node roster and the definition registry live in the
+        control-plane database and survive it. Changing the replica count is likewise just a scale --
+        there is no group to re-form and no size to pin at deploy time. To start blank, use
+        :meth:`reset_coordinator_store`."""
         self.ensure_namespace()
         self.pf.stop("coordinator")
-        existed = bool(self.pods(role="coordinator")) or bool(
-            k8s.get_json("statefulset", "wiggle-lab/role=coordinator").get("items"))
-        if existed:
-            k8s.delete_by_label("wiggle-lab/role=coordinator")
-            self._wait(lambda: not self.pods(role="coordinator"), 120, "old coordinator removed")
-            # The new StatefulSet reuses the same claim names; a terminating PVC must be fully gone
-            # first or the fresh pod would bind (and boot from) the old group's storage.
-            self._wait(lambda: not k8s.get_json("pvc", "wiggle-lab/role=coordinator").get("items"),
-                       120, "old coordinator storage removed")
-            self.policies.clear()
-            self._save_state()
+        # The database first: the coordinator migrates its schema on startup and needs it reachable.
+        if not k8s.get_json("deployment", "wiggle-lab/role=coord-db").get("items"):
+            k8s.apply(manifests.to_yaml(manifests.coordinator_db_manifests())).check()
+        self._wait(self.coordinator_db_ready, 180, "control-plane database ready")
         self.coord_config = {k: v for k, v in (tunables or {}).items() if v is not None}
         self._save_state()
-        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests(size, self.coord_config))).check()
+        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests(replicas, self.coord_config))).check()
+
+    @record
+    def reset_coordinator_store(self):
+        """Wipe the control plane: drop the database pod (its storage is the container filesystem, as
+        with every database in this lab) and let it come back empty. Deliberate, because a redeploy no
+        longer does it by accident."""
+        self.pf.stop("coordinator")
+        k8s.delete_by_label("wiggle-lab/role=coord-db")
+        self._wait(lambda: not self.pods(role="coord-db"), 120, "control-plane database removed")
+        self.policies.clear()
+        self._save_state()
+        k8s.apply(manifests.to_yaml(manifests.coordinator_db_manifests())).check()
+        self._wait(self.coordinator_db_ready, 180, "control-plane database ready")
+        # Restart the coordinators so none of them keeps a connection to the database that just went.
+        if self.pods(role="coordinator"):
+            k8s.rollout_restart("coordinator")
 
     def coordinator_config(self) -> dict:
         """The coordinator's current tunables for the UI: live pod env wins, else the persisted config."""
         keys = {s["key"] for s in C.COORD_TUNABLES}
-        env = self._live_env("wiggle-lab/role=coordinator", resource="statefulset")
+        env = self._live_env("wiggle-lab/role=coordinator", resource="deployment")
         live = {k: v for k, v in env.items() if k in keys}
         return live or dict(self.coord_config)
 
     def coordinator_ready(self) -> bool:
         return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coordinator"))
 
-    def coordinator_group_size(self) -> int:
-        items = k8s.get_json("statefulset", "wiggle-lab/role=coordinator").get("items", [])
+    def coordinator_db_ready(self) -> bool:
+        return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coord-db"))
+
+    def coordinator_replicas(self) -> int:
+        items = k8s.get_json("deployment", "wiggle-lab/role=coordinator").get("items", [])
         return items[0].get("spec", {}).get("replicas", 0) if items else 0
 
     def dump_coordinator_store(self) -> dict:
         """The coordinator store's logical contents (policies/namespaces/nodes/definitions) via the Dump
-        RPC — served by whichever coordinator pod the Service routes to."""
+        RPC -- served by whichever coordinator pod the Service routes to. With more than one, they all
+        answer the same because they read the same database."""
         with self.coord_client() as cc:
             return cc.dump()
 
-    def coordinator_store_files(self, pod: str) -> str:
-        """The Ratis + RocksDB store files inside one coordinator pod (per-pod, so divergence is visible
-        when scaled)."""
-        return k8s.exec_sh(pod, "echo '# tree'; ls -R /var/lib/wiggle/coord 2>/dev/null; "
-                                "echo; echo '# sizes'; du -sh /var/lib/wiggle/coord/* 2>/dev/null")
+    def coordinator_roster(self) -> str:
+        """Who is in the coordinator election and who currently leads, read straight from the
+        control-plane database. This is the election the cells run too: every process announces itself
+        and heartbeats, and the longest-running live one leads."""
+        pods = self.pods(role="coord-db")
+        if not pods:
+            return "(no control-plane database)"
+        sql = ("SELECT id, first_heartbeat, last_heartbeat, leader FROM coord_member "
+               "ORDER BY first_heartbeat, id;")
+        return k8s.exec_sh(pods[0]["name"],
+                           f"psql -U {C.COORD_DB_USER} -d {C.COORD_DB} -c \"{sql}\" 2>&1")
 
     # ---- readiness waits (used by replay to reproduce faithfully) ----
     def wait_coordinator_ready(self, timeout: int = 180):
@@ -517,8 +537,9 @@ class Lab:
         """Re-run a recording's events in order against the current machine. Stops at the first step
         that errors (the reproduction point). ``on_event`` gets each step result as it runs.
 
-        Infra steps get a readiness barrier after them (coordinator/cell), so timing-sensitive
-        sequences reproduce faithfully. Recording is off during replay, so nothing is re-captured.
+        Infra steps get a readiness barrier after them (coordinator deploy/reset, cell), so
+        timing-sensitive sequences reproduce faithfully. Recording is off during replay, so nothing is
+        re-captured.
         """
         results = []
         for ev in recording.get("events", []):
@@ -541,7 +562,9 @@ class Lab:
             else:
                 try:
                     fn(*args, **kwargs)
-                    if wait and method == "deploy_coordinator":
+                    if wait and method in ("deploy_coordinator", "reset_coordinator_store"):
+                        # A reset rolls the coordinators (they were talking to a database that just
+                        # went), so the next step must wait for them the same way a deploy does.
                         self.wait_coordinator_ready()
                     elif wait and method == "create_cell" and args:
                         self.wait_cell_ready(args[0])

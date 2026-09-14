@@ -1,9 +1,8 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -24,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Handler binding via {@link Handlers @Handlers} + {@link Worker#handlers(Object)}: a workflow's
+ * Handler binding via {@link ForFlow @ForFlow} + {@link Worker#registerHandler(Object)}: a workflow's
  * topology is registered once by an author, and a worker implements the steps with an annotated
  * class whose method names match the steps and whose signatures define the kind (one param = input,
  * {@code boolean} = gate, {@code void} = effect). On {@link Worker#start()} the worker reconciles its
@@ -32,6 +31,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * rejecting a signature that clashes with a node's kind up front.
  */
 class HandleBindingTest {
+
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void audit(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        boolean available(Map<String, Object> ctx);
+        Map<String, Object> check(Map<String, Object> ctx);
+        void done(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> validate(Map<String, Object> ctx);
+    }
 
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
@@ -41,16 +51,15 @@ class HandleBindingTest {
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
     private FlowSpec authoredGraph() {
-        return Wiggle.graph("order-fulfilment")
-                .step("validate")
-                .gate("in-stock")
-                .step("authorise", "payments")
-                .effect("audit")
-                .build();
+        return FlowSpec.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::validate)
+                .thenFilter(s::inStock)
+                .thenApply(s::authorise, "payments")
+                .thenAccept(s::audit));
     }
 
     /** The step logic, bound to {@code order-fulfilment} by name; signatures define each step's kind. */
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     static final class OrderImpl {
         final AtomicReference<Object> audited;
         OrderImpl(AtomicReference<Object> audited) { this.audited = audited; }
@@ -61,19 +70,19 @@ class HandleBindingTest {
     }
 
     /** Binds a gate step (in the graph a PREDICATE) with a task signature -- a kind clash. */
-    @Handlers("order-fulfilment")
+    @ForFlow("order-fulfilment")
     static final class BadKindImpl {
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }   // it's a PREDICATE in the graph
     }
 
     /** Handlers for a workflow that was never registered on the server. */
-    @Handlers("never-registered")
+    @ForFlow("never-registered")
     static final class OrphanImpl {
         public Map<String, Object> step(Map<String, Object> c) { return c; }
     }
 
     private void withServer(BiConsumer<WiggleClient, WiggleServer> body) throws Exception {
-        ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
@@ -83,14 +92,14 @@ class HandleBindingTest {
     }
 
     @Test
-    @DisplayName("a worker with no flowSpec drives a full instance via @Handlers bound by name")
+    @DisplayName("a worker with no flowSpec drives a full instance via @ForFlow bound by name")
     void handlersBindingRunsToCompletion() throws Exception {
         withServer((client, server) -> {
             client.register(authoredGraph());   // author registers topology only
 
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "impl-1")) {
-                impl.handlers(new OrderImpl(audited));   // binds by name, no flowSpec seen
+                impl.registerHandler(new OrderImpl(audited));   // binds by name, no flowSpec seen
                 impl.start();   // reconciles: validates names/kinds, discovers the "payments" queue too
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
@@ -111,9 +120,9 @@ class HandleBindingTest {
         withServer((client, server) -> {
             client.register(authoredGraph());
             try (Worker impl = new Worker(client, "impl-3")) {
-                impl.handlers(new BadKindImpl());   // inStock is a PREDICATE, bound as a task
+                impl.registerHandler(new BadKindImpl());   // inStock is a PREDICATE, bound as a task
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("in-stock"), e.getMessage());
+                assertTrue(e.getMessage().contains("inStock"), e.getMessage());
                 assertTrue(e.getMessage().contains("boolean"), e.getMessage());
             }
         });
@@ -124,7 +133,7 @@ class HandleBindingTest {
     void unregisteredWorkflowRejected() throws Exception {
         withServer((client, server) -> {
             try (Worker impl = new Worker(client, "impl-4")) {
-                impl.handlers(new OrphanImpl());
+                impl.registerHandler(new OrphanImpl());
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
                 assertTrue(e.getMessage().contains("is not registered"), e.getMessage());
             }
@@ -135,7 +144,7 @@ class HandleBindingTest {
     public record Item(String id, int qty, String state) {}
 
     /** Typed step logic: each method takes and returns the {@link Item} record (decoded via the codec). */
-    @Handlers("typed-wf")
+    @ForFlow("typed-wf")
     static final class TypedImpl {
         final AtomicReference<String> doneState;
         TypedImpl(AtomicReference<String> doneState) { this.doneState = doneState; }
@@ -148,15 +157,14 @@ class HandleBindingTest {
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
     void typedHandlersBinding() throws Exception {
         withServer((client, server) -> {
-            client.register(Wiggle.graph("typed-wf")
-                    .step("check")
-                    .gate("available")
-                    .effect("done")
-                    .build());
+            client.register(FlowSpec.define("typed-wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::check)
+                .thenFilter(s::available)
+                .thenAccept(s::done)));
 
             AtomicReference<String> doneState = new AtomicReference<>();
             try (Worker impl = new Worker(client, "typed-impl")) {
-                impl.handlers(new TypedImpl(doneState));
+                impl.registerHandler(new TypedImpl(doneState));
                 impl.start();
 
                 String id = client.start("typed-wf", Map.of("id", "x1", "qty", 3));

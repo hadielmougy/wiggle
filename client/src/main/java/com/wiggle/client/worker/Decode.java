@@ -6,7 +6,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method in a {@link Handlers} class as a custom decoder rather than a step: it takes the
+ * Marks a method in a {@link ForFlow} class as a custom decoder rather than a step: it takes the
  * raw persisted JSON (a {@code Map}) and returns a typed context object. Its return type is the type
  * it decodes; whenever a step or combine parameter of that type is bound, this runs instead of the
  * default reflective mapping. This is the seam for schema versioning / upcasting an older context to

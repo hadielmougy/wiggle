@@ -25,13 +25,14 @@ public final class WorkerMain {
 
         var wiggle = WiggleConnection.direct(url);
         FlowSpec flowSpec = OrderFulfilment.flowSpec();
+wiggle.client().register(flowSpec);
 
         Worker worker = new Worker(wiggle.client(), id, WorkerOptions.defaults()
                         .withConcurrency(concurrency)
                         .withLocalBatchSize(localBatch)
                         .withLongPollWait(Duration.ofSeconds(10)))
-                .register(flowSpec)
-                .handlers(new OrderHandlers());
+                
+                .registerHandler(new OrderHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             worker.close();

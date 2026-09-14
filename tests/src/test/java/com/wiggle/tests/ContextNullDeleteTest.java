@@ -2,10 +2,9 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -28,11 +27,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ContextNullDeleteTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> trim(Map<String, Object> ctx);
+    }
+
     @Test @DisplayName("a step that drops a field removes it from the context (not left as null)")
     void droppedFieldIsRemoved() throws Exception {
-        FlowSpec bp = Wiggle.graph("trim")
-                .step("trim")
-                .build();
+        FlowSpec bp = FlowSpec.define("trim", Map.class, OneStep.class, (f, s) -> f.thenApply(s::trim));
 
         Map<String, Object> in = new LinkedHashMap<>();
         in.put("keep", 1);
@@ -45,12 +47,8 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("branch combine clears its per-branch scratch keys from the final context")
     void combineScratchKeysAreRemoved() throws Exception {
-        FlowSpec bp = Wiggle.graph("trip")
-                .fork(
-                        Branch.of("air", s -> s.step("air")),
-                        Branch.of("hotel", s -> s.step("hotel")))
-                .combine("merge")
-                .build();
+        FlowSpec bp = FlowSpec.define("trip", Map.class, TripSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::air), f.thenApply(s::hotel)).combineWithContext(s::merge));
 
         Map<String, Object> out = run(bp, new TripH(), new LinkedHashMap<>(Map.of("id", "t1")));
 
@@ -65,7 +63,7 @@ class ContextNullDeleteTest {
         return ((Number) ((Map<String, Object>) branchOutput).get("price")).intValue();
     }
 
-    @Handlers("trim")
+    @ForFlow("trim")
     static final class TrimH {
         public Map<String, Object> trim(Map<String, Object> ctx) {
             Map<String, Object> next = new LinkedHashMap<>(ctx);
@@ -74,7 +72,14 @@ class ContextNullDeleteTest {
         }
     }
 
-    @Handlers("trip")
+    interface TripSteps {
+        Map<String, Object> air(Map<String, Object> ctx);
+        Map<String, Object> hotel(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> air, Map<String, Object> hotel);
+    }
+
+    @ForFlow("trip")
     static final class TripH {
         public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
         public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
@@ -99,7 +104,8 @@ class ContextNullDeleteTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(bp).handlers(handlers);
+            client.register(bp);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);

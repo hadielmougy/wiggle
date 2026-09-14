@@ -1,9 +1,9 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
@@ -32,14 +32,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class LoopBudgetTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface LoopSteps {
+        boolean forever(Map<String, Object> c);
+        boolean fewMore(Map<String, Object> c);
+        Map<String, Object> spin(Map<String, Object> c);
+        Map<String, Object> after(Map<String, Object> c);
+    }
+
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        boolean g(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
-        return new ServerConfig(0, "loop-test", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "loop-test", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Handlers("loop-wf")
+    @ForFlow("loop-wf")
     public static final class LoopHandlers {
         public boolean forever(Map<String, Object> ctx) { return true; }          // the bug
         public boolean fewMore(Map<String, Object> ctx) {
@@ -57,7 +71,8 @@ class LoopBudgetTest {
     private static InstanceView run(FlowSpec bp, Duration timeout) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker worker = new Worker(client, "loop-w").register(bp).handlers(new LoopHandlers())) {
+             Worker worker = new Worker(client, "loop-w").registerHandler(new LoopHandlers())) {
+            client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of());
             return client.awaitCompletion(id, timeout);
@@ -67,10 +82,9 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its explicit budget (SERVER dispatch)")
     void runawayServerMode() throws Exception {
-        FlowSpec bp = Wiggle.graph("loop-wf")
-                .doWhile("forever", 7, b -> b.step("spin"))
-                .step("after")
-                .build();
+        FlowSpec bp = FlowSpec.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
+                .repeatWhile(s::forever, 7, b -> b.thenApply(s::spin))
+                .thenApply(s::after));
         InstanceView v = run(bp, Duration.ofSeconds(20));
         assertEquals("FAILED", v.status());
         assertNotNull(v.error());
@@ -81,11 +95,10 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its budget under local chaining too")
     void runawayLocalAsync() throws Exception {
-        FlowSpec bp = Wiggle.graph("loop-wf")
-                .doWhile("forever", 7, b -> b.step("spin"))
-                .step("after")
-                .execution(ExecutionMode.LOCAL_ASYNC)
-                .build();
+        FlowSpec bp = FlowSpec.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
+                .repeatWhile(s::forever, 7, b -> b.thenApply(s::spin))
+                .thenApply(s::after)
+                .execution(ExecutionMode.LOCAL_ASYNC));
         InstanceView v = run(bp, Duration.ofSeconds(20));
         assertEquals("FAILED", v.status());
         assertTrue(v.error().contains("exceeded its budget"), v.error());
@@ -94,10 +107,9 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a loop that finishes within budget completes; the counter never reaches the context")
     void legitLoopUnaffected() throws Exception {
-        FlowSpec bp = Wiggle.graph("loop-wf")
-                .doWhile("few-more", 10, b -> b.step("spin"))
-                .step("after")
-                .build();
+        FlowSpec bp = FlowSpec.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
+                .repeatWhile(s::fewMore, 10, b -> b.thenApply(s::spin))
+                .thenApply(s::after));
         InstanceView v = run(bp, Duration.ofSeconds(20));
         assertEquals("COMPLETED", v.status());
         @SuppressWarnings("unchecked")
@@ -109,12 +121,16 @@ class LoopBudgetTest {
     @Test
     @DisplayName("non-loop graphs serialize without the budget field — content hashes are stable")
     void hashStability() {
-        var def = Wiggle.graph("plain").step("a").gate("g").step("b").build().definition();
+        var def = FlowSpec.define("plain", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenFilter(s::g)
+                .thenApply(s::b)).definition();
         for (Node n : def.nodes().values()) {
             assertFalse(n.toJson().containsKey("loopBudget"),
                     "non-loop node '" + n.name() + "' must not serialize a loopBudget");
         }
-        var loop = Wiggle.graph("looped").doWhile("g", 5, b -> b.step("a")).build().definition();
+        var loop = FlowSpec.define("looped", Map.class, OneStep.class, (f, s) ->
+                f.repeatWhile(s::g, 5, b -> b.thenApply(s::a))).definition();
         assertTrue(loop.nodes().values().stream().anyMatch(n -> n.toJson().containsKey("loopBudget")),
                 "the loop guard serializes its budget");
     }

@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -21,12 +20,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Recurring schedules: interval firing, exactly-once claims, lifecycle, validation. */
 class ScheduleTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static WorkflowEngine engine(Storage storage) {
         return new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
     }
 
     private static FlowSpec probe() {
-        return Wiggle.graph("sched-probe").step("work").build();
+        return FlowSpec.define("sched-probe", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")

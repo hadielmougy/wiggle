@@ -1,5 +1,8 @@
 package com.wiggle.coordinator.jdbc;
 
+import com.wiggle.election.ElectionStore;
+import com.wiggle.election.LeaderElection;
+import com.wiggle.election.Member;
 import com.wiggle.server.coord.CoordDefinition;
 import com.wiggle.server.coord.CoordNamespace;
 import com.wiggle.server.coord.CoordNode;
@@ -25,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The JDBC coordinator store against H2 (PostgreSQL mode) — the same contract the in-memory
- * reference gives, with the CAS/lease atomicity that keeps a multi-node coordinator single-writer.
+ * reference gives, with the CAS atomicity that keeps a multi-node coordinator single-writer.
  */
 class JdbcCoordinatorStoreTest {
 
@@ -35,12 +38,16 @@ class JdbcCoordinatorStoreTest {
     // Runs on H2 (PostgreSQL mode) by default; against a real database when WIGGLE_TEST_PG_URL is set
     // (e.g. `docker compose up -d postgres`), which exercises the actual portability of the SQL.
     @BeforeEach void setUp() throws Exception {
-        String pg = System.getenv("WIGGLE_TEST_PG_URL");
+        String pg = env("WIGGLE_TEST_PG_URL");
         String url, user, pw;
         if (pg != null && !pg.isBlank()) {
             url = pg;
-            user = System.getenv("WIGGLE_TEST_PG_USER");
-            pw = System.getenv("WIGGLE_TEST_PG_PASSWORD");
+            // Credentials fall back to the generic pair the rest of the suite uses, so setting
+            // WIGGLE_TEST_DB_* and adding only WIGGLE_TEST_PG_URL works. This duplicates
+            // com.wiggle.tests.TestDb rather than sharing it: :coordinator depends on :core and
+            // :proto alone, and must not grow a dependency on the :tests module to borrow six lines.
+            user = env("WIGGLE_TEST_PG_USER", "WIGGLE_TEST_DB_USER");
+            pw = env("WIGGLE_TEST_PG_PASSWORD", "WIGGLE_TEST_DB_PASSWORD");
             dropCoordTables(url, user, pw);   // a clean slate per test on a persistent DB
         } else {
             url = "jdbc:h2:mem:coord-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
@@ -51,10 +58,19 @@ class JdbcCoordinatorStoreTest {
         store = provider.coordinatorStore();
     }
 
+    /** The first of {@code keys} that is set and non-blank, or null. */
+    private static String env(String... keys) {
+        for (String key : keys) {
+            String v = System.getenv(key);
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
+    }
+
     private static void dropCoordTables(String url, String user, String pw) throws Exception {
         try (var c = java.sql.DriverManager.getConnection(url, user, pw); var s = c.createStatement()) {
             for (String t : new String[]{"coord_policy", "coord_node", "coord_definition",
-                    "coord_namespace", "coord_cell_binding", "coord_leader"}) {
+                    "coord_namespace", "coord_cell_binding", "coord_member"}) {
                 s.execute("DROP TABLE IF EXISTS " + t);
             }
         }
@@ -168,16 +184,48 @@ class JdbcCoordinatorStoreTest {
         assertEquals(1, store.namespaces().size());
     }
 
-    @Test @DisplayName("leader lease: single holder, renewal, contention, and expiry takeover")
-    void leaderLease() {
-        long lease = 5_000;
-        assertTrue(store.acquireLeadership("A", 1_000, lease), "A takes an unheld lease (expiry 6000)");
-        assertTrue(store.acquireLeadership("A", 1_100, lease), "A renews its own lease (expiry 6100)");
-        assertFalse(store.acquireLeadership("B", 1_200, lease), "B can't take A's valid lease");
-        assertTrue(store.acquireLeadership("B", 6_100, lease), "B takes over once A's lease expired (expiry 11100)");
-        assertFalse(store.acquireLeadership("A", 6_200, lease), "now A can't take B's valid lease");
+    @Test @DisplayName("election roster: announce, heartbeat, seniority, takeover on expiry, stand-down")
+    void electionRoster() {
+        ElectionStore election = store.election();
+        long t0 = 100_000;
+        long deadAfter = 5_000;
 
-        store.releaseLeadership("B");
-        assertTrue(store.acquireLeadership("A", 6_300, lease), "released lease is free to take");
+        // Two coordinators announce. A is older, so A leads -- and both compute that independently,
+        // which is the property the whole scheme rests on.
+        Member a = new Member("A", "A", t0, t0);
+        Member b = new Member("B", "B", t0 + 500, t0 + 500);
+        election.step(a, 0, roster -> null);
+        election.step(b, 0, roster -> null);
+
+        List<Member> roster = election.members();
+        assertEquals(2, roster.size(), "both are on the roster");
+        assertEquals("A", LeaderElection.electedLeader(roster, t0 + 600, deadAfter), "the older one leads");
+
+        // A keeps beating; B beating too does not move leadership, because seniority is first_heartbeat
+        // and that must not move on a heartbeat.
+        election.step(a.withHeartbeat(t0 + 1_000), 0, r -> null);
+        election.step(b.withHeartbeat(t0 + 1_000), 0, r -> null);
+        assertEquals("A", LeaderElection.electedLeader(election.members(), t0 + 1_100, deadAfter),
+                "a heartbeat must not reset seniority");
+
+        // A goes quiet: once its last heartbeat falls outside the window, B takes over.
+        election.step(b.withHeartbeat(t0 + 9_000), 0, r -> null);
+        assertEquals("B", LeaderElection.electedLeader(election.members(), t0 + 9_100, deadAfter),
+                "B leads once A's heartbeat went stale");
+
+        // A comes back and is senior again -- it never lost its first_heartbeat.
+        election.step(a.withHeartbeat(t0 + 9_200), 0, r -> null);
+        assertEquals("A", LeaderElection.electedLeader(election.members(), t0 + 9_300, deadAfter),
+                "a returning node resumes its seniority");
+
+        // Standing down backdates the heartbeat, so peers re-elect at once instead of waiting the window.
+        election.standDown(a);
+        assertEquals("B", LeaderElection.electedLeader(election.members(), t0 + 9_400, deadAfter),
+                "stand-down hands over immediately");
+
+        // Pruning drops only the long dead.
+        election.step(b.withHeartbeat(t0 + 20_000), t0 + 10_000, r -> null);
+        assertEquals(List.of("B"), election.members().stream().map(Member::id).toList(),
+                "A's backdated row is pruned, B's is not");
     }
 }

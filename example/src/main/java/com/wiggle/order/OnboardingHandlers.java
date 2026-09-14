@@ -1,7 +1,7 @@
 package com.wiggle.order;
 
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,7 +11,7 @@ import java.util.Map;
  * method is the combine for the {@code send-welcome} / {@code provision} fork — explicit, returning
  * the complete post-join context.
  */
-@Handlers("onboarding")
+@ForFlow("onboarding")
 public final class OnboardingHandlers {
 
     public Map<String, Object> createAccount(Map<String, Object> ctx) {

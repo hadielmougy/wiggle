@@ -1,5 +1,7 @@
 package com.wiggle.server.coord;
 
+import com.wiggle.election.ElectionStore;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -92,19 +94,18 @@ public interface CoordinatorStore extends AutoCloseable {
     /** Idempotent upsert keyed by namespace; drives the provisioning state machine's persistence. */
     void putNamespace(CoordNamespace ns);
 
-    // ---- leader election (coordinator HA -- option A: a durable lease over this store) ----
+    // ---- leader election (coordinator HA) ----
 
     /**
-     * Atomically become or renew the single coordinator leader: succeeds when there is no valid holder
-     * (absent or expired) or when {@code nodeId} already holds it, extending the lease to
-     * {@code nowMillis + leaseMillis}. Returns whether {@code nodeId} holds leadership afterwards. The
-     * leader-only duties (the reconcile/retire loop) run only while this returns true — so a durable,
-     * atomic implementation (JDBC CAS / Cassandra LWT) is what keeps a multi-node coordinator single-writer.
+     * The roster of <em>coordinator processes</em>, for {@link com.wiggle.election.LeaderElection} --
+     * the same announce-and-heartbeat election the cell engine runs, so there is one scheme to reason
+     * about rather than two. Note this is a different roster from {@link #nodes(String)} above, which
+     * holds the <em>cells</em> that report to this coordinator.
+     *
+     * <p>Leader-only duties here are the reconcile/retire loop, which is idempotent and re-entrant --
+     * which is what makes an election without consensus sound.
      */
-    boolean acquireLeadership(String nodeId, long nowMillis, long leaseMillis);
-
-    /** Relinquish leadership if held by {@code nodeId} (best-effort, on graceful shutdown). */
-    default void releaseLeadership(String nodeId) { }
+    ElectionStore election();
 
     @Override default void close() { }
 }

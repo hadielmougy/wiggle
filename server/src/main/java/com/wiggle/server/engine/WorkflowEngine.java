@@ -86,6 +86,8 @@ public final class WorkflowEngine {
 
     private final Storage storage;
     private final DefinitionRegistry definitions;
+    /** Who is polling this node and for what -- so the console can show unclaimable work. */
+    private final PollerRegistry pollers = new PollerRegistry(60_000);
     private final long defaultLeaseMillis;
     private final java.util.function.Supplier<String> idMinter;
 
@@ -153,6 +155,29 @@ public final class WorkflowEngine {
 
     /** The most recently registered version of a workflow, if any. */
     public Optional<WorkflowDefinition> latestDefinition(String name) { return definitions.latest(name); }
+
+    /**
+     * The dispatchable backlog, split by (workflow, version, queue), each marked with whether any
+     * worker polling this node would claim it. An uncovered slice is work nothing can pick up.
+     */
+    public List<Rows.BacklogSlice> backlog(int max) {
+        return storage.inTx(tx -> tx.backlogByVersion(System.currentTimeMillis(), max));
+    }
+
+    /** Whether a live poller on this node would claim this slice. See {@link PollerRegistry}. */
+    public boolean covered(String workflow, int version, String queue) {
+        return pollers.covers(workflow, version, queue, System.currentTimeMillis());
+    }
+
+    /** The workers currently polling this node. */
+    public Set<PollerRegistry.Poller> livePollers() {
+        return pollers.live(System.currentTimeMillis());
+    }
+
+    /** One exact version -- what a version-scoped worker validates its handlers against. */
+    public Optional<WorkflowDefinition> definition(String name, int version) {
+        return definitions.lookup(name, version);
+    }
 
     public String start(String workflow, Integer version, Object context, String correlationId) {
         return tx(tx -> startInTx(tx, workflow, version, context, correlationId, null));
@@ -282,6 +307,11 @@ public final class WorkflowEngine {
         return poll(workerId, queues, max, leaseMillis, deadline, () -> false);
     }
 
+    public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline,
+                                     java.util.function.BooleanSupplier cancelled) {
+        return poll(workerId, queues, null, max, leaseMillis, deadline, cancelled);
+    }
+
     /**
      * Long-polls for work. {@code cancelled} lets the caller (the gRPC layer) signal that the worker's
      * request is gone -- a closing or dead worker whose call was cancelled -- so we do not claim a
@@ -289,8 +319,13 @@ public final class WorkflowEngine {
      * matters with wake-on-produce: a signal can wake a parked poll the instant its worker is shutting
      * down, and the freshly-produced token should go to a live worker instead.
      */
-    public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline,
+    public List<TaskActivation> poll(String workerId, Set<String> queues,
+                                     Set<com.wiggle.core.WorkflowVersion> versions, int max,
+                                     Long leaseMillis, long deadline,
                                      java.util.function.BooleanSupplier cancelled) {
+        // Remember what this worker serves, so coverage can be reported: a queue nobody polls or a
+        // version everyone has scoped out of leaves work dispatchable and unclaimable.
+        pollers.seen(workerId, queues, versions, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         // Wake-on-produce (Layer 1): snapshot the signal counts BEFORE claiming so a token parked
         // between our claim and our wait is never lost, then either claim it or block until a local
@@ -298,7 +333,7 @@ public final class WorkflowEngine {
         // production (and any missed signal) is still caught. The DB claim stays the arbiter.
         if (cancelled.getAsBoolean()) return List.of();
         Map<String, Long> since = notifier.snapshot(queues);
-        List<TaskActivation> tasks = claimNow(workerId, queues, max, lease);
+        List<TaskActivation> tasks = claimNow(workerId, queues, versions, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
         long fallbackWait = adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
@@ -309,7 +344,7 @@ public final class WorkflowEngine {
             if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.getAsBoolean()) return List.of();   // worker gone -- leave the work for a live one
             since = notifier.snapshot(queues);
-            tasks = claimNow(workerId, queues, max, lease);
+            tasks = claimNow(workerId, queues, versions, max, lease);
             if (adaptiveFallbackPoll) {
                 // Signaled: local wake-on-produce covers this node — no point re-claiming fast.
                 // Unsignaled empty round: decay toward the configured interval (25 → 50 → cap).
@@ -326,9 +361,11 @@ public final class WorkflowEngine {
     }
 
     /** One atomic DB claim attempt, with a lease that starts now (not at the poll's arrival). */
-    private List<TaskActivation> claimNow(String workerId, Set<String> queues, int max, long lease) {
+    private List<TaskActivation> claimNow(String workerId, Set<String> queues,
+                                          Set<com.wiggle.core.WorkflowVersion> versions,
+                                          int max, long lease) {
         long now = System.currentTimeMillis();
-        return storage.inTx(tx -> claimActivations(tx, workerId, queues, max, now, now + lease));
+        return storage.inTx(tx -> claimActivations(tx, workerId, queues, versions, max, now, now + lease));
     }
 
     /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
@@ -345,8 +382,9 @@ public final class WorkflowEngine {
     }
 
     private List<TaskActivation> claimActivations(Tx tx, String workerId, Set<String> queues,
+                                                  Set<com.wiggle.core.WorkflowVersion> versions,
                                                   int max, long now, long until) {
-        List<Token> claimed = tx.claimTasks(workerId, queues, max, now, until);
+        List<Token> claimed = tx.claimTasks(workerId, queues, versions, max, now, until);
         List<TaskActivation> activations = new ArrayList<>(claimed.size());
         for (Token t : claimed) {
             activationFor(tx, t, workerId, until).ifPresent(activations::add);
@@ -986,7 +1024,7 @@ public final class WorkflowEngine {
         String scratch = forEachScratchKey(node);
         boolean changed = scratch != null
                 ? overlay.remove(scratch) != null
-                : overlay.keySet().removeAll(armNames(node));
+                : overlay.keySet().removeAll(armNames(node).stream().map(ScratchKeys::arm).toList());
         return changed ? Json.write(overlay) : payloadJson;
     }
 
@@ -1382,7 +1420,7 @@ public final class WorkflowEngine {
                 Object idx = branch.remove(ARM_IDX);
                 branch.remove(LOOP_COUNTS);
                 if (idx == null) continue;   // defensive: a token that never carried an arm tag
-                staged.put(armNames.get(((Number) idx).intValue()), branch);
+                staged.put(ScratchKeys.arm(armNames.get(((Number) idx).intValue())), branch);
             }
             return Json.write(staged);
         }

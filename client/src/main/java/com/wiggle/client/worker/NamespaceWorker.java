@@ -64,8 +64,18 @@ public final class NamespaceWorker implements AutoCloseable {
 
     /** Coordinator-wired: serve {@code namespace}'s active cells, resolved through {@code connection}. */
     public NamespaceWorker(CoordinatedConnection connection, String namespace, String workerId, Consumer<Worker> configurator) {
+        this(connection, namespace, workerId, WorkerOptions.defaults(), configurator);
+    }
+
+    /**
+     * {@link #NamespaceWorker(CoordinatedConnection, String, String, Consumer)} with explicit worker
+     * options -- {@link WorkerOptions#withAwaitRegistration} in particular, since a worker publishes
+     * no topology of its own and may well start before the author registers one.
+     */
+    public NamespaceWorker(CoordinatedConnection connection, String namespace, String workerId,
+                           WorkerOptions options, Consumer<Worker> configurator) {
         this(() -> connection.activeCellTargets(namespace), WiggleClient::new,
-                workerId, WorkerOptions.defaults(), configurator);
+                workerId, options, configurator);
     }
 
     /** How often to re-resolve the active-cell set (default 10s). Set before {@link #start()}. */

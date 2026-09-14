@@ -1,11 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
@@ -34,6 +33,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class LocalBoundaryTest {
 
+    interface ForkSteps {
+        Map<String, Object> seed(Map<String, Object> ctx);
+        Map<String, Object> prep(Map<String, Object> ctx);
+        Map<String, Object> l1(Map<String, Object> ctx);
+        Map<String, Object> l2(Map<String, Object> ctx);
+        Map<String, Object> r1(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+        Map<String, Object> d(Map<String, Object> ctx);
+        boolean keep(Map<String, Object> ctx);
+        Map<String, Object> never(Map<String, Object> ctx);
+        Map<String, Object> seed(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -41,7 +62,7 @@ class LocalBoundaryTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "lb-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "lb-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -51,20 +72,17 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            FlowSpec bp = Wiggle.graph("lb-fork")
-                    .execution(mode)
-                    .step("seed")
-                    .step("prep")
-                    .fork(
-                            Branch.of("left", s -> s.step("l1").step("l2")),
-                            Branch.of("right", s -> s.step("r1")))
-                    .combine("merge")
-                .step("after")
-                    .build();
+            FlowSpec bp = FlowSpec.define("lb-fork", Map.class, ForkSteps.class, (f, s) -> {
+                var prepped = f.execution(mode).thenApply(s::seed).thenApply(s::prep);
+                var left = prepped.thenApply(s::l1).thenApply(s::l2);
+                var right = prepped.thenApply(s::r1);
+                return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
+            });
 
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
-                 Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp).handlers(new ForkH(runs))) {
+                 Worker w = new Worker(client, "lb-" + Ids.next("x")).registerHandler(new ForkH(runs))) {
+                client.register(bp);
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status(), mode + " status");
@@ -83,16 +101,16 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        FlowSpec bp = Wiggle.graph("lb-gate")
+        FlowSpec bp = FlowSpec.define("lb-gate", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_SYNC)
-                .step("seed")
-                .gate("keep")
-                .step("never")
-                .build();
+                .thenApply(s::seed)
+                .thenFilter(s::keep)
+                .thenApply(s::never));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp).handlers(new GateH(downstream))) {
+             Worker w = new Worker(client, "lb-" + Ids.next("x")).registerHandler(new GateH(downstream))) {
+            client.register(bp);
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
@@ -128,10 +146,12 @@ class LocalBoundaryTest {
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker general = new Worker(client, "general",
                      WorkerOptions.defaults().withQueues("lb-queues"))
-                     .register(generalBp).handlers(new QueuesH(ranOn, "general"));
+                     .registerHandler(new QueuesH(ranOn, "general"));
              Worker special = new Worker(client, "special",
                      WorkerOptions.defaults().withQueues("special"))
-                     .register(specialBp).handlers(new QueuesH(ranOn, "special"))) {
+                     .registerHandler(new QueuesH(ranOn, "special"))) {
+            client.register(generalBp);
+            client.register(specialBp);
             general.start();
             special.start();
             InstanceView v = client.awaitCompletion(client.start(generalBp, Map.of()), Duration.ofSeconds(20));
@@ -145,16 +165,15 @@ class LocalBoundaryTest {
 
     private static FlowSpec queueSplitFlowSpec(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return Wiggle.graph("lb-queues")
+        return FlowSpec.define("lb-queues", Map.class, OneStep.class, (f, s) -> f
                 .execution(mode)
-                .step("a")
-                .step("b")
-                .step("c", "special")
-                .step("d")
-                .build();
+                .thenApply(s::a)
+                .thenApply(s::b)
+                .thenApply(s::c, "special")
+                .thenApply(s::d));
     }
 
-    @Handlers("lb-fork")
+    @ForFlow("lb-fork")
     static final class ForkH {
         final Map<String, AtomicInteger> runs;
         ForkH(Map<String, AtomicInteger> runs) { this.runs = runs; }
@@ -174,7 +193,7 @@ class LocalBoundaryTest {
         public Map<String, Object> after(Map<String, Object> ctx) { return counted(runs, "after", put(ctx, "joined", true)); }
     }
 
-    @Handlers("lb-gate")
+    @ForFlow("lb-gate")
     static final class GateH {
         final AtomicInteger downstream;
         GateH(AtomicInteger downstream) { this.downstream = downstream; }
@@ -183,7 +202,7 @@ class LocalBoundaryTest {
         public Map<String, Object> never(Map<String, Object> ctx) { downstream.incrementAndGet(); return ctx; }
     }
 
-    @Handlers("lb-queues")
+    @ForFlow("lb-queues")
     static final class QueuesH {
         final Map<String, String> ranOn;
         final String label;

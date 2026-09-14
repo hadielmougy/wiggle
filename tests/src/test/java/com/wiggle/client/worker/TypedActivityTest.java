@@ -1,9 +1,8 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.ServerConfig;
@@ -23,17 +22,29 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Typed activities via <b>factory methods</b> on a {@link Handlers @Handlers} class — a
+ * Typed activities via <b>factory methods</b> on a {@link ForFlow @ForFlow} class — a
  * zero-parameter method returning {@link Activity}/{@link GateActivity}/{@link EffectActivity} is
  * invoked once at scan and its result serves the step named by the method (or by
- * {@link Handles @Handles}); {@link Compensable} on the result binds the undo. Everything still
+ * {@link ForFlow @ForFlow}); {@link Compensable} on the result binds the undo. Everything still
  * registers through the one {@code worker.handlers(...)} call, mixing freely with plain methods.
  */
 class TypedActivityTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void auditLog(Map<String, Object> ctx);
+        // Both declarations of the same step name, because this file builds the node both ways: the
+        // zero-arg factory declares an undo, the one-arg form does not. A method reference picks
+        // between them by target type -- thenApplyCompensable takes the factory, thenApply the step.
+        CompensableActivity<Map<String, Object>, Map<String, Object>> capturePayment();
+        Map<String, Object> capturePayment(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> summarise(Map<String, Object> ctx);
+    }
+
     /** The standalone typed activity — dependencies via constructor, undo alongside the do. */
-    static final class CapturePayment implements Activity<Map<String, Object>>,
-            Compensable<Map<String, Object>> {
+    static final class CapturePayment implements Activity<Map<String, Object>, Map<String, Object>>,
+            Compensable<Map<String, Object>, Map<String, Object>> {
         final AtomicReference<Object> refunded = new AtomicReference<>();
         final AtomicReference<Object> undoKey = new AtomicReference<>();
         public Map<String, Object> execute(Map<String, Object> ctx) {
@@ -41,37 +52,41 @@ class TypedActivityTest {
             next.put("paymentRef", "pay-1");
             return next;
         }
-        public void compensate(Compensation<Map<String, Object>> comp) {
+        public void compensate(Compensation<Map<String, Object>, Map<String, Object>> comp) {
             refunded.set(comp.result().get("paymentRef"));   // the step's own product: from result()
             undoKey.set(comp.input().get("idemKey"));        // undo-only data: from input(), never the context
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class MixedHandlers {
         final CapturePayment capture = new CapturePayment();
 
         public boolean inStock(Map<String, Object> ctx) { return true; }      // plain gate method
 
-        public Activity<Map<String, Object>> capturePayment() {               // factory -> "capture-payment"
+        public Activity<Map<String, Object>, Map<String, Object>> capturePayment() {               // factory -> "capturePayment"
             return capture;
         }
 
-        public EffectActivity<Map<String, Object>> auditLog() {               // factory -> "audit-log"
+        public EffectActivity<Map<String, Object>> auditLog() {               // factory -> "auditLog"
             return ctx -> { };
         }
     }
 
-    /** capture-payment declares .compensate() — pairs with MixedHandlers' Compensable factory. */
+    /** capturePayment declares its undo in its return type -- MixedHandlers supplies the factory. */
     private static WorkflowDefinition linear() {
-        return Wiggle.graph("wf").step("capture-payment").compensate().gate("in-stock")
-                .effect("audit-log").build().definition();
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApplyCompensable(s::capturePayment)
+                .thenFilter(s::inStock)
+                .thenAccept(s::auditLog)).definition();
     }
 
     /** Same shape, nothing compensable — for handler classes whose activities carry no undo. */
     private static WorkflowDefinition linearPlain() {
-        return Wiggle.graph("wf").step("capture-payment").gate("in-stock")
-                .effect("audit-log").build().definition();
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::capturePayment)
+                .thenFilter(s::inStock)
+                .thenAccept(s::auditLog)).definition();
     }
 
     // ------------------------------------------------------------------ binder-level
@@ -84,10 +99,10 @@ class TypedActivityTest {
         Map<String, HandlerBinder.Binding> byStep = new LinkedHashMap<>();
         r.bindings().forEach(b -> byStep.put(b.step(), b));
 
-        Object out = byStep.get("capture-payment").handler().invoke(Map.of("a", 1L));
+        Object out = byStep.get("capturePayment").handler().invoke(Map.of("a", 1L));
         assertTrue(out.toString().contains("paymentRef"), "typed task runs via the factory result");
-        assertEquals(true, byStep.get("in-stock").handler().invoke(Map.of()), "plain method still binds");
-        assertNull(byStep.get("audit-log").handler().invoke(Map.of()), "typed effect reports null");
+        assertEquals(true, byStep.get("inStock").handler().invoke(Map.of()), "plain method still binds");
+        assertNull(byStep.get("auditLog").handler().invoke(Map.of()), "typed effect reports null");
     }
 
     @Test @DisplayName("a Compensable factory result carries the undo; it sees BOTH snapshots")
@@ -95,7 +110,7 @@ class TypedActivityTest {
         MixedHandlers h = new MixedHandlers();
         var r = HandlerBinder.bind(HandlerBinder.scan(h), linear());
         HandlerBinder.Compensator comp = r.bindings().stream()
-                .filter(b -> b.step().equals("capture-payment")).findFirst().orElseThrow().compensator();
+                .filter(b -> b.step().equals("capturePayment")).findFirst().orElseThrow().compensator();
         assertNotNull(comp, "Compensable ⇒ the binding carries the undo");
         comp.invoke(Map.of("idemKey", "k-7"),                       // input snapshot
                     Map.of("paymentRef", "pay-9"));                 // result snapshot
@@ -103,12 +118,58 @@ class TypedActivityTest {
         assertEquals("k-7", h.capture.undoKey.get(), "input(): undo-only data, no context pollution");
         // the plain method carries none
         assertNull(r.bindings().stream()
-                .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow().compensator());
+                .filter(b -> b.step().equals("inStock")).findFirst().orElseThrow().compensator());
+    }
+
+    // ---- an activity maps A -> B, so the two snapshots are different types ----------------------
+
+    record Ord(String id) {}
+
+    record Pay(String ref) {}
+
+    interface TypedUndoSteps {
+        CompensableActivity<Ord, Pay> charge();
+    }
+
+    @ForFlow("typed-undo")
+    static final class TypedUndoH {
+        final AtomicReference<Object> sawInput = new AtomicReference<>();
+        final AtomicReference<Object> sawResult = new AtomicReference<>();
+
+        public CompensableActivity<Ord, Pay> charge() {
+            return new CompensableActivity<>() {
+                @Override public Pay execute(Ord o) { return new Pay("pay-" + o.id()); }
+                @Override public void compensate(Compensation<Ord, Pay> c) {
+                    sawInput.set(c.input());
+                    sawResult.set(c.result());
+                }
+            };
+        }
+    }
+
+    @Test @DisplayName("each snapshot decodes into its own type: input as A, result as B")
+    void compensatorSeesEachSnapshotAsItsOwnType() throws Exception {
+        WorkflowDefinition def = FlowSpec.define("typed-undo", Ord.class, TypedUndoSteps.class,
+                (f, s) -> f.thenApplyCompensable(s::charge)).definition();
+
+        TypedUndoH h = new TypedUndoH();
+        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(h), def);
+        HandlerBinder.Compensator comp = r.bindings().stream()
+                .filter(b -> b.step().equals("charge")).findFirst().orElseThrow().compensator();
+        assertNotNull(comp);
+
+        // What the engine staged: the step's input and its result, as persisted JSON shapes. They are
+        // different records, so decoding both into the parameter type would hand the undo a mangled
+        // result rather than the Pay it produced.
+        comp.invoke(Map.of("id", "A-1"), Map.of("ref", "pay-A-1"));
+
+        assertEquals(new Ord("A-1"), h.sawInput.get(), "input() decodes into execute's parameter type");
+        assertEquals(new Pay("pay-A-1"), h.sawResult.get(), "result() decodes into its return type");
     }
 
     @Test @DisplayName("@Handles renames a handler away from its method name — plain and factory alike")
     void handlesAnnotation() throws Exception {
-        @Handlers("wf")
+        @ForFlow("wf")
         class Renamed {
             @Handles("capture-payment")
             public Map<String, Object> doTheCharge(Map<String, Object> ctx) { return ctx; }
@@ -122,26 +183,26 @@ class TypedActivityTest {
         assertEquals(3, r.bindings().size());
         assertTrue(r.unserved().isEmpty(), "renamed methods served all three steps");
         assertEquals(true, r.bindings().stream()
-                .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow()
+                .filter(b -> b.step().equals("inStock")).findFirst().orElseThrow()
                 .handler().invoke(Map.of()));
     }
 
     @Test @DisplayName("scan rejections: parameterized factories, null factories, double roles, @Handles collisions")
     void scanRejections() {
-        @Handlers("wf")
+        @ForFlow("wf")
         class ParamFactory {
-            public Activity<Map<String, Object>> capturePayment(String oops) { return c -> c; }
+            public Activity<Map<String, Object>, Map<String, Object>> capturePayment(String oops) { return c -> c; }
         }
         assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new ParamFactory()),
                 "a factory must be zero-parameter");
 
-        @Handlers("wf")
+        @ForFlow("wf")
         class NullFactory {
-            public Activity<Map<String, Object>> capturePayment() { return null; }
+            public Activity<Map<String, Object>, Map<String, Object>> capturePayment() { return null; }
         }
         assertThrows(IllegalStateException.class, () -> HandlerBinder.scan(new NullFactory()));
 
-        @Handlers("wf")
+        @ForFlow("wf")
         class Collides {
             public Map<String, Object> capturePayment(Map<String, Object> c) { return c; }
             @Handles("capture-payment")
@@ -153,7 +214,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("kind mismatches fail fast for factory results too")
     void kindMismatch() {
-        @Handlers("wf")
+        @ForFlow("wf")
         class GateOnTask {
             public GateActivity<Map<String, Object>> capturePayment() { return ctx -> true; }
         }
@@ -164,22 +225,24 @@ class TypedActivityTest {
 
     // ------------------------------------------------------------------ end-to-end
 
-    @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
+    @Test @DisplayName("plain methods + factories + @ForFlow run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        FlowSpec bp = Wiggle.graph("wf")
-                .step("capture-payment").compensate().gate("in-stock").step("summarise").effect("audit-log")
-                .build();
+        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApplyCompensable(s::capturePayment)
+                .thenFilter(s::inStock)
+                .thenApply(s::summarise)
+                .thenAccept(s::auditLog));
 
-        @Handlers("wf")
+        @ForFlow("wf")
         class FlowHandlers {
             public boolean inStock(Map<String, Object> ctx) { return true; }
 
-            public Activity<Map<String, Object>> capturePayment() {
+            public Activity<Map<String, Object>, Map<String, Object>> capturePayment() {
                 return new CapturePayment();
             }
 
             @Handles("summarise")
-            public Activity<Map<String, Object>> buildSummary() {
+            public Activity<Map<String, Object>, Map<String, Object>> buildSummary() {
                 return ctx -> {
                     Map<String, Object> next = new LinkedHashMap<>(ctx);
                     next.put("summary", "ok");
@@ -190,15 +253,16 @@ class TypedActivityTest {
             public EffectActivity<Map<String, Object>> auditLog() { return ctx -> { }; }
         }
 
-        ServerConfig config = new ServerConfig(0, "typed-test", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "typed-test", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "typed-w")
-                     .register(bp)
-                     .handlers(new FlowHandlers())) {
+                     
+                     .registerHandler(new FlowHandlers())) {
+            client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of("orderId", "A-1"));
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(10));

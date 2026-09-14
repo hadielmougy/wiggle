@@ -1,12 +1,12 @@
 package com.wiggle.postgres;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Ids;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.tests.TestDb;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -34,13 +34,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   WIGGLE_TEST_PG_USER=wiggle WIGGLE_TEST_PG_PASSWORD=wiggle \
  *     ./gradlew :tests:test --tests "com.wiggle.postgres.PostgresClaimTest"
  * </pre>
+ *
+ * <p>{@code _USER} / {@code _PASSWORD} may be omitted if the generic {@code WIGGLE_TEST_DB_USER}
+ * / {@code _PASSWORD} are already set for the rest of the suite -- see {@link com.wiggle.tests.TestDb}.
  */
 @EnabledIfEnvironmentVariable(named = "WIGGLE_TEST_PG_URL", matches = ".+")
 class PostgresClaimTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static JdbcStorage storage() {
-        JdbcStorage storage = new JdbcStorage(System.getenv("WIGGLE_TEST_PG_URL"),
-                System.getenv("WIGGLE_TEST_PG_USER"), System.getenv("WIGGLE_TEST_PG_PASSWORD"), 4,
+        JdbcStorage storage = new JdbcStorage(TestDb.url("PG"),
+                TestDb.user("PG"), TestDb.password("PG"), 4,
                 new PostgresDialect());
         storage.migrate();
         return storage;
@@ -48,9 +56,7 @@ class PostgresClaimTest {
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
     private static FlowSpec uniqueWorkflow() {
-        return Wiggle.graph("pg-claim-" + Ids.next("wf"))
-                .step("work")
-                .build();
+        return FlowSpec.define("pg-claim-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     @Test @DisplayName("the SKIP LOCKED claim leases tokens with owner and expiry")

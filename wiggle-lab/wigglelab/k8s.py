@@ -34,8 +34,8 @@ def delete_pod(pod: str) -> shell.Result:
 
 
 def delete_by_label(selector: str) -> shell.Result:
-    # pvc included: the coordinator's per-pod claims carry the same labels, and a redeploy must not
-    # inherit stale Raft storage (or race a terminating claim of the same name).
+    # statefulset/pvc are kept in the sweep so a teardown also clears anything left by an older lab
+    # deployment -- nothing here creates them any more (the coordinator is a stateless Deployment).
     return kubectl(["delete", "deployment,statefulset,service,pod,pvc", "-l", selector, "--wait=false"],
                    timeout=120)
 

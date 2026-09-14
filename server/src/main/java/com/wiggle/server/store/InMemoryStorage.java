@@ -3,6 +3,7 @@ package com.wiggle.server.store;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.*;
 
 import java.util.*;
@@ -169,13 +170,17 @@ public final class InMemoryStorage implements Storage {
             indexToken(stored);
         }
 
-        @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        @Override public List<Token> claimTasks(String workerId, Set<String> queues,
+                                                Set<WorkflowVersion> versions, int max, long now,
+                                                long leaseUntil) {
             List<Token> claimed = new ArrayList<>();
             Iterator<Token> it = readyTasks.iterator();
             while (it.hasNext() && claimed.size() < max) {
                 Token live = it.next();
                 if (live.availableAt > now) break;   // ordered by availableAt: the rest are future
                 if (queues != null && !queues.isEmpty() && !queues.contains(live.queue)) continue;
+                if (versions != null && !versions.isEmpty()
+                        && !versions.contains(new WorkflowVersion(live.workflow, live.version))) continue;
                 it.remove();                          // READY -> RUNNING leaves the claimable index
                 live.status = TokenStatus.RUNNING;
                 live.leaseOwner = workerId;
@@ -278,6 +283,24 @@ public final class InMemoryStorage implements Storage {
                 count++;
             }
             return new Rows.QueueDepth(count, oldest);
+        }
+
+        @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
+            record Key(String workflow, int version, String queue) {}
+            Map<Key, int[]> counts = new LinkedHashMap<>();      // key -> {count}
+            Map<Key, Long> oldest = new LinkedHashMap<>();
+            for (Token t : readyTasks) {                          // ordered by availableAt
+                if (t.availableAt > now) break;
+                Key k = new Key(t.workflow, t.version, t.queue);
+                counts.computeIfAbsent(k, x -> new int[1])[0]++;
+                oldest.putIfAbsent(k, t.availableAt);             // first seen is the oldest
+            }
+            return counts.entrySet().stream()
+                    .sorted((a, b) -> Integer.compare(b.getValue()[0], a.getValue()[0]))
+                    .limit(max)
+                    .map(e -> new Rows.BacklogSlice(e.getKey().workflow(), e.getKey().version(),
+                            e.getKey().queue(), e.getValue()[0], oldest.get(e.getKey())))
+                    .toList();
         }
 
         @Override public int countProcessedSince(long since) {

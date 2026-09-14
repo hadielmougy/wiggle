@@ -4,7 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * included.
  *
  * <p>Note that one object is used twice: it defines the topology (as the receiver of the references)
- * and it implements the steps (as the {@link Handlers @Handlers} object). That is the point of the
+ * and it implements the steps (as the {@link ForFlow @ForFlow} object). That is the point of the
  * API -- the two halves cannot drift, because the compiler ties them together.
  */
 class FlowApiTest {
@@ -49,7 +49,7 @@ class FlowApiTest {
         void notifyCustomer(Fulfilment f);
     }
 
-    @Handlers("flow-order")
+    @ForFlow("flow-order")
     public static final class OrderFlow implements OrderFlowSteps {
 
         final AtomicReference<Fulfilment> notified = new AtomicReference<>();
@@ -79,7 +79,7 @@ class FlowApiTest {
 
     /** The workflow, written as a chain of references to {@code flow}'s own methods. */
     private static FlowSpec flowSpec() {
-        return Wiggle.define("flow-order", Order.class, OrderFlowSteps.class, (f, s) -> {
+        return FlowSpec.define("flow-order", Order.class, OrderFlowSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
             var payment = validated.thenApply(s::charge);
@@ -115,7 +115,7 @@ class FlowApiTest {
         Fulfilment settle(Payment payment, Label label);
     }
 
-    @Handlers("positional-order")
+    @ForFlow("positional-order")
     public static final class PositionalOrderFlow implements PositionalSteps {
 
         public Order validate(Order o) { return new Order(o.id(), o.quantity(), "VALIDATED"); }
@@ -136,7 +136,7 @@ class FlowApiTest {
     void positionalCombineBindsArmsInForkOrder() throws Exception {
         PositionalOrderFlow flow = new PositionalOrderFlow();
 
-        FlowSpec bp = Wiggle.define("positional-order", Order.class, PositionalSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("positional-order", Order.class, PositionalSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate);
             var payment = validated.thenApply(s::charge);
             var shipping = validated.thenApply(s::label);
@@ -173,7 +173,8 @@ class FlowApiTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(bp).handlers(handlers);
+            client.register(bp);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);

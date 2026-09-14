@@ -2,10 +2,9 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -37,20 +36,23 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.graph("merge-check")
-                .step("validate")
-                .fork(
-                        Branch.of("payment", s -> s
-                                .step("authorise")),
-                        Branch.of("shipping", s -> s
-                                .sleep("await", Duration.ofMillis(50))
-                                .step("label")))
-                .combine("merge")
-                .step("notify")
-                .build();
+        return FlowSpec.define("merge-check", Map.class, MergeSteps.class, (f, s) -> {
+            var validated = f.thenApply(s::validate);
+            var payment = validated.thenApply(s::authorise);
+            var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combine(s::merge).thenApply(s::notify);
+        });
     }
 
-    @Handlers("merge-check")
+    interface MergeSteps {
+        Map<String, Object> validate(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        Map<String, Object> label(Map<String, Object> ctx);
+        Map<String, Object> merge(Map<String, Object> payment, Map<String, Object> shipping);
+        Map<String, Object> notify(Map<String, Object> ctx);
+    }
+
+    @ForFlow("merge-check")
     static final class MergeH {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
@@ -76,7 +78,7 @@ class ForkJoinContextMergeTest {
         List<Worker> workers = new ArrayList<>();
         try {
             for (int i = 0; i < 3; i++) {
-                ServerConfig config = new ServerConfig(0, "node-" + i, url, "sa", "", 8,
+                ServerConfig config = new ServerConfig(TestPorts.free(), "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                         Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
                 WiggleServer server = new WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
@@ -85,7 +87,8 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp).handlers(new MergeH());
+                client.register(bp);
+                w.registerHandler(new MergeH());
                 workers.add(w.start());
             }
 
@@ -123,19 +126,23 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec typedFlowSpec() {
-        return Wiggle.graph("parcel-merge")
-                .step("validate")
-                .fork(
-                        Branch.of("payment", s -> s.step("authorise")),
-                        Branch.of("shipping", s -> s
-                                .sleep("await", Duration.ofMillis(50))
-                                .step("label")))
-                .combine("merge")
-                .step("notify")
-                .build();
+        return FlowSpec.define("parcel-merge", Parcel.class, ParcelSteps.class, (f, s) -> {
+            var validated = f.thenApply(s::validate);
+            var payment = validated.thenApply(s::authorise);
+            var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combineWithContext(s::merge).thenApply(s::notify);
+        });
     }
 
-    @Handlers("parcel-merge")
+    interface ParcelSteps {
+        Parcel validate(Parcel p);
+        Parcel authorise(Parcel p);
+        Parcel label(Parcel p);
+        Parcel merge(@Context Parcel base, Parcel payment, Parcel shipping);
+        Parcel notify(Parcel p);
+    }
+
+    @ForFlow("parcel-merge")
     static final class ParcelH {
         public Parcel validate(Parcel p) { return p; }
         public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
@@ -156,7 +163,7 @@ class ForkJoinContextMergeTest {
         List<Worker> workers = new ArrayList<>();
         try {
             for (int i = 0; i < 3; i++) {
-                ServerConfig config = new ServerConfig(0, "node-" + i, url, "sa", "", 8,
+                ServerConfig config = new ServerConfig(TestPorts.free(), "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                         Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
                 WiggleServer server = new WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
@@ -165,7 +172,8 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp).handlers(new ParcelH());
+                client.register(bp);
+                w.registerHandler(new ParcelH());
                 workers.add(w.start());
             }
 

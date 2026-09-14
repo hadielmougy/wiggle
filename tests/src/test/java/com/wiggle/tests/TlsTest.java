@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Tls;
@@ -14,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.net.ssl.SSLContext;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -39,15 +37,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TlsTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static final String STORE = "storepass";
 
     @TempDir static Path dir;
     private static Path serverKs, clientKs, trust;
 
     private static final FlowSpec BP =
-            Wiggle.graph("tls-wf").step("work").build();
+            FlowSpec.define("tls-wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-    @com.wiggle.client.worker.Handlers("tls-wf")
+    @com.wiggle.client.worker.ForFlow("tls-wf")
     static final class WorkHandlers {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
     }
@@ -79,7 +82,8 @@ class TlsTest {
             Tls.Options clientTls = opts(null, trust);   // trusts the server, no client cert
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), clientTls);
-                 Worker w = new Worker(client, "tls-w").register(BP).handlers(new WorkHandlers())) {
+                 Worker w = new Worker(client, "tls-w").registerHandler(new WorkHandlers())) {
+                client.register(BP);
                 w.start();
                 String id = client.start(BP, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());
@@ -98,7 +102,8 @@ class TlsTest {
         try (WiggleServer server = new WiggleServer(config).start()) {
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust));   // presents a cert
-                 Worker w = new Worker(client, "mtls-w").register(BP).handlers(new WorkHandlers())) {
+                 Worker w = new Worker(client, "mtls-w").registerHandler(new WorkHandlers())) {
+                client.register(BP);
                 w.start();
                 String id = client.start(BP, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());
@@ -120,7 +125,7 @@ class TlsTest {
     }
 
     private static ServerConfig serverConfig(Tls.Options tls, int dashboardPort, String dashboardPassword) {
-        return new ServerConfig(0, "tls-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "tls-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort,
                 Duration.ofSeconds(5), Duration.ofSeconds(10), "admin", dashboardPassword, tls);
@@ -139,8 +144,8 @@ class TlsTest {
         return c.send(b.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private static int freePort() throws Exception {
-        try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    private static int freePort() {
+        return TestPorts.free();
     }
 
     // ---- keytool wrappers ----

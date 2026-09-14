@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.RegisteredNode;
@@ -26,15 +25,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CoordinatorFanoutTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     private static ServerConfig cell() {
-        return new ServerConfig(0, "cell", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "cell", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withNamespace("orders");
     }
 
     private static byte[] definitionJson() {
-        FlowSpec bp = Wiggle.graph("wf").step("a").build();
+        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 

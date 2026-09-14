@@ -90,9 +90,9 @@ run now and I have lease budget."*
 ### 5.1 Per-workflow-definition flag (primary)
 
 ```java
-Wiggle.graph("name", codec)
+FlowSpec.define("name", Ctx.class, Steps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
-        .step(...) ...
+        .thenApply(s::first) ...)
 ```
 
 - New field on `WorkflowDefinition`: `ExecutionMode executionMode` (default `DEFAULT`).
@@ -115,7 +115,7 @@ env or re-derive the default — it just obeys what it was handed.
 ### 5.3 Optional future knobs (not v1)
 - `WIGGLE_LOCAL_MAX_STEPS` / `.execution(mode, maxSteps)` — cap a local run length for fairness.
 - `WIGGLE_LOCAL_ASYNC_FLUSH_MILLIS` — periodic flush cadence for `LOCAL_ASYNC`.
-- Per-step `.step(...).checkpoint()` — force a commit boundary even in async mode.
+- Per-step `.thenApply(...).checkpoint()` — force a commit boundary even in async mode.
 
 ## 6. Wire-protocol changes (`proto/wiggle.proto`)
 

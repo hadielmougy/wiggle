@@ -1,12 +1,12 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Step logic for the {@code nightly-report} workflow seeded by {@link DashboardSeed}. */
-@Handlers("nightly-report")
+@ForFlow("nightly-report")
 public final class NightlyReportHandlers {
 
     public Map<String, Object> gather(Map<String, Object> ctx) {

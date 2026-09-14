@@ -4,7 +4,6 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -17,13 +16,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.Map;
 
 /**
  * Client/worker RPCs retry on UNAVAILABLE, so an operation issued while the cell is momentarily
@@ -31,13 +30,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RpcRetryFailoverTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     @AfterEach void clear() {
         System.clearProperty("wiggle.rpc.maxAttempts");
         System.clearProperty("wiggle.rpc.retryDelayMillis");
     }
 
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    private static int freePort() {
+        return TestPorts.free();
     }
 
     private static ServerConfig config(int port) {
@@ -51,7 +55,7 @@ class RpcRetryFailoverTest {
     @DisplayName("a call issued while the cell is down rides out the outage and succeeds once it returns")
     void ridesOutRescheduling() throws Exception {
         int port = freePort();
-        FlowSpec bp = Wiggle.graph("wf").step("a").build();
+        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         System.setProperty("wiggle.rpc.maxAttempts", "60");
         System.setProperty("wiggle.rpc.retryDelayMillis", "150");
 

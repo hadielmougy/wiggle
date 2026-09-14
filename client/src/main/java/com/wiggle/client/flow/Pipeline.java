@@ -14,7 +14,7 @@ import java.util.Set;
  * edges, the queue set, and the workflow-level settings, and assembles them into an immutable
  * {@link FlowSpec} on {@link #build()}. The flowSpec is pure topology -- no step logic -- so this
  * only ever declares nodes (names, kinds, queues, retry); the implementations are bound separately
- * on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes.
+ * on a worker via {@link com.wiggle.client.worker.ForFlow @ForFlow} classes.
  */
 final class Pipeline {
 
@@ -84,14 +84,32 @@ final class Pipeline {
     }
 
     /**
+     * The scratch key a forEach's collected results are staged under, derived from the fan-out
+     * node's name. The prefix is what keeps it out of the way: the results live in the same context
+     * object as the workflow's own data, so a bare node name would collide with a real key of the
+     * same name -- and it collides precisely in the common case, because the node name defaults to
+     * the collection key, which is a real key by definition. The collected results would overwrite
+     * the input collection and then be stripped with it, taking the input along. Reserved by the
+     * same {@code __x__} convention the engine's other internal keys use.
+     */
+    static String forEachScratch(String forEachNodeName) {
+        return ScratchKeys.forEach(forEachNodeName);
+    }
+
+    /**
      * The mandatory merge node after a forEach's join. Like a fork's combine it is a task bound by
      * name, but its {@code itemsKey} is a JSON STRING (not an array): the scratch key the engine
      * stages the collected item results under — a list ordered by item index, or a map keyed like
      * the input when the items came from a map.
+     *
+     * <p>The key is written here and read back off the node by everything downstream — the engine
+     * that stages the results, the strip that removes them, and the worker that binds the combine's
+     * collection parameter — so this is the only place that decides it. An instance already running
+     * an older definition keeps the key its own stored graph carries, so nothing has to be migrated.
      */
     String addForEachCombine(String name, String scratchKey, RetryPolicy retry, String queue) {
         String id = addTask(name, retry, queue);
-        nodes.put(id, nodes.get(id).withItemsKey(Json.write(scratchKey)));
+        nodes.put(id, nodes.get(id).withItemsKey(Json.write(forEachScratch(scratchKey))));
         return id;
     }
 
@@ -144,18 +162,6 @@ final class Pipeline {
      * Replaces an already-added node's retry policy. Only a worker-dispatched node has one -- the
      * engine runs the rest itself, so there is nothing to retry on a worker.
      */
-    void setRetry(String nodeId, RetryPolicy retry) {
-        Node n = requireWorkerNode(nodeId, "a retry policy");
-        nodes.put(nodeId, n.withRetry(retryOr(retry)));
-    }
-
-    /** Replaces an already-added node's queue, registering it so workers discover it. */
-    void setQueue(String nodeId, String queue) {
-        Node n = requireWorkerNode(nodeId, "a queue");
-        String q = queueOr(queue);
-        queues.add(q);
-        nodes.put(nodeId, n.withQueue(q));
-    }
 
     private Node requireWorkerNode(String nodeId, String what) {
         Node n = nodes.get(nodeId);

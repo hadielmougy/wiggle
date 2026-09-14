@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.IdCodec;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -21,15 +20,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class EpochAwareIdTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
-        return new ServerConfig(0, "id-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "id-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.graph("wf").step("a").build();
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @Test @DisplayName("a namespace-configured cell mints ns.e0.s0.<ulid> ids")

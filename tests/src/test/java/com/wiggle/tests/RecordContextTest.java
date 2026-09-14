@@ -1,11 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.RecordMapper;
@@ -40,18 +39,24 @@ class RecordContextTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.graph("record-shipment")
-                .step("validate")
-                .gate("has-items")
-                .fork(
-                        Branch.of("labelling", b -> b.step("label")),
-                        Branch.of("billing", b -> b.step("invoice")))
-                .combine("merge")
-                .step("dispatch")
-                .build();
+        return FlowSpec.define("record-shipment", Shipment.class, ShipmentSteps.class, (f, s) -> {
+            var checked = f.thenApply(s::validate).thenFilter(s::hasItems);
+            return Wiggle.allOf(checked.thenApply(s::label), checked.thenApply(s::invoice))
+                    .combineWithContext(s::merge)
+                    .thenApply(s::dispatch);
+        });
     }
 
-    @Handlers("record-shipment")
+    interface ShipmentSteps {
+        Shipment validate(Shipment s);
+        boolean hasItems(Shipment s);
+        Shipment label(Shipment s);
+        Shipment invoice(Shipment s);
+        Shipment merge(@Context Shipment base, Shipment labelling, Shipment billing);
+        Shipment dispatch(Shipment s);
+    }
+
+    @ForFlow("record-shipment")
     static final class ShipmentH {
         public Shipment validate(Shipment s) { return s.withStatus("VALIDATED"); }
         public boolean hasItems(Shipment s) { return s.items() > 0; }
@@ -65,7 +70,7 @@ class RecordContextTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "rec-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "rec-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -76,7 +81,8 @@ class RecordContextTest {
         FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
+            client.register(bp);
             w.start();
             Shipment in = new Shipment("s-1", 3, new BigDecimal("19.99"), "NEW", null, null, List.of("created"));
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
@@ -98,12 +104,13 @@ class RecordContextTest {
         FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
+            client.register(bp);
             w.start();
             Shipment in = new Shipment("s-2", 0, new BigDecimal("1.00"), "NEW", null, null, List.of());
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
-            assertEquals("gated:has-items", v.terminationReason());
+            assertEquals("gated:hasItems", v.terminationReason());
             assertEquals("VALIDATED", ((Shipment) RecordMapper.fromJson(v.context(), Shipment.class)).status(), "stopped after validate");
         }
     }

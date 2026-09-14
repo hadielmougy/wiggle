@@ -3,8 +3,8 @@
 **Status:** implemented (client model + engine reverse pass; see `SagaCompensationTest`).
 Previously a failed instance stopped in place — sibling tokens cancelled, instance `FAILED`
 (`WorkflowEngine.failInstance`), no undo. This design adds **declared, explicit compensation**: a
-step may declare `.compensate()` and its activity implements `Compensable`; when the instance
-fails, the engine runs the compensators of the already-completed steps, in reverse completion
+step may declare an undo -- by naming it through a `CompensableActivity` factory -- and its
+activity implements `Compensable`; when the instance fails, the engine runs the compensators of the already-completed steps, in reverse completion
 order, as real durable tokens.
 
 The design is shaped by one hard fact about Wiggle and one principle.
@@ -23,31 +23,41 @@ The design is shaped by one hard fact about Wiggle and one principle.
 
 ## 1. Author's surface (DSL)
 
-A step optionally declares a compensating activity, attached to the just-added step exactly the way
-`checkpoint()` attaches today (`WorkflowBuilder.java:418`):
+A step optionally declares a compensating activity. It is declared in the step's own signature:
+the contract names it as a zero-argument factory returning a `CompensableActivity`, which is the
+same shape the handler implements, so the two cannot drift.
 
 ```java
-FlowSpec orders = Wiggle.graph("order-fulfilment")
-        .step("validate")
-        .step("authorise").compensate("void-authorisation")
-        .step("capture").compensate("refund", RetryPolicy.exponential(5, Duration.ofMillis(200)))
-        .step("reserve-stock").compensate("release-stock")
-        .step("print-label")                       // no compensator — nothing to undo
-        .step("confirm")
-        .build();
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
+        .thenApply(s::validate)
+        .thenApplyCompensable(s::authorise)
+        .thenApplyCompensable(s::capture)
+        .thenApplyCompensable(s::reserveStock)
+        .thenApply(s::printLabel)                  // no compensator — nothing to undo
+        .thenApply(s::confirm));
 ```
 
-- `compensate(String activity)` — names the compensator for the preceding step.
-- `compensate(String activity, RetryPolicy retry)` — compensators get their own retry policy
-  (a refund is worth retrying hard; default = the workflow's default retry).
-- `compensate(String activity, RetryPolicy retry, String queue)` — a compensator can run on a
-  different worker pool than its forward step.
+```java
+interface OrderSteps {
+    Order validate(Order o);
+    CompensableActivity<Order, Payment> authorise();   // Order in, Payment out, and an undo
+    Order printLabel(Order o);                  // does not
+}
+```
 
-A step with no `.compensate(...)` is simply not compensated — its effect is either irreversible
-(an email already sent) or immaterial (a read). That is a deliberate, visible choice in the graph,
-not a default.
+- The declaration is the whole of it: `thenApplyCompensable` accepts nothing but a
+  `CompensableActivity` factory, and nothing else sets `compensable` on the node. There is no
+  second place to say it, and so no way for the topology and the handler to disagree about
+  whether an undo exists.
+- An activity maps `A -> B` like any other step, so a compensable step may change the context
+  type; the two snapshots its undo receives are then of different types.
+- The undo runs as an ordinary claimable activity under `<activity>#compensate`, so it retries under
+  the step's own policy and is visible on the console like any other work.
+- A step named with `thenApply`, or through a factory returning a plain `Activity`, is simply not
+  compensated — its effect is either irreversible (an email already sent) or immaterial (a read).
+  That is a deliberate, visible choice in the graph, not a default.
 
-Works uniformly inside `fork` branches, `forEach` bodies, `choose` cases, and `doWhile` bodies —
+Works uniformly inside `allOf` arms, `thenForEach` bodies, `oneOf` arms, and `repeatWhile` bodies —
 any TASK node can carry a compensator.
 
 ---
@@ -62,31 +72,32 @@ in one class, and the pairing is checked by the compiler (implements `Compensabl
 compensator exists; no stringly reference that can dangle):
 
 ```java
-final class CapturePayment implements Activity<Order>, Compensable<Order> {
-    public Order execute(Order o) { return o.withPaymentRef(gateway.capture(o.authRef())); }
-    public void  compensate(Compensation<Order> c) {
-        gateway.refund(c.result().paymentRef());   // result(): the step's own product — idempotent!
+final class CapturePayment implements CompensableActivity<Order, Payment> {
+    public Payment execute(Order o) { return gateway.capture(o.authRef()); }
+    public void    compensate(Compensation<Order, Payment> c) {
+        gateway.refund(c.result().reference());    // result(): the step's own product — idempotent!
         // c.input() is also available: restore-style undos and undo-only data (idempotency keys)
         // read from the INPUT snapshot, so nothing is smuggled through the business context.
     }
 }
 
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public boolean inStock(Order o) { ... }                 // plain methods coexist
 
-    public Activity<Order> capturePayment() {               // factory -> serves "capture-payment"
+    public CompensableActivity<Order, Payment> capturePayment() {   // factory -> serves "capturePayment"
         return new CapturePayment(gateway);
     }
 
-    @Handles("reserve-stock")                               // rename when the method name can't match
-    public Activity<Order> stockReserver() { return new ReserveStock(wms); }
+    @Handles("reserveStock")                                // rename when the method name can't match
+    public CompensableActivity<Order, Order> stockReserver() { return new ReserveStock(wms); }
 }
 
-worker.register(orders).handlers(new OrderHandlers());      // ONE registration call, as always
+client.register(orders);                                    // the author publishes the topology
+worker.registerHandler(new OrderHandlers());                // the worker only implements steps
 ```
 
-`compensate` receives a `Compensation<C>` carrying **both snapshots of its step** (§4):
+`compensate` receives a `Compensation<A, B>` carrying **both snapshots of its step** (§4):
 `result()` — the context as the step left it, so `paymentRef` is guaranteed present regardless of
 what later steps replaced — and `input()` — the context as the step received it, for
 restore-previous-value undos and undo-only data (an idempotency key derived from the input) that
@@ -97,7 +108,7 @@ is an effect: it undoes an external side effect, never steers the (already faile
 Compensators are **at-least-once**, like every handler; they must be idempotent.
 
 **The topology stays the contract; the class provides the implementation.** A step is compensated
-on failure only if the workflow declares it (`.compensate()` on the step — a marker now, since the
+on failure only if the workflow declares it (a `CompensableActivity` factory — the declaration is the marker, since the
 activity carries the code), because the *engine* must know compensability at completion time (to
 snapshot) and the declaration must fold into the content-hash version and show on the console. At
 bind time the pairing is verified **both ways**, failing fast:
@@ -105,7 +116,7 @@ bind time the pairing is verified **both ways**, failing fast:
 - step declared compensable, bound activity is not `Compensable` → bind error;
 - activity is `Compensable`, step not declared → bind error (a silent no-op undo is a lie).
 
-The `@Handlers` method-per-step style coexists on the same binder seam for concise flows and for
+The `@ForFlow` method-per-step style coexists on the same binder seam for concise flows and for
 combines; compensation requires the typed style, which is where per-step capabilities live.
 
 ## 3. Graph / data-model changes
@@ -147,7 +158,7 @@ CompLogEntry(instanceId, seq, activity, queue, retry, inputSnapshotJson, resultS
 - `resultSnapshotJson` — the context the step returned; `inputSnapshotJson` — the context it was
   dispatched with. Both are in hand at the single capture point (`complete()` holds the pre-step
   context and the result in the same transaction), and both feed the compensator's
-  `Compensation<C>` carrier. For a branch-scoped step the branch overlay is captured the same
+  `Compensation<A, B>` carrier. For a branch-scoped step the branch overlay is captured the same
   way, so branch compensation "just works". A linear step's input nearly duplicates its
   predecessor's result — a possible storage optimization later; store both and keep it simple.
 
@@ -258,7 +269,7 @@ may treat a child's `COMPENSATION_FAILED` as its own compensation failure — co
 | States | `Rows.InstanceStatus` (`store/Rows.java:9`) | add the three states; teach terminal checks and the purge/retention path |
 | Cancel | `WorkflowEngine.cancel` (`:158`), `WiggleClient.cancel`, proto | optional `compensate` flag |
 | Console | dashboard SPA + `DashboardData` | show `COMPENSATING`/`COMPENSATED`/`COMPENSATION_FAILED`, the comp-log, and a "retry compensator" action for the failed case |
-| Docs | `docs/dsl-cookbook.md`, a new pattern | a worked saga; retire the "no rollback" caveat in `README.md:497` and `patterns/retries` |
+| Docs | `docs/cookbook.md`, a new pattern | a worked saga; retire the "no rollback" caveat in `README.md:497` and `patterns/retries` |
 
 No change to forward routing, join/combine, or validation — compensators are node metadata plus an
 engine-orchestrated reverse pass, both additive.

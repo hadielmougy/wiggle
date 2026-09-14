@@ -3,6 +3,7 @@ package com.wiggle.server.store;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.InstanceStatus;
 import com.wiggle.server.store.Rows.ServerNode;
+import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Token;
 
 import java.util.List;
@@ -35,8 +36,13 @@ public interface Tx extends GraphStore {
     /**
      * Atomically leases up to {@code max} dispatchable tokens. Implementations must
      * guarantee a token is handed to exactly one worker.
+     *
+     * @param versions when non-empty, claim only tokens of these (workflow, version) pairs -- a
+     *                 worker that bound handlers for specific versions. Empty or null serves every
+     *                 version, which is the default.
      */
-    List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil);
+    List<Token> claimTasks(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
+                           int max, long now, long leaseUntil);
 
     /** WAITING timer tokens whose fire time has passed. */
     List<Token> dueTimers(long now, int max);
@@ -68,6 +74,12 @@ public interface Tx extends GraphStore {
 
     /** Snapshot of the dispatchable backlog, for lag monitoring. */
     Rows.QueueDepth queueDepth(long now);
+
+    /**
+     * The dispatchable backlog split by (workflow, version, queue) -- everything that decides which
+     * workers may claim a token. Read-only and console-facing, so it is not on the hot path.
+     */
+    List<Rows.BacklogSlice> backlogByVersion(long now, int max);
 
     /**
      * Worker-dispatched tokens (TASK/PREDICATE) that finished (DONE) since {@code since} --

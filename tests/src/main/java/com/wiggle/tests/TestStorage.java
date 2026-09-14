@@ -7,13 +7,16 @@ package com.wiggle.tests;
  * <p>Set {@code WIGGLE_TEST_DB_URL} (with {@code _USER} / {@code _PASSWORD}) and the same tests run
  * against that database instead -- any backend the dist storage factory recognises: the real dialect,
  * its real claim path, real transactions and a real network hop. {@code docker compose up -d postgres}
- * provides a PostgreSQL on 5433. {@code WIGGLE_TEST_PG_URL} is accepted as the older name.
+ * provides a PostgreSQL on 5433. {@code WIGGLE_TEST_PG_URL} is still accepted as the older name.
  *
  * <pre>
- *   WIGGLE_TEST_PG_URL=jdbc:postgresql://localhost:5433/wiggle \
- *   WIGGLE_TEST_PG_USER=wiggle WIGGLE_TEST_PG_PASSWORD=wiggle \
+ *   WIGGLE_TEST_DB_URL=jdbc:postgresql://localhost:5433/wiggle \
+ *   WIGGLE_TEST_DB_USER=wiggle WIGGLE_TEST_DB_PASSWORD=wiggle \
  *     ./gradlew :tests:test
  * </pre>
+ *
+ * <p>These credentials also serve the per-backend opt-in tests, so adding {@code WIGGLE_TEST_PG_URL}
+ * to the above is enough to enable the PostgreSQL-only ones -- see {@link TestDb}.
  *
  * <p>A live database is shared across tests and keeps its rows, so anything using this must isolate
  * itself by name rather than by assuming an empty store.
@@ -24,19 +27,7 @@ public final class TestStorage {
 
     /** WIGGLE_TEST_DB_URL points at any supported backend; WIGGLE_TEST_PG_URL is the older name. */
     private static String live() {
-        for (String key : new String[] {"WIGGLE_TEST_DB_URL", "WIGGLE_TEST_PG_URL"}) {
-            String url = System.getenv(key);
-            if (url != null && !url.isBlank()) return url;
-        }
-        return null;
-    }
-
-    private static String env(String... keys) {
-        for (String key : keys) {
-            String v = System.getenv(key);
-            if (v != null && !v.isBlank()) return v;
-        }
-        return null;
+        return TestDb.env("WIGGLE_TEST_DB_URL", "WIGGLE_TEST_PG_URL");
     }
 
     /** True when a real database is configured, for a test that wants to say which it ran on. */
@@ -52,10 +43,10 @@ public final class TestStorage {
     }
 
     public static String user() {
-        return live() != null ? env("WIGGLE_TEST_DB_USER", "WIGGLE_TEST_PG_USER") : "sa";
+        return live() != null ? TestDb.env("WIGGLE_TEST_DB_USER", "WIGGLE_TEST_PG_USER") : "sa";
     }
 
     public static String password() {
-        return live() != null ? env("WIGGLE_TEST_DB_PASSWORD", "WIGGLE_TEST_PG_PASSWORD") : "";
+        return live() != null ? TestDb.env("WIGGLE_TEST_DB_PASSWORD", "WIGGLE_TEST_PG_PASSWORD") : "";
     }
 }

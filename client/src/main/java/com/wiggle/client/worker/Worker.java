@@ -1,17 +1,16 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.ActivityHandler;
-import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.*;
 
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 
 /**
- * The data plane. A worker registers its flowSpecs, then pulls work: it only ever
+ * The data plane. A worker binds handlers, then pulls work: it only ever
  * asks for as many tasks as it has free slots, so the server never overwhelms it and
  * backpressure is a property of the protocol rather than a thing to configure.
  *
@@ -31,11 +30,16 @@ public final class Worker implements AutoCloseable {
     private final WorkerOptions options;
     private final Map<String, ActivityHandler> handlers = new ConcurrentHashMap<>();
     private final Set<String> queues = ConcurrentHashMap.newKeySet();
-    private final List<FlowSpec> flowSpecs = new CopyOnWriteArrayList<>();
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
-    /** {@link Handlers @Handlers} objects, matched to graph steps by name on start. */
-    private final List<HandlerBinder.HandlerSet> handlerSets = new CopyOnWriteArrayList<>();
+    /** {@link ForFlow @ForFlow} objects, matched to graph steps by name on start. */
+    /** One {@code handlers(...)} call: the scanned methods, and the version they were bound for. */
+    private record Registration(HandlerBinder.HandlerSet set, Integer version) {}
+
+    private final List<Registration> handlerSets = new CopyOnWriteArrayList<>();
+    /** The (workflow, version) pairs this worker claims; empty while any registration is unversioned. */
+    private final Set<WorkflowVersion> servedVersions = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean servesEveryVersion = new AtomicBoolean();
 
 
     private final AtomicBoolean running = new AtomicBoolean();
@@ -70,6 +74,15 @@ public final class Worker implements AutoCloseable {
     public String workerId() { return workerId; }
 
     /** The queues this worker actually serves: the explicit restriction, or everything registered. */
+    /**
+     * The versions this worker claims. Empty means every version -- which is the case whenever any
+     * registration was unversioned, since the scoping can only be as narrow as the least specific
+     * binding.
+     */
+    private Set<WorkflowVersion> claimedVersions() {
+        return servesEveryVersion.get() ? Set.of() : Set.copyOf(servedVersions);
+    }
+
     private Set<String> servedQueues() {
         return options.queues().isEmpty() ? queues : options.queues();
     }
@@ -79,17 +92,8 @@ public final class Worker implements AutoCloseable {
     /** Whether the worker is currently running (started and not yet closed). */
     public boolean isRunning() { return running.get(); }
 
-    /** Registers a workflow's topology on this worker (the graph it will poll and drive). */
-    public Worker register(FlowSpec flowSpec) {
-        WorkflowDefinition def = flowSpec.definition();
-        flowSpecs.add(flowSpec);
-        graphs.put(def.key(), def);
-        queues.addAll(def.workerQueues());
-        return this;
-    }
-
     /**
-     * Binds a {@link Handlers @Handlers}-annotated object's methods as this worker's step
+     * Binds a {@link ForFlow @ForFlow}-annotated object's methods as this worker's step
      * implementations. The annotation names the workflow; each method whose name matches a step
      * (case/style-insensitive, so {@code inStock} binds {@code in-stock}) is a handler, its signature
      * defining the step: one parameter is the input (decoded from JSON into that type), a
@@ -105,21 +109,58 @@ public final class Worker implements AutoCloseable {
      * default fold — every combine must have an explicit handler on some worker, and its return is
      * the complete post-join context.
      */
-    public Worker handlers(Object handlerObject) {
-        handlerSets.add(HandlerBinder.scan(handlerObject));
+    public Worker registerHandler(Object handlerObject) {
+        return registerHandler(null, handlerObject);
+    }
+
+
+    public Worker registerHandler(String flowName, Object handlerObject) {
+        HandlerBinder.HandlerSet handlerSet = null;
+        try {
+            handlerSet = HandlerBinder.scan(handlerObject);
+        } catch (IllegalArgumentException e) {
+            LOG.log(System.Logger.Level.ERROR, () -> "Error registering handler " + handlerObject, e);
+            throw e;
+        }
+        if (handlerSet.workflow() == null && flowName == null) {
+            throw new IllegalArgumentException("Handler " + handlerObject + " has no flow name or registered with flow name");
+        }
+        handlerSet = flowName == null ? handlerSet : handlerSet.withFlowName(flowName);
+        handlerSets.add(new Registration(handlerSet, null));
+        servesEveryVersion.set(true);
+        return this;
+    }
+
+    /**
+     * Binds handlers for <em>one version</em> of the workflow. The signatures are checked against that
+     * exact graph, and the worker claims only that version's tasks -- so a version can be allocated to
+     * a service, and a capability handed from one service to another by publishing a new version and
+     * letting the old one drain.
+     *
+     * <p>Without this, a worker serves every version of the workflow it binds, which is the default
+     * and usually right: step names are stable across versions, so one implementation covers them all.
+     * It is also the only thing that keeps an old worker from claiming a newly-published version's
+     * tasks and running them with its own older code -- the activity a handler binds is
+     * {@code workflow#step}, which carries no version, so the names match either way.
+     *
+     * <p>A worker may mix: several versions of one workflow (each with its own handler object, during
+     * a migration), and other workflows entirely. If <em>any</em> registration is unversioned, the
+     * worker claims every version -- the scoping is only as narrow as its least specific binding.
+     */
+    public Worker registerHandler(Object handlerObject, int version) {
+        HandlerBinder.HandlerSet set = HandlerBinder.scan(handlerObject);
+        handlerSets.add(new Registration(set, version));
+        servedVersions.add(new WorkflowVersion(set.workflow(), version));
         return this;
     }
 
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
-        if (options.registerOnStart()) {
-            for (FlowSpec bp : flowSpecs) client.register(bp);
-        }
         if (!handlerSets.isEmpty()) reconcile();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
-        pollThread.setDaemon(true);
+        pollThread.setDaemon(false);
         pollThread.start();
         LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());
@@ -127,15 +168,16 @@ public final class Worker implements AutoCloseable {
     }
 
     private void reconcile() {
-        for (HandlerBinder.HandlerSet set : handlerSets) matchHandlerSet(set);
+        for (Registration r : handlerSets) matchHandlerSet(r);
     }
 
     /**
-     * Resolves a {@link Handlers @Handlers} object against the registered graph (fetched here — the
+     * Resolves a {@link ForFlow @ForFlow} object against the registered graph (fetched here — the
      * binder itself is pure) and installs the resulting bindings. See {@link HandlerBinder}.
      */
-    private void matchHandlerSet(HandlerBinder.HandlerSet set) {
-        WorkflowDefinition def = fetchGraph(set.workflow());
+    private void matchHandlerSet(Registration registration) {
+        HandlerBinder.HandlerSet set = registration.set();
+        WorkflowDefinition def = fetchGraph(set.workflow(), registration.version());
         HandlerBinder.Result result = HandlerBinder.bind(set, def);
         for (HandlerBinder.Binding b : result.bindings()) {
             if (handlers.putIfAbsent(b.activity(), b.handler()) != null) {
@@ -161,11 +203,11 @@ public final class Worker implements AutoCloseable {
     }
 
     /** Fetches the registered graph, waiting out a registration race up to {@code awaitRegistration}. */
-    private WorkflowDefinition fetchGraph(String workflow) {
+    private WorkflowDefinition fetchGraph(String workflow, Integer version) {
         long deadline = System.nanoTime() + options.awaitRegistration().toNanos();
         while (true) {
             try {
-                return client.getWorkflow(workflow);
+                return client.getWorkflow(workflow, version);
             } catch (WiggleClient.WiggleApiException e) {
                 boolean notFound = e.status() == 404;
                 if (notFound && System.nanoTime() < deadline) {
@@ -204,7 +246,7 @@ public final class Worker implements AutoCloseable {
         }
         int free = options.concurrency() - inFlight.get();
         long polledAt = System.currentTimeMillis();
-        PollResult result = client.poll(workerId, servedQueues(), free,
+        PollResult result = client.poll(workerId, servedQueues(), claimedVersions(), free,
                 options.lease().toMillis(), options.longPollWait().toMillis());
         List<TaskActivation> tasks = result.tasks();
         if (tasks.isEmpty()) {

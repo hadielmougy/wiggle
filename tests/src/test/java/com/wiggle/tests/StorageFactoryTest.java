@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class StorageFactoryTest {
 
     private static ServerConfig config(String url) {
-        return new ServerConfig(0, "sf-node", url, url == null ? null : "sa", url == null ? null : "", 4,
+        return new ServerConfig(TestPorts.free(), "sf-node", url, url == null ? null : "sa", url == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

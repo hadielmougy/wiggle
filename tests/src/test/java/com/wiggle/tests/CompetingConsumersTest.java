@@ -1,12 +1,10 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
-import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -35,6 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CompetingConsumersTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -43,7 +46,7 @@ class CompetingConsumersTest {
 
     /** A single-step workflow whose one step both workers will serve. */
     private static FlowSpec oneStep() {
-        return Wiggle.graph("competing").step("work").build();
+        return FlowSpec.define("competing", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     /**
@@ -51,7 +54,7 @@ class CompetingConsumersTest {
      * worker's id and shares the recording structures, so the test can see which worker ran each
      * token and how many times each token ran.
      */
-    @Handlers("competing")
+    @ForFlow("competing")
     static final class CountingH {
         final String worker;
         final Map<Object, String> ranBy;         // instance key -> the worker that ran it
@@ -94,7 +97,7 @@ class CompetingConsumersTest {
     }
 
     private WiggleServer server() throws Exception {
-        ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         return new WiggleServer(config).start();
@@ -121,8 +124,8 @@ class CompetingConsumersTest {
 
             try (Worker a = new Worker(client, "consumer-a", serial());
                  Worker b = new Worker(client, "consumer-b", serial())) {
-                a.handlers(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, rendezvous, null));
-                b.handlers(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, rendezvous, null));
+                a.registerHandler(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, rendezvous, null));
+                b.registerHandler(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, rendezvous, null));
                 a.start();
                 b.start();
 
@@ -154,8 +157,8 @@ class CompetingConsumersTest {
 
             try (Worker a = new Worker(client, "consumer-a", serial());
                  Worker b = new Worker(client, "consumer-b", serial())) {
-                a.handlers(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, null, hold));
-                b.handlers(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, null, hold));
+                a.registerHandler(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, null, hold));
+                b.registerHandler(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, null, hold));
                 a.start();
                 b.start();
 

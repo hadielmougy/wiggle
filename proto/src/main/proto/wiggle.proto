@@ -14,6 +14,9 @@ service WiggleControlPlane {
     rpc GetCluster(Empty) returns (ClusterView);
 
     rpc ListWorkflows(Empty) returns (WorkflowNames);
+    // Dispatchable work split by (workflow, version, queue), each flagged with whether any worker
+    // polling this node would claim it. An uncovered slice is work nothing can pick up.
+    rpc GetBacklogCoverage(BacklogCoverageRequest) returns (BacklogCoverage);
     rpc RegisterWorkflow(WorkflowDefinition) returns (RegisterWorkflowResult);
     rpc GetWorkflow(GetWorkflowRequest) returns (WorkflowDefinition);
 
@@ -85,6 +88,37 @@ message RegisterWorkflowResult {
 
 message GetWorkflowRequest {
     string name = 1;
+    // Absent = the latest registered version. A worker that binds handlers for one specific version
+    // asks for that version, so its signatures are checked against the graph it will actually serve.
+    optional int32 version = 2;
+}
+
+// One (workflow, version) a worker serves. Used to scope claims: a worker that registers handlers
+// for a specific version must not claim another version's tasks, or it would run the wrong code
+// under a name that matches.
+message WorkflowVersion {
+    string workflow = 1;
+    int32 version = 2;
+}
+
+message BacklogCoverageRequest {
+    int32 max = 1;   // 0 = a server default
+}
+
+message BacklogSlice {
+    string workflow = 1;
+    int32 version = 2;
+    string queue = 3;
+    int32 ready_count = 4;
+    int64 oldest_available_at = 5;
+    // False = no worker polling this node serves this queue at this version, so these tokens sit
+    // dispatchable and unclaimed.
+    bool covered = 6;
+}
+
+message BacklogCoverage {
+    repeated BacklogSlice slices = 1;
+    int32 live_pollers = 2;
 }
 
 message StartInstanceRequest {
@@ -191,6 +225,9 @@ message PollRequest {
     int32 max = 3;
     int64 lease_millis = 4;
     int64 wait_millis = 5;
+    // Empty = serve every version, which is the default and what an unversioned worker sends.
+    // Non-empty = claim only these (workflow, version) pairs.
+    repeated WorkflowVersion versions = 6;
 }
 
 message TaskActivation {

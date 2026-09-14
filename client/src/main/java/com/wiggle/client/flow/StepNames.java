@@ -42,6 +42,7 @@ final class StepNames {
         return of(methodRef, serializedForm(methodRef));
     }
 
+
     private static String of(Serializable methodRef, SerializedLambda lambda) {
         String impl = lambda.getImplMethodName();
 
@@ -60,6 +61,50 @@ final class StepNames {
                     + "would not survive registration or replay.");
         }
         return handlesOverride(methodRef, lambda, impl);
+    }
+
+    /**
+     * The <em>context key</em> a reference to the context's own accessor stands for:
+     * {@code Basket::items} yields {@code "items"}.
+     *
+     * <p>Deliberately not {@link #of}, because a key is not a step and the three rules that make a
+     * step name would each be wrong here:
+     * <ul>
+     *   <li><b>the contract rule does not apply.</b> {@link #requireContract} insists a step be named
+     *       through an interface, since a spec only names its steps and the code is bound elsewhere.
+     *       A key names a <em>field of the context</em> -- there is no worker binding to mislead
+     *       about -- and the field lives on the context record, which is a class;</li>
+     *   <li><b>{@link Handles} does not apply.</b> That annotation renames a node so a handler and
+     *       the graph can differ; a key is matched against the persisted JSON, where a record
+     *       component is written under its own name, so an override would silently look up a key
+     *       that is not there;</li>
+     *   <li><b>the worker's name folding does not apply</b> either, for the same reason: the engine
+     *       reads {@code context.get(itemsKey)} exactly, with no folding and no nesting.</li>
+     * </ul>
+     *
+     * <p>What does carry over is the rejection of lambdas and of captured values -- a key must come
+     * from the context type, not from a value in the defining JVM -- and it is stricter: an accessor
+     * bound to a particular instance ({@code someBasket::items}) captures that instance and is
+     * refused, where a step reference legitimately captures its contract.
+     */
+    static String ofKey(Serializable accessorRef) {
+        SerializedLambda lambda = serializedForm(accessorRef);
+        String impl = lambda.getImplMethodName();
+
+        if (impl.startsWith("lambda$")) {
+            throw new IllegalArgumentException(
+                    "the collection for a forEach must be a direct accessor reference (Basket::items), "
+                    + "not a lambda: the reference is read for the context key it names, never called, "
+                    + "so there is nothing for a lambda body to name.");
+        }
+        if (lambda.getCapturedArgCount() > 0) {
+            throw new IllegalArgumentException(
+                    "the accessor reference for '" + impl + "' is bound to a captured value. Name the "
+                    + "collection on the context type itself (Basket::items), not on an instance: the "
+                    + "key is read from the workflow context at run time, and a value from the "
+                    + "defining JVM is not part of the topology.");
+        }
+        return impl;
     }
 
     /**
@@ -108,7 +153,7 @@ final class StepNames {
      * A step must be named through an interface, not a concrete class.
      *
      * <p>A spec never runs a step. It records the step's <em>name</em>, and a worker supplies the code
-     * by matching that name to a method on its {@code @Handlers} object. So a reference to a concrete
+     * by matching that name to a method on its {@code @ForFlow} object. So a reference to a concrete
      * method names code the spec will never call -- which reads as though it will, and goes quietly
      * wrong when the worker binds some other object: the referenced method is simply not the one that
      * runs. Naming an interface method cannot mislead that way, because there is nothing behind it.
@@ -119,7 +164,7 @@ final class StepNames {
         throw new IllegalArgumentException(
                 "'" + impl + "' is referenced on " + lambda.getImplClass().replace('/', '.')
                 + ", which is a class. Declare the steps as an interface and name them through it:"
-                + " Wiggle.define(name, Ctx.class, MySteps.class, (f, s) -> f.thenApply(s::" + impl + "))."
+                + " FlowSpec.define(name, Ctx.class, MySteps.class, (f, s) -> f.thenApply(s::" + impl + "))."
                 + " A spec only names its steps -- the code that runs them is bound by name on a"
                 + " worker, so referencing an implementation here promises something the spec cannot"
                 + " keep.");

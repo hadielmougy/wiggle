@@ -1,9 +1,8 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
@@ -25,6 +24,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SubFlowTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface ParentSteps {
+        Map<String, Object> prepare(Map<String, Object> ctx);
+        Map<String, Object> wrapUp(Map<String, Object> ctx);
+    }
+
+    interface OneStep {
+        Map<String, Object> childDone(Map<String, Object> ctx);
+        Map<String, Object> childWork(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -32,53 +42,53 @@ class SubFlowTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "sub-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "sub-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
     private static FlowSpec parent() {
-        return Wiggle.graph("sub-parent")
-                .step("prepare")
-                .subWorkflow("delegate", "sub-child")
-                .step("wrap-up")
-                .build();
+        return FlowSpec.define("sub-parent", Map.class, ParentSteps.class, (f, s) -> f
+                .thenApply(s::prepare)
+                .thenSubFlow("delegate", "sub-child", Map.class)
+                .thenApply(s::wrapUp));
     }
 
-    @Handlers("sub-parent")
+    @ForFlow("sub-parent")
     static final class ParentH {
         public Map<String, Object> prepare(Map<String, Object> c) { return put(c, "prepared", true); }
         public Map<String, Object> wrapUp(Map<String, Object> c) { return put(c, "wrapped", true); }
     }
 
-    @Handlers("sub-child")
+    @ForFlow("sub-child")
     static final class ChildOkH {
         public Map<String, Object> childWork(Map<String, Object> c) { return put(c, "childSaw", c.get("prepared")); }
         public Map<String, Object> childDone(Map<String, Object> c) { return put(c, "childResult", 42L); }
     }
 
-    @Handlers("sub-child")
+    @ForFlow("sub-child")
     static final class ChildFailH {
         public Map<String, Object> childWork(Map<String, Object> c) { throw new IllegalStateException("child broke"); }
     }
 
-    @Handlers("sub-child")
+    @ForFlow("sub-child")
     static final class ChildParkH {
         public Map<String, Object> childDone(Map<String, Object> c) { return c; }
     }
 
     @Test @DisplayName("the child runs with the parent's context and its result merges back")
     void childCompletes() throws Exception {
-        FlowSpec child = Wiggle.graph("sub-child")
-                .step("child-work")
-                .step("child-done")
-                .build();
+        FlowSpec child = FlowSpec.define("sub-child", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::childWork)
+                .thenApply(s::childDone));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w").register(parent()).register(child)
-                     .handlers(new ParentH()).handlers(new ChildOkH())) {
+             Worker w = new Worker(client, "sub-w")
+                     .registerHandler(new ParentH()).registerHandler(new ChildOkH())) {
+            client.register(child);
+            client.register(parent());
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of("input", 1L)),
                     Duration.ofSeconds(20));
@@ -93,14 +103,15 @@ class SubFlowTest {
 
     @Test @DisplayName("a failing child fails the parent with the child's error")
     void childFailureFailsParent() throws Exception {
-        FlowSpec child = Wiggle.graph("sub-child")
-                .step("child-work", com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1)))
-                .build();
+        FlowSpec child = FlowSpec.define("sub-child", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::childWork, com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1))));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w2").register(parent()).register(child)
-                     .handlers(new ParentH()).handlers(new ChildFailH())) {
+             Worker w = new Worker(client, "sub-w2")
+                     .registerHandler(new ParentH()).registerHandler(new ChildFailH())) {
+            client.register(child);
+            client.register(parent());
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -113,7 +124,8 @@ class SubFlowTest {
     void unregisteredChildFailsParent() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w3").register(parent()).handlers(new ParentH())) {
+             Worker w = new Worker(client, "sub-w3").registerHandler(new ParentH())) {
+            client.register(parent());   // the child is deliberately NOT registered
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -123,15 +135,16 @@ class SubFlowTest {
 
     @Test @DisplayName("cancelling the parent cascades to the running child")
     void cancelCascades() throws Exception {
-        FlowSpec child = Wiggle.graph("sub-child")
-                .awaitSignal("never-arrives")   // the child parks so it is definitely still running
-                .step("child-done")
-                .build();
+        FlowSpec child = FlowSpec.define("sub-child", Map.class, OneStep.class, (f, s) -> f
+                .thenAwait("never-arrives")   // the child parks so it is definitely still running
+                .thenApply(s::childDone));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w4").register(parent()).register(child)
-                     .handlers(new ParentH()).handlers(new ChildParkH())) {
+             Worker w = new Worker(client, "sub-w4")
+                     .registerHandler(new ParentH()).registerHandler(new ChildParkH())) {
+            client.register(child);
+            client.register(parent());
             w.start();
             String parentId = client.start(parent(), Map.of());
 

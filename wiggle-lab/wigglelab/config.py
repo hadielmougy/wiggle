@@ -19,8 +19,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # In-cluster ports.
 COORD_GRPC_PORT = 8099          # CoordinatorServer (CellCoordinator gRPC)
-COORD_RAFT_PORT = 10000         # Apache Ratis peer transport (between coordinator pods)
-COORD_DEFAULT_GROUP_SIZE = 1    # start as a single-member group; scale up to an odd size (3, 5) for HA
+COORD_DEFAULT_REPLICAS = 1      # coordinators are stateless; any number, they elect one leader
 CELL_GRPC_PORT = 8080           # WiggleControlPlane gRPC on a cell node
 CELL_DASHBOARD_PORT = 8090      # cell /healthz probe port (the dashboard moved to the console)
 CONSOLE_HTTP_PORT = 8090        # the standalone ops console (Tomcat) web UI
@@ -31,9 +30,14 @@ COORD_LOCAL_PORT = int(os.environ.get("WIGGLE_LAB_COORD_LOCAL_PORT", "18099"))
 CELL_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CELL_LOCAL_PORT_BASE", "18100"))
 CONSOLE_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CONSOLE_LOCAL_PORT_BASE", "18300"))
 
-# Coordinator Ratis store (single-member embedded group; no external store).
-COORD_STORE_URI = "ratis:///var/lib/wiggle/coord"
-COORD_DATA_DIR = "/var/lib/wiggle/coord"
+# The coordinator's own small database -- separate from every cell's on purpose: a cell must never
+# know about coordinators, and the two are linked by nothing but the gRPC contract. Replicas share
+# it, which is what lets several of them elect a leader and serve the same state.
+COORD_DB_NAME = "db-coord"
+COORD_DB = "wiggle_coord"
+COORD_DB_USER = "wiggle"
+COORD_DB_PASSWORD = "wiggle"
+COORD_STORE_URI = f"jdbc:postgresql://{COORD_DB_NAME}:{DB_PORT}/{COORD_DB}"
 
 PART_OF = "wiggle-lab"
 

@@ -15,8 +15,7 @@ import java.time.Duration;
  * reference to the handler that implements it, so the compiler checks that every step consumes what
  * the one before it produced, and the node names come from the methods rather than from strings
  * typed twice. Nothing runs here -- the chain is walked once, at definition time, and compiles to
- * exactly the graph the equivalent {@code Wiggle.graph(...)} chain would (see
- * {@code FlowEquivalenceTest}). The same {@link OrderHandlers} instance can serve the worker.
+ * The same {@link OrderHandlers} instance can serve the worker.
  */
 public final class OrderFulfilment {
 
@@ -33,7 +32,7 @@ public final class OrderFulfilment {
     }
 
     public static FlowSpec flowSpec() {
-        return Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+        return FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
             var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
                     .thenApply(s::validate)
                     .thenFilter(s::inStock);

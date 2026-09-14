@@ -15,7 +15,7 @@ import java.util.function.UnaryOperator;
  * nodes and return the stream, and the terminal {@link #build()} produces the {@link FlowSpec}.
  * Nothing executes at definition time, and no step logic lives here -- every {@code step}/{@code
  * gate}/{@code effect}/{@code combine} is just a named node. The implementations are bound
- * separately on a worker via {@link com.wiggle.client.worker.Handlers @Handlers} classes, matched to
+ * separately on a worker via {@link com.wiggle.client.worker.ForFlow @ForFlow} classes, matched to
  * the graph by name; a method's signature there defines its input/output types (types may change
  * from step to step, like {@code Stream.map}).
  *
@@ -25,7 +25,7 @@ import java.util.function.UnaryOperator;
  * bookkeeping at the bottom). Each nested branch/case/loop is built by a child builder that captures
  * its own start node and falls back to an enclosing join for a short-circuit.
  */
-public final class GraphBuilder {
+final class GraphBuilder {
 
     /** Which outgoing edge of a node an open end occupies. */
     private enum Edge { NEXT, ALT }
@@ -224,7 +224,8 @@ public final class GraphBuilder {
      * sub-pipeline; the combine node carries the arm names so a worker's combine handler can key
      * each branch's result by name. Reopens the stream at the combine node.
      */
-    public void buildForkCombine(List<Branch> branches, String combineName) {
+    public void buildForkCombine(List<Branch> branches, String combineName,
+                                 RetryPolicy combineRetry, String combineQueue) {
         forkPending = false;
         String forkId = pipeline.addFork();
         attach(forkId);
@@ -238,7 +239,7 @@ public final class GraphBuilder {
         }
         pipeline.setBranches(forkId, starts);
 
-        String combineId = pipeline.addCombine(combineName, names, null, null);
+        String combineId = pipeline.addCombine(combineName, names, combineRetry, combineQueue);
         pipeline.wireNext(joinId, combineId);   // JOIN -> combine
         openAt(combineId, Edge.NEXT);           // reopen the stream after the combine node
         lastStepId = combineId;
@@ -275,7 +276,8 @@ public final class GraphBuilder {
 
     /** Builds the forEach with its mandatory combine node. See {@link ForEachStage}. */
     public void buildForEachCombine(String name, String itemsKey,
-                                    UnaryOperator<GraphBuilder> body, String combineName) {
+                                    UnaryOperator<GraphBuilder> body, String combineName,
+                                    RetryPolicy combineRetry, String combineQueue) {
         forkPending = false;
         String forkId = pipeline.addDynFork(name, itemsKey, itemsKey);
         attach(forkId);
@@ -283,7 +285,7 @@ public final class GraphBuilder {
         String templateStart = buildBranch(Branch.of(name, body), joinId);
         pipeline.setBranches(forkId, List.of(templateStart));
         pipeline.wireNext(forkId, joinId);     // followed when the collection is empty (skips through)
-        String combineId = pipeline.addForEachCombine(combineName, name, null, null);
+        String combineId = pipeline.addForEachCombine(combineName, name, combineRetry, combineQueue);
         pipeline.wireNext(joinId, combineId);  // JOIN -> combine (the collected results' consumer)
         openAt(combineId, Edge.NEXT);
         lastStepId = combineId;
@@ -308,18 +310,28 @@ public final class GraphBuilder {
      * needs more iterations says so here.
      */
     public GraphBuilder doWhile(String conditionName, int maxIterations, UnaryOperator<GraphBuilder> body) {
+        return doWhile(conditionName, maxIterations, body, null);
+    }
+
+    /**
+     * {@link #doWhile(String, int, UnaryOperator)} with the condition pinned to a worker queue. The
+     * condition is a structural node -- you never wrote it as a step -- so it takes a queue, which is
+     * a capacity concern, but no retry policy: it falls back to the workflow default.
+     */
+    public GraphBuilder doWhile(String conditionName, int maxIterations, UnaryOperator<GraphBuilder> body,
+                                String queue) {
         if (maxIterations == 0 || maxIterations < -1) {
             throw new IllegalArgumentException("doWhile '" + conditionName + "' maxIterations must be positive");
         }
         Sub body0 = subStream(body, enclosingJoinId, "doWhile body");
-        String condId = pipeline.addGuard(conditionName, null, null);
+        String condId = pipeline.addGuard(conditionName, null, queue);
         pipeline.markLoop(condId, maxIterations);
 
         routeInto(body0.start());                // enter the loop at the body's first node
         body0.tail().wireOpenEndsTo(condId);     // body tail -> condition
         pipeline.wireNext(condId, body0.start()); // condition true -> back to the body
         openAt(condId, Edge.ALT);                // condition false -> onward
-        lastStepId = condId;   // so withRetry()/onQueue() can reach the condition, which a worker runs
+        lastStepId = condId;
         return this;
     }
 
@@ -425,44 +437,6 @@ public final class GraphBuilder {
     public GraphBuilder execution(ExecutionMode mode) {
         pipeline.executionMode(mode);
         return this;
-    }
-
-    /**
-     * Gives the node just added an explicit retry policy, overriding the workflow default. The
-     * inline forms ({@code step(name, retry)} and friends) cover the common case; this reaches the
-     * nodes that have no inline form -- a {@code combine}, and a {@code doWhile} condition -- and
-     * reads well when a policy is the exception rather than the rule:
-     *
-     * <pre>{@code
-     * .fork(...).combine("settle").withRetry(RetryPolicy.exponential(5, ofMillis(100)))
-     * .doWhile("hasMore", s -> s.step("drain")).withRetry(gentle)
-     * }</pre>
-     *
-     * Applies to whatever a worker runs -- step, effect, gate, combine or loop condition -- and
-     * fails on anything the engine runs itself (a sleep, a signal wait, a fork, a sub-workflow),
-     * which has no worker to retry on.
-     */
-    public GraphBuilder withRetry(RetryPolicy retry) {
-        pipeline.setRetry(requireLastStep("withRetry()"), retry);
-        return this;
-    }
-
-    /**
-     * Pins the node just added to a dedicated worker queue, overriding the workflow default. Like
-     * {@link #withRetry}, this reaches the nodes with no inline form and applies to whatever a
-     * worker runs.
-     */
-    public GraphBuilder onQueue(String queue) {
-        pipeline.setQueue(requireLastStep("onQueue()"), queue);
-        return this;
-    }
-
-    private String requireLastStep(String what) {
-        if (lastStepId == null) {
-            throw new IllegalStateException(what + " must directly follow a step, effect, gate, "
-                    + "combine or doWhile");
-        }
-        return lastStepId;
     }
 
     /**

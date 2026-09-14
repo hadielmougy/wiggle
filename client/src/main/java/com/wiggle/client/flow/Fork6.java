@@ -1,5 +1,7 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.core.RetryPolicy;
+
 /**
  * The stage a 6-armed {@link Wiggle#allOf} returns; its combine is mandatory, because the arms ran on
  * isolated copies of the context and a combine is the only way their results reach the flow.
@@ -22,7 +24,7 @@ public final class Fork6<A, B, C, D, E, F> {
      * were given to {@code allOf}, and returning the complete post-join context.
      */
     public <R> WiggleFlow<R> combine(FlowFn6<A, B, C, D, E, F, R> combine) {
-        return merge(StepNames.ofCombine(combine, fork.armNames, false));
+        return merge(StepNames.ofCombine(combine, fork.armNames, false), null, null);
     }
 
     /**
@@ -31,7 +33,7 @@ public final class Fork6<A, B, C, D, E, F> {
      * arguments line up with the declaration.
      */
     public <X, R> WiggleFlow<R> combineWithContext(FlowFn7<X, A, B, C, D, E, F, R> combine) {
-        return merge(StepNames.ofCombine(combine, fork.armNames, true));
+        return merge(StepNames.ofCombine(combine, fork.armNames, true), null, null);
     }
 
     /**
@@ -39,11 +41,71 @@ public final class Fork6<A, B, C, D, E, F> {
      * API cannot type, and the only form that skips the arm check above.
      */
     public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-        return merge(name);
+        return merge(name, null, null);
     }
 
-    private <R> WiggleFlow<R> merge(String name) {
-        fork.combineName = name;
+    /** {@link #combine(FlowFn6<A,)} with an explicit retry policy for the combine node. */
+    public <R> WiggleFlow<R> combine(FlowFn6<A, B, C, D, E, F, R> combine, RetryPolicy retry) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, false), retry, null);
+    }
+
+    /** {@link #combine(FlowFn6<A,)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> combine(FlowFn6<A, B, C, D, E, F, R> combine, String queue) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, false), null, queue);
+    }
+
+    /** {@link #combine(FlowFn6<A,)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> combine(FlowFn6<A, B, C, D, E, F, R> combine, RetryPolicy retry, String queue) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, false), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn6<A,)} , queue first. */
+    public <R> WiggleFlow<R> combine(FlowFn6<A, B, C, D, E, F, R> combine, String queue, RetryPolicy retry) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, false), retry, queue);
+    }
+
+    /** {@link #combineWithContext(FlowFn7<X,)} with an explicit retry policy for the combine node. */
+    public <X, R> WiggleFlow<R> combineWithContext(FlowFn7<X, A, B, C, D, E, F, R> combine, RetryPolicy retry) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, true), retry, null);
+    }
+
+    /** {@link #combineWithContext(FlowFn7<X,)} pinned to a dedicated worker queue. */
+    public <X, R> WiggleFlow<R> combineWithContext(FlowFn7<X, A, B, C, D, E, F, R> combine, String queue) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, true), null, queue);
+    }
+
+    /** {@link #combineWithContext(FlowFn7<X,)} with both a retry policy and a dedicated queue. */
+    public <X, R> WiggleFlow<R> combineWithContext(FlowFn7<X, A, B, C, D, E, F, R> combine, RetryPolicy retry, String queue) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, true), retry, queue);
+    }
+
+    /** {@link #combineWithContext(FlowFn7<X,)} , queue first. */
+    public <X, R> WiggleFlow<R> combineWithContext(FlowFn7<X, A, B, C, D, E, F, R> combine, String queue, RetryPolicy retry) {
+        return merge(StepNames.ofCombine(combine, fork.armNames, true), retry, queue);
+    }
+
+    /** {@link #combine(String, Class)} with an explicit retry policy for the combine node. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, RetryPolicy retry) {
+        return merge(name, retry, null);
+    }
+
+    /** {@link #combine(String, Class)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, String queue) {
+        return merge(name, null, queue);
+    }
+
+    /** {@link #combine(String, Class)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, RetryPolicy retry, String queue) {
+        return merge(name, retry, queue);
+    }
+
+    /** {@link #combine(String, Class)} , queue first. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, String queue, RetryPolicy retry) {
+        return merge(name, retry, queue);
+    }
+
+    private <R> WiggleFlow<R> merge(String name, RetryPolicy retry, String queue) {
+        fork.combine(name, retry, queue);
         return new WiggleFlow<>(fork);
     }
 }

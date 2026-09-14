@@ -1,10 +1,10 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisteredNode;
 import com.wiggle.server.ServerConfig;
@@ -30,18 +30,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class NamespaceWorkerTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
-        return new ServerConfig(0, "nw", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "nw", null, null, null, 4,
                 Duration.ofMillis(50), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.graph("wf").step("a").build();
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
-    @com.wiggle.client.worker.Handlers("wf")
+    @com.wiggle.client.worker.ForFlow("wf")
     static final class WfHandlers {
         public java.util.Map<String, Object> a(java.util.Map<String, Object> ctx) { return ctx; }
     }
@@ -61,7 +66,7 @@ class NamespaceWorkerTest {
 
             AtomicReference<List<String>> cells = new AtomicReference<>(List.of(a.baseUrl(), b.baseUrl()));
             try (NamespaceWorker nw = new NamespaceWorker(cells::get, WiggleClient::new, "w",
-                    WorkerOptions.defaults(), w -> w.register(bp).handlers(new WfHandlers()))) {
+                    WorkerOptions.defaults(), w -> w.registerHandler(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(a.baseUrl(), b.baseUrl()), nw.activeCells(), "one worker per active cell");
 
@@ -88,7 +93,7 @@ class NamespaceWorkerTest {
         FlowSpec bp = workflow();
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         CoordinatorService svc = new CoordinatorService(store);
-        CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED);
+        CoordinatorApi coord = new CoordinatorApi(svc, TestPorts.free(), Tls.Options.DISABLED);
         coord.start();
         try (WiggleServer cell = new WiggleServer(config().withNamespace("orders")).start();
              WiggleClient cc = new WiggleClient(cell.baseUrl())) {
@@ -100,7 +105,7 @@ class NamespaceWorkerTest {
                     com.wiggle.proto.RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
 
             CoordinatedConnection resolver = WiggleConnection.coordinator("127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "");
-            try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.register(bp).handlers(new WfHandlers()))) {
+            try (NamespaceWorker nw = new NamespaceWorker(resolver, "orders", "w", w -> w.registerHandler(new WfHandlers()))) {
                 nw.reconcileEvery(NEVER).start();
                 assertEquals(Set.of(cell.baseUrl()), nw.activeCells(), "resolved the namespace's one active cell");
                 assertEquals("COMPLETED", cc.awaitCompletion(cc.start("wf", Map.of()), Duration.ofSeconds(5)).status());

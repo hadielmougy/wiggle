@@ -1,7 +1,6 @@
 package com.wiggle.server.cluster;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -26,16 +25,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HousekeeperTest {
 
+    interface SleeperSteps {
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
     private static WorkflowEngine engine(Storage storage) {
         return new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
     }
 
     /** A one-sleep workflow whose timer parks the instance until the housekeeper fires it. */
     private static FlowSpec sleeper(long millis) {
-        return Wiggle.graph("hk-sleeper")
-                .sleep("nap", Duration.ofMillis(millis))
-                .step("after")
-                .build();
+        return FlowSpec.define("hk-sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+                .thenSleep("nap", Duration.ofMillis(millis))
+                .thenApply(s::after));
     }
 
     @Test @DisplayName("adaptive tick drains a backlog larger than one batch; fixed tick does not")

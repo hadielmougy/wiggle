@@ -1,9 +1,8 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
@@ -28,6 +27,17 @@ import static org.junit.jupiter.api.Assertions.*;
 /** LOCAL_SYNC execution: identical results to SERVER, and consecutive steps chain on one worker. */
 class LocalSyncTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+        Map<String, Object> d(Map<String, Object> ctx);
+        boolean keep(Map<String, Object> ctx);
+        Map<String, Object> x(Map<String, Object> ctx);
+        Map<String, Object> y(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -35,7 +45,7 @@ class LocalSyncTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "ls-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "ls-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -43,17 +53,16 @@ class LocalSyncTest {
 
     /** A five-step linear pipeline; each step's value depends on the previous. */
     private static FlowSpec linear(ExecutionMode mode) {
-        return Wiggle.graph("ls-linear")
+        return FlowSpec.define("ls-linear", Map.class, OneStep.class, (f, s) -> f
                 .execution(mode)
-                .step("a")
-                .step("b")
-                .gate("keep")
-                .step("c")
-                .step("d")
-                .build();
+                .thenApply(s::a)
+                .thenApply(s::b)
+                .thenFilter(s::keep)
+                .thenApply(s::c)
+                .thenApply(s::d));
     }
 
-    @Handlers("ls-linear")
+    @ForFlow("ls-linear")
     static final class LinearH {
         final AtomicInteger runs;
         LinearH(AtomicInteger runs) { this.runs = runs; }
@@ -73,7 +82,8 @@ class LocalSyncTest {
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
-                         WorkerOptions.defaults().withConcurrency(4)).register(bp).handlers(new LinearH(runs))) {
+                         WorkerOptions.defaults().withConcurrency(4)).registerHandler(new LinearH(runs))) {
+                client.register(bp);
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status(), mode + " status");
@@ -124,11 +134,10 @@ class LocalSyncTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            FlowSpec bp = Wiggle.graph("async-batch")
-                    .execution(ExecutionMode.LOCAL_ASYNC)
-                    .step("x")
-                    .step("y")
-                    .build();
+            FlowSpec bp = FlowSpec.define("async-batch", Map.class, OneStep.class, (f, s) -> f
+                .execution(ExecutionMode.LOCAL_ASYNC)
+                .thenApply(s::x)
+                .thenApply(s::y));
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();
 

@@ -4,7 +4,6 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -25,8 +24,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The console's Tomcat/servlet web tier end to end: the SPA API over HTTP, and the auth filter. */
 class ConsoleWebTest {
 
+    /** The steps a spec names. A worker binds them by name; nothing here implements them. */
+    interface Steps {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static FlowSpec wf() {
-        return Wiggle.graph("wf").step("work").build();
+        return FlowSpec.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config() {
@@ -118,6 +122,51 @@ class ConsoleWebTest {
                 assertEquals("{\"instances\":[]}", miss.body(), "unknown id -> empty list");
             }
         }
+    }
+
+    @Test @DisplayName("backlog: /api/backlog reports work no worker can claim, and says so in the summary")
+    void backlogCoverageOverHttp() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
+            WiggleClient c = conn.client();
+            // no worker is ever started here, so this token is dispatchable and unclaimable -- which is
+            // exactly the state the rest of the console cannot show: the instance reads RUNNING.
+            FlowSpec stranded = FlowSpec.define("stranded", Map.class, Steps.class,
+                    (f, s) -> f.thenApply(s::work, "nobody-polls-this"));
+            c.register(stranded);
+            String id = c.start(stranded, Map.of());
+
+            ConsoleAuth auth = new ConsoleAuth("admin", null, false);
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+                    auth, 0, Tls.Options.DISABLED).start()) {
+                String base = "http://localhost:" + console.port();
+                HttpClient http = HttpClient.newHttpClient();
+
+                String body = awaitBody(http, base + "/api/backlog", "nobody-polls-this");
+                assertTrue(body.contains("\"queue\":\"nobody-polls-this\""), "the orphan queue is listed");
+                assertTrue(body.contains("\"covered\":false"), "and reported as uncovered");
+                assertTrue(body.contains("\"version\":" + stranded.version()),
+                        "attributed to the version that produced it");
+                assertTrue(body.contains("\"uncoveredSlices\":1"), "the summary counts it");
+                assertTrue(body.contains("\"strandedTasks\":1"), "along with how many tasks are stuck");
+                assertTrue(body.contains("\"livePollers\":0"), "with nothing polling at all");
+
+                assertTrue(get(http, base + "/api/instances/" + id, null).body().contains("RUNNING"),
+                        "while the instance itself still looks healthy -- the point of the view");
+            }
+        }
+    }
+
+    /** The token is written asynchronously by the engine, so poll briefly for it rather than sleeping. */
+    private static String awaitBody(HttpClient http, String url, String expect) throws Exception {
+        long deadline = System.currentTimeMillis() + 10_000;
+        String last = "";
+        while (System.currentTimeMillis() < deadline) {
+            last = get(http, url, null).body();
+            if (last.contains(expect)) return last;
+            Thread.sleep(100);
+        }
+        throw new AssertionError("never saw " + expect + " in " + url + "; last body: " + last);
     }
 
     @Test @DisplayName("authorization: a read-only viewer can read but is 403'd on mutating calls")

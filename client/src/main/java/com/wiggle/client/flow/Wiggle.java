@@ -1,11 +1,8 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.core.RetryPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.BiFunction;
-import java.util.function.Function;
 
 /**
  * Entry point to the flow API: a workflow written as a chain of method references
@@ -15,7 +12,7 @@ import java.util.function.Function;
  * <pre>{@code
  * OrderHandlers h = new OrderHandlers();
  *
- * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge);
@@ -48,109 +45,6 @@ import java.util.function.Function;
 public final class Wiggle {
 
     private Wiggle() {}
-
-    /**
-     * Defines a workflow whose first step takes {@code input}.
-     *
-     * @param name  the workflow name, as registered with the server
-     * @param input the context type the workflow starts from -- it anchors the chain's typing and is
-     *              not otherwise used; the graph carries no context type
-     * @param body  the chain, run once, here
-     */
-    public static <T> FlowSpec define(String name, Class<T> input,
-                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
-        return define(name, null, input, body);
-    }
-
-    /**
-     * Defines a workflow whose steps are declared by {@code contract} -- an interface naming each
-     * step and its signature, with no implementation:
-     *
-     * <pre>{@code
-     * interface OrderSteps {
-     *     Order   validate(Order o);
-     *     boolean inStock(Order o);
-     *     Payment charge(Order o);
-     * }
-     *
-     * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
-     *         .thenApply(s::validate)
-     *         .thenFilter(s::inStock));
-     * }</pre>
-     *
-     * <p>{@code s} is an inert stand-in: the body only <em>names</em> steps through it, and calling a
-     * method on it throws. That is deliberate. A spec never runs a step -- it records the step's name,
-     * and a worker supplies the code by matching that name to a method on its {@code @Handlers}
-     * object. Naming the steps on an interface says exactly that, where a reference to a concrete
-     * class reads as though the spec will call it.
-     *
-     * <p>On the worker, a handler <em>should</em> implement the same interface -- then the compiler
-     * guarantees every step's name and signature match what the spec declared, and the two cannot
-     * drift. It is not required: binding is by name, as it always was, so a handler that merely
-     * happens to match still works.
-     */
-    public static <T, H> FlowSpec define(String name, Class<T> input, Class<H> contract,
-                                         BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
-        return define(name, null, input, contract, body);
-    }
-
-    /** {@link #define(String, Class, Class, BiFunction)} with an explicit default retry policy. */
-    public static <T, H> FlowSpec define(String name, RetryPolicy defaultRetry, Class<T> input,
-                                         Class<H> contract,
-                                         BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
-        if (body == null) throw new IllegalArgumentException("workflow '" + name + "' has no body");
-        H steps = Steps.of(contract);
-        return define(name, defaultRetry, input, f -> body.apply(f, steps));
-    }
-
-    /**
-     * {@link #define(String, Class, Function)} with an explicit default retry policy for every step
-     * that does not name its own.
-     */
-    public static <T> FlowSpec define(String name, RetryPolicy defaultRetry, Class<T> input,
-                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
-        if (body == null) throw new IllegalArgumentException("workflow '" + name + "' has no body");
-        Plan.Step root = Plan.root();
-        WiggleFlow<?> tail = body.apply(new WiggleFlow<>(root));
-        if (tail == null) {
-            throw new IllegalStateException(
-                    "the body of workflow '" + name + "' returned null; it must return the handle it ends on");
-        }
-        return Plan.compile(name, defaultRetry, root);
-    }
-
-    /**
-     * Describes a workflow as <em>topology alone</em> -- named steps and how they chain, branch and
-     * rejoin, with no handlers in sight:
-     *
-     * <pre>{@code
-     * FlowSpec order = Wiggle.graph("binding-order")
-     *         .step("validate")
-     *         .gate("in-stock")
-     *         .step("charge", "payments")
-     *         .effect("notify")
-     *         .build();
-     * }</pre>
-     *
-     * <p>This is the mode for a topology written where its handlers are not: registered by an author
-     * with no handler classes on its classpath, generated from data, or -- as the binding demos show --
-     * served by several independent workers that each bind a subset by name. There is nothing for a
-     * compiler to check in that situation, so nothing is lost by naming the steps.
-     *
-     * <p>{@link #define} is the better mode whenever the handlers <em>are</em> at hand: it checks each
-     * step against the handler that implements it and follows a rename. Both produce the same
-     * {@link FlowSpec} -- the graph has only ever held names -- and a worker cannot tell which was used.
-     */
-    public static GraphBuilder graph(String name) {
-        return Workflow.define(name);
-    }
-
-    /** {@link #graph(String)} with an explicit default retry policy for every step that names none. */
-    public static GraphBuilder graph(String name, RetryPolicy defaultRetry) {
-        return Workflow.define(name, defaultRetry);
-    }
-
-    // ------------------------------------------------------------------ fan-out
 
     /**
      * Fans the flow out over handles that branched from a common point, and returns the mandatory
@@ -283,7 +177,8 @@ public final class Wiggle {
      * they genuinely differ.
      *
      * <p>With no {@code otherwise} arm, a choice where nothing matched skips straight past to the step
-     * after it.
+     * after it -- which is why a single guarded arm is legal here where a single-armed
+     * {@link #allOf} is not. One arm and no default reads as "run this if the guard holds".
      */
     @SafeVarargs
     public static <R> WiggleFlow<R> oneOf(WiggleFlow<R>... arms) {

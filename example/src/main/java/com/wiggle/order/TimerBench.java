@@ -2,8 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.server.ServerConfig;
@@ -37,6 +36,11 @@ import java.util.concurrent.CountDownLatch;
  */
 public final class TimerBench {
 
+    interface TimerSteps {
+        Map<String, Object> enter(Map<String, Object> ctx);
+        void exit(Map<String, Object> ctx);
+    }
+
     public static void main(String[] args) throws Exception {
         int count = intEnv("WIGGLE_BENCH_COUNT", 2000);
         long sleepMillis = intEnv("WIGGLE_BENCH_SLEEP_MILLIS", 25);
@@ -47,11 +51,10 @@ public final class TimerBench {
         boolean adaptive = Boolean.parseBoolean(env("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"));
 
         CountDownLatch done = new CountDownLatch(count);
-        FlowSpec bp = Wiggle.graph("bench-timer")
-                .step("enter")
-                .sleep("hold", Duration.ofMillis(sleepMillis))
-                .effect("exit")
-                .build();
+        FlowSpec bp = FlowSpec.define("bench-timer", Map.class, TimerSteps.class, (f, s) -> f
+                .thenApply(s::enter)
+                .thenSleep("hold", Duration.ofMillis(sleepMillis))
+                .thenAccept(s::exit));
 
         ServerConfig config = new ServerConfig(0, "timer-bench", null, null, null, 16,
                 Duration.ofMillis(tickMillis), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
@@ -71,7 +74,7 @@ public final class TimerBench {
             for (int i = 0; i < workers; i++) {
                 pool.add(new Worker(client, "timer-worker-" + i,
                         WorkerOptions.defaults().withConcurrency(concurrency))
-                        .register(bp).handlers(new TimerHandlers(done)).start());
+                        .registerHandler(new TimerHandlers(done)).start());
             }
             done.await();
             long t1 = System.nanoTime();
@@ -85,7 +88,7 @@ public final class TimerBench {
         }
     }
 
-    @Handlers("bench-timer")
+    @ForFlow("bench-timer")
     public static final class TimerHandlers {
         private final CountDownLatch done;
         public TimerHandlers(CountDownLatch done) { this.done = done; }

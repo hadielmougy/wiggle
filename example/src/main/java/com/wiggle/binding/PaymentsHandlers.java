@@ -1,6 +1,6 @@
 package com.wiggle.binding;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.Map;
 
@@ -11,7 +11,7 @@ import static com.wiggle.binding.BindingOrder.put;
  * to the {@code payments} queue. A worker bound to this set polls just that queue, so ownership of the
  * payment step is isolated from {@link FulfilmentHandlers}.
  */
-@Handlers("binding-order")
+@ForFlow("binding-order")
 public final class PaymentsHandlers {
 
     public Map<String, Object> charge(Map<String, Object> ctx) {

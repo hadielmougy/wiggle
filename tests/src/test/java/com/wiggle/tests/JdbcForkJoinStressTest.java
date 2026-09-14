@@ -1,10 +1,9 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
@@ -40,23 +39,32 @@ class JdbcForkJoinStressTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.graph("order-ish")
-                .step("validate")
-                .gate("in-stock")
-                .fork(
-                        Branch.of("payment", s -> s
-                                .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(50)))
-                                .step("capture")),
-                        Branch.of("shipping", s -> s
-                                .step("reserve")
-                                .sleep("await", Duration.ofMillis(150))
-                                .step("label")))
-                .combine("merge")
-                .step("notify")
-                .build();
+        return FlowSpec.define("order-ish", Map.class, OrderSteps.class, (f, s) -> {
+            var checked = f.thenApply(s::validate).thenFilter(s::inStock);
+            var payment = checked
+                    .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(50)))
+                    .thenApply(s::capture);
+            var shipping = checked
+                    .thenApply(s::reserve)
+                    .thenSleep("await", Duration.ofMillis(150))
+                    .thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combineWithContext(s::merge).thenApply(s::notify);
+        });
     }
 
-    @Handlers("order-ish")
+    interface OrderSteps {
+        Map<String, Object> validate(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        Map<String, Object> capture(Map<String, Object> ctx);
+        Map<String, Object> reserve(Map<String, Object> ctx);
+        Map<String, Object> label(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> payment, Map<String, Object> shipping);
+        Map<String, Object> notify(Map<String, Object> ctx);
+    }
+
+    @ForFlow("order-ish")
     static final class OrderH {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public boolean inStock(Map<String, Object> ctx) { return true; }
@@ -91,7 +99,7 @@ class JdbcForkJoinStressTest {
         List<Worker> workers = new ArrayList<>();
         try {
             for (int i = 0; i < 3; i++) {
-                ServerConfig config = new ServerConfig(0, "node-" + i, url, "sa", "", 8,
+                ServerConfig config = new ServerConfig(TestPorts.free(), "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                         Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
                 WiggleServer server = new WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
@@ -100,7 +108,8 @@ class JdbcForkJoinStressTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp).handlers(new OrderH());
+                client.register(bp);
+                w.registerHandler(new OrderH());
                 workers.add(w.start());
             }
 

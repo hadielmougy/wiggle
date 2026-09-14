@@ -33,6 +33,7 @@
 (defn workflows     [] (GET "/api/workflows"))
 (defn workflow-graph [name] (GET (str "/api/workflows/" (enc name))))
 (defn signals       [] (GET "/api/signals"))
+(defn backlog       [] (GET "/api/backlog"))
 (defn schedules     [] (GET "/api/schedules"))
 
 (defn instances [{:keys [workflow status limit search search-by]}]

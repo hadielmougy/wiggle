@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.ScheduleInfo;
 import com.wiggle.client.WiggleClient.WiggleApiException;
@@ -22,8 +21,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Schedule management over the gRPC control plane: create (interval and cron), list, delete. */
 class ScheduleClientTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
-        return new ServerConfig(0, "schedc-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "schedc-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -31,14 +35,14 @@ class ScheduleClientTest {
 
     @Test @DisplayName("a client creates, lists and deletes interval and cron schedules")
     void manageSchedules() throws Exception {
-        FlowSpec bpA = Wiggle.graph("schedc-probe-a")
-                .step("work").build();
-        FlowSpec bpB = Wiggle.graph("schedc-probe-b")
-                .step("work").build();
+        FlowSpec bpA = FlowSpec.define("schedc-probe-a", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        FlowSpec bpB = FlowSpec.define("schedc-probe-b", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "schedc-w").register(bpA).register(bpB)) {
+             Worker w = new Worker(client, "schedc-w")) {
+            client.register(bpA);
+            client.register(bpB);
             w.start();
 
             String hourly = client.createSchedule("schedc-probe-a", Duration.ofHours(1), Map.of("k", "v"));
@@ -74,12 +78,12 @@ class ScheduleClientTest {
 
     @Test @DisplayName("re-creating a schedule for the same workflow updates it in place, no duplicate")
     void createIsIdempotentPerWorkflow() throws Exception {
-        FlowSpec bp = Wiggle.graph("schedc-probe-dup")
-                .step("work").build();
+        FlowSpec bp = FlowSpec.define("schedc-probe-dup", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "schedc-w2").register(bp)) {
+             Worker w = new Worker(client, "schedc-w2")) {
+            client.register(bp);
             w.start();
 
             // Simulates several app instances each trying to "ensure this schedule exists" on startup.

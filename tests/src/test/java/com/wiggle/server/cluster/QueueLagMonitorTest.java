@@ -1,7 +1,6 @@
 package com.wiggle.server.cluster;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -29,6 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * waiting on its scheduler.
  */
 class QueueLagMonitorTest {
+
+    interface ProbeSteps {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
 
     private final List<LogRecord> captured = new CopyOnWriteArrayList<>();
     private Handler handler;
@@ -64,9 +67,8 @@ class QueueLagMonitorTest {
     }
 
     private WorkflowDefinition registerLagWorkflow(WorkflowEngine engine) {
-        FlowSpec bp = Wiggle.graph("lag-probe")
-                .step("work")   // never claimed: no worker ever polls in this test
-                .build();
+        // never claimed: no worker ever polls in this test
+        FlowSpec bp = FlowSpec.define("lag-probe", Map.class, ProbeSteps.class, (f, s) -> f.thenApply(s::work));
         return engine.definitions().register(bp.definition());
     }
 

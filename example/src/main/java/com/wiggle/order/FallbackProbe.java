@@ -2,8 +2,7 @@ package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -28,20 +27,25 @@ import java.util.Map;
  */
 public final class FallbackProbe {
 
+    interface ProbeSteps {
+        Map<String, Object> ping(Map<String, Object> ctx);
+    }
+
     public static void main(String[] args) throws Exception {
         String submitUrl = env("WIGGLE_SUBMIT_URL", "127.0.0.1:18100");
         String workerUrl = env("WIGGLE_WORKER_URL", "127.0.0.1:18102");
         int probes = Integer.parseInt(env("WIGGLE_BENCH_COUNT", "200"));
         int warmup = Integer.parseInt(env("WIGGLE_BENCH_WARMUP", "20"));
 
-        FlowSpec bp = Wiggle.graph("fallback-probe").step("ping").build();
+        FlowSpec bp = FlowSpec.define("fallback-probe", Map.class, ProbeSteps.class,
+                (f, s) -> f.thenApply(s::ping));
 
         try (WiggleClient submit = new WiggleClient(submitUrl);
              WiggleClient workerClient = new WiggleClient(workerUrl)) {
             submit.register(bp);
             try (Worker worker = new Worker(workerClient, "probe-worker",
                     WorkerOptions.defaults().withConcurrency(4))
-                    .register(bp).handlers(new ProbeHandlers())) {
+                    .registerHandler(new ProbeHandlers())) {
                 worker.start();
                 Thread.sleep(1000);   // let the worker park its long-poll
 
@@ -75,7 +79,7 @@ public final class FallbackProbe {
         }
     }
 
-    @Handlers("fallback-probe")
+    @ForFlow("fallback-probe")
     public static final class ProbeHandlers {
         public Map<String, Object> ping(Map<String, Object> ctx) { return ctx; }
     }

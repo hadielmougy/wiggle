@@ -1,28 +1,29 @@
 package com.wiggle.client.worker;
 
 /**
- * The undo half of a saga step: an {@link Activity} (or {@link EffectActivity}) that also
- * implements {@code Compensable} carries its own compensation, so the code that does the thing and
- * the code that undoes it live in one class and the pairing is checked by the compiler.
+ * An activity that knows how to undo itself. Implemented alongside {@link Activity#execute} on the
+ * same object -- the do and the undo travel together, which is the point:
  *
- * <p>{@link #compensate} receives a {@link Compensation} carrying <b>both snapshots of this
- * step</b> — {@code result()} (the context as the step left it) and {@code input()} (as it
- * received it) — captured at step completion, not read from the instance's latest context. Under
- * replace semantics a later step may have dropped the very fields the undo needs; the snapshots
- * guarantee they are present, and the input side means undo-only data (idempotency keys, previous
- * values to restore) never has to pollute the business context. See
- * {@code docs/saga-compensation.md}.
+ * <pre>{@code
+ * class CapturePayment implements CompensableActivity<Order, Payment> {
+ *     public Payment execute(Order o)                    { return gateway.charge(o); }
+ *     public void compensate(Compensation<Order, Payment> c) { gateway.refund(c.result().reference()); }
+ * }
+ * }</pre>
  *
- * <p>Compensators are at-least-once, like every handler — make them idempotent (refund by an
- * idempotency key, not blindly).
+ * <p>The undo runs as a real durable task, claimed and retried like any other, not as a callback in
+ * the failing step's thread.
  *
  * <p>The topology remains the contract: a step is compensated on failure only if the workflow
- * declares it ({@code .compensate()}). The binder verifies the pairing both ways at bind time — a
- * declared {@code .compensate()} without a {@code Compensable} handler, or a {@code Compensable}
- * handler on an undeclared step, refuses to bind.
+ * declares it, by naming the step through a {@link CompensableActivity} factory. The binder verifies
+ * the pairing both ways at bind time — a declared undo without a {@code Compensable} handler, or a
+ * {@code Compensable} handler on an undeclared step, refuses to bind.
+ *
+ * @param <A> the type the step consumed
+ * @param <B> the type it produced
  */
-public interface Compensable<C> {
+public interface Compensable<A, B> {
 
     /** Undoes this step's external effect, given its input/result snapshots. */
-    void compensate(Compensation<C> comp);
+    void compensate(Compensation<A, B> comp);
 }

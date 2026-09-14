@@ -69,15 +69,13 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
 | `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
-| `postgres` | PostgreSQL + H2 dialects | `wiggle-postgres` |
-| `mysql` | MySQL / MariaDB dialect | `wiggle-mysql` |
-| `oracle` | Oracle Database dialect | `wiggle-oracle` |
-| `sqlserver` | Microsoft SQL Server dialect | `wiggle-sqlserver` |
-| `dist` | runnable standalone server bundling every backend (what the Docker image runs) | *(not published)* |
+| `postgres` | PostgreSQL dialect, plus H2 for tests and local runs | `wiggle-postgres` |
+| `election` | leader election by announce-and-heartbeat, shared by `server` and `coordinator` | *(not published)* |
+| `dist` | runnable standalone server (what the Docker image runs) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `sh.wiggle`, version **0.0.3** (the runnable `dist` module is not
+Published under group `sh.wiggle`, version **0.0.4** (the runnable `dist` module is not
 published). The server core is database-agnostic; it builds its store from an injected
 `StorageFactory` and the backend is selected from the URL scheme ([§7.2](#72-storage-backends)).
 
@@ -128,12 +126,12 @@ and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whic
 
 ```bash
 # run the released image: an in-memory server (gRPC :8080, /healthz probe optional)
-docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.3            # Docker Hub
-# docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.3  # …or GHCR
+docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.4            # Docker Hub
+# docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.4  # …or GHCR
 
 # the ops console against it (same image, different role) → http://localhost:8090
 docker run --rm -p 8090:8090 -e WIGGLE_ROLE=console -e WIGGLE_URL=host.docker.internal:8080 \
-  -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.3
+  -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.4
 
 # a complete stack: server + Postgres + console with login, durable volume, no TLS
 docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
@@ -179,7 +177,7 @@ A definition compiles to pure **topology** — named nodes and their wiring. Wha
 is a `FlowSpec`: the graph, and nothing else. There are two ways to write one, and they differ only
 in where the step names come from.
 
-**`Wiggle.define` — when the steps can be declared as a contract.** Declare them as an interface and
+**`FlowSpec.define` — when the steps can be declared as a contract.** Declare them as an interface and
 name them through it, and the compiler checks that every step consumes what the one before it
 produced, while a rename carries the step name with it:
 
@@ -192,7 +190,7 @@ interface OrderSteps {
     ...
 }
 
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
     var payment  = validated.thenApply(s::authorise, RetryPolicy.exponential(5, ofMillis(100)))
@@ -220,36 +218,36 @@ one node at a time. An ordinary `for` loop in the body therefore *unrolls* into 
 depends on a step's **result** uses `Wiggle.oneOf` or `repeatWhile`, which the engine evaluates at
 run time.
 
-**`Wiggle.graph` — when they are not.** For a topology registered by an author with no handler
-classes on its classpath, generated from data, or served by several independent workers that each
-bind a subset by name:
+**Steps are named by reference, always.** A spec records a step's *name* and nothing else — it never
+holds a handler — so the interface it names them through is a declaration, not an implementation.
+That is what lets the same workflow be served by workers in Java, Go or Python: they each implement
+the steps in their own language and bind by name.
+
+A topology written where its handlers are not — registered by an author with no handler classes on
+its classpath, or served by several independent workers that each bind a subset — declares the
+interface and stops there:
 
 ```java
-FlowSpec orders = Wiggle.graph("order-fulfilment")
-        .step("validate")
-        .gate("in-stock")
-        .fork(
-                Branch.of("payment",  s -> s.step("authorise", RetryPolicy.exponential(5, ofMillis(100)))
-                                            .step("capture")),
-                Branch.of("shipping", s -> s.step("reserve")
-                                            .sleep("await", ofMillis(300))
-                                            .step("label")))
-        .combine("merge")   // fork always rejoins at a mandatory combine
-        .step("notify")
-        .build();
+public interface OrderSteps {
+    Order   validate(Order o);
+    boolean inStock(Order o);
+    Order   authorise(Order o);
+    Order   capture(Order o);
+    // ...
+}
+
+// the author registers this without implementing a single step
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
-Both produce the same `FlowSpec`, node for node and hash for hash; a worker cannot tell which was
-used, and one codebase may use both.
-
-The step logic is a separate class annotated `@Handlers("<workflow-name>")`, bound on a worker by
+The step logic is a separate class annotated `@ForFlow("<workflow-name>")`, bound on a worker by
 name. Each method whose name matches a step (case/style-insensitive, so `inStock` serves `in-stock`)
 is a handler; its signature defines the step — one parameter is the input (decoded from JSON), a
 `boolean` return is a gate, `void` is an effect, any other return is a task whose value becomes the
 next context (types may change from step to step, like `Stream.map`):
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
     public boolean inStock(Order o)   { return o.quantity() > 0; }        // gate
@@ -261,7 +259,9 @@ class OrderHandlers {
 }
 ```
 
-Bind it on the worker with `new Worker(client, "w").register(orders).handlers(new OrderHandlers())`.
+Publish it with `client.register(orders)`, and bind the steps on a worker with
+`new Worker(client, "w").registerHandler(new OrderHandlers())` — the worker fetches the graph and matches
+against it; it is never given the topology.
 A `combine` node (`merge`) must have an explicit handler — a method taking **one parameter per
 fork arm, in fork order** (each branch's result), plus an optional `@Context` parameter (the
 pre-fork context), whose return is the COMPLETE post-join context. Arms bind by position, so a
@@ -270,26 +270,25 @@ worker fails its task, and keys the handler does not return do not survive the j
 
 ### 5.1 Operations
 
-Every operation is topology only — it names a node; the matching `@Handlers` method supplies its logic.
+Every operation is topology only — it names a node; the matching `@ForFlow` method supplies its logic.
 
 | Operation | Meaning |
 |---|---|
-| `step(name)` / `step(name, retry)` / `then(...)` | run the step's handler on a worker; its result becomes the new context |
-| `effect(name)` | the handler runs for a side effect (a `void` method); context unchanged |
-| `gate(name)` | continue only while the guard handler returns true; false ends the instance as `gated:<name>` |
-| `choose(when(...), …, otherwise(...))` | switch/case: first matching guard's branch runs |
-| `fork(branches…).combine(name)` | run branches in parallel on isolated context copies, then rejoin at the mandatory `combine` |
-| `forEach(itemsKey, body).combine(name)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is available **either way — your choice**: declare a `@Context` parameter, or call `Step.base()` (the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`). Combines get the same choice: `@Context` parameter or `Step.base()`. The **mandatory** combine receives `@Context` plus the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `forEach(name, itemsKey, body)` names the node explicitly |
-| `doWhile(name, body)` | run `body`, then repeat while the guard handler named `name` holds (at least once) |
-| `sleep(name, duration)` | server-side timer; holds no worker |
-| `awaitSignal(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
-| `subWorkflow(name, workflow)` | run another workflow as a child; result merges back, failure propagates |
-| `step(name, queue)` / `defaultQueue(q)` | route a step (or every following step) to a dedicated worker pool |
+| `thenApply(s::step)` | run the step's handler on a worker; its result becomes the new context |
+| `thenAccept(s::step)` | the handler runs for a side effect (a `void` method); context unchanged |
+| `thenFilter(s::guard)` | continue only while the guard returns true; false ends the instance as `gated:<name>` |
+| `Wiggle.oneOf(arms…)` + `when` / `otherwise` | switch/case: the first arm whose guard holds runs. Every arm opens with `f.when(s::guard)` or `f.otherwise()`; a single arm is legal and reads as "run this, or skip past it" |
+| `Wiggle.allOf(arms…).combine(s::merge)` | run arms in parallel on **isolated** context copies, then rejoin at the mandatory combine. Arms bind **by position**, in the order given to `allOf`; `combineWithContext` also takes the pre-fork context as a leading `@Context` parameter |
+| `thenForEach(Ctx::items, body).combine(s::collect)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is available **either way — your choice**: declare a `@Context` parameter, or call `Step.base()` (the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`). Combines get the same choice. The **mandatory** combine receives the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `thenForEach(name, Ctx::items, …)` names the node explicitly. The accessor is a reference to the **context's own component** — it gives both the key and the element type, so no `Class<E>` is needed and a renamed component carries the key with it. Lists, maps and arrays all work. Use the string form `thenForEach("items", Item.class, body)` when the context is a `Map<String, Object>`, which has no accessor to reference |
+| `repeatWhile(s::guard, body)` | run `body`, then repeat while the guard holds (at least once). `repeatWhile(guard, maxIterations, body)` caps it; a trailing `"queue"` pins the condition |
+| `thenSleep(duration)` / `thenSleep(name, duration)` | server-side timer; holds no worker |
+| `thenAwait(name[, timeout[, escalation]])` | wait for a named external signal; optional deadline escalates or fails |
+| `thenSubFlow(node, workflow, Result.class)` | run another workflow as a child; its result merges back, failure propagates |
+| a trailing `"queue"` argument / `defaultQueue(q)` | route one node (or every following step) to a dedicated worker pool |
 | `execution(mode)` | set the execution mode ([§6.4](#64-execution-modes)) |
 | `checkpoint()` | (LOCAL_ASYNC) flush this step to the server before the next runs |
-| `build()` | produce the `FlowSpec` |
 
-`step`/`effect`/`gate` take an optional trailing `RetryPolicy`. The context type is not fixed by the
+Retry and queue are trailing arguments on the call that creates the node, in either order, so they travel *with* the step they configure — there is no separate call to forget. A node you named with a handler takes both (`thenApply`, `thenAccept`, `thenFilter`, `thenApplyCompensable`, `when`, and the `combine` of an `allOf` or a `thenForEach`). A node a construct creates for you takes only the queue: `repeatWhile`'s condition, whose retry stays the workflow default. Omitting a retry never leaves a node bare — it inherits the default given to `FlowSpec.define`. The context type is not fixed by the
 definition — each handler picks the type it works in by its signature (a typed record, or a
 `Map<String, Object>` for raw JSON), and a method may return a different type than it takes.
 
@@ -302,7 +301,7 @@ wherever a step or combine parameter of that type is bound. It's the seam for sc
 or a bespoke codec:
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     @Decode
     public Order load(Map<String, Object> raw) {     // upcast an older shape to the current Order
@@ -334,13 +333,35 @@ String id = client.start("order-fulfilment", Map.of("orderId", "A-1001", "quanti
 String id2 = client.start("order-fulfilment", ctx, 302800684, "corr-42");
 ```
 
-Registration belongs with whoever owns the definition — normally the **worker artifact**, where
-the handlers and the graph they serve deploy as one atomic act (`registerOnStart`, the default;
-the binder validates handler signatures against that exact graph on startup). Content-hash
+Registration belongs with whoever owns the definition — the **author**, via `client.register(spec)`.
+A worker never publishes a topology: it binds handlers by name and fetches the graph to validate
+their signatures against on startup (`WorkerOptions.withAwaitRegistration` gives it a window to wait
+if it starts before the author). That split is why the same flow can be served by workers in Java, Go
+and Python without any of them redefining it. Content-hash
 versioning makes this safe for everyone else: re-registering an identical graph is a no-op, a
 changed graph is a NEW version that redirects nothing, in-flight instances stay pinned to the
 version they started on, and by-name submitters pick the new version up only for new starts —
 or never, if they pin.
+
+**Serving one version rather than all of them.** By default a worker's handlers serve *every*
+version of the workflow they bind, which is almost always what you want: step names are stable
+across versions, so one implementation covers them all. Pass a version to narrow that:
+
+```java
+new Worker(client, "service-a").registerHandler(new OrderHandlers(), v1.version());  // claims only v1
+new Worker(client, "service-b").registerHandler(new OrderHandlers(), v2.version());  // claims only v2
+```
+
+A scoped worker filters its claim by `(workflow, version)`, so it will not pick up another
+version's tasks. That is what makes it possible to move a capability between services: service A
+keeps serving v1 while service B takes v2, A drains its in-flight instances and retires — no shared
+deploy, no cutover. Without the scoping, A would keep claiming v2's tasks and running them with v1's
+code, because the activity a handler binds is `workflow#step` and carries no version, so the names
+match and nothing notices. Binding a version that was never registered fails at `start()`, where a
+deploy can fail, rather than as a decode error on the first task.
+
+The cost of scoping is that a version nobody registers has no worker at all, and its tasks sit
+dispatchable forever — see [§7.5](#75-backlog-coverage-work-nothing-can-claim).
 
 ---
 
@@ -380,14 +401,13 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `false` | a sweep that fills its batch runs again immediately (drain mode) — removes the batch÷tick promotion ceiling under backlog (measured: 100 → ~1,700 timers/sec at defaults); idle cost unchanged |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
-| `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `doWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `doWhile(name, maxIterations, body)` |
-| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog ([§7.5](#75-queue-lag-monitoring)) |
+| `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `repeatWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `repeatWhile(guard, maxIterations, body)` |
+| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog ([§7.6](#76-queue-lag-monitoring)) |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN once the backlog isn't draining within this budget |
 
 ### 6.4 Execution modes
 
-Set per workflow: `f.execution(ExecutionMode.LOCAL_SYNC)` in a `define` body, or
-`Wiggle.graph(...).execution(...)`. The mode
+Set per workflow: `f.execution(ExecutionMode.LOCAL_SYNC)` in the `define` body. The mode
 is part of the definition's **content hash**, so an in-flight instance keeps the mode it started on.
 
 | Mode | Behaviour | Crash blast radius | Use for |
@@ -417,7 +437,6 @@ new Worker(client, "worker-1", WorkerOptions.defaults()
 | `longPollWait` | 10s | how long the worker lets a poll block server-side |
 | `idleBackoff` | 200ms | pause when a poll returns nothing |
 | `errorBackoff` | 2s | pause after a poll error |
-| `registerOnStart` | true | (re)register flow specs when the worker starts |
 | `localBatchSize` | 64 | LOCAL_ASYNC steps buffered before a flush (ignored by SERVER/LOCAL_SYNC) |
 
 **RPC retry (client + worker).** Every `WiggleClient` call — and therefore every worker RPC (poll,
@@ -490,10 +509,10 @@ WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
 ```
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
-has four tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
+has five tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
 overlaying token status onto the workflow diagram, cancel, inline signal delivery), **Workflows**
-(render any compiled graph), **Schedules** (create/delete interval and cron schedules), and
-**Signals**. `./gradlew :console:build` compiles the bundle automatically (needs Node;
+(render any compiled graph), **Schedules** (create/delete interval and cron schedules), **Signals**,
+and **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
 
@@ -535,26 +554,48 @@ any RPC; layer the console's login/Basic auth or an external gateway on top for 
 
 No URL → in-memory (single node, dev/test). With one, the server builds its store from an injected
 `StorageFactory` — **no `ServiceLoader`**: the distribution's `WiggleStorageFactory` maps the URL
-scheme to a backend at runtime. The JDBC backends — PostgreSQL / H2 (`wiggle-postgres`),
-MySQL / MariaDB (`wiggle-mysql`), Oracle (`wiggle-oracle`), SQL Server (`wiggle-sqlserver`) — share
-one HikariCP-pooled, dialect-aware store (`wiggle-jdbc`). The `dist` module (the Docker image)
-bundles them all, so a single image serves any of `jdbc:postgresql:`, `jdbc:h2:`,
-`jdbc:mysql:` / `jdbc:mariadb:`, `jdbc:oracle:` or `jdbc:sqlserver:`. Another database is a new
-module — no engine change.
+scheme to a backend at runtime. Both dialects live in `wiggle-postgres` over one HikariCP-pooled
+store (`wiggle-jdbc`): **PostgreSQL** is what you deploy on, and **H2** (in PostgreSQL mode) is for
+tests and local runs — it takes the same schema but has no `SKIP LOCKED`, so it claims tasks by
+compare-and-set rather than in a single statement, and is not a deployment target. So the image
+serves `jdbc:postgresql:` and `jdbc:h2:`.
 
 Embedding the server in your own JVM? Pass the factory explicitly, e.g.
 `new WiggleServer(config, cfg -> new JdbcStorage(cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(),
 cfg.jdbcPoolSize(), new PostgresDialect()))` — you depend only on the storage module(s) you use.
 
+**The coordinator has its own, separate store.** It keeps the control plane's state (placement
+policy, the cell roster, the definition and namespace registries) in the `coord_*` schema, and it
+is deliberately not the engine's store: a cell must never know about coordinators, so the two are
+linked by nothing but the gRPC contract.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WIGGLE_COORD_STORE` | *(unset)* | **unset = in-memory**: one process, nothing to install, state lost on restart. Set `jdbc:postgresql://host:5432/wiggle_coord` for a durable, HA control plane |
+| `WIGGLE_COORD_JDBC_USER` / `WIGGLE_COORD_JDBC_PASSWORD` | *(unset)* | credentials for that database |
+| `WIGGLE_COORD_JDBC_POOL` | `4` | pool size (the control plane's traffic is small) |
+
+Coordinators are otherwise stateless, so HA is just several of them over one database. They elect a
+single leader between themselves — the reconcile/retire loop runs only on the leader — using the
+**same announce-and-heartbeat election the cells run** (the `election` module, shared by `server`
+and `coordinator` and depended on by neither of each other): every process announces itself and
+heartbeats, the longest-running live process leads with ties broken by id, and a process whose own
+heartbeat has gone stale stands down before doing leader work. No consensus protocol, because there
+is nothing to agree on — the shared table is the only source of truth and the rule over it is a pure
+function every process evaluates identically. What makes that safe is that the leader's duties are
+idempotent and re-entrant: a brief overlap during failover duplicates work but cannot corrupt state,
+and every policy write is a compare-and-set on `revision`, so a stale ex-leader's write matches zero
+rows and loses.
+
 ### 7.3 Signals, sub-workflows and schedules
 
-`awaitSignal(name)` parks an instance until the named signal arrives; no worker is held. Deliver
+`thenAwait(name)` parks an instance until the named signal arrives; no worker is held. Deliver
 via `client.signal(instanceId, name, payload)` (gRPC), the console's Signals tab, or
 `POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
-`awaitSignal(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
+`thenAwait(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
 branch instead. Signals are not buffered -- an early delivery is a retryable conflict.
 
-`subWorkflow(name, workflow)` runs a registered workflow as a child with the parent's context;
+`thenSubFlow(node, workflow, Result.class)` runs a registered workflow as a child with the parent's context;
 its final context merges back, its failure/cancellation fails the parent, and cancelling the
 parent cascades to children.
 
@@ -586,13 +627,41 @@ For deployments where a DBA or CI pipeline — not the application — owns DDL:
   un-drifted and **fails fast** if it's behind (telling you to run the migrate job first). Run the
   migrate-only job, then run the app in verify mode with only `SELECT`/`INSERT`/… grants.
 
-### 7.5 Queue-lag monitoring
+### 7.5 Backlog coverage: work nothing can claim
+
+A token whose queue nobody polls — or whose version every worker has scoped itself out of
+([§5](#5-authoring-workflows)) — sits `READY` forever. It is not failed, not retried, not late in
+any way the engine can see: the instance reads `RUNNING` and the token reads `READY`, which is
+exactly what a healthy system looks like a moment before a worker picks the work up. No other view
+can tell you about it, which is why there is one for it.
+
+Each node remembers which queues and `(workflow, version)` pairs its current pollers serve, and the
+**Backlog** tab lists the dispatchable backlog grouped by `(workflow, version, queue)`, each slice
+flagged `covered` or not — uncovered first, with how many tasks are stranded on it and how long the
+oldest has waited. A slice is covered when some live worker polls that queue **and** either is
+unscoped or named that version, which is the same test the claim applies, so it reports what the
+dispatcher would actually do.
+
+Also on the wire as `GetBacklogCoverage`, and over HTTP at `/api/backlog`:
+
+```json
+{"slices": [{"workflow": "orders", "version": 302800684, "queue": "gpu",
+             "readyCount": 41, "oldestAvailableAt": 1757800000000, "covered": false}],
+ "uncoveredSlices": 1, "strandedTasks": 41, "livePollers": 3}
+```
+
+The registry behind it is in memory and deliberately not durable — it is written on the poll path
+and must cost a map write — so it knows only its own node's pollers, and the console aggregates
+across a namespace's cells. A worker that stops polling stops counting as cover once its entry
+times out.
+
+### 7.6 Queue-lag monitoring
 
 The leader watches whether the dispatchable backlog is draining fast enough (backlog vs
 cluster-wide completion rate) and logs a `WARNING` when it isn't — a sign of too few workers, a
 stuck worker pool, or a slow step. Tune with the two `WIGGLE_QUEUE_LAG_*` knobs ([§6.3](#63-server--engine-cluster--housekeeping)).
 
-### 7.6 Benchmarking
+### 7.7 Benchmarking
 
 ```bash
 # in-memory (async ≈ sync, commits are free):
@@ -613,4 +682,3 @@ WIGGLE_EXECUTION_MODE=LOCAL_ASYNC WIGGLE_JDBC_URL=jdbc:postgresql://localhost:54
   the crash-replay contract per mode.
 - `RELEASING.md` — publishing to Maven Central.
 - `proto/src/main/proto/wiggle.proto` — the control-plane wire contract.
-</content>

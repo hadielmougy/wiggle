@@ -6,26 +6,36 @@ import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** {@link GraphBuilder#fork} with its mandatory {@link ForkStage#combine}: the topology it emits
- *  (an isolated fork rejoined by a combine node that carries the arm names). The combine's merge
- *  logic is a worker concern, exercised end-to-end in the engine tests. */
+/**
+ * {@link Wiggle#allOf} with its mandatory combine: the topology it emits -- an isolated fork rejoined
+ * by a combine node that carries the arm names. The combine's merge logic is a worker concern,
+ * exercised end-to-end in the engine tests.
+ */
 class ForkCombineTest {
 
+    interface TripSteps {
+        Map<String, Object> prep(Map<String, Object> ctx);
+        Map<String, Object> bookAir(Map<String, Object> ctx);
+        Map<String, Object> bookHotel(Map<String, Object> ctx);
+        Map<String, Object> merge(Map<String, Object> air, Map<String, Object> hotel);
+        Map<String, Object> book(Map<String, Object> ctx);
+    }
+
     private static FlowSpec tripFlowSpec() {
-        return Wiggle.graph("trip")
-                .step("prep")
-                .fork(
-                        Branch.of("air", s -> s.step("book-air")),
-                        Branch.of("hotel", s -> s.step("book-hotel")))
-                .combine("merge")
-                .step("book")
-                .build();
+        return FlowSpec.define("trip", Map.class, TripSteps.class, (f, s) -> {
+            var prepped = f.thenApply(s::prep);
+            // continuing `prepped` twice is the fan-out; each arm runs on its own isolated copy
+            var air = prepped.thenApply(s::bookAir);
+            var hotel = prepped.thenApply(s::bookHotel);
+            return Wiggle.allOf(air, hotel).combine(s::merge).thenApply(s::book);
+        });
     }
 
     private static Node only(WorkflowDefinition def, NodeKind kind) {
@@ -45,8 +55,8 @@ class ForkCombineTest {
 
         Node fork = only(def, NodeKind.FORK);
         Node join = only(def, NodeKind.JOIN);
-        Node air = named(def, "book-air");
-        Node hotel = named(def, "book-hotel");
+        Node air = named(def, "bookAir");
+        Node hotel = named(def, "bookHotel");
         Node merge = named(def, "merge");
         Node book = named(def, "book");
 
@@ -65,26 +75,35 @@ class ForkCombineTest {
     void combineNodeCarriesArmNamesForTheEngineToKeyBranchResults() {
         WorkflowDefinition def = tripFlowSpec().definition();
         // The arm names ride on the combine node's itemsKey (a store-portable field) as a JSON array,
-        // in fork order, so the engine can stage each isolated branch's result under its name.
-        assertEquals("[\"air\",\"hotel\"]", named(def, "merge").itemsKey());
+        // in fork order, so the engine can stage each isolated branch's result under its name. The arm
+        // names are the step names, which in this API are the referenced methods' own names.
+        assertEquals("[\"bookAir\",\"bookHotel\"]", named(def, "merge").itemsKey());
     }
 
     @Test
-    void combineIsMandatory_forgottenCombineFailsBuild() {
-        GraphBuilder stream = Wiggle.graph("t").step("prep");
-        stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
-
-        IllegalStateException ex = assertThrows(IllegalStateException.class, stream::build);
+    void combineIsMandatory_aFanOutWithNoMergeFailsToDefine() {
+        // Forgetting the combine entirely cannot compile -- allOf returns a stage whose only methods
+        // are combines -- so what is reachable is dropping the stage on the floor, which leaves the
+        // fan-out unjoined.
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                FlowSpec.define("t", Map.class, TripSteps.class, (f, s) -> {
+                    var prepped = f.thenApply(s::prep);
+                    Wiggle.allOf(prepped.thenApply(s::bookAir), prepped.thenApply(s::bookHotel));
+                    return prepped;
+                }));
         assertTrue(ex.getMessage().toLowerCase().contains("merge")
                 || ex.getMessage().toLowerCase().contains("combine"), ex.getMessage());
     }
 
     @Test
     void combineTwiceThrows() {
-        GraphBuilder stream = Wiggle.graph("t").step("prep");
-        ForkStage stage = stream.fork(Branch.of("a", s -> s.step("a")), Branch.of("b", s -> s.step("b")));
-        stage.combine("m");
-        assertThrows(IllegalStateException.class, () -> stage.combine("m2"));
+        assertThrows(IllegalStateException.class, () ->
+                FlowSpec.define("t", Map.class, TripSteps.class, (f, s) -> {
+                    var prepped = f.thenApply(s::prep);
+                    var stage = Wiggle.allOf(prepped.thenApply(s::bookAir), prepped.thenApply(s::bookHotel));
+                    stage.combine(s::merge);
+                    return stage.combine(s::merge);   // a fan-out joins once
+                }));
     }
 
     @Test

@@ -68,13 +68,39 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     /**
+     * The dispatchable backlog split by (workflow, version, queue), each flagged with whether a worker
+     * polling that node would claim it. An uncovered slice is work nothing can pick up -- a queue
+     * nobody polls, or a version every worker has scoped itself out of.
+     */
+    public List<BacklogSlice> backlogCoverage(int max) {
+        com.wiggle.proto.BacklogCoverage res = call(() -> stub.getBacklogCoverage(
+                com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build()));
+        List<BacklogSlice> out = new ArrayList<>(res.getSlicesCount());
+        for (com.wiggle.proto.BacklogSlice s : res.getSlicesList()) {
+            out.add(new BacklogSlice(s.getWorkflow(), s.getVersion(), s.getQueue(),
+                    s.getReadyCount(), s.getOldestAvailableAt(), s.getCovered(), res.getLivePollers()));
+        }
+        return out;
+    }
+
+    /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
+    public record BacklogSlice(String workflow, int version, String queue, int readyCount,
+                               long oldestAvailableAt, boolean covered, int livePollers) {}
+
+    /**
      * The registered graph for {@code name} -- the server's source of truth for a workflow's step
      * names, kinds, and queues. Throws {@link WiggleApiException} with status 404 if the workflow was
      * never registered. Used by {@link Worker#handle} reconciliation.
      */
     public com.wiggle.core.WorkflowDefinition getWorkflow(String name) {
-        WorkflowDefinition def = call(() -> stub.getWorkflow(
-                GetWorkflowRequest.newBuilder().setName(name).build()));
+        return getWorkflow(name, null);
+    }
+
+    /** {@code version} null = the latest registered; otherwise that exact version. */
+    public com.wiggle.core.WorkflowDefinition getWorkflow(String name, Integer version) {
+        GetWorkflowRequest.Builder req = GetWorkflowRequest.newBuilder().setName(name);
+        if (version != null) req.setVersion(version);
+        WorkflowDefinition def = call(() -> stub.getWorkflow(req.build()));
         return com.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(def.getDefinition()));
     }
 
@@ -193,13 +219,27 @@ public final class WiggleClient implements AutoCloseable {
 
     public PollResult poll(String workerId, Collection<String> queues, int max,
                            long leaseMillis, long waitMillis) {
-        PollRequest req = PollRequest.newBuilder()
+        return poll(workerId, queues, java.util.Set.of(), max, leaseMillis, waitMillis);
+    }
+
+    /**
+     * {@code versions} empty = claim every version, which is what an unversioned worker sends.
+     * Non-empty scopes the claim to those (workflow, version) pairs.
+     */
+    public PollResult poll(String workerId, Collection<String> queues,
+                           Collection<com.wiggle.core.WorkflowVersion> versions, int max,
+                           long leaseMillis, long waitMillis) {
+        PollRequest.Builder b = PollRequest.newBuilder()
                 .setWorkerId(workerId)
                 .addAllQueues(queues)
                 .setMax(max)
                 .setLeaseMillis(leaseMillis)
-                .setWaitMillis(waitMillis)
-                .build();
+                .setWaitMillis(waitMillis);
+        for (com.wiggle.core.WorkflowVersion v : versions) {
+            b.addVersions(com.wiggle.proto.WorkflowVersion.newBuilder()
+                    .setWorkflow(v.workflow()).setVersion(v.version()).build());
+        }
+        PollRequest req = b.build();
         TaskList res = call(() -> stub.pollTasks(req));
         List<com.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
         for (com.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(toTaskActivation(t));

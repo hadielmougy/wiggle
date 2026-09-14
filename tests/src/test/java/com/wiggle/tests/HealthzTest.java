@@ -5,7 +5,6 @@ import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -22,10 +21,9 @@ class HealthzTest {
 
     @Test @DisplayName("a cell serves /healthz on the configured port for k8s probes")
     void healthzForK8s() throws Exception {
-        int port;
-        try (ServerSocket s = new ServerSocket(0)) { port = s.getLocalPort(); }
+        int port = TestPorts.free();
 
-        ServerConfig config = new ServerConfig(0, "health-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "health-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, port,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

@@ -59,7 +59,7 @@ class NodeLifecycleTest {
     @Test @DisplayName("node-side link registers, heartbeats, and deregisters over real gRPC")
     void nodeToCoordinatorRoundTrip() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        CoordinatorApi api = new CoordinatorApi(store, 0, Tls.Options.DISABLED);
+        CoordinatorApi api = new CoordinatorApi(store, TestPorts.free(), Tls.Options.DISABLED);
         api.start();
         try {
             String url = "127.0.0.1:" + api.port();

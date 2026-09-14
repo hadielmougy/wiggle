@@ -1,10 +1,9 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
@@ -40,6 +39,40 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class DynamicConstructsTest {
 
+    interface LoopSteps {
+        Map<String, Object> init(Map<String, Object> ctx);
+        boolean more(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface LoopOnceSteps {
+        boolean neverAgain(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface FanSteps {
+        Map<String, Object> upper(String item);
+        Map<String, Object> measure(Map<String, Object> v);
+        Map<String, Object> collect(@Context Map<String, Object> base, List<Map<String, Object>> results);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface MapFanSteps {
+        // MapFanH.tag takes the frozen base as a @Context parameter as well as the item. A step is
+        // named by reference, and a reference is to a one-argument function, so the name is declared
+        // here in the shape the body sees -- the worker binds the two-parameter handler by name.
+        String tag(Long value);
+        Map<String, Object> collect(@Context Map<String, Object> base, Map<String, String> tagged);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface SetFanSteps {
+        String norm(String item);
+        Map<String, Object> collect(Set<String> results);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -47,18 +80,30 @@ class DynamicConstructsTest {
     }
 
     private static ServerConfig config(String jdbcUrl) {
-        return new ServerConfig(0, "dyn-node", jdbcUrl, jdbcUrl == null ? null : "sa",
+        return new ServerConfig(TestPorts.free(), "dyn-node", jdbcUrl, jdbcUrl == null ? null : "sa",
                 jdbcUrl == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
+    /** The same harness for a record context, which a typed accessor needs. */
+    private InstanceView runTyped(FlowSpec bp, Object handlers, Object input) throws Exception {
+        try (WiggleServer server = new WiggleServer(config(null), new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl());
+             Worker w = new Worker(client, "dyn-" + Ids.next("x")).registerHandler(handlers)) {
+            client.register(bp);
+            w.start();
+            return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
+        }
+    }
+
     private InstanceView run(FlowSpec bp, Object handlers, Map<String, Object> input, String jdbcUrl)
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "dyn-" + Ids.next("x")).register(bp).handlers(handlers)) {
+             Worker w = new Worker(client, "dyn-" + Ids.next("x")).registerHandler(handlers)) {
+            client.register(bp);
             w.start();
             return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
         }
@@ -67,15 +112,14 @@ class DynamicConstructsTest {
     // ------------------------------------------------------------------ doWhile
 
     private static FlowSpec counterLoop(ExecutionMode mode) {
-        return Wiggle.graph("dyn-loop")
+        return FlowSpec.define("dyn-loop", Map.class, LoopSteps.class, (f, s) -> f
                 .execution(mode)
-                .step("init")
-                .doWhile("more", b -> b.step("work"))
-                .step("after")
-                .build();
+                .thenApply(s::init)
+                .repeatWhile(s::more, b -> b.thenApply(s::work))
+                .thenApply(s::after));
     }
 
-    @Handlers("dyn-loop")
+    @ForFlow("dyn-loop")
     static final class LoopH {
         final AtomicInteger bodyRuns;
         LoopH(AtomicInteger bodyRuns) { this.bodyRuns = bodyRuns; }
@@ -105,17 +149,16 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile runs its body at least once")
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
-        FlowSpec bp = Wiggle.graph("dyn-loop-once")
-                .doWhile("never-again", b -> b.step("work"))
-                .step("after")
-                .build();
+        FlowSpec bp = FlowSpec.define("dyn-loop-once", Map.class, LoopOnceSteps.class, (f, s) -> f
+                .repeatWhile(s::neverAgain, b -> b.thenApply(s::work))
+                .thenApply(s::after));
         InstanceView v = run(bp, new LoopOnceH(bodyRuns), Map.of(), null);
         assertEquals("COMPLETED", v.status());
         assertEquals(1, bodyRuns.get(), "do-while body runs once even when the condition is false");
         assertEquals(true, Json.asObject(v.context()).get("done"));
     }
 
-    @Handlers("dyn-loop-once")
+    @ForFlow("dyn-loop-once")
     static final class LoopOnceH {
         final AtomicInteger bodyRuns;
         LoopOnceH(AtomicInteger bodyRuns) { this.bodyRuns = bodyRuns; }
@@ -131,17 +174,16 @@ class DynamicConstructsTest {
 
     /** Two-step body: the item value evolves scalar -> map, proving the value threads the body. */
     private static FlowSpec fanOut(ExecutionMode mode) {
-        return Wiggle.graph("dyn-fan")
+        return FlowSpec.define("dyn-fan", Map.class, FanSteps.class, (f, s) -> f
                 .execution(mode)
-                .forEach("per-item", "items", b -> b
-                        .step("upper")
-                        .step("measure"))
-                .combine("collect")
-                .step("after")
-                .build();
+                .thenForEach("per-item", "items", String.class, b -> b
+                        .thenApply(s::upper)
+                        .thenApply(s::measure))
+                .combine(s::collect)
+                .thenApply(s::after));
     }
 
-    @Handlers("dyn-fan")
+    @ForFlow("dyn-fan")
     static final class FanH {
         /** The handler's parameter IS the element; base data and the index come from Step. */
         public Map<String, Object> upper(String item) {
@@ -189,10 +231,9 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("default-name shorthand: forEach(itemsKey, body) names the node after the collection")
     void shorthandDefaultsNameToItemsKey() {
-        FlowSpec bp = Wiggle.graph("dyn-fan-short")
-                .forEach("items", b -> b.step("upper"))
-                .combine("collect")
-                .build();
+        FlowSpec bp = FlowSpec.define("dyn-fan-short", Map.class, FanSteps.class, (f, s) -> f
+                .thenForEach("items", String.class, b -> b.thenApply(s::upper))
+                .combine(s::collect));
         Node dyn = bp.definition().nodes().values().stream()
                 .filter(n -> n.kind() == NodeKind.DYN_FORK)
                 .findFirst().orElseThrow(() -> new AssertionError("no DYN_FORK node"));
@@ -202,11 +243,10 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("a map input fans out per entry; the combine receives a map keyed like the input")
     void mapInputCollectsAsMap() throws Exception {
-        FlowSpec bp = Wiggle.graph("dyn-fan-map")
-                .forEach("per-entry", "prices", b -> b.step("tag"))
-                .combine("collect")
-                .step("after")
-                .build();
+        FlowSpec bp = FlowSpec.define("dyn-fan-map", Map.class, MapFanSteps.class, (f, s) -> f
+                .thenForEach("per-entry", "prices", Long.class, b -> b.thenApply(s::tag))
+                .combine(s::collect)
+                .thenApply(s::after));
         InstanceView v = run(bp, new MapFanH(),
                 new LinkedHashMap<>(Map.of("prices", new LinkedHashMap<>(Map.of("eu", 10L, "us", 12L)))), null);
         assertEquals("COMPLETED", v.status());
@@ -216,7 +256,7 @@ class DynamicConstructsTest {
         assertEquals(true, ctx.get("done"));
     }
 
-    @Handlers("dyn-fan-map")
+    @ForFlow("dyn-fan-map")
     static final class MapFanH {
         /** Two-param style: the frozen base as a @Context parameter instead of Step.base(). */
         public String tag(@Context Map<String, Object> base, Long value) {
@@ -234,16 +274,15 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("scalar items flow scalar-to-scalar; a Set combine parameter deduplicates")
     void setParamDeduplicates() throws Exception {
-        FlowSpec bp = Wiggle.graph("dyn-fan-set")
-                .forEach("per-item", "items", b -> b.step("norm"))
-                .combine("collect")
-                .build();
+        FlowSpec bp = FlowSpec.define("dyn-fan-set", Map.class, SetFanSteps.class, (f, s) -> f
+                .thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
+                .combine(s::collect));
         InstanceView v = run(bp, new SetFanH(), Map.of("items", List.of("x", "x", "y")), null);
         assertEquals("COMPLETED", v.status());
         assertEquals(2L, Json.asObject(v.context()).get("distinct"), "duplicates collapse in a Set");
     }
 
-    @Handlers("dyn-fan-set")
+    @ForFlow("dyn-fan-set")
     static final class SetFanH {
         public String norm(String item) { return item.toUpperCase(); }   // scalar in, scalar out
         /** Ambient style: no @Context parameter — the base comes from Step.base() instead. */
@@ -286,4 +325,53 @@ class DynamicConstructsTest {
         assertEquals(2L, ctx.get("len1"));
         assertFalse(ctx.containsKey("per-item"), "scratch stayed out of the shared context on JDBC too");
     }
+
+    // ---------------------------------------------------------------- forEach by accessor
+
+    public record Cart(List<String> items, String joined) {}
+
+    interface CartSteps {
+        String upper(String item);
+        Cart collect(@Context Cart base, List<String> upper);
+    }
+
+    @ForFlow("dyn-fan-typed")
+    public static final class CartH implements CartSteps {
+        @Override public String upper(String item) { return item.toUpperCase(); }
+        @Override public Cart collect(@Context Cart base, List<String> upper) {
+            return new Cart(base.items(), String.join(",", upper));
+        }
+    }
+
+    @Test @DisplayName("forEach(Cart::items, …): the component name IS the persisted key, end to end")
+    void accessorKeyResolvesAgainstRealJson() throws Exception {
+        FlowSpec bp = FlowSpec.define("dyn-fan-typed", Cart.class, CartSteps.class, (f, s) -> f
+                .thenForEach(Cart::items, b -> b.thenApply(s::upper))
+                .combine(s::collect));
+
+        InstanceView v = runTyped(bp, new CartH(), new Cart(List.of("ab", "cde", "f"), null));
+
+        assertEquals("COMPLETED", v.status(),
+                "the engine found the collection under the component's own name");
+        Map<String, Object> ctx = Json.asObject(v.context());
+        assertEquals("AB,CDE,F", ctx.get("joined"), "every element ran its branch, in order");
+        assertEquals(List.of("ab", "cde", "f"), ctx.get("items"),
+                "the input collection survives -- the node name defaults to the collection key here, "
+                + "so a bare scratch key would have overwritten it and then been stripped with it");
+        assertTrue(ctx.keySet().stream().noneMatch(k -> k.startsWith("__forEach__")),
+                "the scratch key never leaks downstream");
+    }
+
+    @Test @DisplayName("the results are staged under a reserved key, not the fan-out node's own name")
+    void scratchKeyIsReserved() {
+        FlowSpec bp = FlowSpec.define("dyn-scratch", Map.class, FanSteps.class, (f, s) -> f
+                .thenForEach("items", String.class, b -> b.thenApply(s::upper))
+                .combine(s::collect));
+        Node combine = bp.definition().nodes().values().stream()
+                .filter(n -> "collect".equals(n.name()))
+                .findFirst().orElseThrow(() -> new AssertionError("no combine node"));
+        assertEquals("\"__forEach__items\"", combine.itemsKey(),
+                "a bare 'items' would collide with the collection it fanned over");
+    }
+
 }

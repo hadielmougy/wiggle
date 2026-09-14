@@ -1,5 +1,7 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.core.RetryPolicy;
+
 import java.util.function.UnaryOperator;
 
 /**
@@ -26,7 +28,7 @@ public final class Items {
      * when it was a map -- and returning the complete post-join context.
      */
     public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine) {
-        return merge(StepNames.of(combine));
+        return merge(StepNames.of(combine), null, null);
     }
 
     /**
@@ -34,15 +36,75 @@ public final class Items {
      * {@link com.wiggle.client.worker.Context @Context} parameter plus the collected results.
      */
     public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine) {
-        return merge(StepNames.of(combine));
+        return merge(StepNames.of(combine), null, null);
     }
 
     /** The merge named explicitly. */
     public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-        return merge(name);
+        return merge(name, null, null);
     }
 
-    private <R> WiggleFlow<R> merge(String combineName) {
-        return from.recordForEach(name, itemsKey, body, combineName);
+    /** {@link #combine(FlowFn<X,)} with an explicit retry policy for the combine node. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, RetryPolicy retry) {
+        return merge(StepNames.of(combine), retry, null);
+    }
+
+    /** {@link #combine(FlowFn<X,)} pinned to a dedicated worker queue. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, String queue) {
+        return merge(StepNames.of(combine), null, queue);
+    }
+
+    /** {@link #combine(FlowFn<X,)} with both a retry policy and a dedicated queue. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, RetryPolicy retry, String queue) {
+        return merge(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn<X,)} with both, queue first. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, String queue, RetryPolicy retry) {
+        return merge(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn2<C,)} with an explicit retry policy for the combine node. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, RetryPolicy retry) {
+        return merge(StepNames.of(combine), retry, null);
+    }
+
+    /** {@link #combine(FlowFn2<C,)} pinned to a dedicated worker queue. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, String queue) {
+        return merge(StepNames.of(combine), null, queue);
+    }
+
+    /** {@link #combine(FlowFn2<C,)} with both a retry policy and a dedicated queue. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, RetryPolicy retry, String queue) {
+        return merge(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn2<C,)} with both, queue first. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, String queue, RetryPolicy retry) {
+        return merge(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(String, Class)} with an explicit retry policy for the combine node. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, RetryPolicy retry) {
+        return merge(name, retry, null);
+    }
+
+    /** {@link #combine(String, Class)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, String queue) {
+        return merge(name, null, queue);
+    }
+
+    /** {@link #combine(String, Class)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, RetryPolicy retry, String queue) {
+        return merge(name, retry, queue);
+    }
+
+    /** {@link #combine(String, Class)} with both, queue first. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, String queue, RetryPolicy retry) {
+        return merge(name, retry, queue);
+    }
+
+    private <R> WiggleFlow<R> merge(String combineName, RetryPolicy retry, String queue) {
+        return from.recordForEach(name, itemsKey, body, combineName, retry, queue);
     }
 }

@@ -1,7 +1,7 @@
 package com.wiggle.order;
 
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 /**
  * The step logic for {@link OrderFulfilment}, bound on a worker by name. Each method's name matches a
@@ -16,7 +16,7 @@ import com.wiggle.client.worker.Handlers;
  * signature. The {@code @Override}s are the point: drop a step and the build fails, rather than the
  * worker failing to bind at startup.
  */
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 public final class OrderHandlers implements OrderSteps {
 
     @Override

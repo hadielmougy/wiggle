@@ -1,9 +1,8 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
@@ -24,13 +23,20 @@ import static org.junit.jupiter.api.Assertions.*;
 /** {@code .checkpoint()} plumbing (version hash) and its LOCAL_ASYNC behaviour (forces an early flush). */
 class CheckpointTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
         return n;
     }
 
-    @Handlers("cp-flush")
+    @ForFlow("cp-flush")
     static final class FlushH {
         final CountDownLatch bRunning, releaseB;
         FlushH(CountDownLatch bRunning, CountDownLatch releaseB) { this.bRunning = bRunning; this.releaseB = releaseB; }
@@ -39,7 +45,7 @@ class CheckpointTest {
         public Map<String, Object> c(Map<String, Object> ctx) { return put(ctx, "c", 3L); }
     }
 
-    @Handlers("cp-nobuf")
+    @ForFlow("cp-nobuf")
     static final class NobufH {
         final CountDownLatch bRunning, releaseB;
         NobufH(CountDownLatch bRunning, CountDownLatch releaseB) { this.bRunning = bRunning; this.releaseB = releaseB; }
@@ -49,7 +55,7 @@ class CheckpointTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "cp-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "cp-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -57,16 +63,20 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        FlowSpec plain = Wiggle.graph("cp")
-                .step("a").step("b").build();
-        FlowSpec checked = Wiggle.graph("cp")
-                .step("a").checkpoint().step("b").build();
+        FlowSpec plain = FlowSpec.define("cp", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenApply(s::b));
+        FlowSpec checked = FlowSpec.define("cp", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .checkpoint()
+                .thenApply(s::b));
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
         assertEquals(1, checked.definition().checkpoints().size(), "one checkpoint recorded");
         assertNotEquals(plain.version(), checked.version(), "checkpoint is part of the content hash");
 
-        assertThrows(IllegalStateException.class, () -> Wiggle.graph("bad").checkpoint(),
+        assertThrows(IllegalStateException.class,
+                () -> FlowSpec.define("bad", Map.class, OneStep.class, (f, s) -> f.checkpoint()),
                 "checkpoint() must follow a step");
     }
 
@@ -75,16 +85,17 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Wiggle.graph("cp-flush")
+        FlowSpec bp = FlowSpec.define("cp-flush", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a").checkpoint()
-                .step("b")
-                .step("c")
-                .build();
+                .thenApply(s::a)
+                .checkpoint()
+                .thenApply(s::b)
+                .thenApply(s::c));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w").register(bp).handlers(new FlushH(bRunning, releaseB))) {
+             Worker w = new Worker(client, "cp-w").registerHandler(new FlushH(bRunning, releaseB))) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
 
@@ -109,16 +120,16 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Wiggle.graph("cp-nobuf")
+        FlowSpec bp = FlowSpec.define("cp-nobuf", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a")   // no checkpoint
-                .step("b")
-                .step("c")
-                .build();
+                .thenApply(s::a)   // no checkpoint
+                .thenApply(s::b)
+                .thenApply(s::c));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w2").register(bp).handlers(new NobufH(bRunning, releaseB))) {
+             Worker w = new Worker(client, "cp-w2").registerHandler(new NobufH(bRunning, releaseB))) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
 

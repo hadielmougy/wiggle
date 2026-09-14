@@ -42,11 +42,11 @@ public final class TypedBindingDemo {
             try (Worker fulfilment = new Worker(client, "typed-fulfilment");
                  Worker payments = new Worker(client, "typed-payments")) {
 
-                fulfilment.handlers(new TypedFulfilmentHandlers())
+                fulfilment.registerHandler(new TypedFulfilmentHandlers())
                           .start();
                 System.out.println("[fulfilment] serving validate / in-stock / notify as typed Purchase handlers");
 
-                payments.handlers(new TypedPaymentsHandlers())
+                payments.registerHandler(new TypedPaymentsHandlers())
                         .start();
                 System.out.println("[payments]   serving charge on the payments queue");
 

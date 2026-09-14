@@ -5,7 +5,7 @@ import java.util.Set;
 
 /** Worker tuning. Defaults are chosen for interactive workloads, not throughput benchmarks. */
 public record WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
-                            Duration idleBackoff, Duration errorBackoff, boolean registerOnStart,
+                            Duration idleBackoff, Duration errorBackoff,
                             int localBatchSize, Set<String> queues, Duration awaitRegistration) {
 
     public WorkerOptions {
@@ -17,21 +17,21 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
     public static WorkerOptions defaults() {
         return new WorkerOptions(Runtime.getRuntime().availableProcessors(),
                 Duration.ofSeconds(30), Duration.ofSeconds(10),
-                Duration.ofMillis(200), Duration.ofSeconds(2), true, 64, Set.of(), Duration.ZERO);
+                Duration.ofMillis(200), Duration.ofSeconds(2), 64, Set.of(), Duration.ZERO);
     }
 
     public WorkerOptions withConcurrency(int c) {
-        return new WorkerOptions(c, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+        return new WorkerOptions(c, lease, longPollWait, idleBackoff, errorBackoff,
                 localBatchSize, queues, awaitRegistration);
     }
 
     public WorkerOptions withLease(Duration d) {
-        return new WorkerOptions(concurrency, d, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+        return new WorkerOptions(concurrency, d, longPollWait, idleBackoff, errorBackoff,
                 localBatchSize, queues, awaitRegistration);
     }
 
     public WorkerOptions withLongPollWait(Duration d) {
-        return new WorkerOptions(concurrency, lease, d, idleBackoff, errorBackoff, registerOnStart,
+        return new WorkerOptions(concurrency, lease, d, idleBackoff, errorBackoff,
                 localBatchSize, queues, awaitRegistration);
     }
 
@@ -41,7 +41,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      * Ignored by SERVER and LOCAL_SYNC (which flush every step).
      */
     public WorkerOptions withLocalBatchSize(int size) {
-        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
                 size, queues, awaitRegistration);
     }
 
@@ -51,7 +51,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      * steps routed elsewhere, and a local-execution chain hands back at a step it does not serve.
      */
     public WorkerOptions withQueues(String... only) {
-        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
                 localBatchSize, Set.of(only), awaitRegistration);
     }
 
@@ -62,7 +62,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      * are bound by name.
      */
     public WorkerOptions withAwaitRegistration(Duration d) {
-        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff, registerOnStart,
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
                 localBatchSize, queues, d);
     }
 }

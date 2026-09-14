@@ -22,8 +22,7 @@ import java.util.function.Function;
  *
  * <p>The store body is dialect-neutral: it writes canonical, PostgreSQL-flavoured SQL and
  * defers every non-portable fragment to a {@link Dialect}. That single body backs PostgreSQL
- * and H2 (via {@code wiggle-postgres}), MySQL/MariaDB (via {@code wiggle-mysql}) and Oracle
- * (via {@code wiggle-oracle}). Connection pooling is provided by HikariCP.
+ * and H2 (both via {@code wiggle-postgres}). Connection pooling is provided by HikariCP.
  */
 public final class JdbcStorage implements Storage {
 
@@ -296,7 +295,7 @@ public final class JdbcStorage implements Storage {
                                      String expectedBaseline, MigrationMode mode) throws SQLException {
         dialect.acquireMigrationLock(c);
         try (Statement st = c.createStatement()) {
-            execDdl(st, dialect, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
+            execDdl(st, "CREATE TABLE IF NOT EXISTS wf_schema_version (" +
                     "version INT PRIMARY KEY, name VARCHAR(200) NOT NULL, applied_at BIGINT NOT NULL, " +
                     "checksum VARCHAR(64))");
         }
@@ -357,7 +356,7 @@ public final class JdbcStorage implements Storage {
         for (Migration m : pending) {
             try (Statement st = c.createStatement()) {
                 for (String stmt : m.sql().split(";")) {
-                    if (!stmt.isBlank()) execDdl(st, dialect, stmt);
+                    if (!stmt.isBlank()) execDdl(st, stmt);
                 }
             }
             try (PreparedStatement ins = c.prepareStatement(
@@ -379,7 +378,7 @@ public final class JdbcStorage implements Storage {
             try (ResultSet rs = md.getColumns(null, null, table, "CHECKSUM")) { if (rs.next()) return; }
         }
         try (Statement st = c.createStatement()) {
-            execDdl(st, dialect, "ALTER TABLE wf_schema_version ADD checksum VARCHAR(64)");
+            execDdl(st, "ALTER TABLE wf_schema_version ADD checksum VARCHAR(64)");
         }
     }
 
@@ -396,18 +395,10 @@ public final class JdbcStorage implements Storage {
         }
     }
 
-    /**
-     * Runs one dialect-translated DDL statement, tolerating an "already exists" error the dialect
-     * deems benign. Needed for Oracle, which has no {@code IF NOT EXISTS} on older versions and
-     * auto-commits DDL, so a restart or a partially-applied migration can re-encounter an object
-     * that is already there. Any other error propagates.
-     */
-    private static void execDdl(Statement st, Dialect dialect, String canonicalSql) throws SQLException {
-        try {
-            st.execute(dialect.ddl(canonicalSql));
-        } catch (SQLException e) {
-            if (!dialect.isBenignMigrationError(e)) throw e;
-        }
+    /** Runs one DDL statement. Both dialects take {@code IF NOT EXISTS}, so a re-run is idempotent
+     *  and any error here is real. */
+    private static void execDdl(Statement st, String sql) throws SQLException {
+        st.execute(sql);
     }
 
     @Override public <R> R inTx(Function<Tx, R> work) {
@@ -484,10 +475,10 @@ public final class JdbcStorage implements Storage {
             // The version is a content hash of the topology, so an existing (name,version) row
             // is byte-for-byte identical and re-registration is a genuine no-op. insertIgnore makes
             // that idempotent atomically -- unlike a DELETE-then-INSERT, it leaves no window in which
-            // two nodes registering the same graph collide on the primary key. Oracle has no inline
-            // ignore, so a genuine concurrent duplicate surfaces as a duplicate-key error we swallow.
+            // two nodes registering the same graph collide on the primary key. The isDuplicateKey
+            // catch below covers a backend whose ignore is not inline.
             try (PreparedStatement ins = ps(dialect.insertIgnore("INSERT INTO wf_definition " +
-                    "(name,version,body,registered_at) VALUES (?,?,?,?)", "registered_at"))) {
+                    "(name,version,body,registered_at) VALUES (?,?,?,?)"))) {
                 ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
                 ins.setLong(4, System.currentTimeMillis());
                 ins.executeUpdate();
@@ -503,9 +494,9 @@ public final class JdbcStorage implements Storage {
             if (graphExists(def.name(), def.version())) return;
             try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
                     "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key,loop_budget,compensable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", "kind"));
+                    "items_key,item_key,loop_budget,compensable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
                  PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
-                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)", "to_node"))) {
+                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)"))) {
                 for (Node n : def.nodes().values()) {
                     node.setString(1, def.name()); node.setInt(2, def.version()); node.setString(3, n.id());
                     node.setString(4, n.kind().name()); node.setString(5, n.name()); node.setString(6, n.activity());
@@ -531,8 +522,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private boolean graphExists(String workflow, int version) {
-            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? " +
-                    dialect.firstRow())) {
+            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? LIMIT 1")) {
                 p.setString(1, workflow); p.setInt(2, version);
                 try (ResultSet rs = p.executeQuery()) { return rs.next(); }
             } catch (SQLException e) { throw wrap(e); }
@@ -660,14 +650,9 @@ public final class JdbcStorage implements Storage {
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
-            String sql;
-            if (forUpdate) {
-                String hint = dialect.forUpdateHint(), suffix = dialect.forUpdateSuffix();
-                sql = "SELECT * FROM wf_instance" + (hint.isEmpty() ? "" : " " + hint) + " WHERE id=?"
-                        + (suffix.isEmpty() ? "" : " " + suffix);
-            } else {
-                sql = "SELECT * FROM wf_instance WHERE id=?";
-            }
+            String sql = forUpdate
+                    ? "SELECT * FROM wf_instance WHERE id=? FOR UPDATE"
+                    : "SELECT * FROM wf_instance WHERE id=?";
             try (PreparedStatement p = ps(sql)) {
                 p.setString(1, id);
                 try (ResultSet rs = p.executeQuery()) {
@@ -688,7 +673,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
             String sql = "SELECT * FROM wf_instance WHERE correlation_id=? ORDER BY created_at DESC LIMIT ?";
-            try (PreparedStatement p = ps(dialect.limit(sql))) {
+            try (PreparedStatement p = ps(sql)) {
                 p.setString(1, correlationId);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) {
@@ -704,7 +689,7 @@ public final class JdbcStorage implements Storage {
             if (workflow != null) sql.append(" AND workflow=?");
             if (status != null) sql.append(" AND status=?");
             sql.append(" ORDER BY created_at DESC LIMIT ?");
-            try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
+            try (PreparedStatement p = ps(sql.toString())) {
                 int idx = 1;
                 if (workflow != null) p.setString(idx++, workflow);
                 if (status != null) p.setString(idx++, status.name());
@@ -788,14 +773,40 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
-            if (dialect.supportsSkipLocked() && dialect.supportsReturning()) {
-                return claimSkipLockedReturning(workerId, queues, max, now, leaseUntil);
+        @Override public List<Token> claimTasks(String workerId, Set<String> queues,
+                                                Set<WorkflowVersion> versions, int max, long now,
+                                                long leaseUntil) {
+            // PostgreSQL claims in one statement; H2 has neither SKIP LOCKED nor RETURNING and
+            // falls back to compare-and-set.
+            return dialect.supportsSkipLocked() && dialect.supportsReturning()
+                    ? claimSkipLockedReturning(workerId, queues, versions, max, now, leaseUntil)
+                    : claimCompareAndSet(workerId, queues, versions, max, now, leaseUntil);
+        }
+
+        /**
+         * The (workflow, version) filter of a version-scoped worker. It only narrows the candidate
+         * set the dispatch index already found, so it costs a predicate and no join -- wf_token
+         * carries both columns.
+         */
+        private static void appendVersions(StringBuilder sql, Set<WorkflowVersion> versions) {
+            if (versions == null || versions.isEmpty()) return;
+            sql.append(" AND (");
+            for (int i = 0; i < versions.size(); i++) {
+                if (i > 0) sql.append(" OR ");
+                sql.append("(workflow=? AND version=?)");
             }
-            if (dialect.supportsSkipLocked()) {
-                return claimSkipLockedSelect(workerId, queues, max, now, leaseUntil);
+            sql.append(")");
+        }
+
+        /** Binds what {@link #appendVersions} appended; same set, so the same iteration order. */
+        private static int bindVersions(PreparedStatement p, int idx, Set<WorkflowVersion> versions)
+                throws SQLException {
+            if (versions == null || versions.isEmpty()) return idx;
+            for (WorkflowVersion v : versions) {
+                p.setString(idx++, v.workflow());
+                p.setInt(idx++, v.version());
             }
-            return claimCompareAndSet(workerId, queues, max, now, leaseUntil);
+            return idx;
         }
 
         /**
@@ -805,12 +816,15 @@ public final class JdbcStorage implements Storage {
          * transaction ever waits on a row locked by another, concurrent claims across
          * many workers and nodes cannot deadlock, and none of them collide on a row.
          */
-        private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
+                                                     Set<WorkflowVersion> versions, int max,
+                                                     long now, long leaseUntil) {
             StringBuilder pick = new StringBuilder(
                     "SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
                 pick.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
             }
+            appendVersions(pick, versions);
             pick.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
             String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=? " +
                     "WHERE id IN (" + pick + ") RETURNING *";
@@ -821,6 +835,7 @@ public final class JdbcStorage implements Storage {
                 p.setLong(idx++, now);          // SET updated_at
                 p.setLong(idx++, now);          // WHERE available_at<=?
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                idx = bindVersions(p, idx, versions);
                 p.setInt(idx, max);             // LIMIT
                 try (ResultSet rs = p.executeQuery()) {
                     List<Token> out = new ArrayList<>();
@@ -830,58 +845,23 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /**
-         * Two-step claim for dialects that have SKIP LOCKED but not RETURNING (MySQL): lock the
-         * candidate rows with SELECT ... FOR UPDATE SKIP LOCKED, then flip them to RUNNING in the
-         * same transaction. The lock the SELECT took guarantees no other worker can claim the same
-         * rows before the UPDATE commits.
-         */
-        private List<Token> claimSkipLockedSelect(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
-            StringBuilder sel = new StringBuilder(
-                    "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
-            if (queues != null && !queues.isEmpty()) {
-                sel.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
-            }
-            sel.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
-            List<Token> picked = new ArrayList<>();
-            try (PreparedStatement p = ps(dialect.limit(sel.toString()))) {
-                int idx = 1;
-                p.setLong(idx++, now);
-                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
-                p.setInt(idx, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) picked.add(readToken(rs));
-                }
-            } catch (SQLException e) { throw wrap(e); }
-            if (picked.isEmpty()) return picked;
-            try (PreparedStatement upd = ps("UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?," +
-                    "updated_at=? WHERE id=?")) {
-                for (Token t : picked) {
-                    upd.setString(1, workerId); upd.setLong(2, leaseUntil); upd.setLong(3, now); upd.setString(4, t.id);
-                    upd.addBatch();
-                    t.status = TokenStatus.RUNNING;
-                    t.leaseOwner = workerId;
-                    t.leaseExpiresAt = leaseUntil;
-                    t.updatedAt = now;
-                }
-                upd.executeBatch();
-            } catch (SQLException e) { throw wrap(e); }
-            return picked;
-        }
-
-        /** Portable fallback (H2, Oracle): over-fetch candidates, then compare-and-set each. */
-        private List<Token> claimCompareAndSet(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
+        private List<Token> claimCompareAndSet(String workerId, Set<String> queues,
+                                               Set<WorkflowVersion> versions, int max,
+                                               long now, long leaseUntil) {
             StringBuilder sql = new StringBuilder(
                     "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
                 sql.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
             }
+            appendVersions(sql, versions);
             sql.append(" ORDER BY available_at, id LIMIT ?");
             List<Token> candidates = new ArrayList<>();
-            try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
+            try (PreparedStatement p = ps(sql.toString())) {
                 int idx = 1;
                 p.setLong(idx++, now);
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                idx = bindVersions(p, idx, versions);
                 p.setInt(idx, max * 4); // over-fetch: some candidates will lose the CAS race
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) candidates.add(readToken(rs));
@@ -920,8 +900,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> pendingSignals(int max) {
-            try (PreparedStatement p = ps(dialect.limit("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
-                    "ORDER BY created_at LIMIT ?"))) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
+                    "ORDER BY created_at LIMIT ?")) {
                 p.setInt(1, max);
                 try (ResultSet rs = p.executeQuery()) {
                     List<Token> out = new ArrayList<>();
@@ -986,8 +966,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            try (PreparedStatement p = ps(dialect.limit("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
-                    "ORDER BY next_fire_at LIMIT ?"))) {
+            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
+                    "ORDER BY next_fire_at LIMIT ?")) {
                 p.setLong(1, now); p.setInt(2, max);
                 try (ResultSet rs = p.executeQuery()) {
                     List<Rows.Schedule> out = new ArrayList<>();
@@ -1027,6 +1007,23 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
+            try (PreparedStatement p = ps("SELECT workflow, version, queue, COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
+                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=? " +
+                    "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT ?")) {
+                p.setLong(1, now);
+                p.setInt(2, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Rows.BacklogSlice> out = new ArrayList<>();
+                    while (rs.next()) {
+                        out.add(new Rows.BacklogSlice(rs.getString(1), rs.getInt(2), rs.getString(3),
+                                rs.getInt(4), rs.getLong(5)));
+                    }
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
         @Override public int countProcessedSince(long since) {
             try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_token " +
                     "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>?")) {
@@ -1039,7 +1036,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private List<Token> query(String sql, long arg, int limit) {
-            try (PreparedStatement p = ps(dialect.limit(sql))) {
+            try (PreparedStatement p = ps(sql)) {
                 p.setLong(1, arg);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) {
@@ -1102,8 +1099,7 @@ public final class JdbcStorage implements Storage {
             List<String> ids = new ArrayList<>();
             // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
             // dialect a deterministic "oldest first" deletion order at no cost.
-            try (PreparedStatement p = ps(dialect.limit(
-                    "SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?"))) {
+            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?")) {
                 p.setLong(1, updatedBefore);
                 p.setInt(2, limit);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }

@@ -1,7 +1,6 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.client.worker.ActivityHandler;
-import com.wiggle.client.flow.Branch;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -24,17 +24,53 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HandlerBinderTest {
 
-    // ------------------------------------------------------------------ scan
-
-    @Test @DisplayName("scan rejects an object without @Handlers, and a blank workflow name")
-    void scanRejectsUnannotated() {
-        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new Object()));
-        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new BlankH()));
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void log(Map<String, Object> ctx);
+        boolean ok(Map<String, Object> ctx);
+        Map<String, Object> served(Map<String, Object> ctx);
+        Map<String, Object> someoneElses(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
     }
 
-    @Handlers("")
+    // ------------------------------------------------------------------ scan
+
+    @ForFlow("")
     static final class BlankH {
         public Map<String, Object> a(Map<String, Object> c) { return c; }
+    }
+
+    /** No @ForFlow at all: legal now, but the name has to arrive some other way. */
+    static final class UnnamedH {
+        public Map<String, Object> a(Map<String, Object> c) { return c; }
+    }
+
+    @Test @DisplayName("scan rejects a blank workflow name, and leaves a missing one for the caller")
+    void scanWorkflowName() {
+        // An annotation that names nothing is a mistake the binder can see, so it still throws.
+        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new BlankH()));
+
+        // No annotation is not a mistake the binder can see: the name may be coming from
+        // registerHandler(name, handlers). So scan reports "unknown" rather than failing.
+        HandlerBinder.HandlerSet set = HandlerBinder.scan(new UnnamedH());
+        assertNull(set.workflow(), "an unannotated object has no workflow of its own");
+        assertEquals("orders", set.withFlowName("orders").workflow(),
+                "and the caller's name is what supplies it");
+    }
+
+    @Test @DisplayName("registerHandler: the workflow name must come from the annotation or the call")
+    void registerHandlerNeedsAWorkflowName() {
+        // Neither source has one -- rejected here, at the call that made the mistake, rather than
+        // later when the worker tries to fetch a graph called null.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new Worker(null, "w").registerHandler(new UnnamedH()));
+        assertTrue(e.getMessage().contains("flow name"), e.getMessage());
+
+        // Either source on its own is enough.
+        assertDoesNotThrow(() -> new Worker(null, "w").registerHandler("orders", new UnnamedH()),
+                "the name given at the call site stands in for the annotation");
+        assertDoesNotThrow(() -> new Worker(null, "w").registerHandler(new ForkCombineH()),
+                "and an annotated object needs no name");
     }
 
     @Test @DisplayName("scan rejects two methods whose names collide under case-folding")
@@ -44,7 +80,7 @@ class HandlerBinderTest {
         assertTrue(e.getMessage().contains("ambiguous"), e.getMessage());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class CollidingH {
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }
         public Map<String, Object> instock(Map<String, Object> c) { return c; }
@@ -58,7 +94,7 @@ class HandlerBinderTest {
         assertTrue(!set.byName().containsKey("helper"), "0-param method is a helper, not a handler");
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class DecoderH {
         @Decode public Map<String, Object> load(Map<String, Object> raw) { return raw; }
         public Map<String, Object> work(Map<String, Object> c) { return c; }
@@ -68,7 +104,10 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ bind: kinds & signatures
 
     private static WorkflowDefinition linear() {
-        return Wiggle.graph("wf").step("work").gate("ok").effect("log").build().definition();
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::work)
+                .thenFilter(s::ok)
+                .thenAccept(s::log)).definition();
     }
 
     @Test @DisplayName("bind: task returns whole context, gate returns boolean, effect returns null")
@@ -91,7 +130,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class KindsH {
         public Map<String, Object> work(Map<String, Object> c) {
             Map<String, Object> n = new LinkedHashMap<>(c);
@@ -112,34 +151,33 @@ class HandlerBinderTest {
                 () -> HandlerBinder.bind(HandlerBinder.scan(new TooManyParamsH()), linear()));
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class BadGateH {
         public Map<String, Object> ok(Map<String, Object> c) { return c; }   // gate must return boolean
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class BoolTaskH {
         public boolean work(Map<String, Object> c) { return true; }          // task must not return boolean
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class TooManyParamsH {
         public Map<String, Object> work(Map<String, Object> a, Map<String, Object> b) { return a; }
     }
 
     @Test @DisplayName("bind reports unserved steps and applies queue defaulting")
     void unservedAndQueues() {
-        WorkflowDefinition def = Wiggle.graph("wf")
-                .step("served", "special-queue")
-                .step("someone-elses")
-                .build().definition();
+        WorkflowDefinition def = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::served, "special-queue")
+                .thenApply(s::someoneElses)).definition();
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new SubsetH()), def);
         assertEquals(1, r.bindings().size());
         assertEquals("special-queue", r.bindings().get(0).queue(), "explicit queue respected");
-        assertEquals(List.of("someone-elses"), r.unserved());
+        assertEquals(List.of("someoneElses"), r.unserved());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class SubsetH {
         public Map<String, Object> served(Map<String, Object> c) { return c; }
     }
@@ -170,7 +208,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class CtxParamH {
         public Map<String, Object> work(@Context Map<String, Object> base, String item) {
             return Map.of("v", base.get("rate"));
@@ -182,11 +220,8 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ combines
 
     private static WorkflowDefinition forked() {
-        return Wiggle.graph("wf")
-                .fork(Branch.of("a", s -> s.step("a1")),
-                      Branch.of("b", s -> s.step("b1")))
-                .combine("merge")
-                .build().definition();
+        return FlowSpec.define("wf", Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1)).combine(s::merge)).definition();
     }
 
     @Test @DisplayName("fork combine: arms by position, ambient Step.base(), and a verbatim whole return")
@@ -197,8 +232,11 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            // the staged context: pre-fork base + one key per arm
-            Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
+            // the staged context: pre-fork base + one key per arm, keyed by the arm's step
+            // staged under the reserved arm keys, as the engine stages them -- a bare arm name would
+            // collide with a context key of the same name and be stripped along with it
+            Object out = merge.invoke(Map.of("pre", "P",
+                    "__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L)));
             assertEquals(Map.of("pre", "P", "x", 1L, "y", 2L), out,
                     "combine reads its arms in fork order and the base ambiently, returns verbatim");
         } finally {
@@ -206,7 +244,18 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    interface ForkSteps {
+        Map<String, Object> a1(Map<String, Object> c);
+        Map<String, Object> b1(Map<String, Object> c);
+        Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b);
+    }
+
+    interface EachSteps {
+        String norm(String item);
+        Map<String, Object> collect(@Context Map<String, Object> base, List<String> items);
+    }
+
+    @ForFlow("wf")
     static final class ForkCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -226,7 +275,10 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
+            // staged under the reserved arm keys, as the engine stages them -- a bare arm name would
+            // collide with a context key of the same name and be stripped along with it
+            Object out = merge.invoke(Map.of("pre", "P",
+                    "__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L)));
             assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
                     "parameter order is fork order: arm 'a' first, arm 'b' second");
         } finally {
@@ -234,7 +286,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class PositionalCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -253,13 +305,13 @@ class HandlerBinderTest {
     void forkCombineMustTakeEveryArm() {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("[a, b], in that order"),
+        assertTrue(ex.getMessage().contains("[a1, b1], in that order"),
                 "the error names the arms and their order: " + ex.getMessage());
         assertTrue(ex.getMessage().contains("ignore it"),
                 "and says what to do about an arm you do not need: " + ex.getMessage());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class BadCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -273,7 +325,7 @@ class HandlerBinderTest {
         assertTrue(ex.getMessage().contains("more arms than the fork has"), ex.getMessage());
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class WideCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
@@ -282,10 +334,9 @@ class HandlerBinderTest {
     }
 
     private static WorkflowDefinition eachGraph() {
-        return Wiggle.graph("wf")
-                .forEach("per-item", "items", b -> b.step("norm"))
-                .combine("collect")
-                .build().definition();
+        return FlowSpec.define("wf", Map.class, EachSteps.class, (f, s) ->
+                f.thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
+                        .combine(s::collect)).definition();
     }
 
     @Test @DisplayName("forEach combine: List keeps order, Set dedupes, Map is keyed like the input")
@@ -296,15 +347,18 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            // staged: base + the collected results under the forEach's name ("per-item")
-            Object out = collect.invoke(Map.of("pre", "P", "per-item", List.of("x", "x", "y")));
+            // staged: base + the collected results under the forEach's reserved scratch key.
+            // Reserved, not the bare node name: the name defaults to the collection key, so a bare
+            // key would overwrite the very collection it fanned over. DynamicConstructsTest pins
+            // the format; this test only has to stage what the engine would.
+            Object out = collect.invoke(Map.of("pre", "P", "__forEach__per-item", List.of("x", "x", "y")));
             assertEquals(Map.of("pre", "P", "ordered", List.of("x", "x", "y"), "distinct", 2L), out);
         } finally {
             Step.end();
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class EachCombineH {
         public String norm(String item) { return item; }
         public Map<String, Object> collect(@Context Map<String, Object> base, List<String> items) {
@@ -330,7 +384,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Handlers("wf")
+    @ForFlow("wf")
     static final class NoCollectionH {
         public String norm(String item) { return item; }
         public Map<String, Object> collect(@Context Map<String, Object> baseOnly) { return baseOnly; }

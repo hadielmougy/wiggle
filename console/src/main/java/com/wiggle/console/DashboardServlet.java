@@ -46,6 +46,7 @@ public final class DashboardServlet extends HttpServlet {
             if (path.equals("/healthz")) { text(res, 200, "ok"); return; }   // k8s probe for the console pod
             if (path.equals("/api/cluster")) { clusterView(res); return; }
             if (path.equals("/api/signals")) { signals(req, res); return; }
+            if (path.equals("/api/backlog")) { backlog(req, res); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
             if (path.startsWith("/api/schedules")) { schedules(req, res, sub(path, "/api/schedules")); return; }
@@ -156,6 +157,24 @@ public final class DashboardServlet extends HttpServlet {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("instance", DashboardJson.instance(detail.instance()));
         out.put("tokens", tokens);
+        json(res, 200, out);
+    }
+
+    /** Dispatchable work and whether anything is polling for it. See DashboardData#backlogCoverage. */
+    private void backlog(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        int limit = parseInt(req.getParameter("limit"), 100);
+        List<DashboardData.BacklogView> slices = data.backlogCoverage(limit);
+        List<Object> list = new ArrayList<>();
+        int uncovered = 0, stranded = 0;
+        for (DashboardData.BacklogView b : slices) {
+            list.add(DashboardJson.backlog(b));
+            if (!b.covered()) { uncovered++; stranded += b.readyCount(); }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("slices", list);
+        out.put("uncoveredSlices", uncovered);
+        out.put("strandedTasks", stranded);
+        out.put("livePollers", slices.isEmpty() ? 0 : slices.get(0).livePollers());
         json(res, 200, out);
     }
 

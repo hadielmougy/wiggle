@@ -29,7 +29,7 @@ interface OrderSteps {                                  // the steps, as a contr
     ...
 }
 
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
     var payment  = validated.thenApply(s::authorise).thenApply(s::capture);
@@ -87,13 +87,13 @@ are built into the model, not bolted on.
 - 💾 **Durable, honestly** — every instance is DB-backed. Exactly-once dispatch, at-least-once
   execution, lease-based recovery when a worker dies mid-step.
 - 🧭 **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals,
-  timers, sub-workflows, `doWhile`, `forEach` — a compiled graph, versioned by content hash.
+  timers, sub-flows, `repeatWhile`, `thenForEach` — a compiled graph, versioned by content hash.
   **No workflow-code determinism to get wrong**, because the workflow *is* data, not replayed code.
 - 🔌 **Pull-based & polyglot** — workers long-poll over gRPC: no inbound connectivity, no broker,
   backpressure built in. Idiomatic **Java, Go, and Python** workers interoperate on one server —
   a single instance can have steps served by three languages, dispatched by activity name.
 - 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
-  (PostgreSQL / MySQL / Oracle / SQL Server, or in-memory for dev). Embed the server in your JVM
+  (PostgreSQL, or in-memory for dev). Embed the server in your JVM
   for tests; the coordinator is **opt-in** — a single cluster runs unchanged without one. No
   Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
 - 🖥 **Operable from day one** — a web **ops console** (live trace of every instance over the
@@ -145,11 +145,11 @@ locked-down environments). Each release attaches `wiggle-server-<version>.tar`/`
 `SHA-256SUMS`:
 
 ```bash
-tar xf wiggle-server-0.0.3.tar
+tar xf wiggle-server-0.0.4.tar
 sha256sum -c SHA-256SUMS           # optional: verify the download
 WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   WIGGLE_JDBC_USER=wiggle WIGGLE_JDBC_PASSWORD=wiggle \
-  ./wiggle-server-0.0.3/bin/wiggle
+  ./wiggle-server-0.0.4/bin/wiggle
 ```
 
 As a container — one image bundles **every** storage backend; the JDBC URL scheme picks one at
@@ -161,8 +161,8 @@ environment prefers:
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  hadielmougy/wiggle:0.0.3                 # Docker Hub
-  # ghcr.io/hadielmougy/wiggle:0.0.3       # …or GHCR (same image)
+  hadielmougy/wiggle:0.0.4                 # Docker Hub
+  # ghcr.io/hadielmougy/wiggle:0.0.4       # …or GHCR (same image)
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a
@@ -193,7 +193,7 @@ helm install wiggle deploy/helm/wiggle \
 
 When one database is no longer enough — or tenants must not share blast radius — go cellular.
 A **namespace** maps to one or more **cells**; each cell is a full cluster with its **own
-database**. The **coordinator** (a Raft group over embedded Ratis + RocksDB — no external store)
+database**. The **coordinator** (stateless processes over a small PostgreSQL of their own)
 owns placement:
 
 - **Placement by epochs** — a namespace's instances spread over cells by consistent hashing over
@@ -204,7 +204,7 @@ owns placement:
 - **One binary, three roles** — the same image runs everything, chosen by env:
 
 ```bash
-WIGGLE_ROLE=coordinator WIGGLE_COORD_STORE=ratis:///var/lib/wiggle/coord  # control plane, :8099
+WIGGLE_ROLE=coordinator WIGGLE_COORD_STORE=jdbc:postgresql://db/wiggle_coord  # control plane, :8099
 WIGGLE_ROLE=cell WIGGLE_CELL_ID=cellA WIGGLE_NAMESPACE=orders \
   WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_JDBC_URL=jdbc:postgresql://dbA/wiggle  # a cell node
 WIGGLE_ROLE=console WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_NAMESPACE=orders     # the web UI
@@ -253,8 +253,8 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
-// 1. The logic lives in a @Handlers class. The signature defines the step.
-@Handlers("greet")
+// 1. The logic lives in a @ForFlow class. The signature defines the step.
+@ForFlow("greet")
 class GreetHandlers implements GreetSteps {
     public Map<String, Object> sayHello(Map<String, Object> ctx) {
         Map<String, Object> next = new HashMap<>(ctx);
@@ -267,14 +267,14 @@ class GreetHandlers implements GreetSteps {
 //    once and compiled to a graph; the code that runs each step is bound by name on the worker.
 interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
 
-FlowSpec greet = Wiggle.define("greet", Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
+FlowSpec greet = FlowSpec.define("greet", Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
 // 3. Embedded server + worker + one instance.
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
     try (Worker worker = new Worker(client, "worker-1")
-            .register(greet).handlers(new GreetHandlers())) {
+            .registerHandler(new GreetHandlers())) {
         worker.start();
 
         String id = client.start(greet, Map.of("name", "ada"));
@@ -289,7 +289,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 A real one — parallel branches, a guard, a retry policy, a server-side timer:
 
 ```java
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate)
             .thenFilter(s::inStock);         // false ⇒ the instance ends cleanly, not an error
 
@@ -311,30 +311,32 @@ FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.clas
 ### Topology without handlers
 
 Sometimes the graph is written where its handlers are not — an author registering it with no
-handler classes on its classpath, a topology generated from data, or several independent workers
-that each bind a subset of the steps by name. `Wiggle.graph` names the steps directly:
+handler classes on its classpath, or several independent workers that each bind a subset of the
+steps by name. Nothing changes: a spec never holds a handler, only the step's *name*, so the
+interface it names them through is a declaration you need not implement.
 
 ```java
-FlowSpec orders = Wiggle.graph("order-fulfilment")
-        .step("validate")
-        .gate("in-stock")
-        .fork(Branch.of("payment",  s -> s.step("authorise").step("capture")),
-              Branch.of("shipping", s -> s.step("reserve-stock").step("print-label")))
-        .combine("merge")
-        .step("notify")
-        .build();
+public interface OrderSteps {                     // declared here, implemented elsewhere
+    Order   validate(Order o);
+    boolean inStock(Order o);
+    Order   authorise(Order o);
+    // ...
+}
+
+// the author registers the topology without implementing a single step
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
-Both produce the same `FlowSpec` — the graph has only ever held names — and a worker cannot tell
-which was used. Prefer `Wiggle.define` whenever the handlers *are* at hand: it is the one that
-gets checked.
+That is what lets one workflow be served by workers in Java, Go and Python without any of them
+redefining it. A worker that *does* have the handlers can implement the interface and let the
+compiler check that every step matches.
 
 Handlers are plain methods — typed records or raw maps, your choice per step. The **signature
 defines the step kind**: a `boolean` return is a gate, `void` is an effect, anything else is a
 task whose return value becomes the new context:
 
 ```java
-@Handlers("order-fulfilment")
+@ForFlow("order-fulfilment")
 class OrderHandlers {
     public Order   validate(Order o)     { return o.withStatus("VALIDATED"); }
     public boolean inStock(Order o)      { return o.quantity() > 0; }          // gate: "in-stock"
@@ -356,7 +358,7 @@ Dynamic fan-out is just as explicit — **the element is the item's context** (`
 elements the way `fork` transforms contexts):
 
 ```java
-.forEach("items", b -> b.step("price"))     // one isolated branch per element — scalars included
+.thenForEach("items", Item.class, item -> item.thenApply(s::price))   // one isolated branch per element
         .combine("collect")
 
 Priced price(LineItem line) {                       // the parameter IS the element
@@ -367,14 +369,14 @@ Order collect(@Context Order base, List<Priced> priced) { /* you decide what lan
 ```
 
 Run it from any process — different teams can serve different steps of the *same* flow, each
-with its own `@Handlers` class and its own deploy, matched by name:
+with its own `@ForFlow` class and its own deploy, matched by name:
 
 ```java
 try (DirectConnection wiggle = WiggleConnection.direct("localhost:8080")) {
     Worker worker = new Worker(wiggle.client(), "worker-1",
                     WorkerOptions.defaults().withConcurrency(16))
             .register(orders)
-            .handlers(new OrderHandlers())
+            .registerHandler(new OrderHandlers())
             .start();
 
     String id = wiggle.client().start(orders, Order.of("A-1001", "ada", 3, new BigDecimal("249.90")));
@@ -399,11 +401,10 @@ And the parts long-running processes actually need are first-class:
 
 ```java
 // Human / external input — the instance parks (no worker held), a deadline can escalate:
-Wiggle.graph("expense")
-        .step("submit")
-        .awaitSignal("manager-approval", Duration.ofHours(48), b -> b.step("auto-escalate"))
-        .step("pay-out")
-        .build();
+FlowSpec.define("expense", Expense.class, ExpenseSteps.class, (f, s) -> f
+        .thenApply(s::submit)
+        .thenAwait("manager-approval", Duration.ofHours(48), b -> b.thenApply(s::autoEscalate))
+        .thenApply(s::payOut));
 
 client.signal(instanceId, "manager-approval", Map.of("decision", "approved"));
 
@@ -415,9 +416,9 @@ client.cancel(id, "customer changed their mind");
 ```
 
 **More runnable code:** `./gradlew :example:run` (full order demo, one JVM) · the
-**[cookbook](docs/dsl-cookbook.md)** — eight workflows exercising every operator, in both
-authoring modes: `./gradlew :example:runCookbook` ([by name](example/src/main/java/com/wiggle/cookbook/Cookbook.java))
-and `./gradlew :example:runTypedCookbook` ([by method reference](example/src/main/java/com/wiggle/cookbook/TypedCookbook.java)).
+**[cookbook](docs/cookbook.md)** — eight workflows exercising every operator, runnable:
+`./gradlew :example:runCookbook`
+([source](example/src/main/java/com/wiggle/cookbook/Cookbook.java)).
 The same eight graphs either way — worth reading side by side, since the typed one is a single
 class per recipe where the other is a topology file plus a handlers file.
 
@@ -430,9 +431,9 @@ class per recipe where the other is a topology file plus a handlers file.
 | Component | Module | What it does |
 |---|---|---|
 | **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
-| **Storage** | `jdbc`, `postgres`, `mysql`, `oracle`, `sqlserver` | One HikariCP-pooled, dialect-aware JDBC store; backends are drop-in modules behind an explicit `StorageFactory`. No DB configured ⇒ in-memory. |
-| **Coordinator** | `coordinator` | Optional control plane: a Raft group (embedded Ratis + RocksDB — no external store) that allocates namespaces to cells, publishes epoch rings, tracks node health, and answers "where does this instance live?". |
-| **Client & worker** | `client` | Workflow authoring (`Wiggle.define` ∣ `Wiggle.graph`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
+| **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
+| **Coordinator** | `coordinator` | Optional control plane: stateless processes over their own small database that allocate namespaces to cells, publish epoch rings, track node health, and answer "where does this instance live?". Several elect one leader with the same announce-and-heartbeat election the cells run (`election`). |
+| **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
 | **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
 | **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
 | **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ coordinator ∣ console`, every storage backend bundled. |
@@ -491,7 +492,7 @@ combine → notify → audit, `LOCAL_ASYNC` mode), every step durably committed 
 |---|---|
 | Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
 | Cluster | kind (Kubernetes-in-Docker) inside a 10-CPU / 7.7 GB Docker Desktop VM |
-| Topology | 1 coordinator (Ratis) · 2 cells, **each its own server node + PostgreSQL 16** (fresh DBs) · no pod resource limits |
+| Topology | 1 coordinator · 2 cells, **each its own server node + PostgreSQL 16** (fresh DBs) · no pod resource limits |
 | Client side | submitter + 1 worker (`concurrency=100` per cell) on the host, gRPC via `kubectl port-forward` |
 | Runtime | OpenJDK 21 |
 
@@ -552,7 +553,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | Variable | Default | Meaning |
 |---|---|---|
 | `WIGGLE_PORT` | `8080` | gRPC port (`0` picks a free one) |
-| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set to cluster on a DB. Scheme picks the backend: `jdbc:postgresql:`, `jdbc:h2:`, `jdbc:mysql:`/`jdbc:mariadb:`, `jdbc:oracle:`, `jdbc:sqlserver:` |
+| `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set to cluster on a DB. Scheme picks the backend: `jdbc:postgresql:` to deploy on, `jdbc:h2:` for tests and local runs |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | | database credentials |
 | `WIGGLE_SCHEMA_MODE` | `apply` | `apply` runs pending migrations on startup; `verify` applies nothing and fails fast if the schema is behind or has drifted (DBA/CI-owned schema) |
 | `WIGGLE_MIGRATE_ONLY` | `false` | `true` = apply migrations and exit (a one-shot job; then run the app with `WIGGLE_SCHEMA_MODE=verify`) |
@@ -582,7 +583,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 |---|---|---|
 | `WIGGLE_ROLE` | `cell` | set `coordinator` to run the control plane (no engine, no cell DB) |
 | `WIGGLE_PORT` | `8080` | coordinator gRPC port (`8099` by convention) |
-| `WIGGLE_COORD_STORE` | `ratis:///var/lib/wiggle/coord` | coordinator store. **Ratis** (self-contained, no external dep): `ratis://<dir>?peers=id0@host:port,…&id=<self>`. Or **JDBC** (point it at your own DB; stateless coordinators, single-writer via a durable lease): `jdbc:postgresql://host:5432/wiggle_coord` |
+| `WIGGLE_COORD_STORE` | *(unset)* | coordinator store. **unset = in-memory**, a single process with nothing to install — fine locally, not durable. Set to its own database for HA (stateless coordinators, one leader by election): `jdbc:postgresql://host:5432/wiggle_coord` |
 | `WIGGLE_COORD_JDBC_USER` / `WIGGLE_COORD_JDBC_PASSWORD` / `WIGGLE_COORD_JDBC_POOL` | — / — / `4` | credentials + pool size for the JDBC coordinator store |
 | `WIGGLE_MISSED_HEARTBEATS` / `WIGGLE_NODE_NAME` / `WIGGLE_TLS_*` | as above | shared knobs |
 
@@ -631,7 +632,7 @@ Suggestions and PRs welcome — open an issue.
 | | |
 |---|---|
 | 🚀 **[Onboarding + full configuration reference](docs/onboarding.md)** | everything, one page |
-| 🧑‍🍳 **[Cookbook](docs/dsl-cookbook.md)** | every operator in runnable code, both ways — `./gradlew :example:runCookbook` ∣ `:example:runTypedCookbook` |
+| 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | 🧫 **[Sharding & epochs](docs/sharding-and-epochs.md)** | the cellular model in depth |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
@@ -641,16 +642,16 @@ Suggestions and PRs welcome — open an issue.
 **Install** (Maven Central, `sh.wiggle`):
 
 ```kotlin
-implementation("sh.wiggle:wiggle-client:0.0.3")     // DSL + worker + client
-implementation("sh.wiggle:wiggle-server:0.0.3")     // only to embed the server
-implementation("sh.wiggle:wiggle-postgres:0.0.3")   // + your storage module
+implementation("sh.wiggle:wiggle-client:0.0.4")     // DSL + worker + client
+implementation("sh.wiggle:wiggle-server:0.0.4")     // only to embed the server
+implementation("sh.wiggle:wiggle-postgres:0.0.4")   // + your storage module
 ```
 
 Prefer the **BOM** so every wiggle module (and the shared gRPC/protobuf stack) stays version-aligned
 with no per-dependency pins:
 
 ```kotlin
-implementation(platform("sh.wiggle:wiggle-bom:0.0.3"))
+implementation(platform("sh.wiggle:wiggle-bom:0.0.4"))
 implementation("sh.wiggle:wiggle-client")            // versions come from the BOM
 ```
 
@@ -659,7 +660,7 @@ gRPC, protobuf and Guava relocated under `com.wiggle.shaded`, so it has **zero t
 dependencies** and cannot clash with anything already on the app's classpath:
 
 ```kotlin
-implementation("sh.wiggle:wiggle-client-all:0.0.3")  // author flows + run workers, nothing else
+implementation("sh.wiggle:wiggle-client-all:0.0.4")  // author flows + run workers, nothing else
 ```
 
 **Build from source** — JDK 21+, wrapper included:

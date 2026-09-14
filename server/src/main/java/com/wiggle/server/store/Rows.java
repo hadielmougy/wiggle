@@ -149,4 +149,13 @@ public final class Rows {
      * Read-only, so unlike the row classes above this is a plain record.
      */
     public record QueueDepth(int readyCount, long oldestAvailableAt) { }
+
+    /**
+     * One slice of the dispatchable backlog, grouped by what decides who may claim it: the queue a
+     * token sits on, and the (workflow, version) a worker must serve to be allowed it. The console
+     * uses this to show work that no running worker can pick up -- a queue nobody polls, or a version
+     * every worker has scoped itself out of.
+     */
+    public record BacklogSlice(String workflow, int version, String queue,
+                               int readyCount, long oldestAvailableAt) { }
 }

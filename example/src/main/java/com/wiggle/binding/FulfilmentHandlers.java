@@ -1,6 +1,6 @@
 package com.wiggle.binding;
 
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 
 import java.util.Map;
 
@@ -12,7 +12,7 @@ import static com.wiggle.binding.BindingOrder.put;
  * this set has no {@code charge} method, a worker bound to it never serves (nor polls) the payments
  * queue -- ownership of that step is left to {@link PaymentsHandlers}.
  */
-@Handlers("binding-order")
+@ForFlow("binding-order")
 public final class FulfilmentHandlers {
 
     public Map<String, Object> validate(Map<String, Object> ctx) {

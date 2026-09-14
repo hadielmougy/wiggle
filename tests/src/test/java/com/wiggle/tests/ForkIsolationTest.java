@@ -2,11 +2,9 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.worker.Context;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -21,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * The design-B guarantee of {@link GraphBuilder#fork}: each branch runs on
+ * The design-B guarantee of {@link com.wiggle.client.flow.Wiggle#allOf}: each branch runs on
  * its own isolated context copy, so a branch's writes are invisible to its siblings and never reach
  * the shared context implicitly -- the only thing that lands is what the mandatory {@code combine}
  * returns.
@@ -30,17 +28,16 @@ class ForkIsolationTest {
 
     @Test @DisplayName("branch writes are isolated: no implicit merge, combine owns what lands")
     void branchesAreIsolatedAndCombineDecides() throws Exception {
-        FlowSpec bp = Wiggle.graph("isolation")
-                .step("seed")
-                .fork(
-                        // Both arms write the SAME key to different values, and each also asserts it
-                        // cannot see the base being overwritten by its sibling (isolation).
-                        Branch.of("left", s -> s.step("l")),
-                        Branch.of("right", s -> s.step("r")))
-                // The combine ignores both arms' "shared" writes entirely and sets its own value,
-                // proving nothing merges unless combine returns it.
-                .combine("decide")
-                .build();
+        FlowSpec bp = FlowSpec.define("isolation", Map.class, IsolationSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            // Both arms write the SAME key to different values, and each also asserts it cannot see
+            // the base being overwritten by its sibling (isolation).
+            var left = seeded.thenApply(s::l);
+            var right = seeded.thenApply(s::r);
+            // The combine ignores both arms' "shared" writes entirely and sets its own value,
+            // proving nothing merges unless combine returns it.
+            return Wiggle.allOf(left, right).combineWithContext(s::decide);
+        });
 
         Map<String, Object> out = run(bp, new IsolationH(), new LinkedHashMap<>(Map.of("id", "iso-1")));
 
@@ -57,14 +54,11 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a branch that combine ignores contributes nothing to the context")
     void ignoredBranchLeavesNoTrace() throws Exception {
-        FlowSpec bp = Wiggle.graph("ignore-arm")
-                .fork(
-                        Branch.of("keep", s -> s.step("k")),
-                        Branch.of("drop", s -> s.step("d")))
-                // Only "keep" is folded back; "drop"'s writes are discarded with its isolated context.
-                .combine("pick")
-                .step("tail")
-                .build();
+        FlowSpec bp = FlowSpec.define("ignore-arm", Map.class, IgnoreArmSteps.class, (f, s) ->
+                // Only "k" is folded back; "d"'s writes are discarded with its isolated context.
+                Wiggle.allOf(f.thenApply(s::k), f.thenApply(s::d))
+                        .combine(s::pick)
+                        .thenApply(s::tail));
 
         Map<String, Object> out = run(bp, new IgnoreArmH(), new LinkedHashMap<>());
 
@@ -74,13 +68,10 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine's return REPLACES the context: keys it omits do not survive the join")
     void combineReturnReplacesContext() throws Exception {
-        FlowSpec bp = Wiggle.graph("replace-check")
-                .step("seed")
-                .fork(
-                        Branch.of("a", s -> s.step("a1")),
-                        Branch.of("b", s -> s.step("b1")))
-                .combine("pickOnly")
-                .build();
+        FlowSpec bp = FlowSpec.define("replace-check", Map.class, ReplaceSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            return Wiggle.allOf(seeded.thenApply(s::a1), seeded.thenApply(s::b1)).combine(s::pickOnly);
+        });
 
         Map<String, Object> out = run(bp, new ReplaceH(), new LinkedHashMap<>(Map.of("preFork", "here")));
 
@@ -91,16 +82,41 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine with no handler fails the instance — there is no implicit union fold")
     void combineWithoutHandlerFails() throws Exception {
-        FlowSpec bp = Wiggle.graph("no-combine-handler")
-                .fork(
-                        Branch.of("x", s -> s.step("x1")),
-                        Branch.of("y", s -> s.step("y1")))
-                .combine("missing")
-                .build();
+        FlowSpec bp = FlowSpec.define("no-combine-handler", Map.class, NoCombineSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::x1), f.thenApply(s::y1)).combine(s::missing));
 
         InstanceView v = runToTerminal(bp, new NoCombineH(), new LinkedHashMap<>());
 
         assertEquals("FAILED", v.status(), "no default fold: the unserved combine must fail the instance");
+    }
+
+    interface IsolationSteps {
+        Map<String, Object> seed(Map<String, Object> ctx);
+        Map<String, Object> l(Map<String, Object> ctx);
+        Map<String, Object> r(Map<String, Object> ctx);
+        Map<String, Object> decide(@Context Map<String, Object> base,
+                                   Map<String, Object> left, Map<String, Object> right);
+    }
+
+    interface IgnoreArmSteps {
+        Map<String, Object> k(Map<String, Object> ctx);
+        Map<String, Object> d(Map<String, Object> ctx);
+        Map<String, Object> pick(Map<String, Object> keep, Map<String, Object> drop);
+        Map<String, Object> tail(Map<String, Object> ctx);
+    }
+
+    interface ReplaceSteps {
+        Map<String, Object> seed(Map<String, Object> ctx);
+        Map<String, Object> a1(Map<String, Object> ctx);
+        Map<String, Object> b1(Map<String, Object> ctx);
+        Map<String, Object> pickOnly(Map<String, Object> a, Map<String, Object> b);
+    }
+
+    /** The combine is declared but deliberately not implemented by NoCombineH -- that is the point. */
+    interface NoCombineSteps {
+        Map<String, Object> x1(Map<String, Object> ctx);
+        Map<String, Object> y1(Map<String, Object> ctx);
+        Map<String, Object> missing(Map<String, Object> x, Map<String, Object> y);
     }
 
     private static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {
@@ -109,7 +125,7 @@ class ForkIsolationTest {
         return next;
     }
 
-    @Handlers("isolation")
+    @ForFlow("isolation")
     static final class IsolationH {
         public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "base", "B"); }
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
@@ -126,7 +142,7 @@ class ForkIsolationTest {
         }
     }
 
-    @Handlers("ignore-arm")
+    @ForFlow("ignore-arm")
     static final class IgnoreArmH {
         public Map<String, Object> k(Map<String, Object> ctx) { return put(ctx, "kept", true); }
         public Map<String, Object> d(Map<String, Object> ctx) { return put(ctx, "dropped", true); }
@@ -137,7 +153,7 @@ class ForkIsolationTest {
         public Map<String, Object> tail(Map<String, Object> ctx) { return ctx; }
     }
 
-    @Handlers("replace-check")
+    @ForFlow("replace-check")
     static final class ReplaceH {
         public Map<String, Object> seed(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1); }
@@ -147,7 +163,7 @@ class ForkIsolationTest {
         }
     }
 
-    @Handlers("no-combine-handler")
+    @ForFlow("no-combine-handler")
     static final class NoCombineH {
         public Map<String, Object> x1(Map<String, Object> ctx) { return ctx; }
         public Map<String, Object> y1(Map<String, Object> ctx) { return ctx; }
@@ -167,7 +183,8 @@ class ForkIsolationTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(bp).handlers(handlers);
+            client.register(bp);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);
@@ -190,7 +207,8 @@ class ForkIsolationTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-0",
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(bp).handlers(handlers);
+            client.register(bp);
+            w.registerHandler(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);
@@ -205,5 +223,61 @@ class ForkIsolationTest {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> asMap(Object o) {
         return o instanceof Map ? (Map<String, Object>) o : Map.of();
+    }
+
+    // ---------------------------------------------------------------- arm name vs context key
+
+    interface ClashSteps {
+        Map<String, Object> seed(Map<String, Object> c);
+        /** An arm name AND a real context key: the fork stages this arm under its step's name. */
+        Map<String, Object> payment(Map<String, Object> c);
+        Map<String, Object> shipping(Map<String, Object> c);
+        Map<String, Object> settle(@Context Map<String, Object> base,
+                                   Map<String, Object> payment, Map<String, Object> shipping);
+    }
+
+    @ForFlow("arm-key-clash")
+    public static final class ClashH implements ClashSteps {
+        @Override public Map<String, Object> seed(Map<String, Object> c) {
+            Map<String, Object> out = new LinkedHashMap<>(c);
+            out.put("payment", "the user's own value");   // same name as the arm below
+            return out;
+        }
+        @Override public Map<String, Object> payment(Map<String, Object> c) {
+            Map<String, Object> out = new LinkedHashMap<>(c);
+            out.put("charged", true);
+            return out;
+        }
+        @Override public Map<String, Object> shipping(Map<String, Object> c) {
+            Map<String, Object> out = new LinkedHashMap<>(c);
+            out.put("labelled", true);
+            return out;
+        }
+        @Override public Map<String, Object> settle(@Context Map<String, Object> base,
+                                                    Map<String, Object> payment,
+                                                    Map<String, Object> shipping) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            out.put("charged", payment.get("charged"));
+            out.put("labelled", shipping.get("labelled"));
+            return out;
+        }
+    }
+
+    @Test @DisplayName("an arm named like a context key does not eat it -- arms stage under reserved keys")
+    void armNameDoesNotCollideWithAContextKey() throws Exception {
+        FlowSpec bp = FlowSpec.define("arm-key-clash", Map.class, ClashSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            return Wiggle.allOf(seeded.thenApply(s::payment), seeded.thenApply(s::shipping))
+                    .combineWithContext(s::settle);
+        });
+
+        Map<String, Object> out = run(bp, new ClashH(), new LinkedHashMap<>(Map.of("id", "clash-1")));
+
+        assertEquals("the user's own value", out.get("payment"),
+                "the arm named 'payment' staged over the context key 'payment' and the strip took it");
+        assertEquals(true, out.get("charged"), "the payment arm still reached the combine");
+        assertEquals(true, out.get("labelled"), "the shipping arm still reached the combine");
+        assertFalse(out.keySet().stream().anyMatch(k -> k.startsWith("__arm__")),
+                "the reserved arm keys never leak downstream: " + out);
     }
 }

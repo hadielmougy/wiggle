@@ -1,9 +1,8 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
@@ -24,17 +23,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class FindByCorrelationTest {
 
-    @Handlers("corr")
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
+    @ForFlow("corr")
     static final class H {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
     }
 
     private static FlowSpec wf() {
-        return Wiggle.graph("corr").step("work").build();
+        return FlowSpec.define("corr", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config(String jdbcUrl) {
-        return new ServerConfig(0, "corr-node", jdbcUrl, jdbcUrl == null ? null : "sa",
+        return new ServerConfig(TestPorts.free(), "corr-node", jdbcUrl, jdbcUrl == null ? null : "sa",
                 jdbcUrl == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
@@ -44,7 +48,8 @@ class FindByCorrelationTest {
     private void run(String jdbcUrl) throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "corr-w").register(wf()).handlers(new H())) {
+             Worker w = new Worker(client, "corr-w").registerHandler(new H())) {
+            client.register(wf());
             w.start();
             client.register(wf());
 
