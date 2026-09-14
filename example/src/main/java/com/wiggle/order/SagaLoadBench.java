@@ -97,7 +97,7 @@ public final class SagaLoadBench {
                     WiggleClient::new,
                     "saga-load",
                     WorkerOptions.defaults().withConcurrency(100).withLongPollWait(Duration.ofSeconds(10)),
-                    w -> w.register(bp).handlers(new SagaHandlers())
+                    w -> w.handlers(new SagaHandlers())
             ).start();
 
             System.out.printf("saga load: %d instances at %d/s (%d threads) via %s ns=%s%n",

@@ -85,7 +85,8 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp).handlers(new MergeH());
+                client.register(bp);
+                w.handlers(new MergeH());
                 workers.add(w.start());
             }
 
@@ -165,7 +166,8 @@ class ForkJoinContextMergeTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp).handlers(new ParcelH());
+                client.register(bp);
+                w.handlers(new ParcelH());
                 workers.add(w.start());
             }
 

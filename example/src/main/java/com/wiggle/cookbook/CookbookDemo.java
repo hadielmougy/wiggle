@@ -36,10 +36,13 @@ public final class CookbookDemo {
             FlowSpec batchedLoop = Cookbook.batchedLoopWithCheckpoint();
             FlowSpec kitchenSink = Cookbook.kitchenSink();
 
+            // The author publishes every topology; the worker below only implements their steps.
+            for (FlowSpec spec : List.of(linearGate, chooseFork, forEachQueues, pollLoop,
+                    approval, parentChild, batchedLoop, kitchenSink)) {
+                client.register(spec);
+            }
+
             try (Worker worker = new Worker(client, "cookbook-worker")
-                    .register(linearGate).register(chooseFork).register(forEachQueues)
-                    .register(pollLoop).register(approval).register(parentChild)
-                    .register(batchedLoop).register(kitchenSink)
                     .handlers(new CookbookHandlers.LinearGate())
                     .handlers(new CookbookHandlers.ChooseFork())
                     .handlers(new CookbookHandlers.ForeachQueues())

@@ -58,7 +58,8 @@ class DynamicConstructsTest {
             throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "dyn-" + Ids.next("x")).register(bp).handlers(handlers)) {
+             Worker w = new Worker(client, "dyn-" + Ids.next("x")).handlers(handlers)) {
+            client.register(bp);
             w.start();
             return client.awaitCompletion(client.start(bp, input), Duration.ofSeconds(20));
         }

@@ -92,7 +92,8 @@ class SignalTest {
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w").register(bp).handlers(new ApproveH())) {
+             Worker w = new Worker(client, "sig-w").handlers(new ApproveH())) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of("x", 1));
 
@@ -119,7 +120,8 @@ class SignalTest {
                 .build();
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w2").register(bp).handlers(new WrongH())) {
+             Worker w = new Worker(client, "sig-w2").handlers(new WrongH())) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
             awaitPending(server, 1);
@@ -141,7 +143,8 @@ class SignalTest {
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w3").register(bp).handlers(new EscalateH())) {
+             Worker w = new Worker(client, "sig-w3").handlers(new EscalateH())) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());   // never signalled; the deadline fires
 
@@ -162,7 +165,8 @@ class SignalTest {
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sig-w4").register(bp).handlers(new TimeoutH())) {
+             Worker w = new Worker(client, "sig-w4").handlers(new TimeoutH())) {
+            client.register(bp);
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());

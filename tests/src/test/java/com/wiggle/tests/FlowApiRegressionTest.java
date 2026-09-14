@@ -435,7 +435,8 @@ class FlowApiRegressionTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(spec).handlers(handlers);
+            client.register(spec);
+            w.handlers(handlers);
             w.start();
             try {
                 InstanceView v = client.awaitCompletion(client.start(spec, input), Duration.ofSeconds(30));

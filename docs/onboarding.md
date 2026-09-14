@@ -261,7 +261,9 @@ class OrderHandlers {
 }
 ```
 
-Bind it on the worker with `new Worker(client, "w").register(orders).handlers(new OrderHandlers())`.
+Publish it with `client.register(orders)`, and bind the steps on a worker with
+`new Worker(client, "w").handlers(new OrderHandlers())` — the worker fetches the graph and matches
+against it; it is never given the topology.
 A `combine` node (`merge`) must have an explicit handler — a method taking **one parameter per
 fork arm, in fork order** (each branch's result), plus an optional `@Context` parameter (the
 pre-fork context), whose return is the COMPLETE post-join context. Arms bind by position, so a
@@ -334,9 +336,11 @@ String id = client.start("order-fulfilment", Map.of("orderId", "A-1001", "quanti
 String id2 = client.start("order-fulfilment", ctx, 302800684, "corr-42");
 ```
 
-Registration belongs with whoever owns the definition — normally the **worker artifact**, where
-the handlers and the graph they serve deploy as one atomic act (`registerOnStart`, the default;
-the binder validates handler signatures against that exact graph on startup). Content-hash
+Registration belongs with whoever owns the definition — the **author**, via `client.register(spec)`.
+A worker never publishes a topology: it binds handlers by name and fetches the graph to validate
+their signatures against on startup (`WorkerOptions.withAwaitRegistration` gives it a window to wait
+if it starts before the author). That split is why the same flow can be served by workers in Java, Go
+and Python without any of them redefining it. Content-hash
 versioning makes this safe for everyone else: re-registering an identical graph is a no-op, a
 changed graph is a NEW version that redirects nothing, in-flight instances stay pinned to the
 version they started on, and by-name submitters pick the new version up only for new starts —
@@ -417,7 +421,6 @@ new Worker(client, "worker-1", WorkerOptions.defaults()
 | `longPollWait` | 10s | how long the worker lets a poll block server-side |
 | `idleBackoff` | 200ms | pause when a poll returns nothing |
 | `errorBackoff` | 2s | pause after a poll error |
-| `registerOnStart` | true | (re)register flow specs when the worker starts |
 | `localBatchSize` | 64 | LOCAL_ASYNC steps buffered before a flush (ignored by SERVER/LOCAL_SYNC) |
 
 **RPC retry (client + worker).** Every `WiggleClient` call — and therefore every worker RPC (poll,

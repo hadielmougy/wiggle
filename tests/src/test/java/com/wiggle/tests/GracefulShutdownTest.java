@@ -84,7 +84,8 @@ class GracefulShutdownTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
-            Worker worker = new Worker(client, "w-" + Ids.next("x")).register(bp).handlers(drainH);
+            client.register(bp);
+            Worker worker = new Worker(client, "w-" + Ids.next("x")).handlers(drainH);
             worker.start();
             String id = client.start(bp, Map.of());
 
@@ -108,9 +109,10 @@ class GracefulShutdownTest {
             InstanceView mid = server.engine().instance(id).orElseThrow();
             assertEquals("RUNNING", mid.status());
             assertEquals(1L, Json.asObject(mid.context()).get("a"), "the drained step is committed, not lost");
+client.register(bp);
 
             // A fresh worker picks up right where the drain left off.
-            try (Worker second = new Worker(client, "w-" + Ids.next("x")).register(bp).handlers(drainH)) {
+            try (Worker second = new Worker(client, "w-" + Ids.next("x")).handlers(drainH)) {
                 second.start();
                 InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status());

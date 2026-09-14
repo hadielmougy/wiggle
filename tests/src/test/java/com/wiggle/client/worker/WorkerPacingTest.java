@@ -51,10 +51,11 @@ class WorkerPacingTest {
             // Pre-submit so the worker is saturated from its first poll.
             String[] ids = new String[INSTANCES];
             for (int i = 0; i < INSTANCES; i++) ids[i] = client.start("pacing", Map.of());
+client.register(chain());
 
             try (Worker w = new Worker(client, "pacing-w",
                     WorkerOptions.defaults().withConcurrency(CONCURRENCY))) {
-                w.handlers(new PacingH()).register(chain());
+                w.handlers(new PacingH());
                 long t0 = System.nanoTime();
                 w.start();
                 for (String id : ids) {

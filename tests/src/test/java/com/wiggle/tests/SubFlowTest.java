@@ -77,8 +77,10 @@ class SubFlowTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w").register(parent()).register(child)
+             Worker w = new Worker(client, "sub-w")
                      .handlers(new ParentH()).handlers(new ChildOkH())) {
+            client.register(child);
+            client.register(parent());
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of("input", 1L)),
                     Duration.ofSeconds(20));
@@ -99,8 +101,10 @@ class SubFlowTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w2").register(parent()).register(child)
+             Worker w = new Worker(client, "sub-w2")
                      .handlers(new ParentH()).handlers(new ChildFailH())) {
+            client.register(child);
+            client.register(parent());
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -113,7 +117,8 @@ class SubFlowTest {
     void unregisteredChildFailsParent() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w3").register(parent()).handlers(new ParentH())) {
+             Worker w = new Worker(client, "sub-w3").handlers(new ParentH())) {
+            client.register(parent());   // the child is deliberately NOT registered
             w.start();
             InstanceView v = client.awaitCompletion(client.start(parent(), Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
@@ -130,8 +135,10 @@ class SubFlowTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "sub-w4").register(parent()).register(child)
+             Worker w = new Worker(client, "sub-w4")
                      .handlers(new ParentH()).handlers(new ChildParkH())) {
+            client.register(child);
+            client.register(parent());
             w.start();
             String parentId = client.start(parent(), Map.of());
 

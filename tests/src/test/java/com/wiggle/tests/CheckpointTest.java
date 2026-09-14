@@ -84,7 +84,8 @@ class CheckpointTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w").register(bp).handlers(new FlushH(bRunning, releaseB))) {
+             Worker w = new Worker(client, "cp-w").handlers(new FlushH(bRunning, releaseB))) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
 
@@ -118,7 +119,8 @@ class CheckpointTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "cp-w2").register(bp).handlers(new NobufH(bRunning, releaseB))) {
+             Worker w = new Worker(client, "cp-w2").handlers(new NobufH(bRunning, releaseB))) {
+            client.register(bp);
             w.start();
             String id = client.start(bp, Map.of());
 

@@ -64,7 +64,8 @@ class LocalBoundaryTest {
 
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
-                 Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp).handlers(new ForkH(runs))) {
+                 Worker w = new Worker(client, "lb-" + Ids.next("x")).handlers(new ForkH(runs))) {
+                client.register(bp);
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status(), mode + " status");
@@ -92,7 +93,8 @@ class LocalBoundaryTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "lb-" + Ids.next("x")).register(bp).handlers(new GateH(downstream))) {
+             Worker w = new Worker(client, "lb-" + Ids.next("x")).handlers(new GateH(downstream))) {
+            client.register(bp);
             w.start();
             InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
@@ -128,10 +130,12 @@ class LocalBoundaryTest {
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker general = new Worker(client, "general",
                      WorkerOptions.defaults().withQueues("lb-queues"))
-                     .register(generalBp).handlers(new QueuesH(ranOn, "general"));
+                     .handlers(new QueuesH(ranOn, "general"));
              Worker special = new Worker(client, "special",
                      WorkerOptions.defaults().withQueues("special"))
-                     .register(specialBp).handlers(new QueuesH(ranOn, "special"))) {
+                     .handlers(new QueuesH(ranOn, "special"))) {
+            client.register(generalBp);
+            client.register(specialBp);
             general.start();
             special.start();
             InstanceView v = client.awaitCompletion(client.start(generalBp, Map.of()), Duration.ofSeconds(20));

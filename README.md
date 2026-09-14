@@ -274,7 +274,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
     try (Worker worker = new Worker(client, "worker-1")
-            .register(greet).handlers(new GreetHandlers())) {
+            .handlers(new GreetHandlers())) {
         worker.start();
 
         String id = client.start(greet, Map.of("name", "ada"));

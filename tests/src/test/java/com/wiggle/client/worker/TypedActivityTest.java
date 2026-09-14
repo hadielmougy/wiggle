@@ -197,8 +197,9 @@ class TypedActivityTest {
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "typed-w")
-                     .register(bp)
+                     
                      .handlers(new FlowHandlers())) {
+            client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of("orderId", "A-1"));
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(10));

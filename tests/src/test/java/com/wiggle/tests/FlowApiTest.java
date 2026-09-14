@@ -173,7 +173,8 @@ class FlowApiTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));
-            w.register(bp).handlers(handlers);
+            client.register(bp);
+            w.handlers(handlers);
             w.start();
             try {
                 String id = client.start(bp, input);

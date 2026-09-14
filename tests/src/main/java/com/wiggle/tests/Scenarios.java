@@ -49,10 +49,12 @@ public final class Scenarios {
         }
     }
 
+    /** Publishes the topology (the author's job), then starts a worker that binds it by name. */
     private static Worker startWorker(WiggleClient client, FlowSpec bp, Object handlers) {
+        client.register(bp);
         Worker w = new Worker(client, "w-" + Ids.next("x"),
                 WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)))
-                .register(bp).handlers(handlers);
+                .handlers(handlers);
         return w.start();
     }
 
@@ -495,11 +497,12 @@ public final class Scenarios {
                 .build();
 
         withServer((server, client) -> {
+            client.register(bp);
             Worker w = new Worker(client, "hb-" + Ids.next("x"),
                     WorkerOptions.defaults()
                             .withLease(Duration.ofMillis(300))          // heartbeat fires at ~100ms
                             .withLongPollWait(Duration.ofMillis(250)))
-                    .register(bp).handlers(new HeartbeatH(invocations));
+                    .handlers(new HeartbeatH(invocations));
             try (w) {
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));

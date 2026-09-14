@@ -44,15 +44,14 @@ public final class TypedCookbookDemo {
         try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
+            // The author publishes every topology; each recipe object then only implements its steps.
+            for (FlowSpec spec : List.of(linearGateSpec, chooseFork.spec(), forEachQueues.spec(),
+                    pollLoop.spec(), approval.spec(), parentChild.spec(), batchedLoop.spec(),
+                    kitchenSink.spec())) {
+                client.register(spec);
+            }
+
             try (Worker worker = new Worker(client, "typed-cookbook-worker")
-                    .register(linearGateSpec)
-                    .register(chooseFork.spec())
-                    .register(forEachQueues.spec())
-                    .register(pollLoop.spec())
-                    .register(approval.spec())
-                    .register(parentChild.spec())
-                    .register(batchedLoop.spec())
-                    .register(kitchenSink.spec())
                     .handlers(linearGate)
                     .handlers(chooseFork)
                     .handlers(forEachQueues)

@@ -57,7 +57,8 @@ class LoopBudgetTest {
     private static InstanceView run(FlowSpec bp, Duration timeout) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker worker = new Worker(client, "loop-w").register(bp).handlers(new LoopHandlers())) {
+             Worker worker = new Worker(client, "loop-w").handlers(new LoopHandlers())) {
+            client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of());
             return client.awaitCompletion(id, timeout);

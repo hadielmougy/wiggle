@@ -79,7 +79,8 @@ class TlsTest {
             Tls.Options clientTls = opts(null, trust);   // trusts the server, no client cert
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), clientTls);
-                 Worker w = new Worker(client, "tls-w").register(BP).handlers(new WorkHandlers())) {
+                 Worker w = new Worker(client, "tls-w").handlers(new WorkHandlers())) {
+                client.register(BP);
                 w.start();
                 String id = client.start(BP, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());
@@ -98,7 +99,8 @@ class TlsTest {
         try (WiggleServer server = new WiggleServer(config).start()) {
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust));   // presents a cert
-                 Worker w = new Worker(client, "mtls-w").register(BP).handlers(new WorkHandlers())) {
+                 Worker w = new Worker(client, "mtls-w").handlers(new WorkHandlers())) {
+                client.register(BP);
                 w.start();
                 String id = client.start(BP, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());

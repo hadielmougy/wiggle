@@ -41,7 +41,7 @@ public final class FallbackProbe {
             submit.register(bp);
             try (Worker worker = new Worker(workerClient, "probe-worker",
                     WorkerOptions.defaults().withConcurrency(4))
-                    .register(bp).handlers(new ProbeHandlers())) {
+                    .handlers(new ProbeHandlers())) {
                 worker.start();
                 Thread.sleep(1000);   // let the worker park its long-poll
 

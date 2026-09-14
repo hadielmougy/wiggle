@@ -76,7 +76,8 @@ class RecordContextTest {
         FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).handlers(new ShipmentH())) {
+            client.register(bp);
             w.start();
             Shipment in = new Shipment("s-1", 3, new BigDecimal("19.99"), "NEW", null, null, List.of("created"));
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
@@ -98,7 +99,8 @@ class RecordContextTest {
         FlowSpec bp = flowSpec();
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "rec-" + Ids.next("x")).register(bp).handlers(new ShipmentH())) {
+             Worker w = new Worker(client, "rec-" + Ids.next("x")).handlers(new ShipmentH())) {
+            client.register(bp);
             w.start();
             Shipment in = new Shipment("s-2", 0, new BigDecimal("1.00"), "NEW", null, null, List.of());
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));

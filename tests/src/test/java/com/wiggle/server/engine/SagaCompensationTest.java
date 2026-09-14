@@ -68,7 +68,8 @@ class SagaCompensationTest {
     private static InstanceView run(FlowSpec bp, Object handlers) throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker worker = new Worker(client, "saga-w").register(bp).handlers(handlers)) {
+             Worker worker = new Worker(client, "saga-w").handlers(handlers)) {
+            client.register(bp);
             worker.start();
             String id = client.start(bp, Map.of("orderId", "A-1"));
             return client.awaitCompletion(id, Duration.ofSeconds(15));

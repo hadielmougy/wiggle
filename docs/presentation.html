@@ -458,7 +458,7 @@ client.<span class="c-fn">signal</span>(id, <span class="c-str">"manager-approva
 <span class="c-key">try</span> (var server = <span class="c-key">new</span> <span class="c-fn">WiggleServer</span>(cfg).start();
      var client = <span class="c-key">new</span> <span class="c-fn">WiggleClient</span>(server.baseUrl());
      var worker = <span class="c-key">new</span> <span class="c-fn">Worker</span>(client, <span class="c-str">"w-1"</span>)
-                      .register(greet)) {
+                      .handlers(new GreetHandlers())) {
     worker.start();
 
     <span class="c-typ">String</span> id = client.<span class="c-fn">start</span>(greet,

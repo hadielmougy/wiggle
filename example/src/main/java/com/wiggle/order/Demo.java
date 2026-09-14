@@ -31,8 +31,10 @@ public final class Demo {
             System.out.println("Flow " + flowSpec.name() + " v" + flowSpec.version()
                     + " compiled to " + flowSpec.definition().nodes().size() + " nodes");
 
+            client.register(flowSpec);   // the author publishes the topology, once
+
             try (Worker worker = new Worker(client, "worker-1")
-                    .register(flowSpec).handlers(new OrderHandlers())) {
+                    .handlers(new OrderHandlers())) {   // the worker only binds steps, by name
                 worker.start();
 
                 System.out.println("\n--- happy path (retries through a flaky gateway) ---");

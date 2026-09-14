@@ -71,7 +71,7 @@ public final class TimerBench {
             for (int i = 0; i < workers; i++) {
                 pool.add(new Worker(client, "timer-worker-" + i,
                         WorkerOptions.defaults().withConcurrency(concurrency))
-                        .register(bp).handlers(new TimerHandlers(done)).start());
+                        .handlers(new TimerHandlers(done)).start());
             }
             done.await();
             long t1 = System.nanoTime();

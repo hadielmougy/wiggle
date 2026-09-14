@@ -100,7 +100,8 @@ class JdbcForkJoinStressTest {
                 clients.add(client);
                 Worker w = new Worker(client, "w-" + i,
                         WorkerOptions.defaults().withConcurrency(8).withLongPollWait(Duration.ofMillis(250)));
-                w.register(bp).handlers(new OrderH());
+                client.register(bp);
+                w.handlers(new OrderH());
                 workers.add(w.start());
             }
 

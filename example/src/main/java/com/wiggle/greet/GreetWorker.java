@@ -2,7 +2,10 @@ package com.wiggle.greet;
 
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.worker.NamespaceWorker;
+import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Tls;
+
+import java.time.Duration;
 
 /**
  * A coordinator-aware worker for one namespace. It resolves the namespace's active cells through the
@@ -22,8 +25,11 @@ public final class GreetWorker {
         String id = env("WIGGLE_WORKER_ID", "greet-worker-" + ProcessHandle.current().pid());
 
         var resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, null);
+        // The author (GreetStart) registers the topology; this worker only implements the steps.
+        // It may well start first, so give it a window to wait for that registration.
         NamespaceWorker worker = new NamespaceWorker(resolver, ns, id,
-                w -> w.register(GreetFlow.flowSpec()).handlers(new GreetHandlers())).start();
+                WorkerOptions.defaults().withAwaitRegistration(Duration.ofMinutes(5)),
+                w -> w.handlers(new GreetHandlers())).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> { worker.close(); resolver.close(); }));
         System.out.println("greet worker '" + id + "' serving namespace '" + ns + "' via coordinator " + coord);

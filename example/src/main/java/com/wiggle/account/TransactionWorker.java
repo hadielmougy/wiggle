@@ -20,8 +20,10 @@ public class TransactionWorker {
 
         Worker worker = new Worker(wiggle.client(), id, WorkerOptions.defaults()
                 .withConcurrency(concurrency)
-                .withLongPollWait(Duration.ofSeconds(10)))
-                .register(flowSpec)
+                .withLongPollWait(Duration.ofSeconds(10))
+                // SubmitTransactions publishes the topology; this worker only implements the steps,
+                // and may start before it does
+                .withAwaitRegistration(Duration.ofMinutes(5)))
                 .handlers(new AccountHandlers());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

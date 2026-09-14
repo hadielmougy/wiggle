@@ -1,0 +1,110 @@
+package com.wiggle.tests;
+
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
+import com.wiggle.client.worker.Handlers;
+import com.wiggle.client.worker.Worker;
+import com.wiggle.client.worker.WorkerOptions;
+import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.Ids;
+import com.wiggle.core.InstanceView;
+import com.wiggle.core.Json;
+import com.wiggle.server.ServerConfig;
+import com.wiggle.server.WiggleServer;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+/**
+ * A worker needs handlers, not a topology. Publishing is the author's job -- {@code client.register}
+ * -- and a worker never needs the spec at all: {@code matchHandlerSet} fetches the graph from the
+ * server and binds against that, as the Go and Python clients do.
+ *
+ * <p>This pins that a worker built with {@code handlers(...)} alone runs a flow <b>under every
+ * execution mode</b>. The local modes are the interesting ones, because they are the only place
+ * the worker needs the graph for itself: it traverses the compiled definition to chain the next step
+ * without asking the server. That cache is filled when the handlers are bound, from the fetched
+ * graph -- not from {@code register} -- so nothing about local execution depends on the convenience.
+ *
+ * <p>And if the graph were ever missing for a task's version, {@code Worker.execute} falls back to
+ * server-driven, one step at a time: slower, still correct. Losing the spec cannot lose an instance.
+ */
+class HandlerOnlyWorkerTest {
+
+    private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
+        Map<String, Object> n = new LinkedHashMap<>(ctx);
+        n.put(k, v);
+        return n;
+    }
+
+    private static ServerConfig config() {
+        return new ServerConfig(0, "how-node", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
+                Duration.ofSeconds(5), Duration.ofSeconds(10));
+    }
+
+    /** A chain long enough that a local run has something to chain. */
+    private static FlowSpec linear(ExecutionMode mode) {
+        return Wiggle.graph("how-linear")
+                .execution(mode)
+                .step("a")
+                .step("b")
+                .gate("keep")
+                .step("c")
+                .step("d")
+                .build();
+    }
+
+    @Handlers("how-linear")
+    public static final class LinearH {
+        final AtomicInteger runs;
+        LinearH(AtomicInteger runs) { this.runs = runs; }
+        public Map<String, Object> a(Map<String, Object> c) { runs.incrementAndGet(); return put(c, "a", 1L); }
+        public Map<String, Object> b(Map<String, Object> c) { runs.incrementAndGet(); return put(c, "b", (Long) c.get("a") + 1); }
+        public boolean keep(Map<String, Object> c) { runs.incrementAndGet(); return (Long) c.get("b") > 0; }
+        public Map<String, Object> c(Map<String, Object> c) { runs.incrementAndGet(); return put(c, "c", (Long) c.get("b") + 1); }
+        public Map<String, Object> d(Map<String, Object> c) { runs.incrementAndGet(); return put(c, "d", (Long) c.get("c") + 1); }
+    }
+
+    @Test
+    @DisplayName("a worker that only binds handlers runs the flow under SERVER, LOCAL_SYNC and LOCAL_ASYNC")
+    void handlerOnlyWorkerRunsUnderEveryMode() throws Exception {
+        for (ExecutionMode mode : new ExecutionMode[]{
+                ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
+            AtomicInteger runs = new AtomicInteger();
+            FlowSpec spec = linear(mode);
+
+            try (WiggleServer server = new WiggleServer(config()).start();
+                 WiggleClient client = new WiggleClient(server.baseUrl())) {
+
+                client.register(spec);   // the author publishes the topology -- once, from the client
+
+                try (Worker w = new Worker(client, "w-" + Ids.next("x"),
+                        WorkerOptions.defaults().withConcurrency(4))
+                        .handlers(new LinearH(runs))) {      // no register(spec): binds by name
+                    w.start();
+
+                    InstanceView v = client.awaitCompletion(client.start(spec, Map.of()),
+                            Duration.ofSeconds(20));
+
+                    assertEquals("COMPLETED", v.status(), mode + " status");
+                    Map<String, Object> ctx = Json.asObject(v.context());
+                    assertEquals(1L, ctx.get("a"), mode + " a");
+                    assertEquals(2L, ctx.get("b"), mode + " b");
+                    assertEquals(3L, ctx.get("c"), mode + " c");
+                    assertEquals(4L, ctx.get("d"), mode + " d");
+                    assertEquals(5, runs.get(), mode + " every step ran exactly once");
+                }
+            }
+        }
+    }
+
+}

@@ -83,7 +83,8 @@ class OrderHandlers {
     public Activity<Order> stockReserver() { return new ReserveStock(wms); }
 }
 
-worker.register(orders).handlers(new OrderHandlers());      // ONE registration call, as always
+client.register(orders);                                    // the author publishes the topology
+worker.handlers(new OrderHandlers());                       // the worker only implements steps
 ```
 
 `compensate` receives a `Compensation<C>` carrying **both snapshots of its step** (§4):

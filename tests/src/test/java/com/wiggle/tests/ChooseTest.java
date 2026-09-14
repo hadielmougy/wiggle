@@ -81,7 +81,8 @@ class ChooseTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "w-choose").register(bp).handlers(handlers)) {
+             Worker w = new Worker(client, "w-choose").handlers(handlers)) {
+            client.register(bp);
             w.start();
             body.accept(client, bp);
         }

@@ -44,7 +44,8 @@ class FindByCorrelationTest {
     private void run(String jdbcUrl) throws Exception {
         try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "corr-w").register(wf()).handlers(new H())) {
+             Worker w = new Worker(client, "corr-w").handlers(new H())) {
+            client.register(wf());
             w.start();
             client.register(wf());
 

@@ -38,7 +38,9 @@ class ScheduleClientTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "schedc-w").register(bpA).register(bpB)) {
+             Worker w = new Worker(client, "schedc-w")) {
+            client.register(bpA);
+            client.register(bpB);
             w.start();
 
             String hourly = client.createSchedule("schedc-probe-a", Duration.ofHours(1), Map.of("k", "v"));
@@ -79,7 +81,8 @@ class ScheduleClientTest {
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
-             Worker w = new Worker(client, "schedc-w2").register(bp)) {
+             Worker w = new Worker(client, "schedc-w2")) {
+            client.register(bp);
             w.start();
 
             // Simulates several app instances each trying to "ensure this schedule exists" on startup.

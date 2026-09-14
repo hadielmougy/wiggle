@@ -70,7 +70,7 @@ public final class Benchmark {
             for (int i = 0; i < workers; i++) {
                 pool.add(new Worker(client, "bench-worker-" + i, WorkerOptions.defaults()
                         .withConcurrency(concurrency).withLocalBatchSize(batch))
-                        .register(bp).handlers(new BenchHandlers(done)).start());
+                        .handlers(new BenchHandlers(done)).start());
             }
             done.await();
             long t1 = System.nanoTime();

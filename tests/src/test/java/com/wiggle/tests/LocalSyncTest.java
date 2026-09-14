@@ -73,7 +73,8 @@ class LocalSyncTest {
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
-                         WorkerOptions.defaults().withConcurrency(4)).register(bp).handlers(new LinearH(runs))) {
+                         WorkerOptions.defaults().withConcurrency(4)).handlers(new LinearH(runs))) {
+                client.register(bp);
                 w.start();
                 InstanceView v = client.awaitCompletion(client.start(bp, Map.of()), Duration.ofSeconds(20));
                 assertEquals("COMPLETED", v.status(), mode + " status");
