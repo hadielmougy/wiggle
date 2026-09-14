@@ -34,7 +34,7 @@ class FindByCorrelationTest {
     }
 
     private static ServerConfig config(String jdbcUrl) {
-        return new ServerConfig(0, "corr-node", jdbcUrl, jdbcUrl == null ? null : "sa",
+        return new ServerConfig(TestPorts.free(), "corr-node", jdbcUrl, jdbcUrl == null ? null : "sa",
                 jdbcUrl == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,

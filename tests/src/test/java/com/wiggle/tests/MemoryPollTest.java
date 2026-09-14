@@ -28,7 +28,7 @@ class MemoryPollTest {
     private static ServerConfig config(double threshold, double rejectRatio) {
         ServerConfig.Memory memory = new ServerConfig.Memory(
                 true, threshold, rejectRatio, Duration.ofMillis(200), Duration.ofMillis(100));
-        return new ServerConfig(0, "mem-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "mem-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 /*maxLongPoll*/ Duration.ofMillis(2_000), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10), "admin", null, Tls.Options.DISABLED, memory);

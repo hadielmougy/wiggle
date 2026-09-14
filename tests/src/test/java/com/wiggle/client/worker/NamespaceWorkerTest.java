@@ -1,5 +1,6 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
@@ -31,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class NamespaceWorkerTest {
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "nw", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "nw", null, null, null, 4,
                 Duration.ofMillis(50), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -88,7 +89,7 @@ class NamespaceWorkerTest {
         FlowSpec bp = workflow();
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         CoordinatorService svc = new CoordinatorService(store);
-        CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED);
+        CoordinatorApi coord = new CoordinatorApi(svc, TestPorts.free(), Tls.Options.DISABLED);
         coord.start();
         try (WiggleServer cell = new WiggleServer(config().withNamespace("orders")).start();
              WiggleClient cc = new WiggleClient(cell.baseUrl())) {

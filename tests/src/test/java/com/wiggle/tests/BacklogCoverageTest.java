@@ -50,7 +50,7 @@ class BacklogCoverageTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "bc-node", TestStorage.url("backlog"), TestStorage.user(),
+        return new ServerConfig(TestPorts.free(), "bc-node", TestStorage.url("backlog"), TestStorage.user(),
                 TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,

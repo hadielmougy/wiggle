@@ -68,11 +68,6 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     /**
-     * The registered graph for {@code name} -- the server's source of truth for a workflow's step
-     * names, kinds, and queues. Throws {@link WiggleApiException} with status 404 if the workflow was
-     * never registered. Used by {@link Worker#handle} reconciliation.
-     */
-    /**
      * The dispatchable backlog split by (workflow, version, queue), each flagged with whether a worker
      * polling that node would claim it. An uncovered slice is work nothing can pick up -- a queue
      * nobody polls, or a version every worker has scoped itself out of.
@@ -92,6 +87,11 @@ public final class WiggleClient implements AutoCloseable {
     public record BacklogSlice(String workflow, int version, String queue, int readyCount,
                                long oldestAvailableAt, boolean covered, int livePollers) {}
 
+    /**
+     * The registered graph for {@code name} -- the server's source of truth for a workflow's step
+     * names, kinds, and queues. Throws {@link WiggleApiException} with status 404 if the workflow was
+     * never registered. Used by {@link Worker#handle} reconciliation.
+     */
     public com.wiggle.core.WorkflowDefinition getWorkflow(String name) {
         return getWorkflow(name, null);
     }

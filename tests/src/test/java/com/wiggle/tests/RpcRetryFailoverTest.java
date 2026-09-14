@@ -17,7 +17,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -36,8 +35,8 @@ class RpcRetryFailoverTest {
         System.clearProperty("wiggle.rpc.retryDelayMillis");
     }
 
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    private static int freePort() {
+        return TestPorts.free();
     }
 
     private static ServerConfig config(int port) {

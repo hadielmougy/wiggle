@@ -1,5 +1,6 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.FlowSpec;
@@ -190,7 +191,7 @@ class TypedActivityTest {
             public EffectActivity<Map<String, Object>> auditLog() { return ctx -> { }; }
         }
 
-        ServerConfig config = new ServerConfig(0, "typed-test", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "typed-test", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

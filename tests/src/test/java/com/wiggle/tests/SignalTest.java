@@ -67,7 +67,7 @@ class SignalTest {
     }
 
     private static ServerConfig config(int dashboardPort) {
-        return new ServerConfig(0, "sig-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "sig-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(300), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

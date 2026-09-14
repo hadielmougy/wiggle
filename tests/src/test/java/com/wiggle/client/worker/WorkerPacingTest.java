@@ -1,5 +1,6 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
@@ -41,7 +42,7 @@ class WorkerPacingTest {
 
     @Test @DisplayName("a saturated worker drains promptly (no idle-backoff wave gating)")
     void saturatedWorkerDrainsPromptly() throws Exception {
-        ServerConfig config = new ServerConfig(0, "pacing-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "pacing-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.net.ssl.SSLContext;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -122,7 +121,7 @@ class TlsTest {
     }
 
     private static ServerConfig serverConfig(Tls.Options tls, int dashboardPort, String dashboardPassword) {
-        return new ServerConfig(0, "tls-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "tls-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort,
                 Duration.ofSeconds(5), Duration.ofSeconds(10), "admin", dashboardPassword, tls);
@@ -141,8 +140,8 @@ class TlsTest {
         return c.send(b.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private static int freePort() throws Exception {
-        try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    private static int freePort() {
+        return TestPorts.free();
     }
 
     // ---- keytool wrappers ----

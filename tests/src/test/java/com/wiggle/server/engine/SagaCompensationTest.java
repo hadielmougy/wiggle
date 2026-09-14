@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
@@ -59,7 +60,7 @@ class SagaCompensationTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "saga-test", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "saga-test", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

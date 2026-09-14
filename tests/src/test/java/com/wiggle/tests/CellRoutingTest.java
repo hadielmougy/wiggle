@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class CellRoutingTest {
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "cell-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "cell-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -46,7 +46,7 @@ class CellRoutingTest {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
         try (WiggleServer cell = new WiggleServer(config().withNamespace("acme")).start();
              CoordinatorService svc = new CoordinatorService(store);
-             CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED)) {
+             CoordinatorApi coord = new CoordinatorApi(svc, TestPorts.free(), Tls.Options.DISABLED)) {
             coord.start();
             // Simulate the cell's node link registering with the coordinator (seed directly via the service).
             svc.doRegister("acme", RegisteredNode.newBuilder().setCellId("CellA")
