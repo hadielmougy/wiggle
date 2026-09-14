@@ -28,29 +28,37 @@ Map<String, Object> normalise(Map<String, Object> ctx) { ... }
 boolean             eligible(Map<String, Object> ctx)  { ... }
 ```
 
-and with `Wiggle.define` — one class that is both, each step a method reference to the method that
-implements it:
+and with `Wiggle.define` — an interface declaring the steps, named through it by the spec and
+implemented on the worker:
 
 ```java
-@Handlers("tcb-linear-gate")
-class LinearWithGate {
-    FlowSpec spec() {
-        return Wiggle.define("tcb-linear-gate", Signup.class, f -> f
-                .thenApply(this::normalise)
-                .thenApply(this::classify)      // Signup -> Classified: the context type changes here
-                .thenFilter(this::eligible)     // and every step after it must consume Classified
-                .thenAccept(this::welcome));
-    }
-
-    Signup     normalise(Signup s)     { ... }
-    Classified classify(Signup s)      { ... }
-    boolean    eligible(Classified c)  { ... }
-    void       welcome(Classified c)   { ... }
+interface LinearGateSteps {                     // the contract: names and signatures, no code
+    Signup     normalise(Signup s);
+    Classified classify(Signup s);
+    boolean    eligible(Classified c);
+    void       welcome(Classified c);
 }
+
+FlowSpec spec = Wiggle.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+        .thenApply(s::normalise)
+        .thenApply(s::classify)          // Signup -> Classified: the context type changes here
+        .thenFilter(s::eligible)         // and every step after it must consume Classified
+        .thenAccept(s::welcome));
+
+@Handlers("tcb-linear-gate")
+class LinearWithGate implements LinearGateSteps { ... }   // checked against the same contract
 ```
 
-The chain would not compile if `eligible` still took a `Signup`. That is the trade: `graph` can
-describe a topology whose handlers do not exist yet, `define` cannot — but `define` is checked.
+The chain would not compile if `eligible` still took a `Signup`, and the handler would not compile if
+it disagreed with the interface.
+
+Why an interface and not the handler itself: **a spec never runs a step.** It records the step's name,
+and a worker supplies the code by matching that name — so `s` above is an inert stand-in whose methods
+throw if called. A reference to a concrete class would name code the spec will never call, and go
+quietly wrong the moment the worker bound a different object.
+
+That is the trade between the two modes: `graph` can describe a topology whose steps have no
+declaration at all, `define` needs one — and gets it checked in return.
 
 > **These recipes use `Wiggle.graph`**, the mode for topology written apart from its handlers — it
 > shows each operator on its own, without a handler class in the way. Every recipe below also exists
