@@ -9,19 +9,16 @@ import java.sql.SQLException;
  *
  * <p>Two implementations, both in {@code wiggle-postgres}. PostgreSQL is the deployment target and
  * the SQL the store writes; H2 (in PostgreSQL mode) is for tests and local runs. H2 takes that SQL
- * verbatim -- the same DDL, the same {@code ON CONFLICT} upserts -- so there is no statement
- * rewriting here at all. What is left are the few places the store has to ask rather than assume:
- * whether {@code SKIP LOCKED} and {@code RETURNING} are available (they are not on H2, which claims
- * by compare-and-set instead of in one statement), how to take the migration lock, and how a
- * duplicate key surfaces.
+ * verbatim -- the same DDL, the same {@code ON CONFLICT} upserts, the same {@code LIMIT} -- so there
+ * is no statement rewriting here at all. What is left are the three things the store has to ask
+ * rather than assume: whether {@code SKIP LOCKED} and {@code RETURNING} are available (they are not
+ * on H2, which claims by compare-and-set instead of in one statement), how to take the migration
+ * lock, and how a duplicate key surfaces.
  */
 public interface Dialect {
 
     /** Short identifier: {@code "postgresql"} or {@code "h2"}. */
     String id();
-
-    /** The single-row limiter for existence probes: {@code "LIMIT 1"} or {@code "FETCH FIRST 1 ROWS ONLY"}. */
-    default String firstRow() { return "LIMIT 1"; }
 
     /** Whether {@code SELECT ... FOR UPDATE SKIP LOCKED} can drive the task claim. */
     default boolean supportsSkipLocked() { return false; }

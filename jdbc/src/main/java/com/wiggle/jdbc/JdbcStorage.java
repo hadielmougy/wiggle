@@ -522,8 +522,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private boolean graphExists(String workflow, int version) {
-            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? " +
-                    dialect.firstRow())) {
+            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? LIMIT 1")) {
                 p.setString(1, workflow); p.setInt(2, version);
                 try (ResultSet rs = p.executeQuery()) { return rs.next(); }
             } catch (SQLException e) { throw wrap(e); }

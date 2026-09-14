@@ -36,7 +36,6 @@ class DialectTest {
         H2Dialect d = new H2Dialect();
         assertFalse(d.supportsSkipLocked());
         assertFalse(d.supportsReturning());
-        assertEquals("FETCH FIRST 1 ROWS ONLY", d.firstRow());
     }
 
     @Test @DisplayName("the two dialects differ only in the claim primitives and the migration lock")
