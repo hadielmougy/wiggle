@@ -93,7 +93,7 @@ final class Pipeline {
      * same {@code __x__} convention the engine's other internal keys use.
      */
     static String forEachScratch(String forEachNodeName) {
-        return "__forEach__" + forEachNodeName;
+        return ScratchKeys.forEach(forEachNodeName);
     }
 
     /**

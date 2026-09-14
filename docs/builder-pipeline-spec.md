@@ -37,7 +37,7 @@ edge-less; edges are wired afterward.
 | kind | set at create | edges used | reserves a unique name? | in `queues`? | `activity` |
 |---|---|---|---|---|---|
 | TASK (step/effect) | name, activity, queue, retry | `next` | **yes** | yes | `wf#name` |
-| TASK combine | + `itemsKey` = JSON array of arm names | `next` | yes | yes | `wf#name` |
+| TASK combine | + `itemsKey` = JSON array of arm names (each arm's view is staged under `__arm__<arm name>`, reserved so an arm cannot overwrite a context key of the same name) | `next` | yes | yes | `wf#name` |
 | PREDICATE (gate/guard/cond) | name, activity, queue, retry | `next`, `altNext` | **yes** | yes | `wf#name` |
 | SLEEP | name, `sleepMillis` | `next` | **no** (sleep names needn't be unique) | no | null |
 | SIGNAL | name, `sleepMillis` = deadline | `next`, `altNext` | **yes** | no | null |

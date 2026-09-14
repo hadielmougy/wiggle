@@ -5,6 +5,7 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.core.ScratchKeys;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -373,7 +374,7 @@ final class HandlerBinder {
                 throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the fork"
                         + " has: its arms, in order, are " + arms);
             }
-            sources[i] = arms.get(position++);
+            sources[i] = ScratchKeys.arm(arms.get(position++));
         }
         if (position != arms.size()) {
             throw new IllegalStateException(combineWhat(node, m) + " must take all " + arms.size()
@@ -416,7 +417,7 @@ final class HandlerBinder {
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Map<String, Object> base = new LinkedHashMap<>(map);
-            arms.forEach(base::remove);
+            arms.stream().map(ScratchKeys::arm).forEach(base::remove);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
                 args[i] = sources[i] == null

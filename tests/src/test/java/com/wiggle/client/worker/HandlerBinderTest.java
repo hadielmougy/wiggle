@@ -233,7 +233,10 @@ class HandlerBinderTest {
         Step.begin(new Step.Info(1, "t", "i"));
         try {
             // the staged context: pre-fork base + one key per arm, keyed by the arm's step
-            Object out = merge.invoke(Map.of("pre", "P", "a1", Map.of("x", 1L), "b1", Map.of("y", 2L)));
+            // staged under the reserved arm keys, as the engine stages them -- a bare arm name would
+            // collide with a context key of the same name and be stripped along with it
+            Object out = merge.invoke(Map.of("pre", "P",
+                    "__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L)));
             assertEquals(Map.of("pre", "P", "x", 1L, "y", 2L), out,
                     "combine reads its arms in fork order and the base ambiently, returns verbatim");
         } finally {
@@ -272,7 +275,10 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            Object out = merge.invoke(Map.of("pre", "P", "a1", Map.of("x", 1L), "b1", Map.of("y", 2L)));
+            // staged under the reserved arm keys, as the engine stages them -- a bare arm name would
+            // collide with a context key of the same name and be stripped along with it
+            Object out = merge.invoke(Map.of("pre", "P",
+                    "__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L)));
             assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
                     "parameter order is fork order: arm 'a' first, arm 'b' second");
         } finally {

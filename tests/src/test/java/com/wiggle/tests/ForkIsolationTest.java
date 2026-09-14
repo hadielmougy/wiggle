@@ -224,4 +224,60 @@ class ForkIsolationTest {
     private static Map<String, Object> asMap(Object o) {
         return o instanceof Map ? (Map<String, Object>) o : Map.of();
     }
+
+    // ---------------------------------------------------------------- arm name vs context key
+
+    interface ClashSteps {
+        Map<String, Object> seed(Map<String, Object> c);
+        /** An arm name AND a real context key: the fork stages this arm under its step's name. */
+        Map<String, Object> payment(Map<String, Object> c);
+        Map<String, Object> shipping(Map<String, Object> c);
+        Map<String, Object> settle(@Context Map<String, Object> base,
+                                   Map<String, Object> payment, Map<String, Object> shipping);
+    }
+
+    @ForFlow("arm-key-clash")
+    public static final class ClashH implements ClashSteps {
+        @Override public Map<String, Object> seed(Map<String, Object> c) {
+            Map<String, Object> out = new LinkedHashMap<>(c);
+            out.put("payment", "the user's own value");   // same name as the arm below
+            return out;
+        }
+        @Override public Map<String, Object> payment(Map<String, Object> c) {
+            Map<String, Object> out = new LinkedHashMap<>(c);
+            out.put("charged", true);
+            return out;
+        }
+        @Override public Map<String, Object> shipping(Map<String, Object> c) {
+            Map<String, Object> out = new LinkedHashMap<>(c);
+            out.put("labelled", true);
+            return out;
+        }
+        @Override public Map<String, Object> settle(@Context Map<String, Object> base,
+                                                    Map<String, Object> payment,
+                                                    Map<String, Object> shipping) {
+            Map<String, Object> out = new LinkedHashMap<>(base);
+            out.put("charged", payment.get("charged"));
+            out.put("labelled", shipping.get("labelled"));
+            return out;
+        }
+    }
+
+    @Test @DisplayName("an arm named like a context key does not eat it -- arms stage under reserved keys")
+    void armNameDoesNotCollideWithAContextKey() throws Exception {
+        FlowSpec bp = FlowSpec.define("arm-key-clash", Map.class, ClashSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            return Wiggle.allOf(seeded.thenApply(s::payment), seeded.thenApply(s::shipping))
+                    .combineWithContext(s::settle);
+        });
+
+        Map<String, Object> out = run(bp, new ClashH(), new LinkedHashMap<>(Map.of("id", "clash-1")));
+
+        assertEquals("the user's own value", out.get("payment"),
+                "the arm named 'payment' staged over the context key 'payment' and the strip took it");
+        assertEquals(true, out.get("charged"), "the payment arm still reached the combine");
+        assertEquals(true, out.get("labelled"), "the shipping arm still reached the combine");
+        assertFalse(out.keySet().stream().anyMatch(k -> k.startsWith("__arm__")),
+                "the reserved arm keys never leak downstream: " + out);
+    }
 }

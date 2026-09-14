@@ -1024,7 +1024,7 @@ public final class WorkflowEngine {
         String scratch = forEachScratchKey(node);
         boolean changed = scratch != null
                 ? overlay.remove(scratch) != null
-                : overlay.keySet().removeAll(armNames(node));
+                : overlay.keySet().removeAll(armNames(node).stream().map(ScratchKeys::arm).toList());
         return changed ? Json.write(overlay) : payloadJson;
     }
 
@@ -1420,7 +1420,7 @@ public final class WorkflowEngine {
                 Object idx = branch.remove(ARM_IDX);
                 branch.remove(LOOP_COUNTS);
                 if (idx == null) continue;   // defensive: a token that never carried an arm tag
-                staged.put(armNames.get(((Number) idx).intValue()), branch);
+                staged.put(ScratchKeys.arm(armNames.get(((Number) idx).intValue())), branch);
             }
             return Json.write(staged);
         }
