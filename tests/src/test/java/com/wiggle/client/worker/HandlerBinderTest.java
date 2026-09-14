@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -37,6 +38,39 @@ class HandlerBinderTest {
     @ForFlow("")
     static final class BlankH {
         public Map<String, Object> a(Map<String, Object> c) { return c; }
+    }
+
+    /** No @ForFlow at all: legal now, but the name has to arrive some other way. */
+    static final class UnnamedH {
+        public Map<String, Object> a(Map<String, Object> c) { return c; }
+    }
+
+    @Test @DisplayName("scan rejects a blank workflow name, and leaves a missing one for the caller")
+    void scanWorkflowName() {
+        // An annotation that names nothing is a mistake the binder can see, so it still throws.
+        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new BlankH()));
+
+        // No annotation is not a mistake the binder can see: the name may be coming from
+        // registerHandler(name, handlers). So scan reports "unknown" rather than failing.
+        HandlerBinder.HandlerSet set = HandlerBinder.scan(new UnnamedH());
+        assertNull(set.workflow(), "an unannotated object has no workflow of its own");
+        assertEquals("orders", set.withFlowName("orders").workflow(),
+                "and the caller's name is what supplies it");
+    }
+
+    @Test @DisplayName("registerHandler: the workflow name must come from the annotation or the call")
+    void registerHandlerNeedsAWorkflowName() {
+        // Neither source has one -- rejected here, at the call that made the mistake, rather than
+        // later when the worker tries to fetch a graph called null.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new Worker(null, "w").registerHandler(new UnnamedH()));
+        assertTrue(e.getMessage().contains("flow name"), e.getMessage());
+
+        // Either source on its own is enough.
+        assertDoesNotThrow(() -> new Worker(null, "w").registerHandler("orders", new UnnamedH()),
+                "the name given at the call site stands in for the annotation");
+        assertDoesNotThrow(() -> new Worker(null, "w").registerHandler(new ForkCombineH()),
+                "and an annotated object needs no name");
     }
 
     @Test @DisplayName("scan rejects two methods whose names collide under case-folding")
