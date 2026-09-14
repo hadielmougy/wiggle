@@ -27,6 +27,11 @@
       (.then #(swap! db assoc :signals (:signals %)))
       (.catch st/on-error)))
 
+(defn load-backlog! []
+  (-> (api/backlog)
+      (.then #(swap! db assoc :backlog %))
+      (.catch st/on-error)))
+
 (defn load-schedules! []
   (-> (api/schedules)
       (.then #(swap! db assoc :schedules (:schedules %)))

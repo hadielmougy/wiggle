@@ -1067,6 +1067,24 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
+            try (PreparedStatement p = ps(dialect.limit(
+                    "SELECT workflow, version, queue, COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
+                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=? " +
+                    "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT ?"))) {
+                p.setLong(1, now);
+                p.setInt(2, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Rows.BacklogSlice> out = new ArrayList<>();
+                    while (rs.next()) {
+                        out.add(new Rows.BacklogSlice(rs.getString(1), rs.getInt(2), rs.getString(3),
+                                rs.getInt(4), rs.getLong(5)));
+                    }
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
         @Override public int countProcessedSince(long since) {
             try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_token " +
                     "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>?")) {

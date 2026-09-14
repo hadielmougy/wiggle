@@ -76,6 +76,12 @@ public interface Tx extends GraphStore {
     Rows.QueueDepth queueDepth(long now);
 
     /**
+     * The dispatchable backlog split by (workflow, version, queue) -- everything that decides which
+     * workers may claim a token. Read-only and console-facing, so it is not on the hot path.
+     */
+    List<Rows.BacklogSlice> backlogByVersion(long now, int max);
+
+    /**
      * Worker-dispatched tokens (TASK/PREDICATE) that finished (DONE) since {@code since} --
      * the throughput signal for lag monitoring. DB-driven rather than an in-process counter,
      * so it reflects consumption across every node in the cluster, not just this one.

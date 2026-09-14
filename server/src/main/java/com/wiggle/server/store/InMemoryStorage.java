@@ -285,6 +285,24 @@ public final class InMemoryStorage implements Storage {
             return new Rows.QueueDepth(count, oldest);
         }
 
+        @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
+            record Key(String workflow, int version, String queue) {}
+            Map<Key, int[]> counts = new LinkedHashMap<>();      // key -> {count}
+            Map<Key, Long> oldest = new LinkedHashMap<>();
+            for (Token t : readyTasks) {                          // ordered by availableAt
+                if (t.availableAt > now) break;
+                Key k = new Key(t.workflow, t.version, t.queue);
+                counts.computeIfAbsent(k, x -> new int[1])[0]++;
+                oldest.putIfAbsent(k, t.availableAt);             // first seen is the oldest
+            }
+            return counts.entrySet().stream()
+                    .sorted((a, b) -> Integer.compare(b.getValue()[0], a.getValue()[0]))
+                    .limit(max)
+                    .map(e -> new Rows.BacklogSlice(e.getKey().workflow(), e.getKey().version(),
+                            e.getKey().queue(), e.getValue()[0], oldest.get(e.getKey())))
+                    .toList();
+        }
+
         @Override public int countProcessedSince(long since) {
             return (int) tokens.values().stream()
                     .filter(t -> t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE)

@@ -14,6 +14,9 @@ service WiggleControlPlane {
     rpc GetCluster(Empty) returns (ClusterView);
 
     rpc ListWorkflows(Empty) returns (WorkflowNames);
+    // Dispatchable work split by (workflow, version, queue), each flagged with whether any worker
+    // polling this node would claim it. An uncovered slice is work nothing can pick up.
+    rpc GetBacklogCoverage(BacklogCoverageRequest) returns (BacklogCoverage);
     rpc RegisterWorkflow(WorkflowDefinition) returns (RegisterWorkflowResult);
     rpc GetWorkflow(GetWorkflowRequest) returns (WorkflowDefinition);
 
@@ -96,6 +99,26 @@ message GetWorkflowRequest {
 message WorkflowVersion {
     string workflow = 1;
     int32 version = 2;
+}
+
+message BacklogCoverageRequest {
+    int32 max = 1;   // 0 = a server default
+}
+
+message BacklogSlice {
+    string workflow = 1;
+    int32 version = 2;
+    string queue = 3;
+    int32 ready_count = 4;
+    int64 oldest_available_at = 5;
+    // False = no worker polling this node serves this queue at this version, so these tokens sit
+    // dispatchable and unclaimed.
+    bool covered = 6;
+}
+
+message BacklogCoverage {
+    repeated BacklogSlice slices = 1;
+    int32 live_pollers = 2;
 }
 
 message StartInstanceRequest {

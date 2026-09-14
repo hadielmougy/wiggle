@@ -13,6 +13,7 @@
     :instances (do (act/load-instances!)
                    (when (:selected @db) (act/load-detail! (:selected @db))))
     :signals   (act/load-signals!)
+    :backlog   (act/load-backlog!)
     :schedules (act/load-schedules!)
     :workflows nil)) ; a graph is static once loaded
 
@@ -37,6 +38,7 @@
   (act/load-workflows!)
   (act/load-instances!)
   (act/load-signals!)
+  (act/load-backlog!)
   (act/load-schedules!)
   ;; when the tab changes, load its data immediately rather than waiting for the timer
   (add-watch db ::tab-change

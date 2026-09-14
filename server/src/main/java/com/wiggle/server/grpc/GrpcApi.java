@@ -273,6 +273,26 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
+    public void getBacklogCoverage(BacklogCoverageRequest req, StreamObserver<BacklogCoverage> resp) {
+        run(resp, () -> {
+            int max = req.getMax() > 0 ? Math.min(req.getMax(), 500) : 100;
+            BacklogCoverage.Builder out = BacklogCoverage.newBuilder()
+                    .setLivePollers(engine.livePollers().size());
+            for (com.wiggle.server.store.Rows.BacklogSlice s : engine.backlog(max)) {
+                out.addSlices(BacklogSlice.newBuilder()
+                        .setWorkflow(s.workflow())
+                        .setVersion(s.version())
+                        .setQueue(s.queue() == null ? "" : s.queue())
+                        .setReadyCount(s.readyCount())
+                        .setOldestAvailableAt(s.oldestAvailableAt())
+                        .setCovered(engine.covered(s.workflow(), s.version(), s.queue()))
+                        .build());
+            }
+            return out.build();
+        });
+    }
+
+    @Override
     public void pollTasks(PollRequest req, StreamObserver<TaskList> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());

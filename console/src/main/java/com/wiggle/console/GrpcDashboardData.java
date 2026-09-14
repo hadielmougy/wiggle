@@ -83,6 +83,24 @@ public final class GrpcDashboardData implements DashboardData {
         backend.forInstance(id).signal(id, name, payload);
     }
 
+    @Override public List<BacklogView> backlogCoverage(int limit) {
+        // Each cell knows only its own pollers, so ask every one and merge. A slice is covered if ANY
+        // cell that holds it has a worker for it -- reporting it uncovered because a sibling cell
+        // happens to have no backlog there would be a false alarm.
+        List<BacklogView> merged = new ArrayList<>();
+        for (WiggleClient c : backend.cells()) {
+            for (WiggleClient.BacklogSlice s : c.backlogCoverage(limit)) {
+                merged.add(new BacklogView(s.workflow(), s.version(), s.queue(), s.readyCount(),
+                        s.oldestAvailableAt(), s.covered(), s.livePollers()));
+            }
+        }
+        merged.sort((a, b) -> {
+            if (a.covered() != b.covered()) return a.covered() ? 1 : -1;   // uncovered first
+            return Integer.compare(b.readyCount(), a.readyCount());
+        });
+        return merged.size() > limit ? merged.subList(0, limit) : merged;
+    }
+
     @Override public List<SignalView> pendingSignals(int limit) {
         return List.of();   // no gRPC enumeration of pending signals today
     }

@@ -47,7 +47,8 @@
      [:h1 "🌀 WIGGLE"]
      [:div.tabs
       (for [[k label] [[:instances "Instances"] [:workflows "Workflows"]
-                       [:schedules "Schedules"] [:signals "Signals"]]]
+                       [:schedules "Schedules"] [:signals "Signals"]
+                       [:backlog "Backlog"]]]
         ^{:key k}
         [:button {:class (when (= k tab) "active")
                   :on-click #(st/set-tab! k)} label])]
@@ -337,6 +338,44 @@
       [:thead [:tr [:th "signal"] [:th "workflow"] [:th "instance"] [:th "deadline"] [:th ""]]]
       [:tbody (for [t (:signals @db)] ^{:key (:instanceId t)} [signal-row t])]])])
 
+;; ---------------------------------------------------------------- backlog tab
+
+(defn backlog-row [b]
+  [:tr {:class (when-not (:covered b) "uncovered")}
+   [:td [:strong (:workflow b)]]
+   [:td [:code (:version b)]]
+   [:td (:queue b)]
+   [:td (:readyCount b)]
+   [:td.muted (if (pos? (:oldestAvailableAt b)) (u/ago (:oldestAvailableAt b)) "—")]
+   [:td (if (:covered b)
+          [:span.ok "covered"]
+          [:span.bad "no worker"])]])
+
+(defn backlog-tab []
+  (let [b (:backlog @db)
+        slices (:slices b)
+        uncovered (:uncoveredSlices b 0)]
+    [:section.panel
+     [:h2 "Backlog" [:span.count (count slices)]]
+     [:p.muted
+      "Work that is READY to dispatch, grouped by what decides who may claim it. A row marked "
+      [:strong "no worker"] " is being served by nothing: either no worker polls that queue, or every"
+      " worker has scoped itself to other versions. Those tokens sit dispatchable and unclaimed —"
+      " the instance still reads RUNNING, so nothing else in this console shows it."]
+     (if-not (seq slices)
+       [:div.empty "nothing is waiting to be dispatched"]
+       [:<>
+        (when (pos? uncovered)
+          [:div.warn
+           (str uncovered " slice" (when (> uncovered 1) "s") " with no worker — "
+                (:strandedTasks b) " task(s) stranded")])
+        [:table
+         [:thead [:tr [:th "workflow"] [:th "version"] [:th "queue"] [:th "ready"]
+                  [:th "oldest"] [:th "coverage"]]]
+         [:tbody (for [s slices]
+                   ^{:key (str (:workflow s) ":" (:version s) ":" (:queue s))}
+                   [backlog-row s])]]])]))
+
 ;; ---------------------------------------------------------------- root
 
 (defn toast []
@@ -351,5 +390,6 @@
       :instances [instances-tab]
       :workflows [workflows-tab]
       :schedules [schedules-tab]
-      :signals   [signals-tab])]
+      :signals   [signals-tab]
+      :backlog   [backlog-tab])]
    [toast]])

@@ -119,3 +119,11 @@ pre.err { color: var(--err); }
 .fw-close:hover { color: var(--err); border-color: #6a2b2b; }
 .fw-body { overflow: auto; }
 .fw-window.max .fw-body { flex: 1; }
+
+/* Backlog coverage: a slice nothing is polling for. The row is the alarm -- these tokens are
+   dispatchable and unclaimed, which every other view renders as a perfectly healthy RUNNING. */
+tr.uncovered td { background: rgba(160, 60, 60, 0.10); }
+.panel .ok  { color: var(--ok); }
+.panel .bad { color: var(--err); font-weight: 600; }
+.warn { margin: 0 14px 12px; padding: 8px 12px; border-radius: 6px;
+        color: var(--warn); background: rgba(150, 120, 40, 0.12); border: 1px solid #5c4a24; }

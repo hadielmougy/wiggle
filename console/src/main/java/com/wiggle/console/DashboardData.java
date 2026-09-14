@@ -34,6 +34,14 @@ public interface DashboardData {
     /** Signal waits pending external delivery; may be empty where the backend can't enumerate them. */
     List<SignalView> pendingSignals(int limit);
 
+    /**
+     * Dispatchable work split by (workflow, version, queue), each flagged with whether any worker
+     * polling the server would claim it. An uncovered slice is work nothing can pick up -- a queue
+     * nobody polls, or a version every worker has scoped itself out of. Neither shows up anywhere
+     * else: the instance reads RUNNING and the token reads READY, which is what healthy looks like.
+     */
+    List<BacklogView> backlogCoverage(int limit);
+
     List<ScheduleView> schedules();
 
     String createSchedule(String workflow, Duration every, Object context);
@@ -51,6 +59,9 @@ public interface DashboardData {
                      long leaseExpiresAt, String lastError, long updatedAt) {}
 
     record SignalView(String instanceId, String workflow, String signal, long deadline, long createdAt) {}
+
+    record BacklogView(String workflow, int version, String queue, int readyCount,
+                       long oldestAvailableAt, boolean covered, int livePollers) {}
 
     record ScheduleView(String id, String workflow, long everyMillis, String cron,
                         long nextFireAt, long createdAt) {}

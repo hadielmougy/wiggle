@@ -6,12 +6,13 @@
 
 (defonce db
   (r/atom
-   {:tab       :instances          ; :instances | :workflows | :schedules | :signals
+   {:tab       :instances          ; :instances | :workflows | :schedules | :signals | :backlog
     :auth      nil                 ; {:required bool :user ".."} — drives the logout button
     :cluster   nil
     :workflows []
     :instances []
     :signals   []
+    :backlog   nil                 ; {:slices .. :uncoveredSlices .. :strandedTasks ..}
     :schedules []
     :filter    {:workflow "" :status "" :limit 100
                 :search "" :search-by :correlation}   ; free-text lookup by :correlation | :id

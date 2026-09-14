@@ -72,6 +72,26 @@ public final class WiggleClient implements AutoCloseable {
      * names, kinds, and queues. Throws {@link WiggleApiException} with status 404 if the workflow was
      * never registered. Used by {@link Worker#handle} reconciliation.
      */
+    /**
+     * The dispatchable backlog split by (workflow, version, queue), each flagged with whether a worker
+     * polling that node would claim it. An uncovered slice is work nothing can pick up -- a queue
+     * nobody polls, or a version every worker has scoped itself out of.
+     */
+    public List<BacklogSlice> backlogCoverage(int max) {
+        com.wiggle.proto.BacklogCoverage res = call(() -> stub.getBacklogCoverage(
+                com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build()));
+        List<BacklogSlice> out = new ArrayList<>(res.getSlicesCount());
+        for (com.wiggle.proto.BacklogSlice s : res.getSlicesList()) {
+            out.add(new BacklogSlice(s.getWorkflow(), s.getVersion(), s.getQueue(),
+                    s.getReadyCount(), s.getOldestAvailableAt(), s.getCovered(), res.getLivePollers()));
+        }
+        return out;
+    }
+
+    /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
+    public record BacklogSlice(String workflow, int version, String queue, int readyCount,
+                               long oldestAvailableAt, boolean covered, int livePollers) {}
+
     public com.wiggle.core.WorkflowDefinition getWorkflow(String name) {
         return getWorkflow(name, null);
     }

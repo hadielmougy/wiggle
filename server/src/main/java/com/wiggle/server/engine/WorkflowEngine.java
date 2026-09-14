@@ -86,6 +86,8 @@ public final class WorkflowEngine {
 
     private final Storage storage;
     private final DefinitionRegistry definitions;
+    /** Who is polling this node and for what -- so the console can show unclaimable work. */
+    private final PollerRegistry pollers = new PollerRegistry(60_000);
     private final long defaultLeaseMillis;
     private final java.util.function.Supplier<String> idMinter;
 
@@ -153,6 +155,24 @@ public final class WorkflowEngine {
 
     /** The most recently registered version of a workflow, if any. */
     public Optional<WorkflowDefinition> latestDefinition(String name) { return definitions.latest(name); }
+
+    /**
+     * The dispatchable backlog, split by (workflow, version, queue), each marked with whether any
+     * worker polling this node would claim it. An uncovered slice is work nothing can pick up.
+     */
+    public List<Rows.BacklogSlice> backlog(int max) {
+        return storage.inTx(tx -> tx.backlogByVersion(System.currentTimeMillis(), max));
+    }
+
+    /** Whether a live poller on this node would claim this slice. See {@link PollerRegistry}. */
+    public boolean covered(String workflow, int version, String queue) {
+        return pollers.covers(workflow, version, queue, System.currentTimeMillis());
+    }
+
+    /** The workers currently polling this node. */
+    public Set<PollerRegistry.Poller> livePollers() {
+        return pollers.live(System.currentTimeMillis());
+    }
 
     /** One exact version -- what a version-scoped worker validates its handlers against. */
     public Optional<WorkflowDefinition> definition(String name, int version) {
@@ -303,6 +323,9 @@ public final class WorkflowEngine {
                                      Set<com.wiggle.core.WorkflowVersion> versions, int max,
                                      Long leaseMillis, long deadline,
                                      java.util.function.BooleanSupplier cancelled) {
+        // Remember what this worker serves, so coverage can be reported: a queue nobody polls or a
+        // version everyone has scoped out of leaves work dispatchable and unclaimable.
+        pollers.seen(workerId, queues, versions, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         // Wake-on-produce (Layer 1): snapshot the signal counts BEFORE claiming so a token parked
         // between our claim and our wait is never lost, then either claim it or block until a local
