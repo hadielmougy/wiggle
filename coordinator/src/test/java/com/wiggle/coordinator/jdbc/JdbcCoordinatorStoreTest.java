@@ -35,12 +35,16 @@ class JdbcCoordinatorStoreTest {
     // Runs on H2 (PostgreSQL mode) by default; against a real database when WIGGLE_TEST_PG_URL is set
     // (e.g. `docker compose up -d postgres`), which exercises the actual portability of the SQL.
     @BeforeEach void setUp() throws Exception {
-        String pg = System.getenv("WIGGLE_TEST_PG_URL");
+        String pg = env("WIGGLE_TEST_PG_URL");
         String url, user, pw;
         if (pg != null && !pg.isBlank()) {
             url = pg;
-            user = System.getenv("WIGGLE_TEST_PG_USER");
-            pw = System.getenv("WIGGLE_TEST_PG_PASSWORD");
+            // Credentials fall back to the generic pair the rest of the suite uses, so setting
+            // WIGGLE_TEST_DB_* and adding only WIGGLE_TEST_PG_URL works. This duplicates
+            // com.wiggle.tests.TestDb rather than sharing it: :coordinator depends on :core and
+            // :proto alone, and must not grow a dependency on the :tests module to borrow six lines.
+            user = env("WIGGLE_TEST_PG_USER", "WIGGLE_TEST_DB_USER");
+            pw = env("WIGGLE_TEST_PG_PASSWORD", "WIGGLE_TEST_DB_PASSWORD");
             dropCoordTables(url, user, pw);   // a clean slate per test on a persistent DB
         } else {
             url = "jdbc:h2:mem:coord-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
@@ -49,6 +53,15 @@ class JdbcCoordinatorStoreTest {
         }
         provider = new JdbcCoordinatorStoreProvider(url, user, pw, 4);
         store = provider.coordinatorStore();
+    }
+
+    /** The first of {@code keys} that is set and non-blank, or null. */
+    private static String env(String... keys) {
+        for (String key : keys) {
+            String v = System.getenv(key);
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
     }
 
     private static void dropCoordTables(String url, String user, String pw) throws Exception {

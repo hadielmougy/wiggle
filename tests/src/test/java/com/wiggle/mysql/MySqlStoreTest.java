@@ -6,6 +6,7 @@ import com.wiggle.core.Ids;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.tests.TestDb;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -33,13 +34,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   WIGGLE_TEST_MYSQL_USER=wiggle WIGGLE_TEST_MYSQL_PASSWORD=wiggle \
  *     ./gradlew :tests:test --tests "com.wiggle.mysql.MySqlStoreTest"
  * </pre>
+ *
+ * <p>{@code _USER} / {@code _PASSWORD} may be omitted if the generic {@code WIGGLE_TEST_DB_USER}
+ * / {@code _PASSWORD} are already set for the rest of the suite -- see {@link com.wiggle.tests.TestDb}.
  */
 @EnabledIfEnvironmentVariable(named = "WIGGLE_TEST_MYSQL_URL", matches = ".+")
 class MySqlStoreTest {
 
     private static JdbcStorage storage() {
-        JdbcStorage storage = new JdbcStorage(System.getenv("WIGGLE_TEST_MYSQL_URL"),
-                System.getenv("WIGGLE_TEST_MYSQL_USER"), System.getenv("WIGGLE_TEST_MYSQL_PASSWORD"),
+        JdbcStorage storage = new JdbcStorage(TestDb.url("MYSQL"),
+                TestDb.user("MYSQL"), TestDb.password("MYSQL"),
                 8, new MySqlDialect());
         storage.migrate();
         return storage;

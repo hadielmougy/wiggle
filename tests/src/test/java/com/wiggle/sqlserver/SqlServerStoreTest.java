@@ -7,6 +7,7 @@ import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows;
+import com.wiggle.tests.TestDb;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -37,13 +38,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   WIGGLE_TEST_SQLSERVER_USER=sa WIGGLE_TEST_SQLSERVER_PASSWORD='Wiggle!Passw0rd' \
  *     ./gradlew :tests:test --tests "com.wiggle.sqlserver.SqlServerStoreTest"
  * </pre>
+ *
+ * <p>{@code _USER} / {@code _PASSWORD} may be omitted if the generic {@code WIGGLE_TEST_DB_USER}
+ * / {@code _PASSWORD} are already set for the rest of the suite -- see {@link com.wiggle.tests.TestDb}.
  */
 @EnabledIfEnvironmentVariable(named = "WIGGLE_TEST_SQLSERVER_URL", matches = ".+")
 class SqlServerStoreTest {
 
     private static JdbcStorage storage() {
-        JdbcStorage storage = new JdbcStorage(System.getenv("WIGGLE_TEST_SQLSERVER_URL"),
-                System.getenv("WIGGLE_TEST_SQLSERVER_USER"), System.getenv("WIGGLE_TEST_SQLSERVER_PASSWORD"),
+        JdbcStorage storage = new JdbcStorage(TestDb.url("SQLSERVER"),
+                TestDb.user("SQLSERVER"), TestDb.password("SQLSERVER"),
                 8, new SqlServerDialect());
         storage.migrate();
         return storage;
