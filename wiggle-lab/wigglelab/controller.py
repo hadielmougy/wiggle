@@ -537,8 +537,9 @@ class Lab:
         """Re-run a recording's events in order against the current machine. Stops at the first step
         that errors (the reproduction point). ``on_event`` gets each step result as it runs.
 
-        Infra steps get a readiness barrier after them (coordinator/cell), so timing-sensitive
-        sequences reproduce faithfully. Recording is off during replay, so nothing is re-captured.
+        Infra steps get a readiness barrier after them (coordinator deploy/reset, cell), so
+        timing-sensitive sequences reproduce faithfully. Recording is off during replay, so nothing is
+        re-captured.
         """
         results = []
         for ev in recording.get("events", []):
@@ -561,7 +562,9 @@ class Lab:
             else:
                 try:
                     fn(*args, **kwargs)
-                    if wait and method == "deploy_coordinator":
+                    if wait and method in ("deploy_coordinator", "reset_coordinator_store"):
+                        # A reset rolls the coordinators (they were talking to a database that just
+                        # went), so the next step must wait for them the same way a deploy does.
                         self.wait_coordinator_ready()
                     elif wait and method == "create_cell" and args:
                         self.wait_cell_ready(args[0])

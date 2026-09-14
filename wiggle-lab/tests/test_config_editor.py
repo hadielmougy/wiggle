@@ -93,3 +93,20 @@ def test_state_roundtrip(tmp_path, monkeypatch):
     reloaded = controller.Lab()   # __init__ -> _load_state() from the same tmp state file
     assert reloaded.cell_config == {"cellA": {"WIGGLE_DISPATCH_LINGER_MILLIS": 10}}
     assert reloaded.coord_config == {"WIGGLE_LOG_LEVEL": "DEBUG"}
+
+
+def test_reset_is_recorded_and_replayable():
+    """The reset is a recorded action, so a session that clears the control plane replays it -- and
+    replay must wait for the coordinators afterwards, since the reset rolls them."""
+    import inspect
+    from wigglelab import controller
+
+    assert hasattr(controller.Lab, "reset_coordinator_store")
+    # @record wraps the method; functools.wraps keeps __name__, and the wrapper is what makes the
+    # call show up in a recording.
+    assert controller.Lab.reset_coordinator_store.__name__ == "reset_coordinator_store"
+    assert controller.Lab.reset_coordinator_store.__wrapped__ is not None
+
+    src = inspect.getsource(controller.Lab.replay)
+    assert '"deploy_coordinator", "reset_coordinator_store"' in src, \
+        "replay must put a readiness barrier after a reset, as it does after a deploy"
