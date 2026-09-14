@@ -43,8 +43,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class SagaLoadBench {
 
     interface SagaSteps {
-        CompensableActivity<Map<String, Object>> reserve();
-        CompensableActivity<Map<String, Object>> enrich();
+        CompensableActivity<Map<String, Object>, Map<String, Object>> reserve();
+        CompensableActivity<Map<String, Object>, Map<String, Object>> enrich();
         Map<String, Object> boom(Map<String, Object> ctx);
     }
 
@@ -53,27 +53,27 @@ public final class SagaLoadBench {
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
         return FlowSpec.define("saga-load", Map.class, SagaSteps.class, (f, s) -> f
-                .thenActivity(s::reserve)
-                .thenActivity(s::enrich)
+                .thenApplyCompensable(s::reserve)
+                .thenApplyCompensable(s::enrich)
                 .thenApply(s::boom));
     }
 
     @ForFlow("saga-load")
     public static final class SagaHandlers {
-        public CompensableActivity<Map<String, Object>> reserve() { return compensable("reservationRef"); }
-        public CompensableActivity<Map<String, Object>> enrich() { return compensable("enrichmentRef"); }
+        public CompensableActivity<Map<String, Object>, Map<String, Object>> reserve() { return compensable("reservationRef"); }
+        public CompensableActivity<Map<String, Object>, Map<String, Object>> enrich() { return compensable("enrichmentRef"); }
         public Map<String, Object> boom(Map<String, Object> ctx) {
             throw new PermanentActivityException("saga-load: forced failure");
         }
 
-        private static CompensableActivity<Map<String, Object>> compensable(String key) {
-            final class Step implements CompensableActivity<Map<String, Object>> {
+        private static CompensableActivity<Map<String, Object>, Map<String, Object>> compensable(String key) {
+            final class Step implements CompensableActivity<Map<String, Object>, Map<String, Object>> {
                 public Map<String, Object> execute(Map<String, Object> ctx) {
                     Map<String, Object> next = new LinkedHashMap<>(ctx);
                     next.put(key, "ref-" + ctx.get("seq"));
                     return next;
                 }
-                public void compensate(Compensation<Map<String, Object>> c) {
+                public void compensate(Compensation<Map<String, Object>, Map<String, Object>> c) {
                     // the snapshot contract, checked under load: this step's product must be present
                     if (c.result().get(key) == null) {
                         throw new IllegalStateException("undo of " + key + " got a snapshot without it");

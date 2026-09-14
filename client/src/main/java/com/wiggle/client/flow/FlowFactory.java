@@ -10,7 +10,7 @@ import java.io.Serializable;
  *
  * <p>This is the shape a typed activity takes on the worker, so a contract that names steps this way
  * mirrors the handler exactly: the same zero-argument signature, the same return type. See
- * {@link WiggleFlow#thenActivity} and
+ * {@link WiggleFlow#thenApplyCompensable} and
  * {@link com.wiggle.client.worker.CompensableActivity CompensableActivity}.
  *
  * @param <A> the activity type the factory declares -- its type argument is the step's context type

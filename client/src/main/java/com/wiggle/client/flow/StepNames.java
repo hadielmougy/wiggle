@@ -1,6 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handles;
 
@@ -43,20 +42,6 @@ final class StepNames {
         return of(methodRef, serializedForm(methodRef));
     }
 
-    /**
-     * Whether the referenced method <em>declares</em> that it produces something with an undo -- the
-     * single place a step is said to be compensable. Read off the declaration, not an instance: the
-     * spec never calls the factory, and the worker that will is somewhere else entirely.
-     *
-     * <p>False when the method cannot be resolved, which is the same fallback {@code @Handles} takes:
-     * a name alone still produces a valid node, and the binder refuses the pairing later if the
-     * handler turns out to disagree.
-     */
-    static boolean declaresCompensation(Serializable methodRef) {
-        SerializedLambda lambda = serializedForm(methodRef);
-        Method m = resolve(methodRef, lambda, lambda.getImplMethodName());
-        return m != null && Compensable.class.isAssignableFrom(m.getReturnType());
-    }
 
     private static String of(Serializable methodRef, SerializedLambda lambda) {
         String impl = lambda.getImplMethodName();

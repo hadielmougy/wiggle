@@ -30,9 +30,9 @@ same shape the handler implements, so the two cannot drift.
 ```java
 FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
         .thenApply(s::validate)
-        .thenActivity(s::authorise)
-        .thenActivity(s::capture)
-        .thenActivity(s::reserveStock)
+        .thenApplyCompensable(s::authorise)
+        .thenApplyCompensable(s::capture)
+        .thenApplyCompensable(s::reserveStock)
         .thenApply(s::printLabel)                  // no compensator — nothing to undo
         .thenApply(s::confirm));
 ```
@@ -40,14 +40,17 @@ FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.cl
 ```java
 interface OrderSteps {
     Order validate(Order o);
-    CompensableActivity<Order> authorise();     // declares an undo
+    CompensableActivity<Order, Payment> authorise();   // Order in, Payment out, and an undo
     Order printLabel(Order o);                  // does not
 }
 ```
 
-- The declaration is the whole of it: `thenActivity` reads the factory's return type and sets
-  `compensable` on the node. There is no second place to say it, and so no way for the topology and
-  the handler to disagree about whether an undo exists.
+- The declaration is the whole of it: `thenApplyCompensable` accepts nothing but a
+  `CompensableActivity` factory, and nothing else sets `compensable` on the node. There is no
+  second place to say it, and so no way for the topology and the handler to disagree about
+  whether an undo exists.
+- An activity maps `A -> B` like any other step, so a compensable step may change the context
+  type; the two snapshots its undo receives are then of different types.
 - The undo runs as an ordinary claimable activity under `<activity>#compensate`, so it retries under
   the step's own policy and is visible on the console like any other work.
 - A step named with `thenApply`, or through a factory returning a plain `Activity`, is simply not
@@ -69,10 +72,10 @@ in one class, and the pairing is checked by the compiler (implements `Compensabl
 compensator exists; no stringly reference that can dangle):
 
 ```java
-final class CapturePayment implements Activity<Order>, Compensable<Order> {
-    public Order execute(Order o) { return o.withPaymentRef(gateway.capture(o.authRef())); }
-    public void  compensate(Compensation<Order> c) {
-        gateway.refund(c.result().paymentRef());   // result(): the step's own product — idempotent!
+final class CapturePayment implements CompensableActivity<Order, Payment> {
+    public Payment execute(Order o) { return gateway.capture(o.authRef()); }
+    public void    compensate(Compensation<Order, Payment> c) {
+        gateway.refund(c.result().reference());    // result(): the step's own product — idempotent!
         // c.input() is also available: restore-style undos and undo-only data (idempotency keys)
         // read from the INPUT snapshot, so nothing is smuggled through the business context.
     }
@@ -82,19 +85,19 @@ final class CapturePayment implements Activity<Order>, Compensable<Order> {
 class OrderHandlers {
     public boolean inStock(Order o) { ... }                 // plain methods coexist
 
-    public Activity<Order> capturePayment() {               // factory -> serves "capture-payment"
+    public CompensableActivity<Order, Payment> capturePayment() {   // factory -> serves "capturePayment"
         return new CapturePayment(gateway);
     }
 
-    @Handles("reserve-stock")                               // rename when the method name can't match
-    public Activity<Order> stockReserver() { return new ReserveStock(wms); }
+    @Handles("reserveStock")                                // rename when the method name can't match
+    public CompensableActivity<Order, Order> stockReserver() { return new ReserveStock(wms); }
 }
 
 client.register(orders);                                    // the author publishes the topology
 worker.registerHandler(new OrderHandlers());                // the worker only implements steps
 ```
 
-`compensate` receives a `Compensation<C>` carrying **both snapshots of its step** (§4):
+`compensate` receives a `Compensation<A, B>` carrying **both snapshots of its step** (§4):
 `result()` — the context as the step left it, so `paymentRef` is guaranteed present regardless of
 what later steps replaced — and `input()` — the context as the step received it, for
 restore-previous-value undos and undo-only data (an idempotency key derived from the input) that
@@ -155,7 +158,7 @@ CompLogEntry(instanceId, seq, activity, queue, retry, inputSnapshotJson, resultS
 - `resultSnapshotJson` — the context the step returned; `inputSnapshotJson` — the context it was
   dispatched with. Both are in hand at the single capture point (`complete()` holds the pre-step
   context and the result in the same transaction), and both feed the compensator's
-  `Compensation<C>` carrier. For a branch-scoped step the branch overlay is captured the same
+  `Compensation<A, B>` carrier. For a branch-scoped step the branch overlay is captured the same
   way, so branch compensation "just works". A linear step's input nearly duplicates its
   predecessor's result — a possible storage optimization later; store both and keep it simple.
 

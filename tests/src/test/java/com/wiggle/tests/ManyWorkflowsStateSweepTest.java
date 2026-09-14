@@ -83,9 +83,9 @@ class ManyWorkflowsStateSweepTest {
         Map<String, Object> b(Map<String, Object> ctx);
         Map<String, Object> boom(Map<String, Object> ctx);
         Map<String, Object> c(Map<String, Object> ctx);
-        CompensableActivity<Map<String, Object>> charge();
+        CompensableActivity<Map<String, Object>, Map<String, Object>> charge();
         boolean never(Map<String, Object> ctx);
-        CompensableActivity<Map<String, Object>> reserve();
+        CompensableActivity<Map<String, Object>, Map<String, Object>> reserve();
         Map<String, Object> unreachable(Map<String, Object> ctx);
     }
 
@@ -165,8 +165,8 @@ class ManyWorkflowsStateSweepTest {
     /** 7. two compensable steps then a failure -> COMPENSATED */
     private static FlowSpec saga() {
         return FlowSpec.define(PREFIX + "saga", Map.class, OneStep.class, (f, s) -> f
-                .thenActivity(s::reserve)
-                .thenActivity(s::charge)
+                .thenApplyCompensable(s::reserve)
+                .thenApplyCompensable(s::charge)
                 .thenApply(s::boom));
     }
 
@@ -245,17 +245,17 @@ class ManyWorkflowsStateSweepTest {
     public static final class SagaH {
         final Map<String, Integer> undos;
         SagaH(Map<String, Integer> undos) { this.undos = undos; }
-        public com.wiggle.client.worker.CompensableActivity<Map<String, Object>> reserve() { return compensable("reserved"); }
-        public com.wiggle.client.worker.CompensableActivity<Map<String, Object>> charge() { return compensable("charged"); }
+        public com.wiggle.client.worker.CompensableActivity<Map<String, Object>, Map<String, Object>> reserve() { return compensable("reserved"); }
+        public com.wiggle.client.worker.CompensableActivity<Map<String, Object>, Map<String, Object>> charge() { return compensable("charged"); }
         public Map<String, Object> boom(Map<String, Object> c) {
             throw new PermanentActivityException("deliberate: this instance must land COMPENSATED");
         }
 
-        private com.wiggle.client.worker.CompensableActivity<Map<String, Object>> compensable(String key) {
+        private com.wiggle.client.worker.CompensableActivity<Map<String, Object>, Map<String, Object>> compensable(String key) {
             Map<String, Integer> counter = undos;
-            final class Step implements com.wiggle.client.worker.CompensableActivity<Map<String, Object>> {
+            final class Step implements com.wiggle.client.worker.CompensableActivity<Map<String, Object>, Map<String, Object>> {
                 public Map<String, Object> execute(Map<String, Object> ctx) { return put(ctx, key, true); }
-                public void compensate(com.wiggle.client.worker.Compensation<Map<String, Object>> c) {
+                public void compensate(com.wiggle.client.worker.Compensation<Map<String, Object>, Map<String, Object>> c) {
                     counter.merge(key, 1, Integer::sum);
                 }
             }

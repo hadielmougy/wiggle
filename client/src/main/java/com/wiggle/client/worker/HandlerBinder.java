@@ -221,16 +221,20 @@ final class HandlerBinder {
      *  no return). Null when the step has no compensator. */
     private static Compensator compensatorHandler(HandlerSet set, Candidate c) {
         if (c.compensate() == null) return null;
-        Class<?> ctxType = c.method().getParameterTypes()[0];   // the activity's C, from execute/test/apply
+        // An activity maps A -> B, so the two snapshots decode into different types: the input into
+        // execute's parameter, the result into its return.
+        Class<?> inType = c.method().getParameterTypes()[0];
+        Class<?> outType = c.method().getReturnType();
+        Class<?> resultType = outType == void.class || outType.isPrimitive() ? inType : outType;
         return (input, result) -> {
-            Object in = decode(input, ctxType, set.target(), set.decoders());
-            Object out = decode(result, ctxType, set.target(), set.decoders());
+            Object in = decode(input, inType, set.target(), set.decoders());
+            Object out = decode(result, resultType, set.target(), set.decoders());
             call(c.compensate(), c.target(), new Object[]{new Snapshots(in, out)});
         };
     }
 
     /** The {@link Compensation} handed to a compensator: both snapshots, already decoded. */
-    private record Snapshots(Object input, Object result) implements Compensation<Object> {}
+    private record Snapshots(Object input, Object result) implements Compensation<Object, Object> {}
 
     /** The concrete (non-bridge) single-parameter implementation of an interface method, with its
      *  reified parameter type — what the decode machinery needs. */

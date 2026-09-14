@@ -1,6 +1,6 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.worker.Activity;
+import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -153,33 +153,35 @@ public final class WiggleFlow<T> {
     }
 
     /**
-     * A task step named by a zero-argument factory -- the shape a typed activity takes on the
-     * worker, so the contract that names it here has the same signature the handler implements.
+     * A task step whose handler is an object carrying its own undo, named by the zero-argument
+     * factory that supplies it -- the same signature the handler implements, so the contract and the
+     * worker cannot drift.
      *
-     * <p>The factory's declared return type is what says whether the step has an undo: a
-     * {@link com.wiggle.client.worker.CompensableActivity CompensableActivity} marks the node
-     * compensable, so its input and result are captured and its {@code compensate} runs in the
-     * reverse pass if the instance later fails. A plain {@link com.wiggle.client.worker.Activity
-     * Activity} names an ordinary step.
+     * <p>This is the only way a step is marked compensable: the parameter type admits nothing but a
+     * {@link CompensableActivity}, so the declaration and the flag on the node are the same fact.
+     * The engine captures the step's input and result when it completes, and runs {@code compensate}
+     * in the reverse pass if the instance later fails.
      *
      * <pre>{@code
      * interface OrderSteps {
-     *     CompensableActivity<Order> reserve();   // declared with an undo
-     *     Order                      confirm(Order o);
+     *     CompensableActivity<Order, Payment> authorise();
+     *     Payment                             confirm(Payment p);
      * }
      *
-     * f.thenActivity(s::reserve).thenApply(s::confirm)
+     * f.thenApplyCompensable(s::authorise).thenApply(s::confirm)
      * }</pre>
+     *
+     * <p>Like {@link #thenApply}, the step may change the context type: the activity consumes the
+     * flow's current type and the flow continues as whatever it produces. The input position is
+     * wildcarded rather than pinned to {@code T} because a context given as a raw {@code Map.class}
+     * cannot convert inside a nested generic -- the same looseness {@code thenApply} already has
+     * there. The worker checks the input type against the persisted context regardless.
      *
      * <p>Retry and queue come from {@link #withRetry} and {@link #onQueue}, as for any other step.
      */
-    public <R> WiggleFlow<R> thenActivity(FlowFactory<? extends Activity<R>> factory) {
+    public <R> WiggleFlow<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory) {
         String name = StepNames.of(factory);
-        boolean compensable = StepNames.declaresCompensation(factory);
-        return record(name, b -> {
-            GraphBuilder step = b.step(name, null, null);
-            return compensable ? step.compensate() : step;
-        });
+        return record(name, b -> b.step(name, null, null).compensate());
     }
 
     /** An effect step: the handler returns {@code void}, so the context is unchanged. */

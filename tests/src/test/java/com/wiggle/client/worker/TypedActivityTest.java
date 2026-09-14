@@ -35,16 +35,16 @@ class TypedActivityTest {
         void auditLog(Map<String, Object> ctx);
         // Both declarations of the same step name, because this file builds the node both ways: the
         // zero-arg factory declares an undo, the one-arg form does not. A method reference picks
-        // between them by target type -- thenActivity takes the factory, thenApply the step.
-        CompensableActivity<Map<String, Object>> capturePayment();
+        // between them by target type -- thenApplyCompensable takes the factory, thenApply the step.
+        CompensableActivity<Map<String, Object>, Map<String, Object>> capturePayment();
         Map<String, Object> capturePayment(Map<String, Object> ctx);
         boolean inStock(Map<String, Object> ctx);
         Map<String, Object> summarise(Map<String, Object> ctx);
     }
 
     /** The standalone typed activity — dependencies via constructor, undo alongside the do. */
-    static final class CapturePayment implements Activity<Map<String, Object>>,
-            Compensable<Map<String, Object>> {
+    static final class CapturePayment implements Activity<Map<String, Object>, Map<String, Object>>,
+            Compensable<Map<String, Object>, Map<String, Object>> {
         final AtomicReference<Object> refunded = new AtomicReference<>();
         final AtomicReference<Object> undoKey = new AtomicReference<>();
         public Map<String, Object> execute(Map<String, Object> ctx) {
@@ -52,7 +52,7 @@ class TypedActivityTest {
             next.put("paymentRef", "pay-1");
             return next;
         }
-        public void compensate(Compensation<Map<String, Object>> comp) {
+        public void compensate(Compensation<Map<String, Object>, Map<String, Object>> comp) {
             refunded.set(comp.result().get("paymentRef"));   // the step's own product: from result()
             undoKey.set(comp.input().get("idemKey"));        // undo-only data: from input(), never the context
         }
@@ -64,7 +64,7 @@ class TypedActivityTest {
 
         public boolean inStock(Map<String, Object> ctx) { return true; }      // plain gate method
 
-        public Activity<Map<String, Object>> capturePayment() {               // factory -> "capturePayment"
+        public Activity<Map<String, Object>, Map<String, Object>> capturePayment() {               // factory -> "capturePayment"
             return capture;
         }
 
@@ -76,7 +76,7 @@ class TypedActivityTest {
     /** capturePayment declares its undo in its return type -- MixedHandlers supplies the factory. */
     private static WorkflowDefinition linear() {
         return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
-                .thenActivity(s::capturePayment)
+                .thenApplyCompensable(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenAccept(s::auditLog)).definition();
     }
@@ -121,6 +121,52 @@ class TypedActivityTest {
                 .filter(b -> b.step().equals("inStock")).findFirst().orElseThrow().compensator());
     }
 
+    // ---- an activity maps A -> B, so the two snapshots are different types ----------------------
+
+    record Ord(String id) {}
+
+    record Pay(String ref) {}
+
+    interface TypedUndoSteps {
+        CompensableActivity<Ord, Pay> charge();
+    }
+
+    @ForFlow("typed-undo")
+    static final class TypedUndoH {
+        final AtomicReference<Object> sawInput = new AtomicReference<>();
+        final AtomicReference<Object> sawResult = new AtomicReference<>();
+
+        public CompensableActivity<Ord, Pay> charge() {
+            return new CompensableActivity<>() {
+                @Override public Pay execute(Ord o) { return new Pay("pay-" + o.id()); }
+                @Override public void compensate(Compensation<Ord, Pay> c) {
+                    sawInput.set(c.input());
+                    sawResult.set(c.result());
+                }
+            };
+        }
+    }
+
+    @Test @DisplayName("each snapshot decodes into its own type: input as A, result as B")
+    void compensatorSeesEachSnapshotAsItsOwnType() throws Exception {
+        WorkflowDefinition def = FlowSpec.define("typed-undo", Ord.class, TypedUndoSteps.class,
+                (f, s) -> f.thenApplyCompensable(s::charge)).definition();
+
+        TypedUndoH h = new TypedUndoH();
+        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(h), def);
+        HandlerBinder.Compensator comp = r.bindings().stream()
+                .filter(b -> b.step().equals("charge")).findFirst().orElseThrow().compensator();
+        assertNotNull(comp);
+
+        // What the engine staged: the step's input and its result, as persisted JSON shapes. They are
+        // different records, so decoding both into the parameter type would hand the undo a mangled
+        // result rather than the Pay it produced.
+        comp.invoke(Map.of("id", "A-1"), Map.of("ref", "pay-A-1"));
+
+        assertEquals(new Ord("A-1"), h.sawInput.get(), "input() decodes into execute's parameter type");
+        assertEquals(new Pay("pay-A-1"), h.sawResult.get(), "result() decodes into its return type");
+    }
+
     @Test @DisplayName("@Handles renames a handler away from its method name — plain and factory alike")
     void handlesAnnotation() throws Exception {
         @ForFlow("wf")
@@ -145,14 +191,14 @@ class TypedActivityTest {
     void scanRejections() {
         @ForFlow("wf")
         class ParamFactory {
-            public Activity<Map<String, Object>> capturePayment(String oops) { return c -> c; }
+            public Activity<Map<String, Object>, Map<String, Object>> capturePayment(String oops) { return c -> c; }
         }
         assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new ParamFactory()),
                 "a factory must be zero-parameter");
 
         @ForFlow("wf")
         class NullFactory {
-            public Activity<Map<String, Object>> capturePayment() { return null; }
+            public Activity<Map<String, Object>, Map<String, Object>> capturePayment() { return null; }
         }
         assertThrows(IllegalStateException.class, () -> HandlerBinder.scan(new NullFactory()));
 
@@ -182,7 +228,7 @@ class TypedActivityTest {
     @Test @DisplayName("plain methods + factories + @ForFlow run a workflow to COMPLETED")
     void endToEnd() throws Exception {
         FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
-                .thenActivity(s::capturePayment)
+                .thenApplyCompensable(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenApply(s::summarise)
                 .thenAccept(s::auditLog));
@@ -191,12 +237,12 @@ class TypedActivityTest {
         class FlowHandlers {
             public boolean inStock(Map<String, Object> ctx) { return true; }
 
-            public Activity<Map<String, Object>> capturePayment() {
+            public Activity<Map<String, Object>, Map<String, Object>> capturePayment() {
                 return new CapturePayment();
             }
 
             @Handles("summarise")
-            public Activity<Map<String, Object>> buildSummary() {
+            public Activity<Map<String, Object>, Map<String, Object>> buildSummary() {
                 return ctx -> {
                     Map<String, Object> next = new LinkedHashMap<>(ctx);
                     next.put("summary", "ok");
