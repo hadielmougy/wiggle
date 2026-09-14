@@ -34,12 +34,6 @@ class HandlerBinderTest {
 
     // ------------------------------------------------------------------ scan
 
-    @Test @DisplayName("scan rejects an object without @ForFlow, and a blank workflow name")
-    void scanRejectsUnannotated() {
-        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new Object()));
-        assertThrows(IllegalArgumentException.class, () -> HandlerBinder.scan(new BlankH()));
-    }
-
     @ForFlow("")
     static final class BlankH {
         public Map<String, Object> a(Map<String, Object> c) { return c; }

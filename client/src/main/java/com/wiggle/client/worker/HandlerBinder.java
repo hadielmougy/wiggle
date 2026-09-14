@@ -6,6 +6,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.WorkflowDefinition;
 import org.checkerframework.checker.nullness.qual.NonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -49,7 +50,11 @@ final class HandlerBinder {
     /** A handler source's inventory: its step candidates keyed by canonical name, and its
      *  {@link Decode @Decode} decoders (living on the handlers object) keyed by decoded type. */
     record HandlerSet(String workflow, Object target, Map<String, Candidate> byName,
-                      Map<Class<?>, Method> decoders) {}
+                      Map<Class<?>, Method> decoders) {
+        public HandlerSet withFlowName(String flowName) {
+            return new HandlerSet(flowName, target, byName, decoders);
+        }
+    }
 
     /** Invokes a step's undo with both of its snapshots (raw JSON-shaped objects); the wrapper
      *  decodes them into the activity's context type and hands a {@link Compensation} to
@@ -159,12 +164,11 @@ final class HandlerBinder {
         return new Candidate(typed, concreteMethod(typed, primary), compensate);
     }
 
-    private static @NonNull String getWorkflowName(Object handlerObject) {
+    private static @Nullable String getWorkflowName(Object handlerObject) {
         if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
         ForFlow ann = handlerObject.getClass().getAnnotation(ForFlow.class);
         if (ann == null) {
-            throw new IllegalArgumentException(handlerObject.getClass().getName()
-                    + " is not annotated @ForFlow(\"<workflow>\")");
+            return null;
         }
         String workflow = ann.value();
         if (workflow == null || workflow.isBlank()) {

@@ -6,7 +6,6 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
-import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.RetryPolicy;
 
@@ -32,7 +31,7 @@ public class WorkerMain {
         CoordinatedConnection conn = WiggleConnection.coordinator("127.0.0.1:18099");
         var client = conn.clientForNamespace("abc");
         FlowSpec spec = FlowSpec.define("test-flow",Order.class, OrderSteps.class, (f, s) -> {
-            var checked = f.thenApply(s::validate).thenFilter(s::inStock);
+            var checked = f.apply(s::validate).thenFilter(s::inStock);
             var payment  = checked.thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
                     .thenApply(s::capture);
             var shipping = checked.thenApply(s::reserveStock)
@@ -44,13 +43,10 @@ public class WorkerMain {
             client.register(spec);
             client.start(spec, new Order());
 
-
-            Worker worker = new Worker(client, "123").registerHandler(new OrderStepsImpl());
+            Worker worker = new Worker(client, "123").registerHandler("test-flow",new OrderStepsImpl());
             worker.start();
 
             Runtime.getRuntime().addShutdownHook(new Thread(worker::close));
-
-            // Every thread the worker starts is a daemon, so main has to park or the JVM exits.
             Thread.currentThread().join();
     }
 

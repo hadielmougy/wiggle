@@ -7,6 +7,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
 
 /**
  * The data plane. A worker binds handlers, then pulls work: it only ever
@@ -109,7 +110,23 @@ public final class Worker implements AutoCloseable {
      * the complete post-join context.
      */
     public Worker registerHandler(Object handlerObject) {
-        handlerSets.add(new Registration(HandlerBinder.scan(handlerObject), null));
+        return registerHandler(null, handlerObject);
+    }
+
+
+    public Worker registerHandler(String flowName, Object handlerObject) {
+        HandlerBinder.HandlerSet handlerSet = null;
+        try {
+            handlerSet = HandlerBinder.scan(handlerObject);
+        } catch (IllegalArgumentException e) {
+            LOG.log(System.Logger.Level.ERROR, () -> "Error registering handler " + handlerObject, e);
+            throw e;
+        }
+        if (handlerSet.workflow() == null && flowName == null) {
+            throw new IllegalArgumentException("Handler " + handlerObject + " has no flow name or registered with flow name");
+        }
+        handlerSet = flowName == null ? handlerSet : handlerSet.withFlowName(flowName);
+        handlerSets.add(new Registration(handlerSet, null));
         servesEveryVersion.set(true);
         return this;
     }
@@ -143,7 +160,7 @@ public final class Worker implements AutoCloseable {
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
-        pollThread.setDaemon(true);
+        pollThread.setDaemon(false);
         pollThread.start();
         LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());

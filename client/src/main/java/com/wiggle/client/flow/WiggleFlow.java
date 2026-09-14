@@ -79,6 +79,29 @@ public final class WiggleFlow<T> {
 
     // ------------------------------------------------------------------ steps
 
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step) {
+        return task(step, null, null);
+    }
+
+    /** {@link #thenApply(FlowFn)} with an explicit retry policy for the step. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, RetryPolicy retry) {
+        return task(step, retry, null);
+    }
+
+    /** {@link #thenApply(FlowFn)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, String queue) {
+        return task(step, null, queue);
+    }
+
+    /** {@link #thenApply(FlowFn)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, RetryPolicy retry, String queue) {
+        return task(step, retry, queue);
+    }
+
+    /** {@link #thenApply(FlowFn, RetryPolicy, String)}, queue first. */
+    public <R> WiggleFlow<R> apply(FlowFn<T, R> step, String queue, RetryPolicy retry) {
+        return task(step, retry, queue);
+    }
     /**
      * A task step: the handler's return value becomes the new context.
      *
