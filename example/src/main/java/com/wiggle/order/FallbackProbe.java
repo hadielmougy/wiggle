@@ -2,7 +2,6 @@ package com.wiggle.order;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -38,7 +37,7 @@ public final class FallbackProbe {
         int probes = Integer.parseInt(env("WIGGLE_BENCH_COUNT", "200"));
         int warmup = Integer.parseInt(env("WIGGLE_BENCH_WARMUP", "20"));
 
-        FlowSpec bp = Wiggle.define("fallback-probe", Map.class, ProbeSteps.class,
+        FlowSpec bp = FlowSpec.define("fallback-probe", Map.class, ProbeSteps.class,
                 (f, s) -> f.thenApply(s::ping));
 
         try (WiggleClient submit = new WiggleClient(submitUrl);

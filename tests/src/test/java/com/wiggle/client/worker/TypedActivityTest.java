@@ -4,7 +4,6 @@ import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.ServerConfig;
@@ -73,7 +72,7 @@ class TypedActivityTest {
 
     /** capturePayment declares .compensate() -- pairs with MixedHandlers' Compensable factory. */
     private static WorkflowDefinition linear() {
-        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::capturePayment)
                 .compensate()
                 .thenFilter(s::inStock)
@@ -82,7 +81,7 @@ class TypedActivityTest {
 
     /** Same shape, nothing compensable — for handler classes whose activities carry no undo. */
     private static WorkflowDefinition linearPlain() {
-        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenAccept(s::auditLog)).definition();
@@ -180,7 +179,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::capturePayment)
                 .compensate()
                 .thenFilter(s::inStock)

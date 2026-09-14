@@ -5,7 +5,6 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisteredNode;
 import com.wiggle.server.ServerConfig;
@@ -44,7 +43,7 @@ class NamespaceWorkerTest {
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @com.wiggle.client.worker.Handlers("wf")

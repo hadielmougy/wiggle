@@ -54,11 +54,11 @@ public final class DashboardSeed {
         }
         ServerConfig config = ServerConfig.fromEnvironment();
 
-        FlowSpec kyc = Wiggle.define("kyc-checks", Map.class, KycSteps.class, (f, s) -> f
+        FlowSpec kyc = FlowSpec.define("kyc-checks", Map.class, KycSteps.class, (f, s) -> f
                 .thenApply(s::verifyId)
                 .thenApply(s::riskScore));
 
-        FlowSpec onboarding = Wiggle.define("onboarding", Map.class, OnboardingSteps.class, (f, s) -> {
+        FlowSpec onboarding = FlowSpec.define("onboarding", Map.class, OnboardingSteps.class, (f, s) -> {
             var created = f.thenApply(s::createAccount);
             return Wiggle.allOf(created.thenApply(s::welcome), created.thenApply(s::provisionHw))
                     .combineWithContext(s::merge)
@@ -68,7 +68,7 @@ public final class DashboardSeed {
                     .thenApply(s::activate);
         });
 
-        FlowSpec report = Wiggle.define("nightly-report", Map.class, ReportSteps.class, (f, s) -> f
+        FlowSpec report = FlowSpec.define("nightly-report", Map.class, ReportSteps.class, (f, s) -> f
                 .thenApply(s::gather)
                 .thenApply(s::render));
 

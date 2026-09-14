@@ -119,7 +119,7 @@ final class StepNames {
         throw new IllegalArgumentException(
                 "'" + impl + "' is referenced on " + lambda.getImplClass().replace('/', '.')
                 + ", which is a class. Declare the steps as an interface and name them through it:"
-                + " Wiggle.define(name, Ctx.class, MySteps.class, (f, s) -> f.thenApply(s::" + impl + "))."
+                + " FlowSpec.define(name, Ctx.class, MySteps.class, (f, s) -> f.thenApply(s::" + impl + "))."
                 + " A spec only names its steps -- the code that runs them is bound by name on a"
                 + " worker, so referencing an implementation here promises something the spec cannot"
                 + " keep.");

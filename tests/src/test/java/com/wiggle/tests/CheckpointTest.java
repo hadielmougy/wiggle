@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -64,10 +63,10 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        FlowSpec plain = Wiggle.define("cp", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec plain = FlowSpec.define("cp", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenApply(s::b));
-        FlowSpec checked = Wiggle.define("cp", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec checked = FlowSpec.define("cp", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .checkpoint()
                 .thenApply(s::b));
@@ -77,7 +76,7 @@ class CheckpointTest {
         assertNotEquals(plain.version(), checked.version(), "checkpoint is part of the content hash");
 
         assertThrows(IllegalStateException.class,
-                () -> Wiggle.define("bad", Map.class, OneStep.class, (f, s) -> f.checkpoint()),
+                () -> FlowSpec.define("bad", Map.class, OneStep.class, (f, s) -> f.checkpoint()),
                 "checkpoint() must follow a step");
     }
 
@@ -86,7 +85,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Wiggle.define("cp-flush", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("cp-flush", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .thenApply(s::a)
                 .checkpoint()
@@ -121,7 +120,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Wiggle.define("cp-nobuf", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("cp-nobuf", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .thenApply(s::a)   // no checkpoint
                 .thenApply(s::b)

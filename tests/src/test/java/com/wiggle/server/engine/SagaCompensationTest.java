@@ -3,7 +3,6 @@ package com.wiggle.server.engine;
 import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
@@ -89,7 +88,7 @@ class SagaCompensationTest {
     @DisplayName("a failed instance compensates its completed steps in reverse order -> COMPENSATED")
     void reverseOrderSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Wiggle.define("saga", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("saga", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::reserve)
                 .compensate()
                 .thenApply(s::capture)
@@ -131,7 +130,7 @@ class SagaCompensationTest {
     @DisplayName("locally-chained (LOCAL_SYNC) compensable steps capture snapshots and compensate too")
     void localSyncSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Wiggle.define("saga-local", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("saga-local", Map.class, OneStep.class, (f, s) -> f
                 .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
                 .thenApply(s::reserve)
                 .compensate()
@@ -158,7 +157,7 @@ class SagaCompensationTest {
     @Test @Timeout(30)
     @DisplayName("no declared compensation -> plain FAILED, exactly as before")
     void undeclaredStillFails() throws Exception {
-        FlowSpec bp = Wiggle.define("plain-fail", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("plain-fail", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::work)
                 .thenApply(s::boom));
         @Handlers("plain-fail")
@@ -176,7 +175,7 @@ class SagaCompensationTest {
     @DisplayName("a compensator that fails permanently lands COMPENSATION_FAILED, loudly")
     void compensatorFailure() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Wiggle.define("bad-undo", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("bad-undo", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::reserve)
                 .compensate()
                 .thenApply(s::boom));

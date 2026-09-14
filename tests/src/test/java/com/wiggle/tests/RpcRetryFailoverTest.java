@@ -4,7 +4,6 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -56,7 +55,7 @@ class RpcRetryFailoverTest {
     @DisplayName("a call issued while the cell is down rides out the outage and succeeds once it returns")
     void ridesOutRescheduling() throws Exception {
         int port = freePort();
-        FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         System.setProperty("wiggle.rpc.maxAttempts", "60");
         System.setProperty("wiggle.rpc.retryDelayMillis", "150");
 

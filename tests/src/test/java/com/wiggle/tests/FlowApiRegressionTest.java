@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Regression suite for {@link Wiggle#define} against the engine's own behavioural conformance
+ * Regression suite for {@link FlowSpec#define} against the engine's own behavioural conformance
  * scenarios. {@link Scenarios} pins what the engine does -- gates short-circuit, arms are isolated
  * until a combine, retries are per-policy, a sleep holds no worker. This re-states each of those
  * topologies and runs it to completion on a real server against the conformance suite's own
@@ -43,7 +43,7 @@ class FlowApiRegressionTest {
     void sequentialPipeline() throws Exception {
         Scenarios.SeqH h = new Scenarios.SeqH();
 
-        FlowSpec typed = Wiggle.define("seq", Map.class, SeqSteps.class, (f, s) -> f
+        FlowSpec typed = FlowSpec.define("seq", Map.class, SeqSteps.class, (f, s) -> f
                 .thenApply(s::one).thenApply(s::two).thenApply(s::three));
 
         Map<String, Object> out = run(typed, h, Map.of());
@@ -58,7 +58,7 @@ class FlowApiRegressionTest {
         java.util.concurrent.atomic.AtomicInteger downstream = new java.util.concurrent.atomic.AtomicInteger();
         Scenarios.GatedH h = new Scenarios.GatedH(downstream);
 
-        FlowSpec typed = Wiggle.define("gated", Map.class, GatedSteps.class, (f, s) -> f
+        FlowSpec typed = FlowSpec.define("gated", Map.class, GatedSteps.class, (f, s) -> f
                 .thenApply(s::seed).thenFilter(s::gate).thenApply(s::never));
 
         InstanceView v = runToView(typed, h, Map.of());
@@ -74,7 +74,7 @@ class FlowApiRegressionTest {
     void forkMergesDisjointWrites() throws Exception {
         ForkMerge h = new ForkMerge();
 
-        FlowSpec typed = Wiggle.define("fork-merge", Map.class, ForkMergeSteps.class, (f, s) -> {
+        FlowSpec typed = FlowSpec.define("fork-merge", Map.class, ForkMergeSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             var left = seeded.thenApply(s::slowLeft);      // finishes last on purpose
             var right = seeded.thenApply(s::fastRight);
@@ -93,7 +93,7 @@ class FlowApiRegressionTest {
         java.util.concurrent.atomic.AtomicInteger after = new java.util.concurrent.atomic.AtomicInteger();
         JoinOnce h = new JoinOnce(after);
 
-        FlowSpec typed = Wiggle.define("join-once", Map.class, JoinOnceSteps.class, (f, s) ->
+        FlowSpec typed = FlowSpec.define("join-once", Map.class, JoinOnceSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
                         .combineWithContext(s::merge)
                         .thenApply(s::after));
@@ -112,7 +112,7 @@ class FlowApiRegressionTest {
         // result in the context under that name -- so an arm name shares the key namespace with the
         // context. A handler named after a key its own arm writes would collide; these are named for
         // their position and write their keys, which is the habit to keep.
-        FlowSpec typed = Wiggle.define("nested", Map.class, NestedSteps.class, (f, s) -> {
+        FlowSpec typed = FlowSpec.define("nested", Map.class, NestedSteps.class, (f, s) -> {
             var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
                     .combineWithContext(s::innerMerge)
                     .thenApply(s::innerDone);
@@ -133,7 +133,7 @@ class FlowApiRegressionTest {
     void gateInsideBranchDoesNotStrandSiblings() throws Exception {
         BranchGate h = new BranchGate();
 
-        FlowSpec typed = Wiggle.define("branch-gate", Map.class, BranchGateSteps.class, (f, s) -> {
+        FlowSpec typed = FlowSpec.define("branch-gate", Map.class, BranchGateSteps.class, (f, s) -> {
             var gated = f.thenFilter(s::gate).thenApply(s::skipped);
             var other = f.thenApply(s::ran);
             return Wiggle.allOf(gated, other).combineWithContext(s::merge).thenApply(s::after);
@@ -154,7 +154,7 @@ class FlowApiRegressionTest {
         Scenarios.RetryH h = new Scenarios.RetryH(attempts);
         RetryPolicy policy = RetryPolicy.fixed(5, Duration.ofMillis(50));
 
-        FlowSpec typed = Wiggle.define("retry", Map.class, RetrySteps.class,
+        FlowSpec typed = FlowSpec.define("retry", Map.class, RetrySteps.class,
                 (f, s) -> f.thenApply(s::flaky, policy));
 
         Map<String, Object> out = run(typed, h, Map.of());
@@ -166,7 +166,7 @@ class FlowApiRegressionTest {
     void sleepDefersWithoutHoldingAWorker() throws Exception {
         Scenarios.SleeperH h = new Scenarios.SleeperH();
 
-        FlowSpec typed = Wiggle.define("sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+        FlowSpec typed = FlowSpec.define("sleeper", Map.class, SleeperSteps.class, (f, s) -> f
                 .thenApply(s::before)
                 .thenSleep("nap", Duration.ofMillis(400))
                 .thenApply(s::after));
@@ -184,9 +184,9 @@ class FlowApiRegressionTest {
     void definitionIdentityIsUnchanged() {
         Scenarios.SeqH h = new Scenarios.SeqH();
 
-        FlowSpec a = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
-        FlowSpec b = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
-        FlowSpec c = Wiggle.define("versioned", Map.class, SeqSteps.class,
+        FlowSpec a = FlowSpec.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec b = FlowSpec.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec c = FlowSpec.define("versioned", Map.class, SeqSteps.class,
                 (f, s) -> f.thenApply(s::one).thenApply(s::two));
 
         assertEquals(a.version(), b.version(), "the same topology twice is the same version");
@@ -194,7 +194,7 @@ class FlowApiRegressionTest {
 
         // and the graph-level rules still bite: a duplicate node name is still rejected
         assertTrue(org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                        () -> Wiggle.define("dup", Map.class, SeqSteps.class,
+                        () -> FlowSpec.define("dup", Map.class, SeqSteps.class,
                                 (f, s) -> f.thenApply(s::one).thenApply(s::one)))
                 .getMessage().contains("duplicate step name"));
     }

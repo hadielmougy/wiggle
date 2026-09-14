@@ -3,7 +3,6 @@ package com.wiggle.server.engine;
 import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
@@ -83,7 +82,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its explicit budget (SERVER dispatch)")
     void runawayServerMode() throws Exception {
-        FlowSpec bp = Wiggle.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
                 .repeatWhile(s::forever, 7, b -> b.thenApply(s::spin))
                 .thenApply(s::after));
         InstanceView v = run(bp, Duration.ofSeconds(20));
@@ -96,7 +95,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a runaway loop fails at its budget under local chaining too")
     void runawayLocalAsync() throws Exception {
-        FlowSpec bp = Wiggle.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
                 .repeatWhile(s::forever, 7, b -> b.thenApply(s::spin))
                 .thenApply(s::after)
                 .execution(ExecutionMode.LOCAL_ASYNC));
@@ -108,7 +107,7 @@ class LoopBudgetTest {
     @Test @Timeout(30)
     @DisplayName("a loop that finishes within budget completes; the counter never reaches the context")
     void legitLoopUnaffected() throws Exception {
-        FlowSpec bp = Wiggle.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("loop-wf", Map.class, LoopSteps.class, (f, s) -> f
                 .repeatWhile(s::fewMore, 10, b -> b.thenApply(s::spin))
                 .thenApply(s::after));
         InstanceView v = run(bp, Duration.ofSeconds(20));
@@ -122,7 +121,7 @@ class LoopBudgetTest {
     @Test
     @DisplayName("non-loop graphs serialize without the budget field — content hashes are stable")
     void hashStability() {
-        var def = Wiggle.define("plain", Map.class, OneStep.class, (f, s) -> f
+        var def = FlowSpec.define("plain", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenFilter(s::g)
                 .thenApply(s::b)).definition();
@@ -130,7 +129,7 @@ class LoopBudgetTest {
             assertFalse(n.toJson().containsKey("loopBudget"),
                     "non-loop node '" + n.name() + "' must not serialize a loopBudget");
         }
-        var loop = Wiggle.define("looped", Map.class, OneStep.class, (f, s) ->
+        var loop = FlowSpec.define("looped", Map.class, OneStep.class, (f, s) ->
                 f.repeatWhile(s::g, 5, b -> b.thenApply(s::a))).definition();
         assertTrue(loop.nodes().values().stream().anyMatch(n -> n.toJson().containsKey("loopBudget")),
                 "the loop guard serializes its budget");

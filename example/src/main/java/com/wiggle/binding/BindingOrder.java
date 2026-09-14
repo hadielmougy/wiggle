@@ -1,7 +1,6 @@
 package com.wiggle.binding;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 
 import java.util.LinkedHashMap;
@@ -49,7 +48,7 @@ public final class BindingOrder {
      * inert stand-in that only names steps.
      */
     public static FlowSpec flowSpec() {
-        return Wiggle.define(NAME, Map.class, Steps.class, (f, s) -> f
+        return FlowSpec.define(NAME, Map.class, Steps.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)
                 .thenApply(s::charge, PAYMENTS_QUEUE)

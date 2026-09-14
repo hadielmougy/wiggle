@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -59,11 +58,11 @@ class VersionScopedWorkerTest {
 
     /** v1 and v2 of one workflow: same step name, different topology, so different content hashes. */
     private static FlowSpec v1() {
-        return Wiggle.define("vs-order", Map.class, OneStep.class, (f, s) -> f.thenApply(s::handle));
+        return FlowSpec.define("vs-order", Map.class, OneStep.class, (f, s) -> f.thenApply(s::handle));
     }
 
     private static FlowSpec v2() {
-        return Wiggle.define("vs-order", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("vs-order", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::handle)
                 .thenApply(s::extra));
     }

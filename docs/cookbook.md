@@ -52,7 +52,7 @@ The smallest useful pipeline: two transforms, a filter, and a side effect — an
 changes half way through.
 
 ```java
-Wiggle.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
         .thenApply(s::normalise)
         // classify returns a different record, so the context type changes here; every
         // step after it must consume Classified, and the compiler holds that
@@ -71,7 +71,7 @@ method); the context is unchanged.
 An exclusive branch whose arm itself fans out.
 
 ```java
-Wiggle.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
+FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
     // the large arm fans out: a fan-out inside a choice arm is just a fan-out whose
     // common point is the guard
     var large  = f.when(s::isLarge);
@@ -103,7 +103,7 @@ guard holds, otherwise skip past it". A single-armed `allOf` is not: there is no
 Dynamic fan-out with mixed worker pools. The element *is* each branch's context.
 
 ```java
-Wiggle.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
+FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
         .defaultQueue("cpu")
         .thenForEach("items", Item.class, item -> item
                 .thenApply(s::price)
@@ -125,7 +125,7 @@ deduplicates, a `Map` is keyed like the input.
 Poll-until-ready, with an inner gate short-circuiting a cancelled job.
 
 ```java
-Wiggle.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
+FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
         // the body runs once, then the condition is evaluated -- do-while, not while-do
         .repeatWhile(s::stillPending, b -> b
                 // a gate short-circuits to the loop's exit, not just the body: a
@@ -144,7 +144,7 @@ instance with an error naming the loop, rather than spinning forever.
 Wait for a signal, and branch on how the wait resolved.
 
 ```java
-Wiggle.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
+FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
     var waited = f
             .thenApply(s::submit)
             // no worker is held while it waits; if nobody signals in time the
@@ -168,7 +168,7 @@ timeout instead of running an escalation branch.
 Compose a registered child workflow into a bigger one.
 
 ```java
-Wiggle.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
+FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
     var checked = f
             // runs tcb-linear-gate as a child; its final context merges back here, which
             // is why this continues as Classified
@@ -191,7 +191,7 @@ child's final context, which is why the `Class` argument says what to continue a
 Batched local execution with an explicit flush.
 
 ```java
-Wiggle.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
+FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_ASYNC)
         .repeatWhile(s::moreBatches, b -> b
                 .thenApply(s::processBatch)
@@ -210,7 +210,7 @@ A gate, a sub-workflow, a `oneOf` whose arms fan out and fan over a collection, 
 escalation, a checkpointed loop.
 
 ```java
-Wiggle.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
+FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
     var ready = f
             .defaultQueue("default")
             .execution(ExecutionMode.LOCAL_SYNC)

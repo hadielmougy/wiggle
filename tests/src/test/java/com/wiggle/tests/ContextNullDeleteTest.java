@@ -34,7 +34,7 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("a step that drops a field removes it from the context (not left as null)")
     void droppedFieldIsRemoved() throws Exception {
-        FlowSpec bp = Wiggle.define("trim", Map.class, OneStep.class, (f, s) -> f.thenApply(s::trim));
+        FlowSpec bp = FlowSpec.define("trim", Map.class, OneStep.class, (f, s) -> f.thenApply(s::trim));
 
         Map<String, Object> in = new LinkedHashMap<>();
         in.put("keep", 1);
@@ -47,7 +47,7 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("branch combine clears its per-branch scratch keys from the final context")
     void combineScratchKeysAreRemoved() throws Exception {
-        FlowSpec bp = Wiggle.define("trip", Map.class, TripSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("trip", Map.class, TripSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::air), f.thenApply(s::hotel)).combineWithContext(s::merge));
 
         Map<String, Object> out = run(bp, new TripH(), new LinkedHashMap<>(Map.of("id", "t1")));

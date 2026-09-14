@@ -27,7 +27,7 @@ A step optionally declares a compensating activity, attached to the just-added s
 `checkpoint()` attaches today (`WorkflowBuilder.java:418`):
 
 ```java
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
         .thenApply(s::validate)
         .thenApply(s::authorise).compensate()
         .thenApply(s::capture).compensate()

@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -52,7 +51,7 @@ class HandleBindingTest {
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
     private FlowSpec authoredGraph() {
-        return Wiggle.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)
                 .thenApply(s::authorise, "payments")
@@ -158,7 +157,7 @@ class HandleBindingTest {
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
     void typedHandlersBinding() throws Exception {
         withServer((client, server) -> {
-            client.register(Wiggle.define("typed-wf", Map.class, OneStep.class, (f, s) -> f
+            client.register(FlowSpec.define("typed-wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::check)
                 .thenFilter(s::available)
                 .thenAccept(s::done)));

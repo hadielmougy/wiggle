@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -89,7 +88,7 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, QUEUES_WF);
-            FlowSpec spec = Wiggle.define(QUEUES_WF, Map.class, OneStep.class, (f, s) -> f
+            FlowSpec spec = FlowSpec.define(QUEUES_WF, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served)
                 .onQueue(QUEUES_WF + "-served")
                 .thenApply(s::orphan)
@@ -129,8 +128,8 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, VERSION_WF);
-            FlowSpec v1 = Wiggle.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
-            FlowSpec v2 = Wiggle.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f
+            FlowSpec v1 = FlowSpec.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
+            FlowSpec v2 = FlowSpec.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served)
                 .thenApply(s::extra));
             client.register(v1);
@@ -175,8 +174,8 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, UNSCOPED_WF);
-            FlowSpec v1 = Wiggle.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
-            FlowSpec v2 = Wiggle.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f
+            FlowSpec v1 = FlowSpec.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
+            FlowSpec v2 = FlowSpec.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served)
                 .thenApply(s::extra));
             client.register(v1);

@@ -1,7 +1,6 @@
 package com.wiggle.binding.typed;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 
 /**
  * The topology of the typed order flow, authored once. Same idea as {@code binding.BindingOrder},
@@ -25,7 +24,7 @@ public final class TypedBindingOrder {
     }
 
     public static FlowSpec flowSpec() {
-        return Wiggle.define(NAME, Purchase.class, Steps.class, (f, s) -> f
+        return FlowSpec.define(NAME, Purchase.class, Steps.class, (f, s) -> f
                 .thenApply(s::validate)                              // implemented by name, elsewhere
                 .thenFilter(s::inStock)                              // predicate node; a worker supplies it
                 .thenApply(s::charge, PAYMENTS_QUEUE)                // routed to the payments queue

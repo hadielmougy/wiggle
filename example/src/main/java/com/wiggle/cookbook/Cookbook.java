@@ -77,7 +77,7 @@ public final class Cookbook {
     public static final class LinearWithGate implements LinearGateSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+            return FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
                     .thenApply(s::normalise)
                     // classify returns a different record, so the context type changes here; every
                     // step after it must consume Classified, and the compiler holds that
@@ -115,7 +115,7 @@ public final class Cookbook {
     public static final class ChooseThenFork implements ChooseForkSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
+            return FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
                 // the large arm fans out: a fan-out inside a choice arm is just a fan-out whose
                 // common point is the guard
                 var large = f.when(s::isLarge);
@@ -165,7 +165,7 @@ public final class Cookbook {
     public static final class ForEachAcrossQueues implements ForEachSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
+            return FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
                     .defaultQueue("cpu")
                     .thenForEach("items", Item.class, item -> item
                             .thenApply(s::price)
@@ -207,7 +207,7 @@ public final class Cookbook {
     public static final class PollUntilReady implements PollSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
+            return FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
                     // the body runs once, then the condition is evaluated -- do-while, not while-do
                     .repeatWhile(s::stillPending, b -> b
                             // a gate short-circuits to the loop's exit, not just the body: a
@@ -242,7 +242,7 @@ public final class Cookbook {
     public static final class ApprovalWithEscalation implements ApprovalSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
+            return FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
                 var waited = f
                         .thenApply(s::submit)
                         // no worker is held while it waits; if nobody signals in time the
@@ -283,7 +283,7 @@ public final class Cookbook {
     public static final class ChildCheckThenFork implements ParentSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
+            return FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
                 var checked = f
                         // runs tcb-linear-gate as a child; its final context merges back here, which
                         // is why this continues as Classified
@@ -325,7 +325,7 @@ public final class Cookbook {
     public static final class BatchedLoopWithCheckpoint implements BatchedSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
+            return FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
                     .execution(ExecutionMode.LOCAL_ASYNC)
                     .repeatWhile(s::moreBatches, b -> b
                             .thenApply(s::processBatch)
@@ -365,7 +365,7 @@ public final class Cookbook {
     public static final class KitchenSink implements KitchenSinkSteps {
 
         public FlowSpec spec() {
-            return Wiggle.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
+            return FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
                 var ready = f
                         .defaultQueue("default")
                         .execution(ExecutionMode.LOCAL_SYNC)

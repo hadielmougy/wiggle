@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -63,7 +62,7 @@ class HandlerOnlyWorkerTest {
 
     /** A chain long enough that a local run has something to chain. */
     private static FlowSpec linear(ExecutionMode mode) {
-        return Wiggle.define("how-linear", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("how-linear", Map.class, OneStep.class, (f, s) -> f
                 .execution(mode)
                 .thenApply(s::a)
                 .thenApply(s::b)

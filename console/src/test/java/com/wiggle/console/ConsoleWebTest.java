@@ -4,7 +4,6 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -31,7 +30,7 @@ class ConsoleWebTest {
     }
 
     private static FlowSpec wf() {
-        return Wiggle.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config() {
@@ -132,7 +131,7 @@ class ConsoleWebTest {
             WiggleClient c = conn.client();
             // no worker is ever started here, so this token is dispatchable and unclaimable -- which is
             // exactly the state the rest of the console cannot show: the instance reads RUNNING.
-            FlowSpec stranded = Wiggle.define("stranded", Map.class, Steps.class,
+            FlowSpec stranded = FlowSpec.define("stranded", Map.class, Steps.class,
                     (f, s) -> f.thenApply(s::work).onQueue("nobody-polls-this"));
             c.register(stranded);
             String id = c.start(stranded, Map.of());

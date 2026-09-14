@@ -3,7 +3,6 @@ package com.wiggle.client.worker;
 import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -57,7 +56,7 @@ class WorkerPacingTest {
     }
 
     private static FlowSpec chain() {
-        return Wiggle.define("pacing", Map.class, PacingSteps.class, (f, s) -> f
+        return FlowSpec.define("pacing", Map.class, PacingSteps.class, (f, s) -> f
                 .thenApply(s::hop1).thenApply(s::hop2).thenApply(s::hop3).thenApply(s::hop4)
                 .thenApply(s::hop5).thenApply(s::hop6).thenApply(s::hop7).thenApply(s::hop8)
                 .thenApply(s::hop9).thenApply(s::hop10));

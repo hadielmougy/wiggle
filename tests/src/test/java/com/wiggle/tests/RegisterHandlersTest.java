@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -46,7 +45,7 @@ class RegisterHandlersTest {
 
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
     private FlowSpec authoredGraph() {
-        return Wiggle.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)
                 .thenApply(s::authorise, "payments")

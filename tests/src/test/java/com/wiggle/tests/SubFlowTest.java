@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -50,7 +49,7 @@ class SubFlowTest {
     }
 
     private static FlowSpec parent() {
-        return Wiggle.define("sub-parent", Map.class, ParentSteps.class, (f, s) -> f
+        return FlowSpec.define("sub-parent", Map.class, ParentSteps.class, (f, s) -> f
                 .thenApply(s::prepare)
                 .thenSubFlow("delegate", "sub-child", Map.class)
                 .thenApply(s::wrapUp));
@@ -80,7 +79,7 @@ class SubFlowTest {
 
     @Test @DisplayName("the child runs with the parent's context and its result merges back")
     void childCompletes() throws Exception {
-        FlowSpec child = Wiggle.define("sub-child", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec child = FlowSpec.define("sub-child", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::childWork)
                 .thenApply(s::childDone));
 
@@ -104,7 +103,7 @@ class SubFlowTest {
 
     @Test @DisplayName("a failing child fails the parent with the child's error")
     void childFailureFailsParent() throws Exception {
-        FlowSpec child = Wiggle.define("sub-child", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec child = FlowSpec.define("sub-child", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::childWork, com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1))));
 
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -136,7 +135,7 @@ class SubFlowTest {
 
     @Test @DisplayName("cancelling the parent cascades to the running child")
     void cancelCascades() throws Exception {
-        FlowSpec child = Wiggle.define("sub-child", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec child = FlowSpec.define("sub-child", Map.class, OneStep.class, (f, s) -> f
                 .thenAwait("never-arrives")   // the child parks so it is definitely still running
                 .thenApply(s::childDone));
 

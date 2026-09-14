@@ -1,5 +1,6 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ActivityHandler;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
@@ -76,7 +77,7 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ bind: kinds & signatures
 
     private static WorkflowDefinition linear() {
-        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::work)
                 .thenFilter(s::ok)
                 .thenAccept(s::log)).definition();
@@ -140,7 +141,7 @@ class HandlerBinderTest {
 
     @Test @DisplayName("bind reports unserved steps and applies queue defaulting")
     void unservedAndQueues() {
-        WorkflowDefinition def = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+        WorkflowDefinition def = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served, "special-queue")
                 .thenApply(s::someoneElses)).definition();
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new SubsetH()), def);
@@ -192,7 +193,7 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ combines
 
     private static WorkflowDefinition forked() {
-        return Wiggle.define("wf", Map.class, ForkSteps.class, (f, s) ->
+        return FlowSpec.define("wf", Map.class, ForkSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1)).combine(s::merge)).definition();
     }
 
@@ -300,7 +301,7 @@ class HandlerBinderTest {
     }
 
     private static WorkflowDefinition eachGraph() {
-        return Wiggle.define("wf", Map.class, EachSteps.class, (f, s) ->
+        return FlowSpec.define("wf", Map.class, EachSteps.class, (f, s) ->
                 f.thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
                         .combine(s::collect)).definition();
     }

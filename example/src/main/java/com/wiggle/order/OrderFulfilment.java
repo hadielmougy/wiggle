@@ -32,7 +32,7 @@ public final class OrderFulfilment {
     }
 
     public static FlowSpec flowSpec() {
-        return Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+        return FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
             var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
                     .thenApply(s::validate)
                     .thenFilter(s::inStock);

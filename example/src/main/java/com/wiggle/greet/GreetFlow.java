@@ -1,7 +1,6 @@
 package com.wiggle.greet;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import java.util.Map;
 
 /**
@@ -19,7 +18,7 @@ public final class GreetFlow {
     private GreetFlow() { }
 
     public static FlowSpec flowSpec() {
-        return Wiggle.define("greet", Map.class, GreetSteps.class, (f, s) -> f
+        return FlowSpec.define("greet", Map.class, GreetSteps.class, (f, s) -> f
                 .thenApply(s::hello)
                 .thenApply(s::world));
     }

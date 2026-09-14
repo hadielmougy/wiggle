@@ -39,7 +39,7 @@ class JdbcForkJoinStressTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.define("order-ish", Map.class, OrderSteps.class, (f, s) -> {
+        return FlowSpec.define("order-ish", Map.class, OrderSteps.class, (f, s) -> {
             var checked = f.thenApply(s::validate).thenFilter(s::inStock);
             var payment = checked
                     .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(50)))

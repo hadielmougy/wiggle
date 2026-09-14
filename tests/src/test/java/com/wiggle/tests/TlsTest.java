@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Tls;
@@ -49,7 +48,7 @@ class TlsTest {
     private static Path serverKs, clientKs, trust;
 
     private static final FlowSpec BP =
-            Wiggle.define("tls-wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+            FlowSpec.define("tls-wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
     @com.wiggle.client.worker.Handlers("tls-wf")
     static final class WorkHandlers {

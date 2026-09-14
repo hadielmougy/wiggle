@@ -409,7 +409,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, queue) honours the queue and declares a PREDICATE (bound by name)")
         void gateNameOnlyQueue() {
-            FlowSpec bp = Wiggle.define("wf", Map.class, GateThenRun.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("wf", Map.class, GateThenRun.class, (f, s) -> f
                 .thenFilter(s::check, "gpu")
                 .thenApply(s::run));
             WorkflowDefinition def = bp.definition();
@@ -422,7 +422,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, retry, queue) honours both the retry policy and the queue")
         void gateNameOnlyRetryAndQueue() {
-            FlowSpec bp = Wiggle.define("wf", Map.class, GateThenRun.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("wf", Map.class, GateThenRun.class, (f, s) -> f
                     .thenFilter(s::check, RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
                     .thenApply(s::run));
             Node gate = byActivity(bp.definition(), "wf#check");
@@ -433,7 +433,7 @@ class PipelineTest {
         @Test
         @DisplayName("step(name, queue) / effect(name) route correctly")
         void stepAndEffectNameOnly() {
-            FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::ingest, "gpu")
                 .thenAccept(s::notify));
             WorkflowDefinition def = bp.definition();
@@ -447,7 +447,7 @@ class PipelineTest {
         void nameOnlyDeclaresTopologyOnly() {
             // The DSL declares topology only; the worker binds the handler by name. The flowSpec
             // therefore carries just the graph -- there is no baked step logic to collide with.
-            FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::check));
+            FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::check));
             assertEquals(NodeKind.TASK, byActivity(bp.definition(), "wf#check").kind());
         }
     }

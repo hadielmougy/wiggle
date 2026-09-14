@@ -1,7 +1,6 @@
 package com.wiggle.server.cluster;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -36,7 +35,7 @@ class HousekeeperTest {
 
     /** A one-sleep workflow whose timer parks the instance until the housekeeper fires it. */
     private static FlowSpec sleeper(long millis) {
-        return Wiggle.define("hk-sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+        return FlowSpec.define("hk-sleeper", Map.class, SleeperSteps.class, (f, s) -> f
                 .thenSleep("nap", Duration.ofMillis(millis))
                 .thenApply(s::after));
     }

@@ -90,7 +90,7 @@ run now and I have lease budget."*
 ### 5.1 Per-workflow-definition flag (primary)
 
 ```java
-Wiggle.define("name", Ctx.class, Steps.class, (f, s) -> f
+FlowSpec.define("name", Ctx.class, Steps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
         .thenApply(s::first) ...)
 ```

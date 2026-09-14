@@ -29,7 +29,7 @@ interface OrderSteps {                                  // the steps, as a contr
     ...
 }
 
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
     var payment  = validated.thenApply(s::authorise).thenApply(s::capture);
@@ -267,7 +267,7 @@ class GreetHandlers implements GreetSteps {
 //    once and compiled to a graph; the code that runs each step is bound by name on the worker.
 interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
 
-FlowSpec greet = Wiggle.define("greet", Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
+FlowSpec greet = FlowSpec.define("greet", Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
 // 3. Embedded server + worker + one instance.
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
@@ -289,7 +289,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 A real one — parallel branches, a guard, a retry policy, a server-side timer:
 
 ```java
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate)
             .thenFilter(s::inStock);         // false ⇒ the instance ends cleanly, not an error
 
@@ -324,7 +324,7 @@ public interface OrderSteps {                     // declared here, implemented 
 }
 
 // the author registers the topology without implementing a single step
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
 That is what lets one workflow be served by workers in Java, Go and Python without any of them
@@ -401,7 +401,7 @@ And the parts long-running processes actually need are first-class:
 
 ```java
 // Human / external input — the instance parks (no worker held), a deadline can escalate:
-Wiggle.define("expense", Expense.class, ExpenseSteps.class, (f, s) -> f
+FlowSpec.define("expense", Expense.class, ExpenseSteps.class, (f, s) -> f
         .thenApply(s::submit)
         .thenAwait("manager-approval", Duration.ofHours(48), b -> b.thenApply(s::autoEscalate))
         .thenApply(s::payOut));
@@ -433,7 +433,7 @@ class per recipe where the other is a topology file plus a handlers file.
 | **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Coordinator** | `coordinator` | Optional control plane: stateless processes over their own small database that allocate namespaces to cells, publish epoch rings, track node health, and answer "where does this instance live?". Several elect one leader with the same announce-and-heartbeat election the cells run (`election`). |
-| **Client & worker** | `client` | Workflow authoring (`Wiggle.define`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
+| **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
 | **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
 | **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
 | **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ coordinator ∣ console`, every storage backend bundled. |

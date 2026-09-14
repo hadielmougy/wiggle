@@ -4,7 +4,6 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.Compensation;
@@ -53,7 +52,7 @@ public final class SagaLoadBench {
 
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
-        return Wiggle.define("saga-load", Map.class, SagaSteps.class, (f, s) -> f
+        return FlowSpec.define("saga-load", Map.class, SagaSteps.class, (f, s) -> f
                 .thenApply(s::reserve).compensate()
                 .thenApply(s::enrich).compensate()
                 .thenApply(s::boom));

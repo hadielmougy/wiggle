@@ -115,7 +115,7 @@ class ManyWorkflowsStateSweepTest {
 
     /** 1. linear, SERVER mode -> COMPLETED */
     private static FlowSpec linear() {
-        return Wiggle.define(PREFIX + "linear", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define(PREFIX + "linear", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenApply(s::b)
                 .thenApply(s::c));
@@ -123,7 +123,7 @@ class ManyWorkflowsStateSweepTest {
 
     /** 2. a gate that closes -> COMPLETED with terminationReason gated:* */
     private static FlowSpec gated() {
-        return Wiggle.define(PREFIX + "gated", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define(PREFIX + "gated", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenFilter(s::never)
                 .thenApply(s::unreachable));
@@ -131,7 +131,7 @@ class ManyWorkflowsStateSweepTest {
 
     /** 3. fork/combine under LOCAL_SYNC -> COMPLETED, exercising local chaining of a join */
     private static FlowSpec forked() {
-        return Wiggle.define(PREFIX + "forked", Map.class, ForkedSteps.class, (f, s) -> {
+        return FlowSpec.define(PREFIX + "forked", Map.class, ForkedSteps.class, (f, s) -> {
             var seeded = f.execution(ExecutionMode.LOCAL_SYNC).thenApply(s::a);
             return Wiggle.allOf(seeded.thenApply(s::left), seeded.thenApply(s::right))
                     .combineWithContext(s::merge)
@@ -141,7 +141,7 @@ class ManyWorkflowsStateSweepTest {
 
     /** 4. forEach over a collection under LOCAL_ASYNC -> COMPLETED */
     private static FlowSpec fannedOut() {
-        return Wiggle.define(PREFIX + "foreach", Map.class, ForeachSteps.class, (f, s) -> f
+        return FlowSpec.define(PREFIX + "foreach", Map.class, ForeachSteps.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .thenApply(s::a)
                 .thenForEach("items", Map.class, b -> b.thenApply(s::each))
@@ -150,7 +150,7 @@ class ManyWorkflowsStateSweepTest {
 
     /** 5. choose + doWhile -> COMPLETED, exercising guards and a cycle */
     private static FlowSpec branchy() {
-        return Wiggle.define(PREFIX + "branchy", Map.class, BranchySteps.class, (f, s) -> Wiggle.oneOf(
+        return FlowSpec.define(PREFIX + "branchy", Map.class, BranchySteps.class, (f, s) -> Wiggle.oneOf(
                         f.when(s::isBig).thenApply(s::big),
                         f.otherwise().thenApply(s::small))
                 .repeatWhile(s::more, b -> b.thenApply(s::drain)));
@@ -158,14 +158,14 @@ class ManyWorkflowsStateSweepTest {
 
     /** 6. a permanent failure -> FAILED */
     private static FlowSpec failing() {
-        return Wiggle.define(PREFIX + "failing", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define(PREFIX + "failing", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenApply(s::boom));
     }
 
     /** 7. two compensable steps then a failure -> COMPENSATED */
     private static FlowSpec saga() {
-        return Wiggle.define(PREFIX + "saga", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define(PREFIX + "saga", Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::reserve)
                 .compensate()
                 .thenApply(s::charge)
@@ -175,7 +175,7 @@ class ManyWorkflowsStateSweepTest {
 
     /** 8. parks on a signal nobody sends -> stays RUNNING, and a sleep before it */
     private static FlowSpec parked() {
-        return Wiggle.define(PREFIX + "parked", Map.class, ParkedSteps.class, (f, s) -> f
+        return FlowSpec.define(PREFIX + "parked", Map.class, ParkedSteps.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenSleep("nap", Duration.ofMillis(200))
                 .thenAwait("never-arrives")

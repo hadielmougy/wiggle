@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -48,7 +47,7 @@ class CompetingConsumersTest {
 
     /** A single-step workflow whose one step both workers will serve. */
     private static FlowSpec oneStep() {
-        return Wiggle.define("competing", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("competing", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     /**

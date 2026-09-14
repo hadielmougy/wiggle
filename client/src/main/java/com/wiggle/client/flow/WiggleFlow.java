@@ -11,7 +11,7 @@ import java.util.function.UnaryOperator;
  * A handle on the point the flow has reached while it is being <em>defined</em> -- shaped like
  * {@link java.util.concurrent.CompletableFuture} so a workflow reads as a chain, but it is not a
  * future over a running computation. Nothing executes here. Each {@code then*} call records a step
- * and returns a handle on the new end; {@link Wiggle#define} walks the recording once and compiles it
+ * and returns a handle on the new end; {@link FlowSpec#define} walks the recording once and compiles it
  * to the same {@link com.wiggle.client.flow.FlowSpec FlowSpec} the name-based DSL produces. The
  * engine, the graph rows and the worker binding are unchanged -- this is a typed front-end, not a
  * second execution model.
@@ -21,7 +21,7 @@ import java.util.function.UnaryOperator;
  * node name with the method.
  *
  * <pre>{@code
- * FlowSpec order = Wiggle.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge);
@@ -84,7 +84,7 @@ public final class WiggleFlow<T> {
      *
      * <p>Every step kind below takes an optional {@link RetryPolicy} and an optional queue, in either
      * order, so any combination reads the way you want to write it. A step with no policy inherits the
-     * workflow default given to {@link Wiggle#define(String, RetryPolicy, Class, Function)}; a step
+     * workflow default given to {@link FlowSpec#define(String, RetryPolicy, Class, Function)}; a step
      * with no queue uses the workflow's {@link #defaultQueue}.
      */
     public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step) {

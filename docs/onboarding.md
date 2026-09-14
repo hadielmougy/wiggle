@@ -177,7 +177,7 @@ A definition compiles to pure **topology** — named nodes and their wiring. Wha
 is a `FlowSpec`: the graph, and nothing else. There are two ways to write one, and they differ only
 in where the step names come from.
 
-**`Wiggle.define` — when the steps can be declared as a contract.** Declare them as an interface and
+**`FlowSpec.define` — when the steps can be declared as a contract.** Declare them as an interface and
 name them through it, and the compiler checks that every step consumes what the one before it
 produced, while a rename carries the step name with it:
 
@@ -190,7 +190,7 @@ interface OrderSteps {
     ...
 }
 
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
     var payment  = validated.thenApply(s::authorise, RetryPolicy.exponential(5, ofMillis(100)))
@@ -237,7 +237,7 @@ public interface OrderSteps {
 }
 
 // the author registers this without implementing a single step
-FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
 The step logic is a separate class annotated `@Handlers("<workflow-name>")`, bound on a worker by

@@ -36,7 +36,7 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.define("merge-check", Map.class, MergeSteps.class, (f, s) -> {
+        return FlowSpec.define("merge-check", Map.class, MergeSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate);
             var payment = validated.thenApply(s::authorise);
             var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);
@@ -126,7 +126,7 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec typedFlowSpec() {
-        return Wiggle.define("parcel-merge", Parcel.class, ParcelSteps.class, (f, s) -> {
+        return FlowSpec.define("parcel-merge", Parcel.class, ParcelSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate);
             var payment = validated.thenApply(s::authorise);
             var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);

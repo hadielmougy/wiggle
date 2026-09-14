@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.Json;
 import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.RegisteredNode;
@@ -39,7 +38,7 @@ class CoordinatorFanoutTest {
     }
 
     private static byte[] definitionJson() {
-        FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 

@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.Worker;
@@ -35,7 +34,7 @@ class FindByCorrelationTest {
     }
 
     private static FlowSpec wf() {
-        return Wiggle.define("corr", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("corr", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config(String jdbcUrl) {

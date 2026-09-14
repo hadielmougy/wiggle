@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.IdCodec;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -34,7 +33,7 @@ class EpochAwareIdTest {
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @Test @DisplayName("a namespace-configured cell mints ns.e0.s0.<ulid> ids")
