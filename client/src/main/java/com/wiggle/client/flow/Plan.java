@@ -58,6 +58,15 @@ final class Plan {
         /** Set by the stage's combine(), before compilation reaches this step. */
         String combineName;
 
+        /** A fan-out joins exactly once; a second combine on the same stage is a mistake, not an override. */
+        void combine(String name) {
+            if (combineName != null) {
+                throw new IllegalStateException("allOf(" + String.join(", ", armNames)
+                        + ") already has a merge ('" + combineName + "'); a fan-out joins once");
+            }
+            combineName = name;
+        }
+
         Fork(Step parent, List<List<Step>> arms, List<String> armNames) {
             super(parent, null, null);
             this.arms = arms;

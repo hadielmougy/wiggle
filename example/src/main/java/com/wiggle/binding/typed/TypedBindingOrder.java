@@ -16,12 +16,19 @@ public final class TypedBindingOrder {
 
     private TypedBindingOrder() {}
 
+    /** The steps, declared and not implemented -- each worker brings its own and binds by name. */
+    public interface Steps {
+        Purchase validate(Purchase p);
+        boolean inStock(Purchase p);
+        Purchase charge(Purchase p);
+        void notify(Purchase p);
+    }
+
     public static FlowSpec flowSpec() {
-        return Wiggle.graph(NAME)
-                .step("validate")                                    // implemented by name, elsewhere
-                .gate("in-stock")                                    // predicate node; a worker supplies it
-                .step("charge", PAYMENTS_QUEUE)                      // routed to the payments queue
-                .effect("notify")
-                .build();
+        return Wiggle.define(NAME, Purchase.class, Steps.class, (f, s) -> f
+                .thenApply(s::validate)                              // implemented by name, elsewhere
+                .thenFilter(s::inStock)                              // predicate node; a worker supplies it
+                .thenApply(s::charge, PAYMENTS_QUEUE)                // routed to the payments queue
+                .thenAccept(s::notify));
     }
 }

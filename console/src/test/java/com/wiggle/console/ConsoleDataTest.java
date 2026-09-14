@@ -34,8 +34,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ConsoleDataTest {
 
+    /** The steps a spec names. A worker binds them by name; nothing here implements them. */
+    interface Steps {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static FlowSpec wf() {
-        return Wiggle.graph("wf").step("work").build();
+        return Wiggle.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config() {

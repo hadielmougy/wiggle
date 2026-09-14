@@ -15,7 +15,7 @@ public final class ForkN {
 
     /** The merge for the preceding fan-out, named rather than referenced. */
     public <R> WiggleFlow<R> combine(String name, Class<R> result) {
-        fork.combineName = name;
+        fork.combine(name);
         return new WiggleFlow<>(fork);
     }
 }

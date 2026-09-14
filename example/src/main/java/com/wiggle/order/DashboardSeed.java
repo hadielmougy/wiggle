@@ -27,6 +27,27 @@ import java.util.Map;
  */
 public final class DashboardSeed {
 
+    interface KycSteps {
+        Map<String, Object> verifyId(Map<String, Object> ctx);
+        Map<String, Object> riskScore(Map<String, Object> ctx);
+    }
+
+    interface OnboardingSteps {
+        Map<String, Object> createAccount(Map<String, Object> ctx);
+        Map<String, Object> welcome(Map<String, Object> ctx);
+        Map<String, Object> provisionHw(Map<String, Object> ctx);
+        // the handler wants the pre-fork context too, so this is a combineWithContext shape
+        Map<String, Object> merge(Map<String, Object> base,
+                                  Map<String, Object> welcome, Map<String, Object> provisioned);
+        Map<String, Object> autoEscalate(Map<String, Object> ctx);
+        Map<String, Object> activate(Map<String, Object> ctx);
+    }
+
+    interface ReportSteps {
+        Map<String, Object> gather(Map<String, Object> ctx);
+        Map<String, Object> render(Map<String, Object> ctx);
+    }
+
     public static void main(String[] args) throws Exception {
         // Default the dashboard on (the whole point of this tool) unless the caller set a port.
         if (System.getProperty("wiggle.dashboard.port") == null && System.getenv("WIGGLE_DASHBOARD_PORT") == null) {
@@ -34,27 +55,23 @@ public final class DashboardSeed {
         }
         ServerConfig config = ServerConfig.fromEnvironment();
 
-        FlowSpec kyc = Wiggle.graph("kyc-checks")
-                .step("verify-id")
-                .step("risk-score")
-                .build();
+        FlowSpec kyc = Wiggle.define("kyc-checks", Map.class, KycSteps.class, (f, s) -> f
+                .thenApply(s::verifyId)
+                .thenApply(s::riskScore));
 
-        FlowSpec onboarding = Wiggle.graph("onboarding")
-                .step("create-account")
-                .fork(
-                        Branch.of("send-welcome", b -> b.step("welcome")),
-                        Branch.of("provision", b -> b.step("provision-hw")))
-                .combine("merge")
-                .subWorkflow("run-kyc", "kyc-checks")
-                .awaitSignal("manager-approval", Duration.ofHours(48),
-                        b -> b.step("auto-escalate"))
-                .step("activate")
-                .build();
+        FlowSpec onboarding = Wiggle.define("onboarding", Map.class, OnboardingSteps.class, (f, s) -> {
+            var created = f.thenApply(s::createAccount);
+            return Wiggle.allOf(created.thenApply(s::welcome), created.thenApply(s::provisionHw))
+                    .combineWithContext(s::merge)
+                    .thenSubFlow("run-kyc", "kyc-checks", Map.class)
+                    .thenAwait("manager-approval", Duration.ofHours(48),
+                            b -> b.thenApply(s::autoEscalate))
+                    .thenApply(s::activate);
+        });
 
-        FlowSpec report = Wiggle.graph("nightly-report")
-                .step("gather")
-                .step("render")
-                .build();
+        FlowSpec report = Wiggle.define("nightly-report", Map.class, ReportSteps.class, (f, s) -> f
+                .thenApply(s::gather)
+                .thenApply(s::render));
 
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl());

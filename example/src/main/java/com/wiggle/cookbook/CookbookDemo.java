@@ -1,7 +1,7 @@
 package com.wiggle.cookbook;
 
-import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
@@ -12,77 +12,89 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Runs every {@link Cookbook} flowSpec to completion in one embedded JVM, printing the
- * resulting context so you can see each operator combination's actual effect. Two of the
- * flowSpecs ({@code cb-approval-escalation}, {@code cb-kitchen-sink}) wait on a signal that
- * this demo deliberately never sends, so you can watch the escalation branch fire instead.
+ * Runs every {@link Cookbook} recipe to completion in one embedded JVM, printing the resulting
+ * context. The mirror of {@link CookbookDemo} — same operators, same outcomes, defined through
+ * {@link com.wiggle.client.flow.Wiggle#define} instead of {@code graph}.
  *
  * <pre>./gradlew :example:runCookbook</pre>
+ *
+ * <p>Each recipe is one object here, registered and bound in the same breath: {@code register(r.spec())}
+ * takes the topology it defined, {@code handlers(r)} takes the very same instance as its handlers.
+ * That is the whole point of the typed mode — the two halves cannot drift, because they are one class.
+ *
+ * <p>Two recipes ({@code tcb-approval-escalation}, {@code tcb-kitchen-sink}) wait on a signal this
+ * demo deliberately never sends, so you can watch the escalation branch fire instead.
  */
 public final class CookbookDemo {
 
     public static void main(String[] args) throws Exception {
+        Cookbook.LinearWithGate linearGate = new Cookbook.LinearWithGate();
+        Cookbook.ChooseThenFork chooseFork = new Cookbook.ChooseThenFork();
+        Cookbook.ForEachAcrossQueues forEachQueues = new Cookbook.ForEachAcrossQueues();
+        Cookbook.PollUntilReady pollLoop = new Cookbook.PollUntilReady();
+        Cookbook.ApprovalWithEscalation approval = new Cookbook.ApprovalWithEscalation();
+        Cookbook.ChildCheckThenFork parentChild = new Cookbook.ChildCheckThenFork();
+        Cookbook.BatchedLoopWithCheckpoint batchedLoop = new Cookbook.BatchedLoopWithCheckpoint();
+        Cookbook.KitchenSink kitchenSink = new Cookbook.KitchenSink();
+
+        // tcb-linear-gate is also the child workflow of tcb-parent, so it must be registered before
+        // that instance starts.
+        FlowSpec linearGateSpec = linearGate.spec();
+
         try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
-            // cb-linear-gate is also used as a child workflow by cb-parent and cb-kitchen-sink,
-            // so it must be registered before either of those instances starts.
-            FlowSpec linearGate = Cookbook.linearWithGate();
-            FlowSpec chooseFork = Cookbook.chooseThenFork();
-            FlowSpec forEachQueues = Cookbook.forEachAcrossQueues();
-            FlowSpec pollLoop = Cookbook.pollUntilReady();
-            FlowSpec approval = Cookbook.approvalWithEscalation();
-            FlowSpec parentChild = Cookbook.childCheckThenFork();
-            FlowSpec batchedLoop = Cookbook.batchedLoopWithCheckpoint();
-            FlowSpec kitchenSink = Cookbook.kitchenSink();
-
-            // The author publishes every topology; the worker below only implements their steps.
-            for (FlowSpec spec : List.of(linearGate, chooseFork, forEachQueues, pollLoop,
-                    approval, parentChild, batchedLoop, kitchenSink)) {
+            // The author publishes every topology; each recipe object then only implements its steps.
+            for (FlowSpec spec : List.of(linearGateSpec, chooseFork.spec(), forEachQueues.spec(),
+                    pollLoop.spec(), approval.spec(), parentChild.spec(), batchedLoop.spec(),
+                    kitchenSink.spec())) {
                 client.register(spec);
             }
 
-            try (Worker worker = new Worker(client, "cookbook-worker")
-                    .handlers(new CookbookHandlers.LinearGate())
-                    .handlers(new CookbookHandlers.ChooseFork())
-                    .handlers(new CookbookHandlers.ForeachQueues())
-                    .handlers(new CookbookHandlers.PollUntilReady())
-                    .handlers(new CookbookHandlers.ApprovalEscalation())
-                    .handlers(new CookbookHandlers.Parent())
-                    .handlers(new CookbookHandlers.BatchedLoop())
-                    .handlers(new CookbookHandlers.KitchenSink())) {
+            try (Worker worker = new Worker(client, "typed-cookbook-worker")
+                    .handlers(linearGate)
+                    .handlers(chooseFork)
+                    .handlers(forEachQueues)
+                    .handlers(pollLoop)
+                    .handlers(approval)
+                    .handlers(parentChild)
+                    .handlers(batchedLoop)
+                    .handlers(kitchenSink)) {
                 worker.start();
 
-                run(client, "1. step + then + effect + gate", linearGate,
-                        Map.of("email", "HADI@Wiggle.dev"));
+                run(client, "1. step + effect + gate (and a context type change)", linearGate.spec(),
+                        Map.of("email", "  HADI@Wiggle.dev  "));
 
-                run(client, "2. choose + fork + retry", chooseFork,
+                run(client, "2. oneOf + allOf + retry", chooseFork.spec(),
                         Map.of("amount", 5000));
 
-                run(client, "3. forEach + per-step queue", forEachQueues,
-                        Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "B"), Map.of("sku", "C"))));
+                run(client, "3. forEach + per-step queue", forEachQueues.spec(),
+                        Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "BB"),
+                                Map.of("sku", "CCC"))));
 
-                run(client, "4. doWhile + gate", pollLoop, Map.of("cancelled", false));
+                run(client, "4. repeatWhile + gate", pollLoop.spec(), Map.of("cancelled", false));
 
-                run(client, "5. awaitSignal(escalation) + choose (nobody signals -> escalates)",
-                        approval, Map.of());
+                run(client, "5. thenAwait(escalation) + oneOf (nobody signals -> escalates)",
+                        approval.spec(), Map.of());
 
-                run(client, "6. subWorkflow + gate + fork", parentChild,
+                run(client, "6. thenSubFlow + gate + allOf", parentChild.spec(),
                         Map.of("email", "hadi@wiggle.dev"));
 
-                run(client, "7. execution(LOCAL_ASYNC) + checkpoint + doWhile", batchedLoop, Map.of());
+                run(client, "7. execution(LOCAL_ASYNC) + checkpoint + repeatWhile",
+                        batchedLoop.spec(), Map.of());
 
-                run(client, "8. kitchen sink -- almost every operator in one graph", kitchenSink,
-                        Map.of("email", "hadi@wiggle.dev",
-                                "items", List.of(Map.of("sku", "A"), Map.of("sku", "B"))));
+                run(client, "8. kitchen sink -- almost every operator in one graph",
+                        kitchenSink.spec(),
+                        Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "B"),
+                                Map.of("sku", "C"))));
             }
         }
     }
 
-    private static void run(WiggleClient client, String label, FlowSpec bp,
-                             Map<String, Object> context) throws Exception {
+    private static void run(WiggleClient client, String label, FlowSpec spec,
+                            Map<String, Object> context) throws Exception {
         System.out.println("\n--- " + label + " ---");
-        String id = client.start(bp, context);
+        String id = client.start(spec, context);
         InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(30));
         System.out.println("   status:  " + v.status()
                 + (v.terminationReason() == null ? "" : " (" + v.terminationReason() + ")"));

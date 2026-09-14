@@ -43,7 +43,7 @@ public final class Fork5<A, B, C, D, E> {
     }
 
     private <R> WiggleFlow<R> merge(String name) {
-        fork.combineName = name;
+        fork.combine(name);
         return new WiggleFlow<>(fork);
     }
 }

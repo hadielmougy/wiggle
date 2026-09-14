@@ -28,13 +28,18 @@ import java.util.Map;
  */
 public final class FallbackProbe {
 
+    interface ProbeSteps {
+        Map<String, Object> ping(Map<String, Object> ctx);
+    }
+
     public static void main(String[] args) throws Exception {
         String submitUrl = env("WIGGLE_SUBMIT_URL", "127.0.0.1:18100");
         String workerUrl = env("WIGGLE_WORKER_URL", "127.0.0.1:18102");
         int probes = Integer.parseInt(env("WIGGLE_BENCH_COUNT", "200"));
         int warmup = Integer.parseInt(env("WIGGLE_BENCH_WARMUP", "20"));
 
-        FlowSpec bp = Wiggle.graph("fallback-probe").step("ping").build();
+        FlowSpec bp = Wiggle.define("fallback-probe", Map.class, ProbeSteps.class,
+                (f, s) -> f.thenApply(s::ping));
 
         try (WiggleClient submit = new WiggleClient(submitUrl);
              WiggleClient workerClient = new WiggleClient(workerUrl)) {

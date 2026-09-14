@@ -25,8 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The console's Tomcat/servlet web tier end to end: the SPA API over HTTP, and the auth filter. */
 class ConsoleWebTest {
 
+    /** The steps a spec names. A worker binds them by name; nothing here implements them. */
+    interface Steps {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static FlowSpec wf() {
-        return Wiggle.graph("wf").step("work").build();
+        return Wiggle.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config() {
@@ -127,7 +132,8 @@ class ConsoleWebTest {
             WiggleClient c = conn.client();
             // no worker is ever started here, so this token is dispatchable and unclaimable -- which is
             // exactly the state the rest of the console cannot show: the instance reads RUNNING.
-            FlowSpec stranded = Wiggle.graph("stranded").step("work").onQueue("nobody-polls-this").build();
+            FlowSpec stranded = Wiggle.define("stranded", Map.class, Steps.class,
+                    (f, s) -> f.thenApply(s::work).onQueue("nobody-polls-this"));
             c.register(stranded);
             String id = c.start(stranded, Map.of());
 

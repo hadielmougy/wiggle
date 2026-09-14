@@ -2,6 +2,7 @@ package com.wiggle.greet;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
+import java.util.Map;
 
 /**
  * The tiny "greet" flow used by {@link GreetWorker} and {@link GreetStart}. The flowSpec carries both
@@ -10,12 +11,16 @@ import com.wiggle.client.flow.Wiggle;
  */
 public final class GreetFlow {
 
+    interface GreetSteps {
+        Map<String, Object> hello(Map<String, Object> ctx);
+        Map<String, Object> world(Map<String, Object> ctx);
+    }
+
     private GreetFlow() { }
 
     public static FlowSpec flowSpec() {
-        return Wiggle.graph("greet")
-                .step("hello")
-                .step("world")
-                .build();
+        return Wiggle.define("greet", Map.class, GreetSteps.class, (f, s) -> f
+                .thenApply(s::hello)
+                .thenApply(s::world));
     }
 }

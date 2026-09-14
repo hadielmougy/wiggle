@@ -58,17 +58,11 @@ tasks.register<JavaExec>("runTypedBinding") {
 
 tasks.register<JavaExec>("runCookbook") {
     group = "application"
-    description = "Runs every cookbook recipe defined by name (Wiggle.graph)."
+    description = "Runs every cookbook recipe (Wiggle.define)."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.cookbook.CookbookDemo")
 }
 
-tasks.register<JavaExec>("runTypedCookbook") {
-    group = "application"
-    description = "Runs every cookbook recipe defined with the typed API (Wiggle.define)."
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.wiggle.cookbook.TypedCookbookDemo")
-}
 
 tasks.register<JavaExec>("bench") {
     group = "application"

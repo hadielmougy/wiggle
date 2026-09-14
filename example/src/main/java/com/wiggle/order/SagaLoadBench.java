@@ -43,15 +43,20 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class SagaLoadBench {
 
+    interface SagaSteps {
+        Map<String, Object> reserve(Map<String, Object> ctx);
+        Map<String, Object> enrich(Map<String, Object> ctx);
+        Map<String, Object> boom(Map<String, Object> ctx);
+    }
+
     static final AtomicLong UNDOS = new AtomicLong();
 
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
-        return Wiggle.graph("saga-load")
-                .step("reserve").compensate()
-                .step("enrich").compensate()
-                .step("boom")
-                .build();
+        return Wiggle.define("saga-load", Map.class, SagaSteps.class, (f, s) -> f
+                .thenApply(s::reserve).compensate()
+                .thenApply(s::enrich).compensate()
+                .thenApply(s::boom));
     }
 
     @Handlers("saga-load")
