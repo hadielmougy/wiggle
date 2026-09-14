@@ -274,7 +274,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
     try (Worker worker = new Worker(client, "worker-1")
-            .handlers(new GreetHandlers())) {
+            .registerHandler(new GreetHandlers())) {
         worker.start();
 
         String id = client.start(greet, Map.of("name", "ada"));
@@ -376,7 +376,7 @@ try (DirectConnection wiggle = WiggleConnection.direct("localhost:8080")) {
     Worker worker = new Worker(wiggle.client(), "worker-1",
                     WorkerOptions.defaults().withConcurrency(16))
             .register(orders)
-            .handlers(new OrderHandlers())
+            .registerHandler(new OrderHandlers())
             .start();
 
     String id = wiggle.client().start(orders, Order.of("A-1001", "ada", 3, new BigDecimal("249.90")));

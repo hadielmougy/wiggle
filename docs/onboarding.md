@@ -260,7 +260,7 @@ class OrderHandlers {
 ```
 
 Publish it with `client.register(orders)`, and bind the steps on a worker with
-`new Worker(client, "w").handlers(new OrderHandlers())` — the worker fetches the graph and matches
+`new Worker(client, "w").registerHandler(new OrderHandlers())` — the worker fetches the graph and matches
 against it; it is never given the topology.
 A `combine` node (`merge`) must have an explicit handler — a method taking **one parameter per
 fork arm, in fork order** (each branch's result), plus an optional `@Context` parameter (the
@@ -348,8 +348,8 @@ version of the workflow they bind, which is almost always what you want: step na
 across versions, so one implementation covers them all. Pass a version to narrow that:
 
 ```java
-new Worker(client, "service-a").handlers(new OrderHandlers(), v1.version());  // claims only v1
-new Worker(client, "service-b").handlers(new OrderHandlers(), v2.version());  // claims only v2
+new Worker(client, "service-a").registerHandler(new OrderHandlers(), v1.version());  // claims only v1
+new Worker(client, "service-b").registerHandler(new OrderHandlers(), v2.version());  // claims only v2
 ```
 
 A scoped worker filters its claim by `(workflow, version)`, so it will not pick up another

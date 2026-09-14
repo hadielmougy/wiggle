@@ -83,7 +83,7 @@ class OrderHandlers {
 }
 
 client.register(orders);                                    // the author publishes the topology
-worker.handlers(new OrderHandlers());                       // the worker only implements steps
+worker.registerHandler(new OrderHandlers());                // the worker only implements steps
 ```
 
 `compensate` receives a `Compensation<C>` carrying **both snapshots of its step** (§4):

@@ -76,13 +76,13 @@ you build a specialized service:
 // gpu-render-pool: a service that ONLY runs the "gpu" steps
 Worker gpu = new Worker(client, "gpu-1",
                 WorkerOptions.defaults().withQueues("gpu"))   // specialization
-        .handlers(new GpuHandlers())   // fetches the graph by name; only claims gpu-queue steps
+        .registerHandler(new GpuHandlers())   // fetches the graph by name; only claims gpu-queue steps
         .start();
 ```
 
 ```java
 // order-service: default = serve every queue its bound steps live on
-Worker general = new Worker(client, "order-1").handlers(new OrderHandlers()).start();
+Worker general = new Worker(client, "order-1").registerHandler(new OrderHandlers()).start();
 ```
 
 A worker doesn't subscribe through a broker. It **long-polls** the server for its served queues; the
