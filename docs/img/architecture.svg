@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 672" width="980" height="672" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
   <title id="t">Wiggle architecture — clients and workers, the optional cell coordinator, cells (namespace = own cluster + own database), and the ops console</title>
-  <desc id="d">Your services (Java/Go/Python clients and pull-based workers) talk gRPC to wiggle cells. Each namespace is a cell: its own server cluster and its own database. An optional coordinator — a Raft group over Ratis+RocksDB — places namespaces on cells by consistent hashing over epochs; instance ids carry their own routing. A standalone ops console (web UI) and a CLI operate the whole thing.</desc>
+  <desc id="d">Your services (Java/Go/Python clients and pull-based workers) talk gRPC to wiggle cells. Each namespace is a cell: its own server cluster and its own database. An optional coordinator — stateless processes over a small database of their own — places namespaces on cells by consistent hashing over epochs; instance ids carry their own routing. A standalone ops console (web UI) and a CLI operate the whole thing.</desc>
 
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -64,7 +64,7 @@
     <text x="490" y="261">coordinator-1</text>
     <text x="628" y="261">coordinator-2</text>
   </g>
-  <text x="490" y="296" font-size="10.5" fill="#7c8296" text-anchor="middle">Raft group (Apache Ratis + RocksDB) — no external store</text>
+  <text x="490" y="296" font-size="10.5" fill="#7c8296" text-anchor="middle">stateless processes over a small shared database</text>
   <text x="490" y="312" font-size="10.5" fill="#7c8296" text-anchor="middle">places namespaces on cells · consistent hashing over epochs · directory-free routing</text>
 
   <!-- ======================= gRPC bus ======================= -->

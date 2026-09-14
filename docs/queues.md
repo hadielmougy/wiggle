@@ -68,8 +68,10 @@ are never routed to a queue — see §5.
 
 ## 3. Serve a queue (a worker = a microservice)
 
-A worker registers the flow specs it can run and, by default, serves **every** queue those flow specs
-mention. `withQueues(...)` restricts it — that's how you build a specialized service:
+A worker binds handlers for the workflows it can run and, by default, serves **every** queue those
+workflows mention. (It does not publish the topology — the author does; the worker fetches the graph
+by name to validate its handlers against.) `withQueues(...)` restricts what it serves — that's how
+you build a specialized service:
 
 ```java
 // gpu-render-pool: a service that ONLY runs the "gpu" steps
@@ -87,6 +89,12 @@ Worker general = new Worker(client, "order-1").handlers(new OrderHandlers()).sta
 A worker doesn't subscribe through a broker. It **long-polls** the server for its served queues; the
 server leases it only tokens whose queue it serves. Nothing is ever pushed — a worker needs no inbound
 connectivity and can scale to any number of replicas.
+
+The flip side of specialization is that a queue **no** worker serves is a queue whose tokens sit
+`READY` forever — not failed, not retried, just never claimed, while the instance still reads
+`RUNNING`. That is what the console's **Backlog** tab is for: it lists the dispatchable backlog by
+`(workflow, version, queue)` and flags any slice no live poller covers. Worth a look after changing
+a `withQueues(...)` set or retiring a service.
 
 ---
 
