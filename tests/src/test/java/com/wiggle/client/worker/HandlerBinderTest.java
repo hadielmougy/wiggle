@@ -1,7 +1,6 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.worker.ActivityHandler;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +22,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * in {@link Step#begin}/{@link Step#end} to replicate the worker's runtime contract.
  */
 class HandlerBinderTest {
+
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void log(Map<String, Object> ctx);
+        boolean ok(Map<String, Object> ctx);
+        Map<String, Object> served(Map<String, Object> ctx);
+        Map<String, Object> someoneElses(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
 
     // ------------------------------------------------------------------ scan
 
@@ -68,7 +76,10 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ bind: kinds & signatures
 
     private static WorkflowDefinition linear() {
-        return Wiggle.graph("wf").step("work").gate("ok").effect("log").build().definition();
+        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::work)
+                .thenFilter(s::ok)
+                .thenAccept(s::log)).definition();
     }
 
     @Test @DisplayName("bind: task returns whole context, gate returns boolean, effect returns null")
@@ -129,14 +140,13 @@ class HandlerBinderTest {
 
     @Test @DisplayName("bind reports unserved steps and applies queue defaulting")
     void unservedAndQueues() {
-        WorkflowDefinition def = Wiggle.graph("wf")
-                .step("served", "special-queue")
-                .step("someone-elses")
-                .build().definition();
+        WorkflowDefinition def = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::served, "special-queue")
+                .thenApply(s::someoneElses)).definition();
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new SubsetH()), def);
         assertEquals(1, r.bindings().size());
         assertEquals("special-queue", r.bindings().get(0).queue(), "explicit queue respected");
-        assertEquals(List.of("someone-elses"), r.unserved());
+        assertEquals(List.of("someoneElses"), r.unserved());
     }
 
     @Handlers("wf")
@@ -182,11 +192,8 @@ class HandlerBinderTest {
     // ------------------------------------------------------------------ combines
 
     private static WorkflowDefinition forked() {
-        return Wiggle.graph("wf")
-                .fork(Branch.of("a", s -> s.step("a1")),
-                      Branch.of("b", s -> s.step("b1")))
-                .combine("merge")
-                .build().definition();
+        return Wiggle.define("wf", Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1)).combine(s::merge)).definition();
     }
 
     @Test @DisplayName("fork combine: arms by position, ambient Step.base(), and a verbatim whole return")
@@ -197,13 +204,24 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            // the staged context: pre-fork base + one key per arm
-            Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
+            // the staged context: pre-fork base + one key per arm, keyed by the arm's step
+            Object out = merge.invoke(Map.of("pre", "P", "a1", Map.of("x", 1L), "b1", Map.of("y", 2L)));
             assertEquals(Map.of("pre", "P", "x", 1L, "y", 2L), out,
                     "combine reads its arms in fork order and the base ambiently, returns verbatim");
         } finally {
             Step.end();
         }
+    }
+
+    interface ForkSteps {
+        Map<String, Object> a1(Map<String, Object> c);
+        Map<String, Object> b1(Map<String, Object> c);
+        Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b);
+    }
+
+    interface EachSteps {
+        String norm(String item);
+        Map<String, Object> collect(@Context Map<String, Object> base, List<String> items);
     }
 
     @Handlers("wf")
@@ -226,7 +244,7 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            Object out = merge.invoke(Map.of("pre", "P", "a", Map.of("x", 1L), "b", Map.of("y", 2L)));
+            Object out = merge.invoke(Map.of("pre", "P", "a1", Map.of("x", 1L), "b1", Map.of("y", 2L)));
             assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
                     "parameter order is fork order: arm 'a' first, arm 'b' second");
         } finally {
@@ -253,7 +271,7 @@ class HandlerBinderTest {
     void forkCombineMustTakeEveryArm() {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("[a, b], in that order"),
+        assertTrue(ex.getMessage().contains("[a1, b1], in that order"),
                 "the error names the arms and their order: " + ex.getMessage());
         assertTrue(ex.getMessage().contains("ignore it"),
                 "and says what to do about an arm you do not need: " + ex.getMessage());
@@ -282,10 +300,9 @@ class HandlerBinderTest {
     }
 
     private static WorkflowDefinition eachGraph() {
-        return Wiggle.graph("wf")
-                .forEach("per-item", "items", b -> b.step("norm"))
-                .combine("collect")
-                .build().definition();
+        return Wiggle.define("wf", Map.class, EachSteps.class, (f, s) ->
+                f.thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
+                        .combine(s::collect)).definition();
     }
 
     @Test @DisplayName("forEach combine: List keeps order, Set dedupes, Map is keyed like the input")

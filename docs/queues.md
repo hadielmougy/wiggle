@@ -49,12 +49,11 @@ The queue is a trailing argument on a step (and on effects/gates). Or set a `def
 step after it. Unset ⇒ the queue is the **workflow name**.
 
 ```java
-Wiggle.graph("orders")
-    .step("validate")                 // queue "orders" (the default)
-    .step("charge", "payments")     // queue "payments"
-    .step("render-receipt", "gpu")      // queue "gpu"
-    .step("email", "notify")       // queue "notify"
-    .build();
+Wiggle.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+        .thenApply(s::validate)                    // queue "orders" (the default)
+        .thenApply(s::charge, "payments")          // queue "payments"
+        .thenApply(s::renderReceipt, "gpu")        // queue "gpu"
+        .thenApply(s::email, "notify"));           // queue "notify"
 ```
 
 The queue is compiled onto each node (`Node.queue`) and collected into the definition's queue set. It is

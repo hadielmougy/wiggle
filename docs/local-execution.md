@@ -90,9 +90,9 @@ run now and I have lease budget."*
 ### 5.1 Per-workflow-definition flag (primary)
 
 ```java
-Wiggle.graph("name", codec)
+Wiggle.define("name", Ctx.class, Steps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
-        .step(...) ...
+        .thenApply(s::first) ...)
 ```
 
 - New field on `WorkflowDefinition`: `ExecutionMode executionMode` (default `DEFAULT`).

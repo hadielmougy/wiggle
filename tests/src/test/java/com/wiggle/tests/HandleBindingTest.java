@@ -33,6 +33,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HandleBindingTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void audit(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        boolean available(Map<String, Object> ctx);
+        Map<String, Object> check(Map<String, Object> ctx);
+        void done(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> validate(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -41,12 +52,11 @@ class HandleBindingTest {
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
     private FlowSpec authoredGraph() {
-        return Wiggle.graph("order-fulfilment")
-                .step("validate")
-                .gate("in-stock")
-                .step("authorise", "payments")
-                .effect("audit")
-                .build();
+        return Wiggle.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::validate)
+                .thenFilter(s::inStock)
+                .thenApply(s::authorise, "payments")
+                .thenAccept(s::audit));
     }
 
     /** The step logic, bound to {@code order-fulfilment} by name; signatures define each step's kind. */
@@ -113,7 +123,7 @@ class HandleBindingTest {
             try (Worker impl = new Worker(client, "impl-3")) {
                 impl.handlers(new BadKindImpl());   // inStock is a PREDICATE, bound as a task
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("in-stock"), e.getMessage());
+                assertTrue(e.getMessage().contains("inStock"), e.getMessage());
                 assertTrue(e.getMessage().contains("boolean"), e.getMessage());
             }
         });
@@ -148,11 +158,10 @@ class HandleBindingTest {
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
     void typedHandlersBinding() throws Exception {
         withServer((client, server) -> {
-            client.register(Wiggle.graph("typed-wf")
-                    .step("check")
-                    .gate("available")
-                    .effect("done")
-                    .build());
+            client.register(Wiggle.define("typed-wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::check)
+                .thenFilter(s::available)
+                .thenAccept(s::done)));
 
             AtomicReference<String> doneState = new AtomicReference<>();
             try (Worker impl = new Worker(client, "typed-impl")) {

@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
@@ -40,20 +39,29 @@ class JdbcForkJoinStressTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.graph("order-ish")
-                .step("validate")
-                .gate("in-stock")
-                .fork(
-                        Branch.of("payment", s -> s
-                                .step("authorise", RetryPolicy.exponential(5, Duration.ofMillis(50)))
-                                .step("capture")),
-                        Branch.of("shipping", s -> s
-                                .step("reserve")
-                                .sleep("await", Duration.ofMillis(150))
-                                .step("label")))
-                .combine("merge")
-                .step("notify")
-                .build();
+        return Wiggle.define("order-ish", Map.class, OrderSteps.class, (f, s) -> {
+            var checked = f.thenApply(s::validate).thenFilter(s::inStock);
+            var payment = checked
+                    .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(50)))
+                    .thenApply(s::capture);
+            var shipping = checked
+                    .thenApply(s::reserve)
+                    .thenSleep("await", Duration.ofMillis(150))
+                    .thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combineWithContext(s::merge).thenApply(s::notify);
+        });
+    }
+
+    interface OrderSteps {
+        Map<String, Object> validate(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        Map<String, Object> capture(Map<String, Object> ctx);
+        Map<String, Object> reserve(Map<String, Object> ctx);
+        Map<String, Object> label(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> payment, Map<String, Object> shipping);
+        Map<String, Object> notify(Map<String, Object> ctx);
     }
 
     @Handlers("order-ish")

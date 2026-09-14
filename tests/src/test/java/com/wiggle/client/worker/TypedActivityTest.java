@@ -32,6 +32,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TypedActivityTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void auditLog(Map<String, Object> ctx);
+        Map<String, Object> capturePayment(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> summarise(Map<String, Object> ctx);
+    }
+
     /** The standalone typed activity — dependencies via constructor, undo alongside the do. */
     static final class CapturePayment implements Activity<Map<String, Object>>,
             Compensable<Map<String, Object>> {
@@ -54,25 +62,30 @@ class TypedActivityTest {
 
         public boolean inStock(Map<String, Object> ctx) { return true; }      // plain gate method
 
-        public Activity<Map<String, Object>> capturePayment() {               // factory -> "capture-payment"
+        public Activity<Map<String, Object>> capturePayment() {               // factory -> "capturePayment"
             return capture;
         }
 
-        public EffectActivity<Map<String, Object>> auditLog() {               // factory -> "audit-log"
+        public EffectActivity<Map<String, Object>> auditLog() {               // factory -> "auditLog"
             return ctx -> { };
         }
     }
 
-    /** capture-payment declares .compensate() — pairs with MixedHandlers' Compensable factory. */
+    /** capturePayment declares .compensate() -- pairs with MixedHandlers' Compensable factory. */
     private static WorkflowDefinition linear() {
-        return Wiggle.graph("wf").step("capture-payment").compensate().gate("in-stock")
-                .effect("audit-log").build().definition();
+        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::capturePayment)
+                .compensate()
+                .thenFilter(s::inStock)
+                .thenAccept(s::auditLog)).definition();
     }
 
     /** Same shape, nothing compensable — for handler classes whose activities carry no undo. */
     private static WorkflowDefinition linearPlain() {
-        return Wiggle.graph("wf").step("capture-payment").gate("in-stock")
-                .effect("audit-log").build().definition();
+        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::capturePayment)
+                .thenFilter(s::inStock)
+                .thenAccept(s::auditLog)).definition();
     }
 
     // ------------------------------------------------------------------ binder-level
@@ -85,10 +98,10 @@ class TypedActivityTest {
         Map<String, HandlerBinder.Binding> byStep = new LinkedHashMap<>();
         r.bindings().forEach(b -> byStep.put(b.step(), b));
 
-        Object out = byStep.get("capture-payment").handler().invoke(Map.of("a", 1L));
+        Object out = byStep.get("capturePayment").handler().invoke(Map.of("a", 1L));
         assertTrue(out.toString().contains("paymentRef"), "typed task runs via the factory result");
-        assertEquals(true, byStep.get("in-stock").handler().invoke(Map.of()), "plain method still binds");
-        assertNull(byStep.get("audit-log").handler().invoke(Map.of()), "typed effect reports null");
+        assertEquals(true, byStep.get("inStock").handler().invoke(Map.of()), "plain method still binds");
+        assertNull(byStep.get("auditLog").handler().invoke(Map.of()), "typed effect reports null");
     }
 
     @Test @DisplayName("a Compensable factory result carries the undo; it sees BOTH snapshots")
@@ -96,7 +109,7 @@ class TypedActivityTest {
         MixedHandlers h = new MixedHandlers();
         var r = HandlerBinder.bind(HandlerBinder.scan(h), linear());
         HandlerBinder.Compensator comp = r.bindings().stream()
-                .filter(b -> b.step().equals("capture-payment")).findFirst().orElseThrow().compensator();
+                .filter(b -> b.step().equals("capturePayment")).findFirst().orElseThrow().compensator();
         assertNotNull(comp, "Compensable ⇒ the binding carries the undo");
         comp.invoke(Map.of("idemKey", "k-7"),                       // input snapshot
                     Map.of("paymentRef", "pay-9"));                 // result snapshot
@@ -104,7 +117,7 @@ class TypedActivityTest {
         assertEquals("k-7", h.capture.undoKey.get(), "input(): undo-only data, no context pollution");
         // the plain method carries none
         assertNull(r.bindings().stream()
-                .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow().compensator());
+                .filter(b -> b.step().equals("inStock")).findFirst().orElseThrow().compensator());
     }
 
     @Test @DisplayName("@Handles renames a handler away from its method name — plain and factory alike")
@@ -123,7 +136,7 @@ class TypedActivityTest {
         assertEquals(3, r.bindings().size());
         assertTrue(r.unserved().isEmpty(), "renamed methods served all three steps");
         assertEquals(true, r.bindings().stream()
-                .filter(b -> b.step().equals("in-stock")).findFirst().orElseThrow()
+                .filter(b -> b.step().equals("inStock")).findFirst().orElseThrow()
                 .handler().invoke(Map.of()));
     }
 
@@ -167,9 +180,12 @@ class TypedActivityTest {
 
     @Test @DisplayName("plain methods + factories + @Handles run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        FlowSpec bp = Wiggle.graph("wf")
-                .step("capture-payment").compensate().gate("in-stock").step("summarise").effect("audit-log")
-                .build();
+        FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::capturePayment)
+                .compensate()
+                .thenFilter(s::inStock)
+                .thenApply(s::summarise)
+                .thenAccept(s::auditLog));
 
         @Handlers("wf")
         class FlowHandlers {

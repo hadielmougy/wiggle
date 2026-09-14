@@ -42,6 +42,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @EnabledIfEnvironmentVariable(named = "WIGGLE_TEST_PG_URL", matches = ".+")
 class PostgresClaimTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static JdbcStorage storage() {
         JdbcStorage storage = new JdbcStorage(TestDb.url("PG"),
                 TestDb.user("PG"), TestDb.password("PG"), 4,
@@ -52,9 +57,7 @@ class PostgresClaimTest {
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
     private static FlowSpec uniqueWorkflow() {
-        return Wiggle.graph("pg-claim-" + Ids.next("wf"))
-                .step("work")
-                .build();
+        return Wiggle.define("pg-claim-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     @Test @DisplayName("the SKIP LOCKED claim leases tokens with owner and expiry")

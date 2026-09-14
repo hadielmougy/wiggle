@@ -311,23 +311,25 @@ FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.clas
 ### Topology without handlers
 
 Sometimes the graph is written where its handlers are not — an author registering it with no
-handler classes on its classpath, a topology generated from data, or several independent workers
-that each bind a subset of the steps by name. `Wiggle.graph` names the steps directly:
+handler classes on its classpath, or several independent workers that each bind a subset of the
+steps by name. Nothing changes: a spec never holds a handler, only the step's *name*, so the
+interface it names them through is a declaration you need not implement.
 
 ```java
-FlowSpec orders = Wiggle.graph("order-fulfilment")
-        .step("validate")
-        .gate("in-stock")
-        .fork(Branch.of("payment",  s -> s.step("authorise").step("capture")),
-              Branch.of("shipping", s -> s.step("reserve-stock").step("print-label")))
-        .combine("merge")
-        .step("notify")
-        .build();
+public interface OrderSteps {                     // declared here, implemented elsewhere
+    Order   validate(Order o);
+    boolean inStock(Order o);
+    Order   authorise(Order o);
+    // ...
+}
+
+// the author registers the topology without implementing a single step
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
-Both produce the same `FlowSpec` — the graph has only ever held names — and a worker cannot tell
-which was used. Prefer `Wiggle.define` whenever the handlers *are* at hand: it is the one that
-gets checked.
+That is what lets one workflow be served by workers in Java, Go and Python without any of them
+redefining it. A worker that *does* have the handlers can implement the interface and let the
+compiler check that every step matches.
 
 Handlers are plain methods — typed records or raw maps, your choice per step. The **signature
 defines the step kind**: a `boolean` return is a gate, `void` is an effect, anything else is a
@@ -399,11 +401,10 @@ And the parts long-running processes actually need are first-class:
 
 ```java
 // Human / external input — the instance parks (no worker held), a deadline can escalate:
-Wiggle.graph("expense")
-        .step("submit")
-        .awaitSignal("manager-approval", Duration.ofHours(48), b -> b.step("auto-escalate"))
-        .step("pay-out")
-        .build();
+Wiggle.define("expense", Expense.class, ExpenseSteps.class, (f, s) -> f
+        .thenApply(s::submit)
+        .thenAwait("manager-approval", Duration.ofHours(48), b -> b.thenApply(s::autoEscalate))
+        .thenApply(s::payOut));
 
 client.signal(instanceId, "manager-approval", Map.of("decision", "approved"));
 
@@ -415,9 +416,9 @@ client.cancel(id, "customer changed their mind");
 ```
 
 **More runnable code:** `./gradlew :example:run` (full order demo, one JVM) · the
-**[cookbook](docs/dsl-cookbook.md)** — eight workflows exercising every operator, in both
-authoring modes: `./gradlew :example:runCookbook` ([by name](example/src/main/java/com/wiggle/cookbook/Cookbook.java))
-and `./gradlew :example:runTypedCookbook` ([by method reference](example/src/main/java/com/wiggle/cookbook/TypedCookbook.java)).
+**[cookbook](docs/cookbook.md)** — eight workflows exercising every operator, runnable:
+`./gradlew :example:runCookbook`
+([source](example/src/main/java/com/wiggle/cookbook/Cookbook.java)).
 The same eight graphs either way — worth reading side by side, since the typed one is a single
 class per recipe where the other is a topology file plus a handlers file.
 
@@ -432,7 +433,7 @@ class per recipe where the other is a topology file plus a handlers file.
 | **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Coordinator** | `coordinator` | Optional control plane: stateless processes over their own small database that allocate namespaces to cells, publish epoch rings, track node health, and answer "where does this instance live?". Several elect one leader with the same announce-and-heartbeat election the cells run (`election`). |
-| **Client & worker** | `client` | Workflow authoring (`Wiggle.define` ∣ `Wiggle.graph`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
+| **Client & worker** | `client` | Workflow authoring (`Wiggle.define`), `@Handlers` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
 | **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
 | **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
 | **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ coordinator ∣ console`, every storage backend bundled. |
@@ -631,7 +632,7 @@ Suggestions and PRs welcome — open an issue.
 | | |
 |---|---|
 | 🚀 **[Onboarding + full configuration reference](docs/onboarding.md)** | everything, one page |
-| 🧑‍🍳 **[Cookbook](docs/dsl-cookbook.md)** | every operator in runnable code, both ways — `./gradlew :example:runCookbook` ∣ `:example:runTypedCookbook` |
+| 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | 🧫 **[Sharding & epochs](docs/sharding-and-epochs.md)** | the cellular model in depth |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |

@@ -34,6 +34,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SignalTest {
 
+    /** The steps these specs name; a worker binds them by name. */
+    interface AfterStep {
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface EscalateSteps {
+        Map<String, Object> escalate(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -85,10 +95,9 @@ class SignalTest {
 
     @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
     void signalOverGrpc() throws Exception {
-        FlowSpec bp = Wiggle.graph("sig-approve")
-                .awaitSignal("approval")
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("sig-approve", Map.class, AfterStep.class, (f, s) -> f
+                .thenAwait("approval")
+                .thenApply(s::after));
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -114,10 +123,9 @@ class SignalTest {
 
     @Test @DisplayName("signalling an instance that is not waiting for that name is a 409")
     void wrongSignalConflicts() throws Exception {
-        FlowSpec bp = Wiggle.graph("sig-wrong")
-                .awaitSignal("expected")
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("sig-wrong", Map.class, AfterStep.class, (f, s) -> f
+                .thenAwait("expected")
+                .thenApply(s::after));
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w2").handlers(new WrongH())) {
@@ -135,11 +143,9 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline runs the escalation branch, then rejoins the flow")
     void deadlineEscalates() throws Exception {
-        FlowSpec bp = Wiggle.graph("sig-escalate")
-                .awaitSignal("approval", Duration.ofMillis(250),
-                        b -> b.step("escalate"))
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("sig-escalate", Map.class, EscalateSteps.class, (f, s) -> f
+                .thenAwait("approval", Duration.ofMillis(250), b -> b.thenApply(s::escalate))
+                .thenApply(s::after));
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -158,10 +164,9 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline with no escalation fails the instance")
     void deadlineFails() throws Exception {
-        FlowSpec bp = Wiggle.graph("sig-timeout")
-                .awaitSignal("approval", Duration.ofMillis(250))
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("sig-timeout", Map.class, AfterStep.class, (f, s) -> f
+                .thenAwait("approval", Duration.ofMillis(250))
+                .thenApply(s::after));
 
         try (WiggleServer server = new WiggleServer(config(0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl());

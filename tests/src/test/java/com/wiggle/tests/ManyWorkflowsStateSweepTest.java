@@ -1,8 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.flow.Branch;
-import com.wiggle.client.flow.Case;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
@@ -52,6 +50,46 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ManyWorkflowsStateSweepTest {
 
+    interface ForkedSteps {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> left(Map<String, Object> ctx);
+        Map<String, Object> right(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> l, Map<String, Object> r);
+        Map<String, Object> c(Map<String, Object> ctx);
+    }
+
+    interface ForeachSteps {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> each(Map<String, Object> item);
+        Map<String, Object> collect(@Context Map<String, Object> base, java.util.List<Object> items);
+    }
+
+    interface BranchySteps {
+        boolean isBig(Map<String, Object> ctx);
+        Map<String, Object> big(Map<String, Object> ctx);
+        Map<String, Object> small(Map<String, Object> ctx);
+        boolean more(Map<String, Object> ctx);
+        Map<String, Object> drain(Map<String, Object> ctx);
+    }
+
+    interface ParkedSteps {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> boom(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+        Map<String, Object> charge(Map<String, Object> ctx);
+        boolean never(Map<String, Object> ctx);
+        Map<String, Object> reserve(Map<String, Object> ctx);
+        Map<String, Object> unreachable(Map<String, Object> ctx);
+    }
+
     /** Distinct workflow shapes, each exercising a different part of the engine. */
     private static final int WORKFLOWS = 8;
     /** Instances per shape, to get past the one-row-per-group case. */
@@ -77,64 +115,71 @@ class ManyWorkflowsStateSweepTest {
 
     /** 1. linear, SERVER mode -> COMPLETED */
     private static FlowSpec linear() {
-        return Wiggle.graph(PREFIX + "linear").step("a").step("b").step("c").build();
+        return Wiggle.define(PREFIX + "linear", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenApply(s::b)
+                .thenApply(s::c));
     }
 
     /** 2. a gate that closes -> COMPLETED with terminationReason gated:* */
     private static FlowSpec gated() {
-        return Wiggle.graph(PREFIX + "gated").step("a").gate("never").step("unreachable").build();
+        return Wiggle.define(PREFIX + "gated", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenFilter(s::never)
+                .thenApply(s::unreachable));
     }
 
     /** 3. fork/combine under LOCAL_SYNC -> COMPLETED, exercising local chaining of a join */
     private static FlowSpec forked() {
-        return Wiggle.graph(PREFIX + "forked").execution(ExecutionMode.LOCAL_SYNC)
-                .step("a")
-                .fork(Branch.of("l", s -> s.step("left")), Branch.of("r", s -> s.step("right")))
-                .combine("merge")
-                .step("c")
-                .build();
+        return Wiggle.define(PREFIX + "forked", Map.class, ForkedSteps.class, (f, s) -> {
+            var seeded = f.execution(ExecutionMode.LOCAL_SYNC).thenApply(s::a);
+            return Wiggle.allOf(seeded.thenApply(s::left), seeded.thenApply(s::right))
+                    .combineWithContext(s::merge)
+                    .thenApply(s::c);
+        });
     }
 
     /** 4. forEach over a collection under LOCAL_ASYNC -> COMPLETED */
     private static FlowSpec fannedOut() {
-        return Wiggle.graph(PREFIX + "foreach").execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a")
-                .forEach("items", b -> b.step("each"))
-                .combine("collect")
-                .build();
+        return Wiggle.define(PREFIX + "foreach", Map.class, ForeachSteps.class, (f, s) -> f
+                .execution(ExecutionMode.LOCAL_ASYNC)
+                .thenApply(s::a)
+                .thenForEach("items", Map.class, b -> b.thenApply(s::each))
+                .combine(s::collect));
     }
 
     /** 5. choose + doWhile -> COMPLETED, exercising guards and a cycle */
     private static FlowSpec branchy() {
-        return Wiggle.graph(PREFIX + "branchy")
-                .choose(Case.when("isBig", s -> s.step("big")),
-                        Case.otherwise("small", s -> s.step("small")))
-                .doWhile("more", s -> s.step("drain"))
-                .build();
+        return Wiggle.define(PREFIX + "branchy", Map.class, BranchySteps.class, (f, s) -> Wiggle.oneOf(
+                        f.when(s::isBig).thenApply(s::big),
+                        f.otherwise().thenApply(s::small))
+                .repeatWhile(s::more, b -> b.thenApply(s::drain)));
     }
 
     /** 6. a permanent failure -> FAILED */
     private static FlowSpec failing() {
-        return Wiggle.graph(PREFIX + "failing").step("a").step("boom").build();
+        return Wiggle.define(PREFIX + "failing", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenApply(s::boom));
     }
 
     /** 7. two compensable steps then a failure -> COMPENSATED */
     private static FlowSpec saga() {
-        return Wiggle.graph(PREFIX + "saga")
-                .step("reserve").compensate()
-                .step("charge").compensate()
-                .step("boom")
-                .build();
+        return Wiggle.define(PREFIX + "saga", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::reserve)
+                .compensate()
+                .thenApply(s::charge)
+                .compensate()
+                .thenApply(s::boom));
     }
 
     /** 8. parks on a signal nobody sends -> stays RUNNING, and a sleep before it */
     private static FlowSpec parked() {
-        return Wiggle.graph(PREFIX + "parked")
-                .step("a")
-                .sleep("nap", Duration.ofMillis(200))
-                .awaitSignal("never-arrives")
-                .step("after")
-                .build();
+        return Wiggle.define(PREFIX + "parked", Map.class, ParkedSteps.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenSleep("nap", Duration.ofMillis(200))
+                .thenAwait("never-arrives")
+                .thenApply(s::after));
     }
 
     // ------------------------------------------------------------------ the handlers

@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.Map;
 
 /**
  * Unit tests for {@link Pipeline}, the package-private graph builder behind the DSL. These
@@ -26,6 +27,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * it declares named nodes (task/guard/combine/...) with retry and queue, but no step logic.
  */
 class PipelineTest {
+
+    /** The step this spec names; a worker binds it by name. */
+    /** {@code check} is a predicate in one spec here and a task in another. A step's kind comes from
+     *  the signature it is declared with, so the two specs declare their own. */
+    interface GateThenRun {
+        boolean check(Map<String, Object> ctx);
+        Map<String, Object> run(Map<String, Object> ctx);
+    }
+
+    interface OneStep {
+        Map<String, Object> check(Map<String, Object> ctx);
+        Map<String, Object> ingest(Map<String, Object> ctx);
+        void notify(Map<String, Object> ctx);
+    }
 
     private static Pipeline pipeline() {
         return new Pipeline("wf", null);
@@ -394,10 +409,9 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, queue) honours the queue and declares a PREDICATE (bound by name)")
         void gateNameOnlyQueue() {
-            FlowSpec bp = Wiggle.graph("wf")
-                    .gate("check", "gpu")
-                    .step("run")
-                    .build();
+            FlowSpec bp = Wiggle.define("wf", Map.class, GateThenRun.class, (f, s) -> f
+                .thenFilter(s::check, "gpu")
+                .thenApply(s::run));
             WorkflowDefinition def = bp.definition();
 
             assertEquals("gpu", byActivity(def, "wf#check").queue(), "queue must be honoured, not dropped");
@@ -408,10 +422,9 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, retry, queue) honours both the retry policy and the queue")
         void gateNameOnlyRetryAndQueue() {
-            FlowSpec bp = Wiggle.graph("wf")
-                    .gate("check", RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
-                    .step("run")
-                    .build();
+            FlowSpec bp = Wiggle.define("wf", Map.class, GateThenRun.class, (f, s) -> f
+                    .thenFilter(s::check, RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
+                    .thenApply(s::run));
             Node gate = byActivity(bp.definition(), "wf#check");
             assertEquals("gpu", gate.queue());
             assertEquals(7, gate.retry().maxAttempts());
@@ -420,10 +433,9 @@ class PipelineTest {
         @Test
         @DisplayName("step(name, queue) / effect(name) route correctly")
         void stepAndEffectNameOnly() {
-            FlowSpec bp = Wiggle.graph("wf")
-                    .step("ingest", "gpu")
-                    .effect("notify")
-                    .build();
+            FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::ingest, "gpu")
+                .thenAccept(s::notify));
             WorkflowDefinition def = bp.definition();
 
             assertEquals("gpu", byActivity(def, "wf#ingest").queue());
@@ -435,7 +447,7 @@ class PipelineTest {
         void nameOnlyDeclaresTopologyOnly() {
             // The DSL declares topology only; the worker binds the handler by name. The flowSpec
             // therefore carries just the graph -- there is no baked step logic to collide with.
-            FlowSpec bp = Wiggle.graph("wf").step("check").build();
+            FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::check));
             assertEquals(NodeKind.TASK, byActivity(bp.definition(), "wf#check").kind());
         }
     }

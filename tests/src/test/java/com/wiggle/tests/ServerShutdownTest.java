@@ -32,6 +32,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  */
 class ServerShutdownTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(TestPorts.free(), "shutdown-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -44,7 +49,7 @@ class ServerShutdownTest {
     @Test
     @DisplayName("closing a server whose worker is parked in a long poll still frees the port")
     void closeTerminatesEvenWithAnInFlightLongPoll() throws Exception {
-        FlowSpec spec = Wiggle.graph("shutdown-" + Ids.next("wf")).step("work").build();
+        FlowSpec spec = Wiggle.define("shutdown-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
         WiggleServer server = new WiggleServer(config()).start();
         int port = server.port();

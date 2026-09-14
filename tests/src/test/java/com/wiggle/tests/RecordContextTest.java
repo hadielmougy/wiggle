@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
@@ -40,15 +39,21 @@ class RecordContextTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.graph("record-shipment")
-                .step("validate")
-                .gate("has-items")
-                .fork(
-                        Branch.of("labelling", b -> b.step("label")),
-                        Branch.of("billing", b -> b.step("invoice")))
-                .combine("merge")
-                .step("dispatch")
-                .build();
+        return Wiggle.define("record-shipment", Shipment.class, ShipmentSteps.class, (f, s) -> {
+            var checked = f.thenApply(s::validate).thenFilter(s::hasItems);
+            return Wiggle.allOf(checked.thenApply(s::label), checked.thenApply(s::invoice))
+                    .combineWithContext(s::merge)
+                    .thenApply(s::dispatch);
+        });
+    }
+
+    interface ShipmentSteps {
+        Shipment validate(Shipment s);
+        boolean hasItems(Shipment s);
+        Shipment label(Shipment s);
+        Shipment invoice(Shipment s);
+        Shipment merge(@Context Shipment base, Shipment labelling, Shipment billing);
+        Shipment dispatch(Shipment s);
     }
 
     @Handlers("record-shipment")
@@ -105,7 +110,7 @@ class RecordContextTest {
             Shipment in = new Shipment("s-2", 0, new BigDecimal("1.00"), "NEW", null, null, List.of());
             InstanceView v = client.awaitCompletion(client.start(bp, in), Duration.ofSeconds(20));
             assertEquals("COMPLETED", v.status());
-            assertEquals("gated:has-items", v.terminationReason());
+            assertEquals("gated:hasItems", v.terminationReason());
             assertEquals("VALIDATED", ((Shipment) RecordMapper.fromJson(v.context(), Shipment.class)).status(), "stopped after validate");
         }
     }

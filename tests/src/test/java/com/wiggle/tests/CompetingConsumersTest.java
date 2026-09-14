@@ -35,6 +35,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CompetingConsumersTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -43,7 +48,7 @@ class CompetingConsumersTest {
 
     /** A single-step workflow whose one step both workers will serve. */
     private static FlowSpec oneStep() {
-        return Wiggle.graph("competing").step("work").build();
+        return Wiggle.define("competing", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     /**

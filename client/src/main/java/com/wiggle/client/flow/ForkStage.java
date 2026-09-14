@@ -16,7 +16,7 @@ import java.util.List;
  *
  * @see GraphBuilder#fork
  */
-public final class ForkStage {
+final class ForkStage {
 
     private final GraphBuilder stream;
     private final List<Branch> branches;

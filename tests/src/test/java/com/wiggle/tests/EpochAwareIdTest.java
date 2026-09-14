@@ -21,6 +21,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class EpochAwareIdTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(TestPorts.free(), "id-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -29,7 +34,7 @@ class EpochAwareIdTest {
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.graph("wf").step("a").build();
+        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @Test @DisplayName("a namespace-configured cell mints ns.e0.s0.<ulid> ids")

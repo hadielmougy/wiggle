@@ -218,27 +218,27 @@ one node at a time. An ordinary `for` loop in the body therefore *unrolls* into 
 depends on a step's **result** uses `Wiggle.oneOf` or `repeatWhile`, which the engine evaluates at
 run time.
 
-**`Wiggle.graph` — when they are not.** For a topology registered by an author with no handler
-classes on its classpath, generated from data, or served by several independent workers that each
-bind a subset by name:
+**Steps are named by reference, always.** A spec records a step's *name* and nothing else — it never
+holds a handler — so the interface it names them through is a declaration, not an implementation.
+That is what lets the same workflow be served by workers in Java, Go or Python: they each implement
+the steps in their own language and bind by name.
+
+A topology written where its handlers are not — registered by an author with no handler classes on
+its classpath, or served by several independent workers that each bind a subset — declares the
+interface and stops there:
 
 ```java
-FlowSpec orders = Wiggle.graph("order-fulfilment")
-        .step("validate")
-        .gate("in-stock")
-        .fork(
-                Branch.of("payment",  s -> s.step("authorise", RetryPolicy.exponential(5, ofMillis(100)))
-                                            .step("capture")),
-                Branch.of("shipping", s -> s.step("reserve")
-                                            .sleep("await", ofMillis(300))
-                                            .step("label")))
-        .combine("merge")   // fork always rejoins at a mandatory combine
-        .step("notify")
-        .build();
-```
+public interface OrderSteps {
+    Order   validate(Order o);
+    boolean inStock(Order o);
+    Order   authorise(Order o);
+    Order   capture(Order o);
+    // ...
+}
 
-Both produce the same `FlowSpec`, node for node and hash for hash; a worker cannot tell which was
-used, and one codebase may use both.
+// the author registers this without implementing a single step
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
+```
 
 The step logic is a separate class annotated `@Handlers("<workflow-name>")`, bound on a worker by
 name. Each method whose name matches a step (case/style-insensitive, so `inStock` serves `in-stock`)
@@ -408,8 +408,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 
 ### 6.4 Execution modes
 
-Set per workflow: `f.execution(ExecutionMode.LOCAL_SYNC)` in a `define` body, or
-`Wiggle.graph(...).execution(...)`. The mode
+Set per workflow: `f.execution(ExecutionMode.LOCAL_SYNC)` in the `define` body. The mode
 is part of the definition's **content hash**, so an in-flight instance keeps the mode it started on.
 
 | Mode | Behaviour | Crash blast radius | Use for |

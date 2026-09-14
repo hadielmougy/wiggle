@@ -38,13 +38,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TlsTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static final String STORE = "storepass";
 
     @TempDir static Path dir;
     private static Path serverKs, clientKs, trust;
 
     private static final FlowSpec BP =
-            Wiggle.graph("tls-wf").step("work").build();
+            Wiggle.define("tls-wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
     @com.wiggle.client.worker.Handlers("tls-wf")
     static final class WorkHandlers {

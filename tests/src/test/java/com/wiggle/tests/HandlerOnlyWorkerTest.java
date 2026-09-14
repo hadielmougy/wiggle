@@ -39,6 +39,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HandlerOnlyWorkerTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+        Map<String, Object> d(Map<String, Object> ctx);
+        boolean keep(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -54,14 +63,13 @@ class HandlerOnlyWorkerTest {
 
     /** A chain long enough that a local run has something to chain. */
     private static FlowSpec linear(ExecutionMode mode) {
-        return Wiggle.graph("how-linear")
+        return Wiggle.define("how-linear", Map.class, OneStep.class, (f, s) -> f
                 .execution(mode)
-                .step("a")
-                .step("b")
-                .gate("keep")
-                .step("c")
-                .step("d")
-                .build();
+                .thenApply(s::a)
+                .thenApply(s::b)
+                .thenFilter(s::keep)
+                .thenApply(s::c)
+                .thenApply(s::d));
     }
 
     @Handlers("how-linear")

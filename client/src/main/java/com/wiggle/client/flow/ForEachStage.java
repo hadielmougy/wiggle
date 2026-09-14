@@ -19,7 +19,7 @@ import java.util.function.UnaryOperator;
  *
  * @see GraphBuilder#forEach
  */
-public final class ForEachStage {
+final class ForEachStage {
 
     private final GraphBuilder stream;
     private final String name;

@@ -23,12 +23,18 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.Map;
 
 /**
  * Client/worker RPCs retry on UNAVAILABLE, so an operation issued while the cell is momentarily
  * gone — a restart or an active/passive failover — succeeds once it comes back, instead of failing.
  */
 class RpcRetryFailoverTest {
+
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
 
     @AfterEach void clear() {
         System.clearProperty("wiggle.rpc.maxAttempts");
@@ -50,7 +56,7 @@ class RpcRetryFailoverTest {
     @DisplayName("a call issued while the cell is down rides out the outage and succeeds once it returns")
     void ridesOutRescheduling() throws Exception {
         int port = freePort();
-        FlowSpec bp = Wiggle.graph("wf").step("a").build();
+        FlowSpec bp = Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         System.setProperty("wiggle.rpc.maxAttempts", "60");
         System.setProperty("wiggle.rpc.retryDelayMillis", "150");
 

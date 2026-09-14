@@ -14,7 +14,7 @@ import java.util.function.UnaryOperator;
  * {@link GraphBuilder#withRetry}, because a {@code choose} adds several guards at once and there
  * is no "the one just added" to amend. An {@code otherwise} arm has no guard and so takes neither.
  */
-public record Case(String name, boolean guarded, RetryPolicy retry, String queue,
+record Case(String name, boolean guarded, RetryPolicy retry, String queue,
                    UnaryOperator<GraphBuilder> body) {
 
     /** A guarded arm: its branch runs when the guard named {@code name} is the first case to test true. */

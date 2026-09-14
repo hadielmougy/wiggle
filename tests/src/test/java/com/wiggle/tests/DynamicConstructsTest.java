@@ -40,6 +40,40 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class DynamicConstructsTest {
 
+    interface LoopSteps {
+        Map<String, Object> init(Map<String, Object> ctx);
+        boolean more(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface LoopOnceSteps {
+        boolean neverAgain(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface FanSteps {
+        Map<String, Object> upper(String item);
+        Map<String, Object> measure(Map<String, Object> v);
+        Map<String, Object> collect(@Context Map<String, Object> base, List<Map<String, Object>> results);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface MapFanSteps {
+        // MapFanH.tag takes the frozen base as a @Context parameter as well as the item. A step is
+        // named by reference, and a reference is to a one-argument function, so the name is declared
+        // here in the shape the body sees -- the worker binds the two-parameter handler by name.
+        String tag(Long value);
+        Map<String, Object> collect(@Context Map<String, Object> base, Map<String, String> tagged);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface SetFanSteps {
+        String norm(String item);
+        Map<String, Object> collect(Set<String> results);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -68,12 +102,11 @@ class DynamicConstructsTest {
     // ------------------------------------------------------------------ doWhile
 
     private static FlowSpec counterLoop(ExecutionMode mode) {
-        return Wiggle.graph("dyn-loop")
+        return Wiggle.define("dyn-loop", Map.class, LoopSteps.class, (f, s) -> f
                 .execution(mode)
-                .step("init")
-                .doWhile("more", b -> b.step("work"))
-                .step("after")
-                .build();
+                .thenApply(s::init)
+                .repeatWhile(s::more, b -> b.thenApply(s::work))
+                .thenApply(s::after));
     }
 
     @Handlers("dyn-loop")
@@ -106,10 +139,9 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile runs its body at least once")
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
-        FlowSpec bp = Wiggle.graph("dyn-loop-once")
-                .doWhile("never-again", b -> b.step("work"))
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("dyn-loop-once", Map.class, LoopOnceSteps.class, (f, s) -> f
+                .repeatWhile(s::neverAgain, b -> b.thenApply(s::work))
+                .thenApply(s::after));
         InstanceView v = run(bp, new LoopOnceH(bodyRuns), Map.of(), null);
         assertEquals("COMPLETED", v.status());
         assertEquals(1, bodyRuns.get(), "do-while body runs once even when the condition is false");
@@ -132,14 +164,13 @@ class DynamicConstructsTest {
 
     /** Two-step body: the item value evolves scalar -> map, proving the value threads the body. */
     private static FlowSpec fanOut(ExecutionMode mode) {
-        return Wiggle.graph("dyn-fan")
+        return Wiggle.define("dyn-fan", Map.class, FanSteps.class, (f, s) -> f
                 .execution(mode)
-                .forEach("per-item", "items", b -> b
-                        .step("upper")
-                        .step("measure"))
-                .combine("collect")
-                .step("after")
-                .build();
+                .thenForEach("per-item", "items", String.class, b -> b
+                        .thenApply(s::upper)
+                        .thenApply(s::measure))
+                .combine(s::collect)
+                .thenApply(s::after));
     }
 
     @Handlers("dyn-fan")
@@ -190,10 +221,9 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("default-name shorthand: forEach(itemsKey, body) names the node after the collection")
     void shorthandDefaultsNameToItemsKey() {
-        FlowSpec bp = Wiggle.graph("dyn-fan-short")
-                .forEach("items", b -> b.step("upper"))
-                .combine("collect")
-                .build();
+        FlowSpec bp = Wiggle.define("dyn-fan-short", Map.class, FanSteps.class, (f, s) -> f
+                .thenForEach("items", String.class, b -> b.thenApply(s::upper))
+                .combine(s::collect));
         Node dyn = bp.definition().nodes().values().stream()
                 .filter(n -> n.kind() == NodeKind.DYN_FORK)
                 .findFirst().orElseThrow(() -> new AssertionError("no DYN_FORK node"));
@@ -203,11 +233,10 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("a map input fans out per entry; the combine receives a map keyed like the input")
     void mapInputCollectsAsMap() throws Exception {
-        FlowSpec bp = Wiggle.graph("dyn-fan-map")
-                .forEach("per-entry", "prices", b -> b.step("tag"))
-                .combine("collect")
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("dyn-fan-map", Map.class, MapFanSteps.class, (f, s) -> f
+                .thenForEach("per-entry", "prices", Long.class, b -> b.thenApply(s::tag))
+                .combine(s::collect)
+                .thenApply(s::after));
         InstanceView v = run(bp, new MapFanH(),
                 new LinkedHashMap<>(Map.of("prices", new LinkedHashMap<>(Map.of("eu", 10L, "us", 12L)))), null);
         assertEquals("COMPLETED", v.status());
@@ -235,10 +264,9 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("scalar items flow scalar-to-scalar; a Set combine parameter deduplicates")
     void setParamDeduplicates() throws Exception {
-        FlowSpec bp = Wiggle.graph("dyn-fan-set")
-                .forEach("per-item", "items", b -> b.step("norm"))
-                .combine("collect")
-                .build();
+        FlowSpec bp = Wiggle.define("dyn-fan-set", Map.class, SetFanSteps.class, (f, s) -> f
+                .thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
+                .combine(s::collect));
         InstanceView v = run(bp, new SetFanH(), Map.of("items", List.of("x", "x", "y")), null);
         assertEquals("COMPLETED", v.status());
         assertEquals(2L, Json.asObject(v.context()).get("distinct"), "duplicates collapse in a Set");

@@ -31,6 +31,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class NamespaceWorkerTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(TestPorts.free(), "nw", null, null, null, 4,
                 Duration.ofMillis(50), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -39,7 +44,7 @@ class NamespaceWorkerTest {
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.graph("wf").step("a").build();
+        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @com.wiggle.client.worker.Handlers("wf")

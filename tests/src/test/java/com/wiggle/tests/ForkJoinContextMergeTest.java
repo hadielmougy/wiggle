@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
@@ -37,17 +36,20 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec flowSpec() {
-        return Wiggle.graph("merge-check")
-                .step("validate")
-                .fork(
-                        Branch.of("payment", s -> s
-                                .step("authorise")),
-                        Branch.of("shipping", s -> s
-                                .sleep("await", Duration.ofMillis(50))
-                                .step("label")))
-                .combine("merge")
-                .step("notify")
-                .build();
+        return Wiggle.define("merge-check", Map.class, MergeSteps.class, (f, s) -> {
+            var validated = f.thenApply(s::validate);
+            var payment = validated.thenApply(s::authorise);
+            var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combine(s::merge).thenApply(s::notify);
+        });
+    }
+
+    interface MergeSteps {
+        Map<String, Object> validate(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        Map<String, Object> label(Map<String, Object> ctx);
+        Map<String, Object> merge(Map<String, Object> payment, Map<String, Object> shipping);
+        Map<String, Object> notify(Map<String, Object> ctx);
     }
 
     @Handlers("merge-check")
@@ -124,16 +126,20 @@ class ForkJoinContextMergeTest {
     }
 
     private static FlowSpec typedFlowSpec() {
-        return Wiggle.graph("parcel-merge")
-                .step("validate")
-                .fork(
-                        Branch.of("payment", s -> s.step("authorise")),
-                        Branch.of("shipping", s -> s
-                                .sleep("await", Duration.ofMillis(50))
-                                .step("label")))
-                .combine("merge")
-                .step("notify")
-                .build();
+        return Wiggle.define("parcel-merge", Parcel.class, ParcelSteps.class, (f, s) -> {
+            var validated = f.thenApply(s::validate);
+            var payment = validated.thenApply(s::authorise);
+            var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);
+            return Wiggle.allOf(payment, shipping).combineWithContext(s::merge).thenApply(s::notify);
+        });
+    }
+
+    interface ParcelSteps {
+        Parcel validate(Parcel p);
+        Parcel authorise(Parcel p);
+        Parcel label(Parcel p);
+        Parcel merge(@Context Parcel base, Parcel payment, Parcel shipping);
+        Parcel notify(Parcel p);
     }
 
     @Handlers("parcel-merge")

@@ -165,15 +165,19 @@ final class Plan {
      * hold wins.
      */
     static Choice choice(List<Step> leaves) {
-        if (leaves.size() < 2) throw new IllegalArgumentException("oneOf needs at least two branches to choose between");
-        Step junction = junction(leaves);
+        // One arm is legal, unlike a fork: a lone guarded arm is "run this, or skip past it", which
+        // is a real shape. Two is the common case, not the requirement.
+        if (leaves.isEmpty()) throw new IllegalArgumentException("oneOf needs at least one branch to choose");
+        // With two or more arms the junction is where they diverged. With one there is nothing to
+        // diverge from, so it is whatever the arm's own guard hangs off.
+        Step junction = leaves.size() == 1 ? soleArmJunction(leaves.getFirst()) : junction(leaves);
 
         List<Case> cases = new ArrayList<>(leaves.size());
         for (Step leaf : leaves) {
             List<Step> path = pathFrom(junction, leaf);
             for (Step s : path) s.claimed = true;
 
-            if (!(path.get(0) instanceof Guard guard)) {
+            if (!(path.getFirst() instanceof Guard guard)) {
                 throw new IllegalArgumentException(
                         "every arm of oneOf must open with when(...) or otherwise(): the arm ending at "
                         + describe(leaf) + " starts with " + describe(path.get(0))
@@ -190,6 +194,17 @@ final class Plan {
                     : Case.when(guard.name, guard.retry, guard.queue, sub -> replay(body, sub, what)));
         }
         return new Choice(junction, cases);
+    }
+
+    /** The point a lone {@code oneOf} arm branches from: its opening guard's parent. */
+    private static Step soleArmJunction(Step leaf) {
+        for (Step s = leaf; s != null; s = s.parent) {
+            if (s instanceof Guard) return s.parent;
+        }
+        throw new IllegalArgumentException(
+                "every arm of oneOf must open with when(...) or otherwise(): the arm ending at "
+                + describe(leaf) + " has no guard. A choose picks one arm by evaluating each arm's "
+                + "guard in turn.");
     }
 
     /**
@@ -212,7 +227,7 @@ final class Plan {
     /** The nearest step every leaf descends from -- where the fork belongs. */
     private static Step junction(List<Step> leaves) {
         Set<Step> ancestors = new HashSet<>();
-        for (Step s = leaves.get(0).parent; s != null; s = s.parent) ancestors.add(s);
+        for (Step s = leaves.getFirst().parent; s != null; s = s.parent) ancestors.add(s);
 
         Step junction = null;
         for (int i = 1; i < leaves.size(); i++) {
@@ -226,8 +241,8 @@ final class Plan {
             if (junction == null || isAncestor(junction, s)) junction = s;
         }
         Set<Step> onFirst = new HashSet<>();
-        for (Step s = leaves.get(0); s != null; s = s.parent) onFirst.add(s);
-        if (onFirst.contains(junction) && junction == leaves.get(0)) {
+        for (Step s = leaves.getFirst(); s != null; s = s.parent) onFirst.add(s);
+        if (onFirst.contains(junction) && junction == leaves.getFirst()) {
             throw new IllegalArgumentException(
                     "allOf was given a handle that is an ancestor of another; arms must be siblings");
         }
@@ -292,7 +307,7 @@ final class Plan {
         List<Step> next = unclaimed(step);
         if (next.isEmpty()) return null;
         if (next.size() > 1) throw new IllegalArgumentException(branchError(step, what));
-        return next.get(0);
+        return next.getFirst();
     }
 
     private static List<Step> unclaimed(Step step) {

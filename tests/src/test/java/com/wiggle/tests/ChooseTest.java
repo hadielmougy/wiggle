@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Case;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Handlers;
@@ -25,6 +24,21 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 /** Exclusive-choice ({@code choose}) behaviour: first match wins, exactly one branch runs. */
 class ChooseTest {
 
+    interface DefaultSteps {
+        boolean isGold(Map<String, Object> c);
+        boolean isPremium(Map<String, Object> c);
+        Map<String, Object> gold(Map<String, Object> c);
+        Map<String, Object> premium(Map<String, Object> c);
+        Map<String, Object> plain(Map<String, Object> c);
+        Map<String, Object> finalize(Map<String, Object> c);
+    }
+
+    interface SkipSteps {
+        boolean isA(Map<String, Object> c);
+        Map<String, Object> a(Map<String, Object> c);
+        Map<String, Object> finalize(Map<String, Object> c);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -39,13 +53,11 @@ class ChooseTest {
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
     private FlowSpec withDefault() {
-        return Wiggle.graph("choose-default")
-                .choose(
-                        Case.when("is-gold", b -> b.step("gold")),
-                        Case.when("is-premium", b -> b.step("premium")),   // also true for "gold": must not win
-                        Case.otherwise("plain", b -> b.step("plain")))
-                .step("finalize")
-                .build();
+        return Wiggle.define("choose-default", Map.class, DefaultSteps.class, (f, s) -> Wiggle.oneOf(
+                        f.when(s::isGold).thenApply(s::gold),
+                        f.when(s::isPremium).thenApply(s::premium),   // also true for "gold": must not win
+                        f.otherwise().thenApply(s::plain))
+                .thenApply(s::finalize));
     }
 
     @Handlers("choose-default")
@@ -60,11 +72,8 @@ class ChooseTest {
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
     private FlowSpec withoutDefault() {
-        return Wiggle.graph("choose-skip")
-                .choose(
-                        Case.when("is-a", b -> b.step("a")))
-                .step("finalize")
-                .build();
+        return Wiggle.define("choose-skip", Map.class, SkipSteps.class, (f, s) ->
+                Wiggle.oneOf(f.when(s::isA).thenApply(s::a)).thenApply(s::finalize));
     }
 
     @Handlers("choose-skip")

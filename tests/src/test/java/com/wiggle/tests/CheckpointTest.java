@@ -24,6 +24,13 @@ import static org.junit.jupiter.api.Assertions.*;
 /** {@code .checkpoint()} plumbing (version hash) and its LOCAL_ASYNC behaviour (forces an early flush). */
 class CheckpointTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -57,16 +64,20 @@ class CheckpointTest {
 
     @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
     void plumbing() {
-        FlowSpec plain = Wiggle.graph("cp")
-                .step("a").step("b").build();
-        FlowSpec checked = Wiggle.graph("cp")
-                .step("a").checkpoint().step("b").build();
+        FlowSpec plain = Wiggle.define("cp", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .thenApply(s::b));
+        FlowSpec checked = Wiggle.define("cp", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::a)
+                .checkpoint()
+                .thenApply(s::b));
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
         assertEquals(1, checked.definition().checkpoints().size(), "one checkpoint recorded");
         assertNotEquals(plain.version(), checked.version(), "checkpoint is part of the content hash");
 
-        assertThrows(IllegalStateException.class, () -> Wiggle.graph("bad").checkpoint(),
+        assertThrows(IllegalStateException.class,
+                () -> Wiggle.define("bad", Map.class, OneStep.class, (f, s) -> f.checkpoint()),
                 "checkpoint() must follow a step");
     }
 
@@ -75,12 +86,12 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Wiggle.graph("cp-flush")
+        FlowSpec bp = Wiggle.define("cp-flush", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a").checkpoint()
-                .step("b")
-                .step("c")
-                .build();
+                .thenApply(s::a)
+                .checkpoint()
+                .thenApply(s::b)
+                .thenApply(s::c));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -110,12 +121,11 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = Wiggle.graph("cp-nobuf")
+        FlowSpec bp = Wiggle.define("cp-nobuf", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a")   // no checkpoint
-                .step("b")
-                .step("c")
-                .build();
+                .thenApply(s::a)   // no checkpoint
+                .thenApply(s::b)
+                .thenApply(s::c));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());

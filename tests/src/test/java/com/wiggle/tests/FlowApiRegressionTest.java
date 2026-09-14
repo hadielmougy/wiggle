@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Worker;
@@ -21,44 +20,31 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Regression suite for the typed API ({@link Wiggle#define}) against the engine's own behavioural
- * conformance scenarios. {@link Scenarios} pins what the engine does -- gates short-circuit, arms are
- * isolated until a combine, retries are per-policy, a sleep holds no worker -- with every topology
- * written through {@link Wiggle#graph}. This re-states each of those topologies through the typed API
- * and checks two things:
+ * Regression suite for {@link Wiggle#define} against the engine's own behavioural conformance
+ * scenarios. {@link Scenarios} pins what the engine does -- gates short-circuit, arms are isolated
+ * until a combine, retries are per-policy, a sleep holds no worker. This re-states each of those
+ * topologies and runs it to completion on a real server against the conformance suite's own
+ * handlers, asserting the outcome that suite asserts.
  *
- * <ol>
- *   <li><b>the same graph</b> -- content hashes must match, node for node. A definition's version is
- *       a SHA-256 over the whole canonical topology, so equal hashes mean the engine is driving a
- *       byte-identical graph and <em>cannot</em> behave differently;</li>
- *   <li><b>the same behaviour</b> -- each one then runs to completion on a real server against the
- *       conformance suite's own handlers, asserting the outcome that suite asserts.</li>
- * </ol>
- *
- * The second is what the first cannot prove: that the names the method references produced are the
- * names the worker binds back. If the typed API named a step differently, binding would fail before
+ * <p>What that catches, and no graph comparison could, is that the names the method references
+ * produce are the names the worker binds back. A step named differently would fail to bind before
  * the instance ever ran.
  *
- * <p>One difference is expected and is visible below. A typed step is named after its <em>method</em>
- * ({@code slowLeft}), where the conformance suite writes its graphs in kebab-case ({@code slow-left}).
- * Step binding folds the two together, so behaviour is unaffected -- but a fork arm's name is an exact
- * map key -- the engine stages each branch's result under it -- so the fan-out cases compare against
- * graphs named the way the method references name them.
+ * <p>These used to be written twice -- once by name, once by method reference -- and compared by
+ * content hash. That comparison went with the by-name mode; what it was protecting (that both said
+ * the same thing) cannot be violated by one mode.
  */
 class FlowApiRegressionTest {
 
     // ------------------------------------------------------------------ linear: steps and gates
 
     @Test
-    @DisplayName("a linear pipeline: same graph, and the context still accumulates in order")
+    @DisplayName("a linear pipeline: the context accumulates in order")
     void sequentialPipeline() throws Exception {
         Scenarios.SeqH h = new Scenarios.SeqH();
 
-        FlowSpec graph = Wiggle.graph("seq").step("one").step("two").step("three").build();
         FlowSpec typed = Wiggle.define("seq", Map.class, SeqSteps.class, (f, s) -> f
                 .thenApply(s::one).thenApply(s::two).thenApply(s::three));
-
-        assertSameGraph(graph, typed);
 
         Map<String, Object> out = run(typed, h, Map.of());
         assertEquals(1L, out.get("a"));
@@ -67,16 +53,13 @@ class FlowApiRegressionTest {
     }
 
     @Test
-    @DisplayName("a false gate: same graph, and it still ends the instance cleanly as gated:gate")
+    @DisplayName("a false gate ends the instance cleanly as gated:gate")
     void gateShortCircuits() throws Exception {
         java.util.concurrent.atomic.AtomicInteger downstream = new java.util.concurrent.atomic.AtomicInteger();
         Scenarios.GatedH h = new Scenarios.GatedH(downstream);
 
-        FlowSpec graph = Wiggle.graph("gated").step("seed").gate("gate").step("never").build();
         FlowSpec typed = Wiggle.define("gated", Map.class, GatedSteps.class, (f, s) -> f
                 .thenApply(s::seed).thenFilter(s::gate).thenApply(s::never));
-
-        assertSameGraph(graph, typed);
 
         InstanceView v = runToView(typed, h, Map.of());
         assertEquals("COMPLETED", v.status());
@@ -87,17 +70,9 @@ class FlowApiRegressionTest {
     // ------------------------------------------------------------------ fan-out and combine
 
     @Test
-    @DisplayName("fork/combine: same graph, and both arms' writes still survive the join")
+    @DisplayName("fork/combine: both arms' writes survive the join")
     void forkMergesDisjointWrites() throws Exception {
         ForkMerge h = new ForkMerge();
-
-        FlowSpec graph = Wiggle.graph("fork-merge")
-                .step("seed")
-                .fork(Branch.of("slowLeft", s -> s.step("slowLeft")),
-                      Branch.of("fastRight", s -> s.step("fastRight")))
-                .combine("merge")
-                .step("after")
-                .build();
 
         FlowSpec typed = Wiggle.define("fork-merge", Map.class, ForkMergeSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
@@ -106,8 +81,6 @@ class FlowApiRegressionTest {
             return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
         });
 
-        assertSameGraph(graph, typed);
-
         Map<String, Object> out = run(typed, h, Map.of());
         assertEquals("L", out.get("left"), "the slower arm's write survived");
         assertEquals("R", out.get("right"), "and so did the faster one's");
@@ -115,25 +88,15 @@ class FlowApiRegressionTest {
     }
 
     @Test
-    @DisplayName("a three-armed fork: same graph, and the continuation still runs exactly once")
+    @DisplayName("a three-armed fork runs the continuation exactly once")
     void joinRunsContinuationOnce() throws Exception {
         java.util.concurrent.atomic.AtomicInteger after = new java.util.concurrent.atomic.AtomicInteger();
         JoinOnce h = new JoinOnce(after);
-
-        FlowSpec graph = Wiggle.graph("join-once")
-                .fork(Branch.of("a1", s -> s.step("a1")),
-                      Branch.of("b1", s -> s.step("b1")),
-                      Branch.of("c1", s -> s.step("c1")))
-                .combine("merge")
-                .step("after")
-                .build();
 
         FlowSpec typed = Wiggle.define("join-once", Map.class, JoinOnceSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
                         .combineWithContext(s::merge)
                         .thenApply(s::after));
-
-        assertSameGraph(graph, typed);
 
         assertEquals("COMPLETED", runToView(typed, h, Map.of()).status());
         Thread.sleep(300);   // give any duplicate dispatch time to show up
@@ -141,7 +104,7 @@ class FlowApiRegressionTest {
     }
 
     @Test
-    @DisplayName("nested forks: same graph, and the inner join still pops back to the right barrier")
+    @DisplayName("nested forks: the inner join pops back to the right barrier")
     void nestedForks() throws Exception {
         Nested h = new Nested();
 
@@ -149,17 +112,6 @@ class FlowApiRegressionTest {
         // result in the context under that name -- so an arm name shares the key namespace with the
         // context. A handler named after a key its own arm writes would collide; these are named for
         // their position and write their keys, which is the habit to keep.
-        FlowSpec graph = Wiggle.graph("nested")
-                .fork(Branch.of("innerDone", s -> s
-                              .fork(Branch.of("innerA", t -> t.step("innerA")),
-                                    Branch.of("innerB", t -> t.step("innerB")))
-                              .combine("innerMerge")
-                              .step("innerDone")),
-                      Branch.of("outerRight", s -> s.step("outerRight")))
-                .combine("outerMerge")
-                .step("outerDone")
-                .build();
-
         FlowSpec typed = Wiggle.define("nested", Map.class, NestedSteps.class, (f, s) -> {
             var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
                     .combineWithContext(s::innerMerge)
@@ -167,8 +119,6 @@ class FlowApiRegressionTest {
             var right = f.thenApply(s::outerRight);
             return Wiggle.allOf(left, right).combineWithContext(s::outerMerge).thenApply(s::outerDone);
         });
-
-        assertSameGraph(graph, typed);
 
         Map<String, Object> out = run(typed, h, Map.of());
         assertEquals(1L, out.get("ia"));
@@ -179,24 +129,15 @@ class FlowApiRegressionTest {
     }
 
     @Test
-    @DisplayName("a gate inside an arm: same graph, and siblings still join without it")
+    @DisplayName("a gate inside an arm: siblings join without it")
     void gateInsideBranchDoesNotStrandSiblings() throws Exception {
         BranchGate h = new BranchGate();
-
-        FlowSpec graph = Wiggle.graph("branch-gate")
-                .fork(Branch.of("skipped", s -> s.gate("gate").step("skipped")),
-                      Branch.of("ran", s -> s.step("ran")))
-                .combine("merge")
-                .step("after")
-                .build();
 
         FlowSpec typed = Wiggle.define("branch-gate", Map.class, BranchGateSteps.class, (f, s) -> {
             var gated = f.thenFilter(s::gate).thenApply(s::skipped);
             var other = f.thenApply(s::ran);
             return Wiggle.allOf(gated, other).combineWithContext(s::merge).thenApply(s::after);
         });
-
-        assertSameGraph(graph, typed);
 
         Map<String, Object> out = run(typed, h, Map.of());
         assertNull(out.get("skipped"), "the closed arm contributed nothing");
@@ -207,39 +148,28 @@ class FlowApiRegressionTest {
     // ------------------------------------------------------------------ failure handling
 
     @Test
-    @DisplayName("a per-step retry policy: same graph, and a transient failure is still retried")
+    @DisplayName("a per-step retry policy retries a transient failure")
     void retriesTransientFailures() throws Exception {
         Map<String, java.util.concurrent.atomic.AtomicInteger> attempts = new java.util.concurrent.ConcurrentHashMap<>();
         Scenarios.RetryH h = new Scenarios.RetryH(attempts);
         RetryPolicy policy = RetryPolicy.fixed(5, Duration.ofMillis(50));
 
-        FlowSpec graph = Wiggle.graph("retry").step("flaky", policy).build();
         FlowSpec typed = Wiggle.define("retry", Map.class, RetrySteps.class,
                 (f, s) -> f.thenApply(s::flaky, policy));
-
-        assertSameGraph(graph, typed);
 
         Map<String, Object> out = run(typed, h, Map.of());
         assertEquals(3L, out.get("attempts"), "it failed twice and succeeded on the third attempt");
     }
 
     @Test
-    @DisplayName("a server-side timer: same graph, and the instance still defers without a worker")
+    @DisplayName("a server-side timer defers the instance without holding a worker")
     void sleepDefersWithoutHoldingAWorker() throws Exception {
         Scenarios.SleeperH h = new Scenarios.SleeperH();
-
-        FlowSpec graph = Wiggle.graph("sleeper")
-                .step("before")
-                .sleep("nap", Duration.ofMillis(400))
-                .step("after")
-                .build();
 
         FlowSpec typed = Wiggle.define("sleeper", Map.class, SleeperSteps.class, (f, s) -> f
                 .thenApply(s::before)
                 .thenSleep("nap", Duration.ofMillis(400))
                 .thenApply(s::after));
-
-        assertSameGraph(graph, typed);
 
         Map<String, Object> out = run(typed, h, Map.of());
         long before = ((Number) out.get("before")).longValue();
@@ -404,11 +334,6 @@ class FlowApiRegressionTest {
     // ------------------------------------------------------------------ harness
 
     /** Equal content hashes: the two definitions are the same graph, so the engine cannot tell them apart. */
-    private static void assertSameGraph(FlowSpec graph, FlowSpec typed) {
-        assertEquals(graph.definition().nodes().keySet(), typed.definition().nodes().keySet(), "node ids");
-        assertEquals(graph.version(), typed.version(),
-                "Wiggle.define must compile to the same graph as Wiggle.graph, node for node");
-    }
 
     private static Map<String, Object> run(FlowSpec spec, Object handlers, Map<String, Object> input)
             throws Exception {

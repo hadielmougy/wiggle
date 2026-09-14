@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
@@ -34,6 +33,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class LocalBoundaryTest {
 
+    interface ForkSteps {
+        Map<String, Object> seed(Map<String, Object> ctx);
+        Map<String, Object> prep(Map<String, Object> ctx);
+        Map<String, Object> l1(Map<String, Object> ctx);
+        Map<String, Object> l2(Map<String, Object> ctx);
+        Map<String, Object> r1(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+        Map<String, Object> d(Map<String, Object> ctx);
+        boolean keep(Map<String, Object> ctx);
+        Map<String, Object> never(Map<String, Object> ctx);
+        Map<String, Object> seed(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -51,16 +72,12 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            FlowSpec bp = Wiggle.graph("lb-fork")
-                    .execution(mode)
-                    .step("seed")
-                    .step("prep")
-                    .fork(
-                            Branch.of("left", s -> s.step("l1").step("l2")),
-                            Branch.of("right", s -> s.step("r1")))
-                    .combine("merge")
-                .step("after")
-                    .build();
+            FlowSpec bp = Wiggle.define("lb-fork", Map.class, ForkSteps.class, (f, s) -> {
+                var prepped = f.execution(mode).thenApply(s::seed).thenApply(s::prep);
+                var left = prepped.thenApply(s::l1).thenApply(s::l2);
+                var right = prepped.thenApply(s::r1);
+                return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
+            });
 
             try (WiggleServer server = new WiggleServer(config()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
@@ -84,12 +101,11 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        FlowSpec bp = Wiggle.graph("lb-gate")
+        FlowSpec bp = Wiggle.define("lb-gate", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_SYNC)
-                .step("seed")
-                .gate("keep")
-                .step("never")
-                .build();
+                .thenApply(s::seed)
+                .thenFilter(s::keep)
+                .thenApply(s::never));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -149,13 +165,12 @@ class LocalBoundaryTest {
 
     private static FlowSpec queueSplitFlowSpec(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return Wiggle.graph("lb-queues")
+        return Wiggle.define("lb-queues", Map.class, OneStep.class, (f, s) -> f
                 .execution(mode)
-                .step("a")
-                .step("b")
-                .step("c", "special")
-                .step("d")
-                .build();
+                .thenApply(s::a)
+                .thenApply(s::b)
+                .thenApply(s::c, "special")
+                .thenApply(s::d));
     }
 
     @Handlers("lb-fork")

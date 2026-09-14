@@ -31,6 +31,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class GracefulShutdownTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> c(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -73,12 +80,11 @@ class GracefulShutdownTest {
 
         // Default batch size (64) means step "a" alone never triggers a flush -- its result sits
         // only in the worker's in-memory buffer until a boundary, a full batch, or a drain.
-        FlowSpec bp = Wiggle.graph("shutdown-drain")
+        FlowSpec bp = Wiggle.define("shutdown-drain", Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
-                .step("a")
-                .step("b")
-                .step("c")
-                .build();
+                .thenApply(s::a)
+                .thenApply(s::b)
+                .thenApply(s::c));
 
         DrainH drainH = new DrainH(runsOfA, runsOfB, runsOfC, aStarted, proceed);
 

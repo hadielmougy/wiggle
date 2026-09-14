@@ -37,6 +37,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SagaCompensationTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        Map<String, Object> boom(Map<String, Object> ctx);
+        Map<String, Object> capture(Map<String, Object> ctx);
+        Map<String, Object> reserve(Map<String, Object> ctx);
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     record Undo(String step, Object input, Object result) {}
 
     static final class Recording {
@@ -81,11 +89,12 @@ class SagaCompensationTest {
     @DisplayName("a failed instance compensates its completed steps in reverse order -> COMPENSATED")
     void reverseOrderSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Wiggle.graph("saga")
-                .step("reserve").compensate()
-                .step("capture").compensate()
-                .step("boom")
-                .build();
+        FlowSpec bp = Wiggle.define("saga", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::reserve)
+                .compensate()
+                .thenApply(s::capture)
+                .compensate()
+                .thenApply(s::boom));
 
         @Handlers("saga")
         class H {
@@ -122,12 +131,13 @@ class SagaCompensationTest {
     @DisplayName("locally-chained (LOCAL_SYNC) compensable steps capture snapshots and compensate too")
     void localSyncSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Wiggle.graph("saga-local")
+        FlowSpec bp = Wiggle.define("saga-local", Map.class, OneStep.class, (f, s) -> f
                 .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
-                .step("reserve").compensate()
-                .step("capture").compensate()
-                .step("boom")
-                .build();
+                .thenApply(s::reserve)
+                .compensate()
+                .thenApply(s::capture)
+                .compensate()
+                .thenApply(s::boom));
 
         @Handlers("saga-local")
         class H {
@@ -148,7 +158,9 @@ class SagaCompensationTest {
     @Test @Timeout(30)
     @DisplayName("no declared compensation -> plain FAILED, exactly as before")
     void undeclaredStillFails() throws Exception {
-        FlowSpec bp = Wiggle.graph("plain-fail").step("work").step("boom").build();
+        FlowSpec bp = Wiggle.define("plain-fail", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::work)
+                .thenApply(s::boom));
         @Handlers("plain-fail")
         class H {
             public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
@@ -164,10 +176,10 @@ class SagaCompensationTest {
     @DisplayName("a compensator that fails permanently lands COMPENSATION_FAILED, loudly")
     void compensatorFailure() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = Wiggle.graph("bad-undo")
-                .step("reserve").compensate()
-                .step("boom")
-                .build();
+        FlowSpec bp = Wiggle.define("bad-undo", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::reserve)
+                .compensate()
+                .thenApply(s::boom));
         @Handlers("bad-undo")
         class H {
             public Activity<Map<String, Object>> reserve() { return compensableStep("reserved", rec, true); }

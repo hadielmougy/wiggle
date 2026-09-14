@@ -30,6 +30,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  */
 class CellRoutingTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(TestPorts.free(), "cell-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -38,7 +43,7 @@ class CellRoutingTest {
     }
 
     private static FlowSpec workflow() {
-        return Wiggle.graph("wf").step("a").build();
+        return Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @Test @DisplayName("resolver routes start + operate-by-id to the coordinator-resolved cell")

@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
@@ -28,11 +27,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ContextNullDeleteTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> trim(Map<String, Object> ctx);
+    }
+
     @Test @DisplayName("a step that drops a field removes it from the context (not left as null)")
     void droppedFieldIsRemoved() throws Exception {
-        FlowSpec bp = Wiggle.graph("trim")
-                .step("trim")
-                .build();
+        FlowSpec bp = Wiggle.define("trim", Map.class, OneStep.class, (f, s) -> f.thenApply(s::trim));
 
         Map<String, Object> in = new LinkedHashMap<>();
         in.put("keep", 1);
@@ -45,12 +47,8 @@ class ContextNullDeleteTest {
 
     @Test @DisplayName("branch combine clears its per-branch scratch keys from the final context")
     void combineScratchKeysAreRemoved() throws Exception {
-        FlowSpec bp = Wiggle.graph("trip")
-                .fork(
-                        Branch.of("air", s -> s.step("air")),
-                        Branch.of("hotel", s -> s.step("hotel")))
-                .combine("merge")
-                .build();
+        FlowSpec bp = Wiggle.define("trip", Map.class, TripSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::air), f.thenApply(s::hotel)).combineWithContext(s::merge));
 
         Map<String, Object> out = run(bp, new TripH(), new LinkedHashMap<>(Map.of("id", "t1")));
 
@@ -72,6 +70,13 @@ class ContextNullDeleteTest {
             next.remove("drop");            // the return replaces the context: drop is gone
             return next;
         }
+    }
+
+    interface TripSteps {
+        Map<String, Object> air(Map<String, Object> ctx);
+        Map<String, Object> hotel(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> air, Map<String, Object> hotel);
     }
 
     @Handlers("trip")

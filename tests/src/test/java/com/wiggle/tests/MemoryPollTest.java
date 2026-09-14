@@ -25,6 +25,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class MemoryPollTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config(double threshold, double rejectRatio) {
         ServerConfig.Memory memory = new ServerConfig.Memory(
                 true, threshold, rejectRatio, Duration.ofMillis(200), Duration.ofMillis(100));
@@ -36,9 +41,7 @@ class MemoryPollTest {
 
     @Test @DisplayName("over the memory threshold, a rejected poll returns empty + hold-off even when work exists")
     void rejectsUnderPressure() throws Exception {
-        FlowSpec bp = Wiggle.graph("mem-" + Ids.next("wf"))
-                .step("work")
-                .build();
+        FlowSpec bp = Wiggle.define("mem-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         // 0.0001 is below any running JVM's live-set/max, so the guard is always under pressure;
         // reject ratio 1.0 => every poll is rejected -- deterministic.
         try (WiggleServer server = new WiggleServer(config(0.0001, 1.0)).start();
@@ -90,9 +93,7 @@ class MemoryPollTest {
 
     @Test @DisplayName("under a normal threshold no poll is rejected and work flows")
     void noRejectUnderThreshold() throws Exception {
-        FlowSpec bp = Wiggle.graph("mem-ok-" + Ids.next("wf"))
-                .step("work")
-                .build();
+        FlowSpec bp = Wiggle.define("mem-ok-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         // Threshold 0.999 is effectively never crossed, so even reject-ratio 1.0 never triggers.
         try (WiggleServer server = new WiggleServer(config(0.999, 1.0)).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {

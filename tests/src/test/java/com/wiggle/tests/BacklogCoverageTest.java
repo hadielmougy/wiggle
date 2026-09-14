@@ -39,6 +39,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class BacklogCoverageTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> served(Map<String, Object> ctx);
+        Map<String, Object> extra(Map<String, Object> ctx);
+        Map<String, Object> orphan(Map<String, Object> ctx);
+    }
+
     private static final String QUEUES_WF = "bc-queues";
     private static final String VERSION_WF = "bc-version";
     private static final String UNSCOPED_WF = "bc-unscoped";
@@ -82,10 +89,11 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, QUEUES_WF);
-            FlowSpec spec = Wiggle.graph(QUEUES_WF)
-                    .step("served").onQueue(QUEUES_WF + "-served")
-                    .step("orphan").onQueue(QUEUES_WF + "-orphan")
-                    .build();
+            FlowSpec spec = Wiggle.define(QUEUES_WF, Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::served)
+                .onQueue(QUEUES_WF + "-served")
+                .thenApply(s::orphan)
+                .onQueue(QUEUES_WF + "-orphan"));
             client.register(spec);
 
             // a worker that serves ONLY the first queue -- nothing will ever claim "orphan"
@@ -121,8 +129,10 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, VERSION_WF);
-            FlowSpec v1 = Wiggle.graph(VERSION_WF).step("served").build();
-            FlowSpec v2 = Wiggle.graph(VERSION_WF).step("served").step("extra").build();
+            FlowSpec v1 = Wiggle.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
+            FlowSpec v2 = Wiggle.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::served)
+                .thenApply(s::extra));
             client.register(v1);
             client.register(v2);
 
@@ -165,8 +175,10 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, UNSCOPED_WF);
-            FlowSpec v1 = Wiggle.graph(UNSCOPED_WF).step("served").build();
-            FlowSpec v2 = Wiggle.graph(UNSCOPED_WF).step("served").step("extra").build();
+            FlowSpec v1 = Wiggle.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
+            FlowSpec v2 = Wiggle.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::served)
+                .thenApply(s::extra));
             client.register(v1);
             client.register(v2);
 

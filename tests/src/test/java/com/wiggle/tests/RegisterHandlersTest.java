@@ -30,6 +30,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RegisterHandlersTest {
 
+    /** The steps this spec names; a worker binds them by name. */
+    interface OneStep {
+        void audit(Map<String, Object> ctx);
+        Map<String, Object> authorise(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> validate(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Object ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(Json.asObject(ctx));
         n.put(k, v);
@@ -38,12 +46,11 @@ class RegisterHandlersTest {
 
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
     private FlowSpec authoredGraph() {
-        return Wiggle.graph("order-fulfilment")
-                .step("validate")
-                .gate("in-stock")
-                .step("authorise", "payments")
-                .effect("audit")
-                .build();
+        return Wiggle.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::validate)
+                .thenFilter(s::inStock)
+                .thenApply(s::authorise, "payments")
+                .thenAccept(s::audit));
     }
 
     private void withServer(BiConsumer<WiggleClient, WiggleServer> body) throws Exception {
@@ -56,7 +63,7 @@ class RegisterHandlersTest {
         }
     }
 
-    /** Methods in mixed case styles; the return type picks the kind. "inStock" matches step "in-stock". */
+    /** Methods in mixed case styles; the return type picks the kind. */
     @Handlers("order-fulfilment")
     public static final class OrderHandlers {
         final AtomicReference<Object> audited;
@@ -78,7 +85,7 @@ class RegisterHandlersTest {
             AtomicReference<Object> audited = new AtomicReference<>();
             try (Worker impl = new Worker(client, "obj-1")) {
                 impl.handlers(new OrderHandlers(audited));
-                impl.start();   // reconciles: matches inStock->in-stock, discovers the payments queue
+                impl.start();   // reconciles the handlers against the graph, discovers the payments queue
 
                 String id = client.start("order-fulfilment", Map.of("orderId", "o1", "qty", 2));
                 InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
@@ -109,7 +116,7 @@ class RegisterHandlersTest {
 
     @Handlers("order-fulfilment")
     public static final class ClashHandlers {
-        // returns a Map (task) but the graph's "in-stock" is a gate (PREDICATE)
+        // returns a Map (task) but the graph's "inStock" is a gate (PREDICATE)
         public Map<String, Object> inStock(Map<String, Object> c) { return c; }
     }
 
@@ -121,7 +128,7 @@ class RegisterHandlersTest {
             try (Worker impl = new Worker(client, "obj-clash")) {
                 impl.handlers(new ClashHandlers());
                 IllegalStateException e = assertThrows(IllegalStateException.class, impl::start);
-                assertTrue(e.getMessage().contains("in-stock"), e.getMessage());
+                assertTrue(e.getMessage().contains("inStock"), e.getMessage());
                 assertTrue(e.getMessage().contains("boolean"), e.getMessage());
             }
         });

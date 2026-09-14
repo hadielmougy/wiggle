@@ -1,7 +1,9 @@
 # Builder → Pipeline specification
 
-The requirements for the workflow DSL's build layer, from the fluent `WorkflowBuilder` surface down
-to the assembled, validated, content-versioned `FlowSpec`. An implementation that follows this
+The requirements for the workflow DSL's build layer, from the (package-private) `WorkflowBuilder`
+surface down to the assembled, validated, content-versioned `FlowSpec`. `Wiggle.define` records a
+chain of method references and replays it through this layer; nothing outside the `flow` package
+touches it. An implementation that follows this
 produces byte-identical `WorkflowDefinition`s (same content-version) to the current one.
 
 The build layer is **topology only** — it declares named nodes and how they chain, branch, and
@@ -62,7 +64,7 @@ name**; `defaultQueue(q)` overrides it for subsequently-added nodes. Only task /
 add their resolved queue to the `queues` set.
 
 **3.4 Retry** — a node's own `RetryPolicy`, else the workflow `defaultRetry`. Constructor:
-`defaultRetry = given ?? RetryPolicy.forever()`. The DSL entry `Wiggle.graph(name)` supplies
+`defaultRetry = given ?? RetryPolicy.forever()`. `Wiggle.define(name, …)` supplies
 `RetryPolicy.exponential(3, 500ms)` as that default; `define(name, retry)` overrides.
 
 **3.5 startNode** — recorded once, for the first node attached to the *root* stream. (This is the
@@ -121,7 +123,8 @@ fresh success END node; delegate to `Pipeline.build()`.
 
 ## 5. Operators (public API + graph produced + frontier effect)
 
-Entry: `Wiggle.graph(name)` / `define(name, RetryPolicy)` → `WorkflowBuilder`.
+Entry: `Wiggle.define(name, …)` compiles its recorded chain through this builder, which is
+internal to the `flow` package -- it is the assembly target, not a public authoring surface.
 
 | operator (signatures) | nodes / edges created | frontier effect |
 |---|---|---|

@@ -30,6 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class QueueLagMonitorTest {
 
+    interface ProbeSteps {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private final List<LogRecord> captured = new CopyOnWriteArrayList<>();
     private Handler handler;
     /** Strong reference: JUL keeps loggers only weakly, so without this the logger (and our handler)
@@ -64,9 +68,8 @@ class QueueLagMonitorTest {
     }
 
     private WorkflowDefinition registerLagWorkflow(WorkflowEngine engine) {
-        FlowSpec bp = Wiggle.graph("lag-probe")
-                .step("work")   // never claimed: no worker ever polls in this test
-                .build();
+        // never claimed: no worker ever polls in this test
+        FlowSpec bp = Wiggle.define("lag-probe", Map.class, ProbeSteps.class, (f, s) -> f.thenApply(s::work));
         return engine.definitions().register(bp.definition());
     }
 

@@ -25,7 +25,7 @@ import java.util.function.UnaryOperator;
  * bookkeeping at the bottom). Each nested branch/case/loop is built by a child builder that captures
  * its own start node and falls back to an enclosing join for a short-circuit.
  */
-public final class GraphBuilder {
+final class GraphBuilder {
 
     /** Which outgoing edge of a node an open end occupies. */
     private enum Edge { NEXT, ALT }

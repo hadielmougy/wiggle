@@ -24,13 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class FindByCorrelationTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     @Handlers("corr")
     static final class H {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
     }
 
     private static FlowSpec wf() {
-        return Wiggle.graph("corr").step("work").build();
+        return Wiggle.define("corr", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config(String jdbcUrl) {

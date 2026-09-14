@@ -22,6 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Schedule management over the gRPC control plane: create (interval and cron), list, delete. */
 class ScheduleClientTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
     private static ServerConfig config() {
         return new ServerConfig(TestPorts.free(), "schedc-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
@@ -31,10 +36,8 @@ class ScheduleClientTest {
 
     @Test @DisplayName("a client creates, lists and deletes interval and cron schedules")
     void manageSchedules() throws Exception {
-        FlowSpec bpA = Wiggle.graph("schedc-probe-a")
-                .step("work").build();
-        FlowSpec bpB = Wiggle.graph("schedc-probe-b")
-                .step("work").build();
+        FlowSpec bpA = Wiggle.define("schedc-probe-a", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        FlowSpec bpB = Wiggle.define("schedc-probe-b", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
@@ -76,8 +79,7 @@ class ScheduleClientTest {
 
     @Test @DisplayName("re-creating a schedule for the same workflow updates it in place, no duplicate")
     void createIsIdempotentPerWorkflow() throws Exception {
-        FlowSpec bp = Wiggle.graph("schedc-probe-dup")
-                .step("work").build();
+        FlowSpec bp = Wiggle.define("schedc-probe-dup", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());

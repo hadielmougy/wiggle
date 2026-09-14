@@ -1,9 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.flow.Branch;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handlers;
 import com.wiggle.client.worker.PermanentActivityException;
@@ -35,6 +33,78 @@ public final class Scenarios {
 
     private Scenarios() {}
 
+    // ---- step contracts: each scenario's steps, declared. The @Handlers classes below implement
+    // them by name; nothing here runs a step.
+
+    interface SeqSteps {
+        Map<String, Object> one(Map<String, Object> ctx);
+        Map<String, Object> two(Map<String, Object> ctx);
+        Map<String, Object> three(Map<String, Object> ctx);
+    }
+
+    interface GatedSteps {
+        Map<String, Object> seed(Map<String, Object> ctx);
+        boolean gate(Map<String, Object> ctx);
+        Map<String, Object> never(Map<String, Object> ctx);
+    }
+
+    interface ForkMergeSteps {
+        Map<String, Object> seed(Map<String, Object> ctx);
+        Map<String, Object> slowLeft(Map<String, Object> ctx);
+        Map<String, Object> fastRight(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface JoinOnceSteps {
+        Map<String, Object> a1(Map<String, Object> ctx);
+        Map<String, Object> b1(Map<String, Object> ctx);
+        Map<String, Object> c1(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base, Map<String, Object> a,
+                                  Map<String, Object> b, Map<String, Object> c);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    /**
+     * Note the names. An arm is named after its last step, and the engine stages each arm's result in
+     * the context under that name -- so an arm name shares the key namespace with the context. These
+     * steps are named for their position and write their own keys ({@code ia}, {@code ib}, ...); a
+     * step named after a key its own arm writes would collide with it.
+     */
+    interface NestedSteps {
+        Map<String, Object> innerA(Map<String, Object> ctx);
+        Map<String, Object> innerB(Map<String, Object> ctx);
+        Map<String, Object> innerMerge(@Context Map<String, Object> base,
+                                       Map<String, Object> ia, Map<String, Object> ib);
+        Map<String, Object> innerDone(Map<String, Object> ctx);
+        Map<String, Object> outerRight(Map<String, Object> ctx);
+        Map<String, Object> outerMerge(@Context Map<String, Object> base,
+                                       Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> outerDone(Map<String, Object> ctx);
+    }
+
+    interface BranchGateSteps {
+        boolean gate(Map<String, Object> ctx);
+        Map<String, Object> skipped(Map<String, Object> ctx);
+        Map<String, Object> ran(Map<String, Object> ctx);
+        Map<String, Object> merge(@Context Map<String, Object> base,
+                                  Map<String, Object> gated, Map<String, Object> other);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface FlakySteps { Map<String, Object> flaky(Map<String, Object> ctx); }
+    interface ExhaustedSteps { Map<String, Object> alwaysFails(Map<String, Object> ctx); }
+    interface FatalSteps { Map<String, Object> fatal(Map<String, Object> ctx); }
+    interface WorkStep { Map<String, Object> work(Map<String, Object> ctx); }
+    interface SlowStep { Map<String, Object> slow(Map<String, Object> ctx); }
+    interface HeartbeatSteps { Map<String, Object> longRunning(Map<String, Object> ctx); }
+
+    interface SleeperSteps {
+        Map<String, Object> before(Map<String, Object> ctx);
+        Map<String, Object> after(Map<String, Object> ctx);
+    }
+
     private interface Body {
         void run(WiggleServer server, WiggleClient client) throws Exception;
     }
@@ -58,10 +128,6 @@ public final class Scenarios {
         return w.start();
     }
 
-    private static GraphBuilder json(String name) {
-        return Wiggle.graph(name);
-    }
-
     static Map<String, Object> put(Map<String, Object> ctx, String key, Object value) {
         Map<String, Object> next = new LinkedHashMap<>(ctx);
         next.put(key, value);
@@ -79,11 +145,8 @@ public final class Scenarios {
 
     /** A linear pipeline runs its steps in order and the context accumulates. */
     public static void sequentialPipeline() throws Exception {
-        FlowSpec bp = json("seq")
-                .step("one")
-                .step("two")
-                .step("three")
-                .build();
+        FlowSpec bp = Wiggle.define("seq", Map.class, SeqSteps.class, (f, s) -> f
+                .thenApply(s::one).thenApply(s::two).thenApply(s::three));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new SeqH())) {
@@ -107,11 +170,8 @@ public final class Scenarios {
     /** A false gate ends the instance successfully and skips everything downstream. */
     public static void gateShortCircuits() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        FlowSpec bp = json("gated")
-                .step("seed")
-                .gate("gate")
-                .step("never")
-                .build();
+        FlowSpec bp = Wiggle.define("gated", Map.class, GatedSteps.class, (f, s) -> f
+                .thenApply(s::seed).thenFilter(s::gate).thenApply(s::never));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new GatedH(downstream))) {
@@ -137,14 +197,11 @@ public final class Scenarios {
 
     /** Parallel branches merge field-by-field instead of clobbering each other. */
     public static void forkMergesDisjointWrites() throws Exception {
-        FlowSpec bp = json("fork-merge")
-                .step("seed")
-                .fork(
-                        Branch.of("left", s -> s.step("slow-left")),
-                        Branch.of("right", s -> s.step("fast-right")))
-                .combine("merge")
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("fork-merge", Map.class, ForkMergeSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            return Wiggle.allOf(seeded.thenApply(s::slowLeft), seeded.thenApply(s::fastRight))
+                    .combineWithContext(s::merge).thenApply(s::after);
+        });
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new ForkMergeH())) {
@@ -177,14 +234,9 @@ public final class Scenarios {
     /** The step after a fork runs exactly once, no matter how many branches there were. */
     public static void joinRunsContinuationOnce() throws Exception {
         AtomicInteger afterCount = new AtomicInteger();
-        FlowSpec bp = json("join-once")
-                .fork(
-                        Branch.of("a", s -> s.step("a1")),
-                        Branch.of("b", s -> s.step("b1")),
-                        Branch.of("c", s -> s.step("c1")))
-                .combine("merge")
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("join-once", Map.class, JoinOnceSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
+                        .combineWithContext(s::merge).thenApply(s::after));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new JoinOnceH(afterCount))) {
@@ -217,17 +269,14 @@ public final class Scenarios {
 
     /** Forks nest: the join stack pops back to the right barrier. */
     public static void nestedForks() throws Exception {
-        FlowSpec bp = json("nested")
-                .fork(
-                        Branch.of("outer-left", s -> s.fork(
-                                Branch.of("inner-a", t -> t.step("ia")),
-                                Branch.of("inner-b", t -> t.step("ib")))
-                                .combine("inner-merge")
-                                .step("inner-after")),
-                        Branch.of("outer-right", s -> s.step("or")))
-                .combine("outer-merge")
-                .step("outer-after")
-                .build();
+        FlowSpec bp = Wiggle.define("nested", Map.class, NestedSteps.class, (f, s) -> {
+            var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
+                    .combineWithContext(s::innerMerge)
+                    .thenApply(s::innerDone);
+            return Wiggle.allOf(left, f.thenApply(s::outerRight))
+                    .combineWithContext(s::outerMerge)
+                    .thenApply(s::outerDone);
+        });
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new NestedH())) {
@@ -243,10 +292,10 @@ public final class Scenarios {
 
     @Handlers("nested")
     static final class NestedH {
-        public Map<String, Object> ia(Map<String, Object> ctx) { return put(ctx, "ia", 1L); }
-        public Map<String, Object> ib(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
-        public Map<String, Object> innerAfter(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
-        public Map<String, Object> or(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
+        public Map<String, Object> innerA(Map<String, Object> ctx) { return put(ctx, "ia", 1L); }
+        public Map<String, Object> innerB(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
+        public Map<String, Object> innerDone(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
+        public Map<String, Object> outerRight(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
         public Map<String, Object> innerMerge(@Context Map<String, Object> base,
                                               Map<String, Object> ia,
                                               Map<String, Object> ib) {
@@ -257,20 +306,14 @@ public final class Scenarios {
                                               Map<String, Object> right) {
             return fold(base, left, right);
         }
-        public Map<String, Object> outerAfter(Map<String, Object> ctx) { return put(ctx, "outerAfter", 1L); }
+        public Map<String, Object> outerDone(Map<String, Object> ctx) { return put(ctx, "outerAfter", 1L); }
     }
 
     /** A gate inside a branch short-circuits that branch only; siblings still join. */
     public static void gateInsideBranchDoesNotStrandSiblings() throws Exception {
-        FlowSpec bp = json("branch-gate")
-                .fork(
-                        Branch.of("gated", s -> s
-                                .gate("gate")
-                                .step("skipped")),
-                        Branch.of("other", s -> s.step("ran")))
-                .combine("merge")
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("branch-gate", Map.class, BranchGateSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenFilter(s::gate).thenApply(s::skipped), f.thenApply(s::ran))
+                        .combineWithContext(s::merge).thenApply(s::after));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new BranchGateH())) {
@@ -300,9 +343,8 @@ public final class Scenarios {
     /** A transient failure is retried according to the step's policy. */
     public static void retriesTransientFailures() throws Exception {
         Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
-        FlowSpec bp = json("retry")
-                .step("flaky", RetryPolicy.fixed(5, Duration.ofMillis(50)))
-                .build();
+        FlowSpec bp = Wiggle.define("retry", Map.class, FlakySteps.class, (f, s) ->
+                f.thenApply(s::flaky, RetryPolicy.fixed(5, Duration.ofMillis(50))));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new RetryH(attempts))) {
@@ -326,9 +368,8 @@ public final class Scenarios {
 
     /** Retries stop at the policy limit and the instance fails with the last error. */
     public static void exhaustedRetriesFailInstance() throws Exception {
-        FlowSpec bp = json("retry-exhausted")
-                .step("always-fails", RetryPolicy.fixed(2, Duration.ofMillis(20)))
-                .build();
+        FlowSpec bp = Wiggle.define("retry-exhausted", Map.class, ExhaustedSteps.class, (f, s) ->
+                f.thenApply(s::alwaysFails, RetryPolicy.fixed(2, Duration.ofMillis(20))));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new ExhaustedH())) {
@@ -349,9 +390,8 @@ public final class Scenarios {
     /** PermanentActivityException skips retries entirely. */
     public static void permanentFailureSkipsRetries() throws Exception {
         AtomicInteger calls = new AtomicInteger();
-        FlowSpec bp = json("permanent")
-                .step("fatal", RetryPolicy.fixed(5, Duration.ofMillis(20)))
-                .build();
+        FlowSpec bp = Wiggle.define("permanent", Map.class, FatalSteps.class, (f, s) ->
+                f.thenApply(s::fatal, RetryPolicy.fixed(5, Duration.ofMillis(20))));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new PermanentH(calls))) {
@@ -374,11 +414,8 @@ public final class Scenarios {
 
     /** A sleep is a server-side timer: the instance waits without occupying a worker. */
     public static void sleepDefersWithoutHoldingAWorker() throws Exception {
-        FlowSpec bp = json("sleeper")
-                .step("before")
-                .sleep(Duration.ofMillis(600))
-                .step("after")
-                .build();
+        FlowSpec bp = Wiggle.define("sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+                .thenApply(s::before).thenSleep(Duration.ofMillis(600)).thenApply(s::after));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new SleeperH())) {
@@ -406,9 +443,8 @@ public final class Scenarios {
      * reclaims the expired lease and the task becomes dispatchable again.
      */
     public static void expiredLeaseIsReclaimed() throws Exception {
-        FlowSpec bp = json("orphan")
-                .step("work", RetryPolicy.fixed(5, Duration.ofMillis(20)))
-                .build();
+        FlowSpec bp = Wiggle.define("orphan", Map.class, WorkStep.class, (f, s) ->
+                f.thenApply(s::work, RetryPolicy.fixed(5, Duration.ofMillis(20))));
 
         withServer((server, client) -> {
             client.register(bp);
@@ -438,9 +474,7 @@ public final class Scenarios {
 
     /** A task may only be completed by the worker holding its lease. */
     public static void staleLeaseIsRejected() throws Exception {
-        FlowSpec bp = json("lease-guard")
-                .step("work")
-                .build();
+        FlowSpec bp = Wiggle.define("lease-guard", Map.class, WorkStep.class, (f, s) -> f.thenApply(s::work));
 
         withServer((server, client) -> {
             client.register(bp);
@@ -460,9 +494,7 @@ public final class Scenarios {
 
     /** Cancelling an instance stops it and abandons its in-flight work. */
     public static void cancelStopsAnInstance() throws Exception {
-        FlowSpec bp = json("cancellable")
-                .step("slow")
-                .build();
+        FlowSpec bp = Wiggle.define("cancellable", Map.class, SlowStep.class, (f, s) -> f.thenApply(s::slow));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new CancellableH())) {
@@ -492,9 +524,8 @@ public final class Scenarios {
      */
     public static void heartbeatKeepsLongTaskAlive() throws Exception {
         AtomicInteger invocations = new AtomicInteger();
-        FlowSpec bp = json("heartbeat")
-                .step("long-running")
-                .build();
+        FlowSpec bp = Wiggle.define("heartbeat", Map.class, HeartbeatSteps.class, (f, s) ->
+                f.thenApply(s::longRunning));
 
         withServer((server, client) -> {
             client.register(bp);
@@ -526,10 +557,10 @@ public final class Scenarios {
 
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
     public static void definitionVersionIsContentAddressed() {
-        FlowSpec a = json("versioned").step("one").build();
-        FlowSpec b = json("versioned").step("one").build();
-        FlowSpec c = json("versioned")
-                .step("one").step("two").build();
+        FlowSpec a = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec b = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec c = Wiggle.define("versioned", Map.class, SeqSteps.class, (f, s) ->
+                f.thenApply(s::one).thenApply(s::two));
 
         Check.equal(a.version(), b.version(), "identical topologies share a version");
         Check.isTrue(a.version() != c.version(), "a changed topology gets a new version");
@@ -540,7 +571,7 @@ public final class Scenarios {
     public static void dslRejectsInvalidGraphs() {
         boolean duplicateRejected = false;
         try {
-            json("dup").step("same").step("same").build();
+            Wiggle.define("dup", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one).thenApply(s::one));
         } catch (IllegalArgumentException e) {
             duplicateRejected = true;
         }
@@ -548,7 +579,7 @@ public final class Scenarios {
 
         boolean emptyRejected = false;
         try {
-            json("empty").build();
+            Wiggle.define("empty", Map.class, SeqSteps.class, (f, s) -> f);
         } catch (IllegalStateException e) {
             emptyRejected = true;
         }
@@ -586,9 +617,7 @@ public final class Scenarios {
     /** Two workers on one server share the work rather than duplicating it. */
     public static void workDistributesAcrossWorkers() throws Exception {
         AtomicInteger total = new AtomicInteger();
-        FlowSpec bp = json("distributed")
-                .step("work")
-                .build();
+        FlowSpec bp = Wiggle.define("distributed", Map.class, WorkStep.class, (f, s) -> f.thenApply(s::work));
 
         withServer((server, client) -> {
             DistributedH handlers = new DistributedH(total);

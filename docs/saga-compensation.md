@@ -27,14 +27,13 @@ A step optionally declares a compensating activity, attached to the just-added s
 `checkpoint()` attaches today (`WorkflowBuilder.java:418`):
 
 ```java
-FlowSpec orders = Wiggle.graph("order-fulfilment")
-        .step("validate")
-        .step("authorise").compensate("void-authorisation")
-        .step("capture").compensate("refund", RetryPolicy.exponential(5, Duration.ofMillis(200)))
-        .step("reserve-stock").compensate("release-stock")
-        .step("print-label")                       // no compensator — nothing to undo
-        .step("confirm")
-        .build();
+FlowSpec orders = Wiggle.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
+        .thenApply(s::validate)
+        .thenApply(s::authorise).compensate()
+        .thenApply(s::capture).compensate()
+        .thenApply(s::reserveStock).compensate()
+        .thenApply(s::printLabel)                  // no compensator — nothing to undo
+        .thenApply(s::confirm));
 ```
 
 - `compensate(String activity)` — names the compensator for the preceding step.
@@ -259,7 +258,7 @@ may treat a child's `COMPENSATION_FAILED` as its own compensation failure — co
 | States | `Rows.InstanceStatus` (`store/Rows.java:9`) | add the three states; teach terminal checks and the purge/retention path |
 | Cancel | `WorkflowEngine.cancel` (`:158`), `WiggleClient.cancel`, proto | optional `compensate` flag |
 | Console | dashboard SPA + `DashboardData` | show `COMPENSATING`/`COMPENSATED`/`COMPENSATION_FAILED`, the comp-log, and a "retry compensator" action for the failed case |
-| Docs | `docs/dsl-cookbook.md`, a new pattern | a worked saga; retire the "no rollback" caveat in `README.md:497` and `patterns/retries` |
+| Docs | `docs/cookbook.md`, a new pattern | a worked saga; retire the "no rollback" caveat in `README.md:497` and `patterns/retries` |
 
 No change to forward routing, join/combine, or validation — compensators are node metadata plus an
 engine-orchestrated reverse pass, both additive.

@@ -4,7 +4,6 @@ import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.flow.GraphBuilder;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -28,16 +27,40 @@ class WorkerPacingTest {
     private static final int INSTANCES = 6;
     private static final int CONCURRENCY = 2;
 
-    /** All hop steps canonicalise to the one {@code hop} handler (punctuation is ignored on match). */
+    /** {@value #STEPS} distinct hops: a step is named by the method it references, so a chain of N
+     *  nodes needs N names. They are identical -- this measures pacing, not step work. */
+    interface PacingSteps {
+        Map<String, Object> hop1(Map<String, Object> ctx);
+        Map<String, Object> hop2(Map<String, Object> ctx);
+        Map<String, Object> hop3(Map<String, Object> ctx);
+        Map<String, Object> hop4(Map<String, Object> ctx);
+        Map<String, Object> hop5(Map<String, Object> ctx);
+        Map<String, Object> hop6(Map<String, Object> ctx);
+        Map<String, Object> hop7(Map<String, Object> ctx);
+        Map<String, Object> hop8(Map<String, Object> ctx);
+        Map<String, Object> hop9(Map<String, Object> ctx);
+        Map<String, Object> hop10(Map<String, Object> ctx);
+    }
+
     @Handlers("pacing")
     static final class PacingH {
-        public Map<String, Object> hop(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop1(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop2(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop3(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop4(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop5(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop6(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop7(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop8(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop9(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> hop10(Map<String, Object> ctx) { return ctx; }
     }
 
     private static FlowSpec chain() {
-        GraphBuilder b = Wiggle.graph("pacing");
-        for (int i = 0; i < STEPS; i++) b = b.step("hop" + "-".repeat(i));
-        return b.build();
+        return Wiggle.define("pacing", Map.class, PacingSteps.class, (f, s) -> f
+                .thenApply(s::hop1).thenApply(s::hop2).thenApply(s::hop3).thenApply(s::hop4)
+                .thenApply(s::hop5).thenApply(s::hop6).thenApply(s::hop7).thenApply(s::hop8)
+                .thenApply(s::hop9).thenApply(s::hop10));
     }
 
     @Test @DisplayName("a saturated worker drains promptly (no idle-backoff wave gating)")

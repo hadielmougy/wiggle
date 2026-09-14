@@ -24,6 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class EmbeddedCellDeployerTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> a(Map<String, Object> ctx);
+    }
+
     @Test @DisplayName("provisions an in-memory cell to ACTIVE and its endpoint serves work")
     void provisionsAndServes() throws Exception {
         InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
@@ -35,7 +40,7 @@ class EmbeddedCellDeployerTest {
 
             // the recorded endpoint is a live cell: register + start, and the id is epoch-aware for "shop"
             try (WiggleClient client = new WiggleClient(ns.endpoint())) {
-                client.register(Wiggle.graph("wf").step("a").build());
+                client.register(Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a)));
                 String id = client.start("wf", Map.of());
                 assertEquals("shop", IdCodec.parse(id)
                         .orElseThrow(() -> new AssertionError("expected an epoch-aware id, got " + id))
@@ -46,7 +51,7 @@ class EmbeddedCellDeployerTest {
             deployer.teardown("shop");
             try (WiggleClient dead = new WiggleClient(ns.endpoint())) {
                 assertThrows(RuntimeException.class,
-                        () -> dead.register(Wiggle.graph("wf").step("a").build()),
+                        () -> dead.register(Wiggle.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a))),
                         "a torn-down cell should not answer");
             }
         }

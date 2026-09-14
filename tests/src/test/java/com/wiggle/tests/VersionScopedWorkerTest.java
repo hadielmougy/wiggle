@@ -38,6 +38,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class VersionScopedWorkerTest {
 
+    /** The step this spec names; a worker binds it by name. */
+    interface OneStep {
+        Map<String, Object> handle(Map<String, Object> ctx);
+        Map<String, Object> extra(Map<String, Object> ctx);
+    }
+
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
@@ -53,11 +59,13 @@ class VersionScopedWorkerTest {
 
     /** v1 and v2 of one workflow: same step name, different topology, so different content hashes. */
     private static FlowSpec v1() {
-        return Wiggle.graph("vs-order").step("handle").build();
+        return Wiggle.define("vs-order", Map.class, OneStep.class, (f, s) -> f.thenApply(s::handle));
     }
 
     private static FlowSpec v2() {
-        return Wiggle.graph("vs-order").step("handle").step("extra").build();
+        return Wiggle.define("vs-order", Map.class, OneStep.class, (f, s) -> f
+                .thenApply(s::handle)
+                .thenApply(s::extra));
     }
 
     /** Service A's code. Tags the context with which service ran it. */
