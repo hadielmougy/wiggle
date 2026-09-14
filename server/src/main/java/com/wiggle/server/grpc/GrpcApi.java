@@ -147,7 +147,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void getWorkflow(GetWorkflowRequest req, StreamObserver<WorkflowDefinition> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetWorkflow name=" + req.getName());
         run(resp, () -> {
-            com.wiggle.core.WorkflowDefinition def = engine.latestDefinition(req.getName())
+            com.wiggle.core.WorkflowDefinition def = (req.hasVersion()
+                    ? engine.definition(req.getName(), req.getVersion())
+                    : engine.latestDefinition(req.getName()))
                     .orElseThrow(() -> EngineException.notFound("workflow"));
             return WorkflowDefinition.newBuilder().setDefinition(ProtoJson.toStruct(def.toJson())).build();
         });
@@ -260,6 +262,16 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         return b.build();
     }
 
+    /** The (workflow, version) pairs a version-scoped worker serves; empty means every version. */
+    private static java.util.Set<com.wiggle.core.WorkflowVersion> versionFilter(PollRequest req) {
+        if (req.getVersionsCount() == 0) return java.util.Set.of();
+        java.util.Set<com.wiggle.core.WorkflowVersion> out = new java.util.LinkedHashSet<>();
+        for (com.wiggle.proto.WorkflowVersion v : req.getVersionsList()) {
+            out.add(new com.wiggle.core.WorkflowVersion(v.getWorkflow(), v.getVersion()));
+        }
+        return out;
+    }
+
     @Override
     public void pollTasks(PollRequest req, StreamObserver<TaskList> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
@@ -284,7 +296,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             // A cancelled call means the worker is gone (closed/dead); don't claim work it can't run.
             io.grpc.Context ctx = io.grpc.Context.current();
             List<com.wiggle.core.TaskActivation> tasks =
-                    engine.poll(req.getWorkerId(), queues, max, lease, deadline, ctx::isCancelled);
+                    engine.poll(req.getWorkerId(), queues, versionFilter(req), max, lease, deadline,
+                            ctx::isCancelled);
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                     + " returning " + tasks.size() + " task(s)");
             TaskList.Builder out = TaskList.newBuilder();

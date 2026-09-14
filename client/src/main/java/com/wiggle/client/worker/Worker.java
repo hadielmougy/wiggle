@@ -34,7 +34,13 @@ public final class Worker implements AutoCloseable {
     /** Compiled graphs by "name:version", for local-execution traversal. */
     private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
     /** {@link Handlers @Handlers} objects, matched to graph steps by name on start. */
-    private final List<HandlerBinder.HandlerSet> handlerSets = new CopyOnWriteArrayList<>();
+    /** One {@code handlers(...)} call: the scanned methods, and the version they were bound for. */
+    private record Registration(HandlerBinder.HandlerSet set, Integer version) {}
+
+    private final List<Registration> handlerSets = new CopyOnWriteArrayList<>();
+    /** The (workflow, version) pairs this worker claims; empty while any registration is unversioned. */
+    private final Set<WorkflowVersion> servedVersions = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean servesEveryVersion = new AtomicBoolean();
 
 
     private final AtomicBoolean running = new AtomicBoolean();
@@ -69,6 +75,15 @@ public final class Worker implements AutoCloseable {
     public String workerId() { return workerId; }
 
     /** The queues this worker actually serves: the explicit restriction, or everything registered. */
+    /**
+     * The versions this worker claims. Empty means every version -- which is the case whenever any
+     * registration was unversioned, since the scoping can only be as narrow as the least specific
+     * binding.
+     */
+    private Set<WorkflowVersion> claimedVersions() {
+        return servesEveryVersion.get() ? Set.of() : Set.copyOf(servedVersions);
+    }
+
     private Set<String> servedQueues() {
         return options.queues().isEmpty() ? queues : options.queues();
     }
@@ -96,7 +111,31 @@ public final class Worker implements AutoCloseable {
      * the complete post-join context.
      */
     public Worker handlers(Object handlerObject) {
-        handlerSets.add(HandlerBinder.scan(handlerObject));
+        handlerSets.add(new Registration(HandlerBinder.scan(handlerObject), null));
+        servesEveryVersion.set(true);
+        return this;
+    }
+
+    /**
+     * Binds handlers for <em>one version</em> of the workflow. The signatures are checked against that
+     * exact graph, and the worker claims only that version's tasks -- so a version can be allocated to
+     * a service, and a capability handed from one service to another by publishing a new version and
+     * letting the old one drain.
+     *
+     * <p>Without this, a worker serves every version of the workflow it binds, which is the default
+     * and usually right: step names are stable across versions, so one implementation covers them all.
+     * It is also the only thing that keeps an old worker from claiming a newly-published version's
+     * tasks and running them with its own older code -- the activity a handler binds is
+     * {@code workflow#step}, which carries no version, so the names match either way.
+     *
+     * <p>A worker may mix: several versions of one workflow (each with its own handler object, during
+     * a migration), and other workflows entirely. If <em>any</em> registration is unversioned, the
+     * worker claims every version -- the scoping is only as narrow as its least specific binding.
+     */
+    public Worker handlers(Object handlerObject, int version) {
+        HandlerBinder.HandlerSet set = HandlerBinder.scan(handlerObject);
+        handlerSets.add(new Registration(set, version));
+        servedVersions.add(new WorkflowVersion(set.workflow(), version));
         return this;
     }
 
@@ -114,15 +153,16 @@ public final class Worker implements AutoCloseable {
     }
 
     private void reconcile() {
-        for (HandlerBinder.HandlerSet set : handlerSets) matchHandlerSet(set);
+        for (Registration r : handlerSets) matchHandlerSet(r);
     }
 
     /**
      * Resolves a {@link Handlers @Handlers} object against the registered graph (fetched here — the
      * binder itself is pure) and installs the resulting bindings. See {@link HandlerBinder}.
      */
-    private void matchHandlerSet(HandlerBinder.HandlerSet set) {
-        WorkflowDefinition def = fetchGraph(set.workflow());
+    private void matchHandlerSet(Registration registration) {
+        HandlerBinder.HandlerSet set = registration.set();
+        WorkflowDefinition def = fetchGraph(set.workflow(), registration.version());
         HandlerBinder.Result result = HandlerBinder.bind(set, def);
         for (HandlerBinder.Binding b : result.bindings()) {
             if (handlers.putIfAbsent(b.activity(), b.handler()) != null) {
@@ -148,11 +188,11 @@ public final class Worker implements AutoCloseable {
     }
 
     /** Fetches the registered graph, waiting out a registration race up to {@code awaitRegistration}. */
-    private WorkflowDefinition fetchGraph(String workflow) {
+    private WorkflowDefinition fetchGraph(String workflow, Integer version) {
         long deadline = System.nanoTime() + options.awaitRegistration().toNanos();
         while (true) {
             try {
-                return client.getWorkflow(workflow);
+                return client.getWorkflow(workflow, version);
             } catch (WiggleClient.WiggleApiException e) {
                 boolean notFound = e.status() == 404;
                 if (notFound && System.nanoTime() < deadline) {
@@ -191,7 +231,7 @@ public final class Worker implements AutoCloseable {
         }
         int free = options.concurrency() - inFlight.get();
         long polledAt = System.currentTimeMillis();
-        PollResult result = client.poll(workerId, servedQueues(), free,
+        PollResult result = client.poll(workerId, servedQueues(), claimedVersions(), free,
                 options.lease().toMillis(), options.longPollWait().toMillis());
         List<TaskActivation> tasks = result.tasks();
         if (tasks.isEmpty()) {

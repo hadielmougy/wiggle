@@ -73,8 +73,14 @@ public final class WiggleClient implements AutoCloseable {
      * never registered. Used by {@link Worker#handle} reconciliation.
      */
     public com.wiggle.core.WorkflowDefinition getWorkflow(String name) {
-        WorkflowDefinition def = call(() -> stub.getWorkflow(
-                GetWorkflowRequest.newBuilder().setName(name).build()));
+        return getWorkflow(name, null);
+    }
+
+    /** {@code version} null = the latest registered; otherwise that exact version. */
+    public com.wiggle.core.WorkflowDefinition getWorkflow(String name, Integer version) {
+        GetWorkflowRequest.Builder req = GetWorkflowRequest.newBuilder().setName(name);
+        if (version != null) req.setVersion(version);
+        WorkflowDefinition def = call(() -> stub.getWorkflow(req.build()));
         return com.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(def.getDefinition()));
     }
 
@@ -193,13 +199,27 @@ public final class WiggleClient implements AutoCloseable {
 
     public PollResult poll(String workerId, Collection<String> queues, int max,
                            long leaseMillis, long waitMillis) {
-        PollRequest req = PollRequest.newBuilder()
+        return poll(workerId, queues, java.util.Set.of(), max, leaseMillis, waitMillis);
+    }
+
+    /**
+     * {@code versions} empty = claim every version, which is what an unversioned worker sends.
+     * Non-empty scopes the claim to those (workflow, version) pairs.
+     */
+    public PollResult poll(String workerId, Collection<String> queues,
+                           Collection<com.wiggle.core.WorkflowVersion> versions, int max,
+                           long leaseMillis, long waitMillis) {
+        PollRequest.Builder b = PollRequest.newBuilder()
                 .setWorkerId(workerId)
                 .addAllQueues(queues)
                 .setMax(max)
                 .setLeaseMillis(leaseMillis)
-                .setWaitMillis(waitMillis)
-                .build();
+                .setWaitMillis(waitMillis);
+        for (com.wiggle.core.WorkflowVersion v : versions) {
+            b.addVersions(com.wiggle.proto.WorkflowVersion.newBuilder()
+                    .setWorkflow(v.workflow()).setVersion(v.version()).build());
+        }
+        PollRequest req = b.build();
         TaskList res = call(() -> stub.pollTasks(req));
         List<com.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
         for (com.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(toTaskActivation(t));

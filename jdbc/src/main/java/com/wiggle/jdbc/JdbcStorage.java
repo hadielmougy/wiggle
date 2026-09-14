@@ -788,14 +788,42 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        @Override public List<Token> claimTasks(String workerId, Set<String> queues,
+                                                Set<WorkflowVersion> versions, int max, long now,
+                                                long leaseUntil) {
             if (dialect.supportsSkipLocked() && dialect.supportsReturning()) {
-                return claimSkipLockedReturning(workerId, queues, max, now, leaseUntil);
+                return claimSkipLockedReturning(workerId, queues, versions, max, now, leaseUntil);
             }
             if (dialect.supportsSkipLocked()) {
-                return claimSkipLockedSelect(workerId, queues, max, now, leaseUntil);
+                return claimSkipLockedSelect(workerId, queues, versions, max, now, leaseUntil);
             }
-            return claimCompareAndSet(workerId, queues, max, now, leaseUntil);
+            return claimCompareAndSet(workerId, queues, versions, max, now, leaseUntil);
+        }
+
+        /**
+         * The (workflow, version) filter of a version-scoped worker. It only narrows the candidate
+         * set the dispatch index already found, so it costs a predicate and no join -- wf_token
+         * carries both columns.
+         */
+        private static void appendVersions(StringBuilder sql, Set<WorkflowVersion> versions) {
+            if (versions == null || versions.isEmpty()) return;
+            sql.append(" AND (");
+            for (int i = 0; i < versions.size(); i++) {
+                if (i > 0) sql.append(" OR ");
+                sql.append("(workflow=? AND version=?)");
+            }
+            sql.append(")");
+        }
+
+        /** Binds what {@link #appendVersions} appended; same set, so the same iteration order. */
+        private static int bindVersions(PreparedStatement p, int idx, Set<WorkflowVersion> versions)
+                throws SQLException {
+            if (versions == null || versions.isEmpty()) return idx;
+            for (WorkflowVersion v : versions) {
+                p.setString(idx++, v.workflow());
+                p.setInt(idx++, v.version());
+            }
+            return idx;
         }
 
         /**
@@ -805,12 +833,15 @@ public final class JdbcStorage implements Storage {
          * transaction ever waits on a row locked by another, concurrent claims across
          * many workers and nodes cannot deadlock, and none of them collide on a row.
          */
-        private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
+                                                     Set<WorkflowVersion> versions, int max,
+                                                     long now, long leaseUntil) {
             StringBuilder pick = new StringBuilder(
                     "SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
                 pick.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
             }
+            appendVersions(pick, versions);
             pick.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
             String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=? " +
                     "WHERE id IN (" + pick + ") RETURNING *";
@@ -821,6 +852,7 @@ public final class JdbcStorage implements Storage {
                 p.setLong(idx++, now);          // SET updated_at
                 p.setLong(idx++, now);          // WHERE available_at<=?
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                idx = bindVersions(p, idx, versions);
                 p.setInt(idx, max);             // LIMIT
                 try (ResultSet rs = p.executeQuery()) {
                     List<Token> out = new ArrayList<>();
@@ -836,18 +868,22 @@ public final class JdbcStorage implements Storage {
          * same transaction. The lock the SELECT took guarantees no other worker can claim the same
          * rows before the UPDATE commits.
          */
-        private List<Token> claimSkipLockedSelect(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        private List<Token> claimSkipLockedSelect(String workerId, Set<String> queues,
+                                                  Set<WorkflowVersion> versions, int max,
+                                                  long now, long leaseUntil) {
             StringBuilder sel = new StringBuilder(
                     "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
                 sel.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
             }
+            appendVersions(sel, versions);
             sel.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
             List<Token> picked = new ArrayList<>();
             try (PreparedStatement p = ps(dialect.limit(sel.toString()))) {
                 int idx = 1;
                 p.setLong(idx++, now);
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                idx = bindVersions(p, idx, versions);
                 p.setInt(idx, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) picked.add(readToken(rs));
@@ -870,18 +906,22 @@ public final class JdbcStorage implements Storage {
         }
 
         /** Portable fallback (H2, Oracle): over-fetch candidates, then compare-and-set each. */
-        private List<Token> claimCompareAndSet(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        private List<Token> claimCompareAndSet(String workerId, Set<String> queues,
+                                               Set<WorkflowVersion> versions, int max,
+                                               long now, long leaseUntil) {
             StringBuilder sql = new StringBuilder(
                     "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
             if (queues != null && !queues.isEmpty()) {
                 sql.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
             }
+            appendVersions(sql, versions);
             sql.append(" ORDER BY available_at, id LIMIT ?");
             List<Token> candidates = new ArrayList<>();
             try (PreparedStatement p = ps(dialect.limit(sql.toString()))) {
                 int idx = 1;
                 p.setLong(idx++, now);
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                idx = bindVersions(p, idx, versions);
                 p.setInt(idx, max * 4); // over-fetch: some candidates will lose the CAS race
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) candidates.add(readToken(rs));

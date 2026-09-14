@@ -3,6 +3,7 @@ package com.wiggle.server.store;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.*;
 
 import java.util.*;
@@ -169,13 +170,17 @@ public final class InMemoryStorage implements Storage {
             indexToken(stored);
         }
 
-        @Override public List<Token> claimTasks(String workerId, Set<String> queues, int max, long now, long leaseUntil) {
+        @Override public List<Token> claimTasks(String workerId, Set<String> queues,
+                                                Set<WorkflowVersion> versions, int max, long now,
+                                                long leaseUntil) {
             List<Token> claimed = new ArrayList<>();
             Iterator<Token> it = readyTasks.iterator();
             while (it.hasNext() && claimed.size() < max) {
                 Token live = it.next();
                 if (live.availableAt > now) break;   // ordered by availableAt: the rest are future
                 if (queues != null && !queues.isEmpty() && !queues.contains(live.queue)) continue;
+                if (versions != null && !versions.isEmpty()
+                        && !versions.contains(new WorkflowVersion(live.workflow, live.version))) continue;
                 it.remove();                          // READY -> RUNNING leaves the claimable index
                 live.status = TokenStatus.RUNNING;
                 live.leaseOwner = workerId;

@@ -64,7 +64,7 @@ class SqlServerStoreTest {
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
             assertTrue(id != null && !id.isBlank(), "an instance id is returned");
 
-            var claimed = storage.inTx(tx -> tx.claimTasks("w1", null, 10, System.currentTimeMillis(),
+            var claimed = storage.inTx(tx -> tx.claimTasks("w1", null, null, 10, System.currentTimeMillis(),
                     System.currentTimeMillis() + 30_000));
             assertEquals(1, claimed.size(), "the single ready task is claimed");
             assertEquals("w1", claimed.getFirst().leaseOwner);
@@ -119,7 +119,7 @@ class SqlServerStoreTest {
                     go.await();
                     List<String> mine = new java.util.ArrayList<>();
                     while (remaining.get() > 0 && System.nanoTime() < deadlineNanos) {
-                        var claimed = storage.inTx(tx -> tx.claimTasks(workerId, null, 5,
+                        var claimed = storage.inTx(tx -> tx.claimTasks(workerId, null, null, 5,
                                 System.currentTimeMillis(), System.currentTimeMillis() + 30_000));
                         if (claimed.isEmpty()) {
                             Thread.sleep(2);   // no rows free right now; let a peer's claim commit, then retry
