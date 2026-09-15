@@ -32,7 +32,7 @@ public record FlowSpec(WorkflowDefinition definition) {
      */
     public static <T> FlowSpec define(String name, Class<T> input,
                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
-        return define(name, null, input, body);
+        return define(name, RetryPolicy.forever(), input, body);
     }
 
     /**
@@ -64,7 +64,7 @@ public record FlowSpec(WorkflowDefinition definition) {
      */
     public static <T, H> FlowSpec define(String name, Class<T> input, Class<H> contract,
                                          BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
-        return define(name, null, input, contract, body);
+        return define(name, RetryPolicy.forever(), input, contract, body);
     }
 
     /** {@link #define(String, Class, Class, BiFunction)} with an explicit default retry policy. */
