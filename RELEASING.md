@@ -62,6 +62,20 @@ bundle to the Central Portal.
    ```sh
    ./gradlew publishToMavenLocal
    ```
+   Then check no published POM depends on something that is **not** published. A published
+   module with a `project(":x")` dependency on an unpublished `:x` emits a POM naming an
+   artifact nobody can resolve, and nothing in the build complains:
+   ```sh
+   for m in ~/.m2/repository/sh/wiggle/*/; do
+     grep -o '<artifactId>[^<]*</artifactId>' "$m"*/*.pom 2>/dev/null \
+       | grep -oE '>(wiggle-[a-z-]+|[a-z-]+)<' | tr -d '><' | sort -u \
+       | grep -vE '^(wiggle-.*)$' && echo "  ^^ in $m"
+   done
+   ```
+   0.0.4 and 0.0.5 both shipped `wiggle-server` depending on `sh.wiggle:election`, which was
+   never uploaded — every consumer of `wiggle-server` (and of `wiggle-jdbc` / `wiggle-postgres`,
+   which bring it transitively) failed to resolve. Better still, build a throwaway project that
+   depends on `wiggle-postgres` from `mavenLocal()` and compile something against it.
 4. Upload the deployment to the Central Portal:
    ```sh
    ./gradlew publishToMavenCentral
@@ -72,6 +86,24 @@ bundle to the Central Portal.
 6. Tag the release: `git tag vx.y.z && git push --tags`. **Pushing the tag also fires the
    [`Release` workflow](.github/workflows/release.yml)** (see below), which creates the GitHub
    Release for `vx.y.z` and attaches the runnable server distribution.
+
+7. Update the website. The `wiggle-site` repo has pages that name the version and are
+   **not** vendored from here — the tutorials' dependency coordinates, the Kubernetes
+   manifests' image tags — so a release leaves them behind unless someone bumps them:
+   ```sh
+   cd ../wiggle-site
+   grep -rlE '(sh\.wiggle:[a-z-]+|hadielmougy/wiggle):[0-9]' content/   # what names a version
+   # bump the site-only pages, then:
+   ./scripts/sync-docs.sh && .venv/bin/python build.py
+   ```
+   `sync-docs.sh` re-vendors the docs from here **and refuses to finish** while any page
+   names a version this repo does not declare, so it will tell you exactly which lines are
+   stale. Open a PR there as usual.
+
+   This step is not optional when the release adds API. 0.0.5 added
+   `PostgresStorageFactory`, and until the site was bumped the embedded tutorial told
+   readers to depend on `wiggle-postgres:0.0.4` and then call a class that version did not
+   contain — the page could not be followed.
 
 Artifacts appear on Central within ~15–30 minutes and sync to search indexes over the
 following hours.
