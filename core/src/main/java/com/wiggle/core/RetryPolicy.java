@@ -17,7 +17,7 @@ public record RetryPolicy(int maxAttempts, long initialBackoffMillis, double mul
     }
 
     public static RetryPolicy forever() {
-        return new RetryPolicy(Integer.MAX_VALUE, Duration.ofSeconds(1).toMillis(), 1.0, Duration.ofMinutes(1).toMillis(), 0);
+        return new RetryPolicy(10_000, Duration.ofSeconds(1).toMillis(), 1.0, Duration.ofMinutes(1).toMillis(), 0);
     }
 
     public static RetryPolicy none() {
