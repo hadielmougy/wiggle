@@ -74,6 +74,9 @@ class DocSnippetsTest {
         // the tutorial -- also run end to end by TutorialTest
         EXPECTED.put("../tutorial/Orders.java", List.of("records", "contract", "topology", "main"));
         EXPECTED.put("../tutorial/OrderHandlers.java", List.of("handlers"));
+        EXPECTED.put("../tutorial/Embedded.java", List.of("storage", "main"));
+        EXPECTED.put("../tutorial/Standalone.java", List.of("submitter", "worker"));
+        EXPECTED.put("../tutorial/Coordinated.java", List.of("open-epoch", "main"));
     }
 
     /** Regions the main repo's own docs draw on, beyond the site fixtures above. */
@@ -289,6 +292,9 @@ class DocSnippetsTest {
             Map.entry("decode", "docs/decode/OrderHandlers.java"),
             Map.entry("tutorial", "tutorial/Orders.java"),
             Map.entry("tutorial-handlers", "tutorial/OrderHandlers.java"),
+            Map.entry("tut-embedded", "tutorial/Embedded.java"),
+            Map.entry("tut-standalone", "tutorial/Standalone.java"),
+            Map.entry("tut-coordinated", "tutorial/Coordinated.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
             Map.entry("id-codec", "../core/src/main/java/com/wiggle/core/IdCodec.java"),
@@ -388,7 +394,7 @@ class DocSnippetsTest {
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(24, EXPECTED.size(), "every wired page and doc should have a fixture");
+        assertEquals(27, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }
