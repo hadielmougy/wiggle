@@ -53,9 +53,11 @@ public final class IdCodec {
      * code units -- so the same ulid always maps to the same shard. The result is stamped into the id
      * at mint time and read back verbatim on resolve, never recomputed.
      */
+    // docs:begin shard-for
     public static long shardFor(String ulid, int ringSize) {
         return ringSize <= 1 ? 0 : Math.floorMod(hash64(ulid), ringSize);
     }
+    // docs:end shard-for
 
     /**
      * 64-bit FNV-1a over the ulid, finished with a murmur3 fmix64 avalanche so every input bit affects

@@ -27,8 +27,9 @@ A step optionally declares a compensating activity. It is declared in the step's
 the contract names it as a zero-argument factory returning a `CompensableActivity`, which is the
 same shape the handler implements, so the two cannot drift.
 
+<!-- snippet: saga-doc/topology -->
 ```java
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, FullOrderSteps.class, (f, s) -> f
         .thenApply(s::validate)
         .thenApplyCompensable(s::authorise)
         .thenApplyCompensable(s::capture)
@@ -37,11 +38,13 @@ FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.cl
         .thenApply(s::confirm));
 ```
 
+<!-- snippet: saga-doc/contract -->
 ```java
 interface OrderSteps {
     Order validate(Order o);
     CompensableActivity<Order, Payment> authorise();   // Order in, Payment out, and an undo
     Order printLabel(Order o);                  // does not
+    ...
 }
 ```
 
@@ -71,6 +74,7 @@ step, matched by class name under the usual canonical folding). An activity that
 in one class, and the pairing is checked by the compiler (implements `Compensable` ⇒ the
 compensator exists; no stringly reference that can dangle):
 
+<!-- snippet: saga-doc-activity/activity -->
 ```java
 final class CapturePayment implements CompensableActivity<Order, Payment> {
     public Payment execute(Order o) { return gateway.capture(o.authRef()); }
@@ -80,21 +84,6 @@ final class CapturePayment implements CompensableActivity<Order, Payment> {
         // read from the INPUT snapshot, so nothing is smuggled through the business context.
     }
 }
-
-@ForFlow("order-fulfilment")
-class OrderHandlers {
-    public boolean inStock(Order o) { ... }                 // plain methods coexist
-
-    public CompensableActivity<Order, Payment> capturePayment() {   // factory -> serves "capturePayment"
-        return new CapturePayment(gateway);
-    }
-
-    @Handles("reserveStock")                                // rename when the method name can't match
-    public CompensableActivity<Order, Order> stockReserver() { return new ReserveStock(wms); }
-}
-
-client.register(orders);                                    // the author publishes the topology
-worker.registerHandler(new OrderHandlers());                // the worker only implements steps
 ```
 
 `compensate` receives a `Compensation<A, B>` carrying **both snapshots of its step** (§4):

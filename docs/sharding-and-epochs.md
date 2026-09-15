@@ -70,8 +70,8 @@ assign to cells — they are *not* created when nodes or cells join.
 At mint time a cell spreads its new ids across the shards **it owns** (`server/CellPlacement.shardFor`
 → `IdCodec.shardFor`):
 
+<!-- snippet: id-codec/shard-for -->
 ```java
-// IdCodec: well-mixed hash of the ulid, reduced to the range (FNV-1a + murmur3 fmix64)
 public static long shardFor(String ulid, int ringSize) {
     return ringSize <= 1 ? 0 : Math.floorMod(hash64(ulid), ringSize);
 }

@@ -77,7 +77,8 @@ public final class Cookbook {
     public static final class LinearWithGate implements LinearGateSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+            // docs:begin linear-gate
+            FlowSpec spec = FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
                     .thenApply(s::normalise)
                     // classify returns a different record, so the context type changes here; every
                     // step after it must consume Classified, and the compiler holds that
@@ -85,6 +86,8 @@ public final class Cookbook {
                     // a false gate ends the instance successfully as "gated:eligible" -- not an error
                     .thenFilter(s::eligible)
                     .thenAccept(s::welcome));
+            // docs:end linear-gate
+            return spec;
         }
 
         public Signup normalise(Signup s) { return new Signup(s.email().trim().toLowerCase()); }
@@ -115,7 +118,8 @@ public final class Cookbook {
     public static final class ChooseThenFork implements ChooseForkSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
+            // docs:begin choose-fork
+            FlowSpec spec = FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
                 // the large arm fans out: a fan-out inside a choice arm is just a fan-out whose
                 // common point is the guard
                 var large = f.when(s::isLarge);
@@ -129,6 +133,8 @@ public final class Cookbook {
                 // both arms end at Purchase, which is what lets oneOf give back a Purchase
                 return Wiggle.oneOf(largeArm, standard).thenApply(s::settle);
             });
+            // docs:end choose-fork
+            return spec;
         }
 
         public boolean isLarge(Purchase p) { return p.amount() >= 1000; }
@@ -165,7 +171,8 @@ public final class Cookbook {
     public static final class ForEachAcrossQueues implements ForEachSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
+            // docs:begin foreach-queues
+            FlowSpec spec = FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
                     .defaultQueue("cpu")
                     .thenForEach(Basket::items, item -> item
                             .thenApply(s::price)
@@ -173,6 +180,8 @@ public final class Cookbook {
                             .thenApply(s::renderThumbnail, "gpu"))
                     .combine(s::collectItems)
                     .thenApply(s::summarise));
+            // docs:end foreach-queues
+            return spec;
         }
 
         public Item price(Item i) { return new Item(i.sku(), i.sku().length() * 100L); }
@@ -207,7 +216,8 @@ public final class Cookbook {
     public static final class PollUntilReady implements PollSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
+            // docs:begin poll-until-ready
+            FlowSpec spec = FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
                     // the body runs once, then the condition is evaluated -- do-while, not while-do
                     .repeatWhile(s::stillPending, b -> b
                             // a gate short-circuits to the loop's exit, not just the body: a
@@ -215,6 +225,8 @@ public final class Cookbook {
                             .thenFilter(s::notCancelled)
                             .thenApply(s::poll))
                     .thenApply(s::finish));
+            // docs:end poll-until-ready
+            return spec;
         }
 
         public boolean notCancelled(Job j) { return !j.cancelled(); }
@@ -242,7 +254,8 @@ public final class Cookbook {
     public static final class ApprovalWithEscalation implements ApprovalSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
+            // docs:begin approval-escalation
+            FlowSpec spec = FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
                 var waited = f
                         .thenApply(s::submit)
                         // no worker is held while it waits; if nobody signals in time the
@@ -255,6 +268,8 @@ public final class Cookbook {
 
                 return Wiggle.oneOf(escalated, approved);
             });
+            // docs:end approval-escalation
+            return spec;
         }
 
         public Expense submit(Expense e) { return new Expense("submitted"); }
@@ -283,7 +298,8 @@ public final class Cookbook {
     public static final class ChildCheckThenFork implements ParentSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
+            // docs:begin parent
+            FlowSpec spec = FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
                 var checked = f
                         // runs tcb-linear-gate as a child; its final context merges back here, which
                         // is why this continues as Classified
@@ -295,6 +311,8 @@ public final class Cookbook {
 
                 return Wiggle.allOf(provision, audit).combineWithContext(s::merge);
             });
+            // docs:end parent
+            return spec;
         }
 
         public boolean childPassed(Classified c) { return c.email() != null; }
@@ -325,12 +343,15 @@ public final class Cookbook {
     public static final class BatchedLoopWithCheckpoint implements BatchedSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
+            // docs:begin batched-loop
+            FlowSpec spec = FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
                     .execution(ExecutionMode.LOCAL_ASYNC)
                     .repeatWhile(s::moreBatches, b -> b
                             .thenApply(s::processBatch)
                             .checkpoint())   // flush the buffer before the next iteration
                     .thenApply(s::finalise));
+            // docs:end batched-loop
+            return spec;
         }
 
         public Batch processBatch(Batch b) { return new Batch(b.done() + 1); }
@@ -365,7 +386,8 @@ public final class Cookbook {
     public static final class KitchenSink implements KitchenSinkSteps {
 
         public FlowSpec spec() {
-            return FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
+            // docs:begin kitchen-sink
+            FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
                 var ready = f
                         .defaultQueue("default")
                         .execution(ExecutionMode.LOCAL_SYNC)
@@ -387,6 +409,8 @@ public final class Cookbook {
                         .repeatWhile(s::moreChecks, b -> b.thenApply(s::runCheck).checkpoint())
                         .thenApply(s::ship);
             });
+            // docs:end kitchen-sink
+            return spec;
         }
 
         public Basket intake(Basket b) { return b; }
