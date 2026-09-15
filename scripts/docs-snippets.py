@@ -51,6 +51,7 @@ SOURCES = {
     # the conformance cookbook: every spec the doc shows is one the test suite runs
     "cookbook": FIXTURES / "cookbook/Cookbook.java",
     "cookbook-contract": FIXTURES / "docs/CookbookContract.java",
+    "versioning": FIXTURES / "docs/VersioningSnippet.java",
     "saga": FIXTURES / "docs/SagaSnippet.java",
     "saga-handlers": FIXTURES / "docs/BookingHandlers.java",
     "saga-doc": FIXTURES / "docs/SagaDocSnippet.java",
