@@ -61,6 +61,12 @@ class DocSnippetsTest {
         EXPECTED.put("CellsSnippet.java", List.of("connect"));
     }
 
+    /** Regions the main repo's own docs draw on, beyond the site fixtures above. */
+    private static final Map<String, List<String>> DOC_SOURCES = Map.of(
+            "../example/src/main/java/com/wiggle/cookbook/Cookbook.java",
+            List.of("linear-gate", "choose-fork", "foreach-queues", "poll-until-ready",
+                    "approval-escalation", "parent", "batched-loop", "kitchen-sink"));
+
     private static final Path DIR = Path.of("../example/src/main/java/com/wiggle/docs");
 
     private static final Pattern BEGIN = Pattern.compile("^\\s*// docs:begin (\\S+)\\s*$");
@@ -184,6 +190,109 @@ class DocSnippetsTest {
         }
         assertTrue(in, "region '" + name + "' not found in " + file);
         return out.toString();
+    }
+
+    @Test @DisplayName("a doc's marked block matches its region -- hand-edit it and this fails")
+    void docsMatchTheirRegions() throws IOException {
+        int checked = 0;
+        for (Path doc : docs()) {
+            List<String> lines = Files.readAllLines(doc);
+            for (int i = 0; i < lines.size(); i++) {
+                Matcher m = Pattern.compile("^<!-- snippet: ([\\w-]+)/([\\w,-]+) -->$")
+                        .matcher(lines.get(i));
+                if (!m.matches()) continue;
+                assertTrue(i + 1 < lines.size() && lines.get(i + 1).startsWith("```"),
+                        doc + ":" + (i + 2) + ": marker is not followed by a fence");
+
+                List<String> shown = new ArrayList<>();
+                for (int j = i + 2; j < lines.size() && !lines.get(j).startsWith("```"); j++) {
+                    shown.add(lines.get(j));
+                }
+                String expected = String.join("\n", dedent(regionLines(sourcePath(m.group(1)),
+                        m.group(2).split(","))));
+                assertEquals(expected, String.join("\n", shown),
+                        doc + ": the block after <!-- snippet: " + m.group(1) + "/" + m.group(2)
+                        + " --> is not what that region says. Re-run scripts/docs-snippets.py; "
+                        + "the source owns this code, the markdown only displays it.");
+                checked++;
+            }
+        }
+        assertTrue(checked >= 8, "expected the cookbook's wired blocks at least; checked " + checked);
+    }
+
+    @Test @DisplayName("no java block anywhere in docs/ names an API that was removed")
+    void noDocBlockNamesARemovedApi() throws IOException {
+        // The net under the blocks that are not wired to source yet. It is a denylist, not a
+        // compiler -- but "a removed API is still quoted" is the exact failure that went unnoticed
+        // on the site for weeks, and a denylist catches that much without a toolchain.
+        List<String> gone = List.of(".compensate()", ".withRetry(", ".onQueue(", "Wiggle.graph",
+                                    "@Handlers(", "thenActivity", "thenSubWorkflow");
+        List<String> hits = new ArrayList<>();
+        for (Path doc : docs()) {
+            Matcher b = Pattern.compile("(?m)^```java\\n(.*?)^```", Pattern.DOTALL)
+                    .matcher(Files.readString(doc));
+            while (b.find()) {
+                for (String g : gone) {
+                    if (b.group(1).contains(g)) hits.add(doc.getFileName() + ": " + g);
+                }
+            }
+        }
+        assertEquals(List.of(), hits, "removed API quoted in docs/");
+    }
+
+    private static List<Path> docs() throws IOException {
+        try (Stream<Path> s = Files.list(Path.of("../docs"))) {
+            return s.filter(p -> p.toString().endsWith(".md")).sorted().toList();
+        }
+    }
+
+    private static Path sourcePath(String source) {
+        for (String p : DOC_SOURCES.keySet()) {
+            if (p.endsWith("/" + capitalise(source) + ".java")) return Path.of(p);
+        }
+        return DIR.resolve(capitalise(source) + "Snippet.java");
+    }
+
+    private static String capitalise(String s) {
+        StringBuilder b = new StringBuilder();
+        for (String part : s.split("-")) b.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
+        return b.toString();
+    }
+
+    /** The lines of one or more regions, joined by a blank line -- what the extractor emits. */
+    private static List<String> regionLines(Path file, String[] names) throws IOException {
+        List<String> all = new ArrayList<>();
+        for (String name : names) {
+            if (!all.isEmpty()) all.add("");
+            List<String> lines = Files.readAllLines(file);
+            boolean in = false, skipping = false;
+            List<String> body = new ArrayList<>();
+            for (String line : lines) {
+                Matcher b = BEGIN.matcher(line);
+                if (b.matches() && b.group(1).equals(name)) { in = true; continue; }
+                Matcher e = END.matcher(line);
+                if (e.matches() && e.group(1).equals(name)) break;
+                if (!in) continue;
+                if (SKIP.matcher(line).matches()) skipping = true;
+                else if (RESUME.matcher(line).matches()) skipping = false;
+                else if (!skipping) body.add(line);
+            }
+            assertTrue(in, "region '" + name + "' not found in " + file);
+            all.addAll(dedent(body));
+        }
+        return all;
+    }
+
+    /** Mirrors dedent() in the extractor scripts. */
+    private static List<String> dedent(List<String> lines) {
+        List<String> ls = new ArrayList<>(lines);
+        while (!ls.isEmpty() && ls.get(0).isBlank()) ls.remove(0);
+        while (!ls.isEmpty() && ls.get(ls.size() - 1).isBlank()) ls.remove(ls.size() - 1);
+        int pad = ls.stream().filter(l -> !l.isBlank())
+                .mapToInt(l -> l.length() - l.stripLeading().length()).min().orElse(0);
+        List<String> out = new ArrayList<>(ls.size());
+        for (String l : ls) out.add(l.isBlank() ? "" : l.substring(pad));
+        return out;
     }
 
     /** Kept so the set above cannot silently become empty. */

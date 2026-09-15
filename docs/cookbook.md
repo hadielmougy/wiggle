@@ -51,8 +51,9 @@ on:
 The smallest useful pipeline: two transforms, a filter, and a side effect — and a context type that
 changes half way through.
 
+<!-- snippet: cookbook/linear-gate -->
 ```java
-FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
         .thenApply(s::normalise)
         // classify returns a different record, so the context type changes here; every
         // step after it must consume Classified, and the compiler holds that
@@ -70,12 +71,14 @@ method); the context is unchanged.
 
 An exclusive branch whose arm itself fans out.
 
+<!-- snippet: cookbook/choose-fork -->
 ```java
-FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
     // the large arm fans out: a fan-out inside a choice arm is just a fan-out whose
     // common point is the guard
-    var large  = f.when(s::isLarge);
-    var fraud  = large.thenApply(s::fraudCheck, RetryPolicy.exponential(3, Duration.ofMillis(50)));
+    var large = f.when(s::isLarge);
+    var fraud = large.thenApply(s::fraudCheck,
+            RetryPolicy.exponential(3, Duration.ofMillis(50)));
     var notice = large.thenAccept(s::managerNotice);
     var largeArm = Wiggle.allOf(fraud, notice).combineWithContext(s::largeMerge);
 
@@ -102,8 +105,9 @@ guard holds, otherwise skip past it". A single-armed `allOf` is not: there is no
 
 Dynamic fan-out with mixed worker pools. The element *is* each branch's context.
 
+<!-- snippet: cookbook/foreach-queues -->
 ```java
-FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
         .defaultQueue("cpu")
         .thenForEach(Basket::items, item -> item
                 .thenApply(s::price)
@@ -131,8 +135,9 @@ deduplicates, a `Map` is keyed like the input.
 
 Poll-until-ready, with an inner gate short-circuiting a cancelled job.
 
+<!-- snippet: cookbook/poll-until-ready -->
 ```java
-FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
         // the body runs once, then the condition is evaluated -- do-while, not while-do
         .repeatWhile(s::stillPending, b -> b
                 // a gate short-circuits to the loop's exit, not just the body: a
@@ -150,8 +155,9 @@ instance with an error naming the loop, rather than spinning forever.
 
 Wait for a signal, and branch on how the wait resolved.
 
+<!-- snippet: cookbook/approval-escalation -->
 ```java
-FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
     var waited = f
             .thenApply(s::submit)
             // no worker is held while it waits; if nobody signals in time the
@@ -160,7 +166,7 @@ FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (
                     esc -> esc.thenApply(s::autoEscalate));
 
     var escalated = waited.when(s::wasEscalated).thenAccept(s::notifyDirector);
-    var approved  = waited.otherwise().thenAccept(s::notifySubmitter);
+    var approved = waited.otherwise().thenAccept(s::notifySubmitter);
 
     return Wiggle.oneOf(escalated, approved);
 });
@@ -174,8 +180,9 @@ timeout instead of running an escalation branch.
 
 Compose a registered child workflow into a bigger one.
 
+<!-- snippet: cookbook/parent -->
 ```java
-FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
     var checked = f
             // runs tcb-linear-gate as a child; its final context merges back here, which
             // is why this continues as Classified
@@ -183,7 +190,7 @@ FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
             .thenFilter(s::childPassed);
 
     var provision = checked.thenApply(s::provision);
-    var audit     = checked.thenAccept(s::audit);
+    var audit = checked.thenAccept(s::audit);
 
     return Wiggle.allOf(provision, audit).combineWithContext(s::merge);
 });
@@ -197,8 +204,9 @@ child's final context, which is why the `Class` argument says what to continue a
 
 Batched local execution with an explicit flush.
 
+<!-- snippet: cookbook/batched-loop -->
 ```java
-FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_ASYNC)
         .repeatWhile(s::moreBatches, b -> b
                 .thenApply(s::processBatch)
@@ -216,17 +224,19 @@ buffer to commit at that point — the escape hatch for a step that must not be 
 A gate, a sub-workflow, a `oneOf` whose arms fan out and fan over a collection, a timed await with
 escalation, a checkpointed loop.
 
+<!-- snippet: cookbook/kitchen-sink -->
 ```java
-FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
     var ready = f
             .defaultQueue("default")
             .execution(ExecutionMode.LOCAL_SYNC)
             .thenApply(s::intake)
             .thenFilter(s::hasItems);
 
-    var vip    = ready.when(s::isVip);
-    var packed = vip.thenApply(s::pack, RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing");
-    var held   = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept(s::notice);
+    var vip = ready.when(s::isVip);
+    var packed = vip.thenApply(s::pack,
+            RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing");
+    var held = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept(s::notice);
     var vipArm = Wiggle.allOf(packed, held).combineWithContext(s::priorityMerge);
 
     var standard = ready.otherwise()
