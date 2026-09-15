@@ -48,8 +48,9 @@ notify service — each deployed, scaled, and secured on its own.
 The queue is a trailing argument on a step (and on effects/gates). Or set a `defaultQueue` for every
 step after it. Unset ⇒ the queue is the **workflow name**.
 
+<!-- snippet: queues/topology -->
 ```java
-FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+FlowSpec orders = FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
         .thenApply(s::validate)                    // queue "orders" (the default)
         .thenApply(s::charge, "payments")          // queue "payments"
         .thenApply(s::renderReceipt, "gpu")        // queue "gpu"
@@ -72,6 +73,7 @@ workflows mention. (It does not publish the topology — the author does; the wo
 by name to validate its handlers against.) `withQueues(...)` restricts what it serves — that's how
 you build a specialized service:
 
+<!-- snippet: queues/specialised-worker -->
 ```java
 // gpu-render-pool: a service that ONLY runs the "gpu" steps
 Worker gpu = new Worker(client, "gpu-1",
@@ -80,6 +82,7 @@ Worker gpu = new Worker(client, "gpu-1",
         .start();
 ```
 
+<!-- snippet: queues/general-worker -->
 ```java
 // order-service: default = serve every queue its bound steps live on
 Worker general = new Worker(client, "order-1").registerHandler(new OrderHandlers()).start();

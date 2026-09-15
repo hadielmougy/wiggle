@@ -59,13 +59,29 @@ class DocSnippetsTest {
         EXPECTED.put("RetriesHandlers.java", List.of("gate-handler", "poll-handlers"));
         EXPECTED.put("ScheduledSnippet.java", List.of("contract", "topology"));
         EXPECTED.put("CellsSnippet.java", List.of("connect"));
+        // the main repo's own docs
+        EXPECTED.put("CookbookContract.java", List.of("contract"));
+        EXPECTED.put("SagaDocSnippet.java", List.of("contract", "topology"));
+        EXPECTED.put("CapturePayment.java", List.of("activity"));
+        EXPECTED.put("SagaDocHandlers.java", List.of("handlers"));
+        EXPECTED.put("QueuesSnippet.java", List.of("topology", "specialised-worker", "general-worker"));
+        EXPECTED.put("LocalExecutionSnippet.java", List.of("execution-mode"));
+        EXPECTED.put("onboarding/OnboardingSnippet.java",
+                List.of("contract", "register-line", "topology", "client-lifecycle",
+                        "start-by-name", "version-pinning", "worker-options"));
+        EXPECTED.put("onboarding/OrderHandlers.java", List.of("handlers"));
+        EXPECTED.put("decode/OrderHandlers.java", List.of("decode"));
     }
 
     /** Regions the main repo's own docs draw on, beyond the site fixtures above. */
     private static final Map<String, List<String>> DOC_SOURCES = Map.of(
             "../example/src/main/java/com/wiggle/cookbook/Cookbook.java",
             List.of("linear-gate", "choose-fork", "foreach-queues", "poll-until-ready",
-                    "approval-escalation", "parent", "batched-loop", "kitchen-sink"));
+                    "approval-escalation", "parent", "batched-loop", "kitchen-sink"),
+            // docs that quote the implementation itself, so the quote cannot drift from it
+            "../core/src/main/java/com/wiggle/core/IdCodec.java", List.of("shard-for"),
+            "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java",
+            List.of("resolve", "invalidate"));
 
     private static final Path DIR = Path.of("../example/src/main/java/com/wiggle/docs");
 
@@ -73,6 +89,7 @@ class DocSnippetsTest {
     private static final Pattern END = Pattern.compile("^\\s*// docs:end (\\S+)\\s*$");
     private static final Pattern SKIP = Pattern.compile("^\\s*// docs:skip\\s*$");
     private static final Pattern RESUME = Pattern.compile("^\\s*// docs:resume\\s*$");
+    private static final Pattern ELIDE = Pattern.compile("^(\\s*)// docs:elide(?: (.*))?\\s*$");
 
     private static Path fixture(String name) {
         Path p = DIR.resolve(name);
@@ -129,10 +146,10 @@ class DocSnippetsTest {
     @Test @DisplayName("no fixture carries a region no page asks for, and none is missing")
     void theFixtureSetMatchesWhatTheSiteAsksFor() throws IOException {
         Set<String> withRegions = new TreeSet<>();
-        try (Stream<Path> files = Files.list(DIR)) {
+        try (Stream<Path> files = Files.walk(DIR)) {
             for (Path p : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 if (Files.readString(p).contains("// docs:begin")) {
-                    withRegions.add(p.getFileName().toString());
+                    withRegions.add(DIR.relativize(p).toString());
                 }
             }
         }
@@ -184,9 +201,13 @@ class DocSnippetsTest {
             Matcher e = END.matcher(line);
             if (e.matches() && e.group(1).equals(name)) break;
             if (!in) continue;
+            Matcher el = ELIDE.matcher(line);
             if (SKIP.matcher(line).matches()) skipping = true;
             else if (RESUME.matcher(line).matches()) skipping = false;
-            else if (!skipping) out.append(line).append('\n');
+            else if (el.matches()) {
+                if (!skipping) out.append(el.group(1))
+                        .append(el.group(2) == null ? "..." : el.group(2)).append('\n');
+            } else if (!skipping) out.append(line).append('\n');
         }
         assertTrue(in, "region '" + name + "' not found in " + file);
         return out.toString();
@@ -246,11 +267,30 @@ class DocSnippetsTest {
         }
     }
 
+    /** Mirrors SOURCES in the two extractor scripts: marker name -> the file that owns it. */
+    private static final Map<String, String> SOURCE_FILES = Map.ofEntries(
+            Map.entry("cookbook", "../example/src/main/java/com/wiggle/cookbook/Cookbook.java"),
+            Map.entry("cookbook-contract", "docs/CookbookContract.java"),
+            Map.entry("saga", "docs/SagaSnippet.java"),
+            Map.entry("saga-handlers", "docs/BookingHandlers.java"),
+            Map.entry("saga-doc", "docs/SagaDocSnippet.java"),
+            Map.entry("saga-doc-activity", "docs/CapturePayment.java"),
+            Map.entry("saga-doc-handlers", "docs/SagaDocHandlers.java"),
+            Map.entry("onboarding", "docs/onboarding/OnboardingSnippet.java"),
+            Map.entry("onboarding-handlers", "docs/onboarding/OrderHandlers.java"),
+            Map.entry("decode", "docs/decode/OrderHandlers.java"),
+            Map.entry("queues", "docs/QueuesSnippet.java"),
+            Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
+            Map.entry("id-codec", "../core/src/main/java/com/wiggle/core/IdCodec.java"),
+            Map.entry("coordinated-connection",
+                    "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java"));
+
     private static Path sourcePath(String source) {
-        for (String p : DOC_SOURCES.keySet()) {
-            if (p.endsWith("/" + capitalise(source) + ".java")) return Path.of(p);
-        }
-        return DIR.resolve(capitalise(source) + "Snippet.java");
+        String path = SOURCE_FILES.get(source);
+        assertTrue(path != null, "unknown snippet source '" + source + "' -- the docs name it but "
+                + "this test does not know it; scripts/docs-snippets.py must know it too");
+        return path.startsWith("../") ? Path.of(path)
+                : Path.of("../example/src/main/java/com/wiggle").resolve(path);
     }
 
     private static String capitalise(String s) {
@@ -273,9 +313,12 @@ class DocSnippetsTest {
                 Matcher e = END.matcher(line);
                 if (e.matches() && e.group(1).equals(name)) break;
                 if (!in) continue;
+                Matcher el = ELIDE.matcher(line);
                 if (SKIP.matcher(line).matches()) skipping = true;
                 else if (RESUME.matcher(line).matches()) skipping = false;
-                else if (!skipping) body.add(line);
+                else if (el.matches()) {
+                    if (!skipping) body.add(el.group(1) + (el.group(2) == null ? "..." : el.group(2)));
+                } else if (!skipping) body.add(line);
             }
             assertTrue(in, "region '" + name + "' not found in " + file);
             all.addAll(dedent(body));
@@ -295,11 +338,47 @@ class DocSnippetsTest {
         return out;
     }
 
+    /**
+     * The blocks that are deliberately NOT wired, and why. Pinned so neither side drifts: nobody
+     * "fixes" one of these by pointing it at source it must not quote, and no new hand-written block
+     * appears without a decision being made about it.
+     */
+    private static final Map<String, String> UNWIRED = Map.of(
+            "ring-immutability-guard.md", "quotes the code as it was BEFORE the guard, to show the "
+                    + "bug -- wiring it to today's source would erase the point",
+            "sharding-and-epochs.md", "shows a wrong fallback (\"would wrap to the WRONG cell\") that "
+                    + "must not exist in the repo",
+            "local-execution.md", "an abridged signature sketch of GraphTraversal -- methods with no "
+                    + "bodies, which is a summary, not source",
+            "saga-compensation.md", "a record sketch of the wire model, not a compilable declaration");
+
+    @Test @DisplayName("only the blocks that must stay hand-written are unwired, and we know which")
+    void unwiredBlocksAreTheOnesWeChose() throws IOException {
+        Map<String, Integer> unwired = new LinkedHashMap<>();
+        for (Path doc : docs()) {
+            List<String> lines = Files.readAllLines(doc);
+            for (int i = 0; i < lines.size(); i++) {
+                if (!lines.get(i).startsWith("```java")) continue;
+                boolean marked = i > 0 && lines.get(i - 1).startsWith("<!-- snippet:");
+                if (!marked) {
+                    unwired.merge(doc.getFileName().toString(), 1, Integer::sum);
+                }
+            }
+        }
+        assertEquals(UNWIRED.keySet(), unwired.keySet(),
+                "a doc gained a hand-written java block, or lost the one it was allowed. Wire it to "
+                + "compiled source, or add it to UNWIRED with the reason it cannot be.");
+        for (String doc : unwired.keySet()) {
+            assertEquals(1, unwired.get(doc), doc + " is allowed exactly one hand-written block ("
+                    + UNWIRED.get(doc) + ")");
+        }
+    }
+
     /** Kept so the set above cannot silently become empty. */
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(13, EXPECTED.size(), "every site-only page with Java should have a fixture");
+        assertEquals(22, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }

@@ -124,9 +124,11 @@ public final class CoordinatedConnection implements AutoCloseable {
 
     /** Drop cached instance-resolutions for a namespace -- call after a cell RPC fails with
      *  UNAVAILABLE/NOT_FOUND so the next operate-by-id re-resolves. */
+    // docs:begin invalidate
     public void invalidate(String namespace) {
         byShard.keySet().removeIf(k -> k.startsWith(namespace + "|"));
     }
+    // docs:end invalidate
 
     /** Resolves where a NEW instance of a namespace should start. Not cached: the coordinator spreads new
      *  starts across the ring, so resolving per start is what distributes them across cells/shards. */
@@ -137,6 +139,7 @@ public final class CoordinatedConnection implements AutoCloseable {
 
     /** Resolves the cell that owns an existing instance, by its baked-in epoch+shard. Cached by
      *  (namespace, epoch, shard) -- bounded, since every instance on a shard shares one cell. */
+    // docs:begin resolve
     private Endpoint resolveInstance(String instanceId) {
         IdCodec.Placement p = IdCodec.parse(instanceId).orElseThrow(() -> new IllegalArgumentException(
                 "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"));
@@ -150,6 +153,7 @@ public final class CoordinatedConnection implements AutoCloseable {
         byShard.put(key, new Cached(e, System.nanoTime() + ttlNanos));
         return e;
     }
+    // docs:end resolve
 
     /**
      * Runs a coordinator RPC with the shared UNAVAILABLE retry ({@link RpcRetry}) — so resolution and

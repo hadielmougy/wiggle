@@ -66,13 +66,21 @@ not: node failover within a cell changes the address list. So the TTL bounds **e
 mapping staleness. The client uses `max(1s, Endpoint.ttl_seconds)` — a coordinator-sent `ttl_seconds`
 of 0 is floored to 1 s, never treated as "cache forever".
 
+<!-- snippet: coordinated-connection/resolve -->
 ```java
-// CoordinatedConnection.resolveInstance
-Cached c = byShard.get(key);
-if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();   // hit
-ResolveResponse r = coord.resolve(/* by instance_id */);
-long ttlNanos = Math.max(1, e.getTtlSeconds()) * 1_000_000_000L;             // 0 -> 1s floor
-byShard.put(key, new Cached(e, System.nanoTime() + ttlNanos));
+private Endpoint resolveInstance(String instanceId) {
+    IdCodec.Placement p = IdCodec.parse(instanceId).orElseThrow(() -> new IllegalArgumentException(
+            "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"));
+    String key = p.namespace() + "|e" + p.epoch() + "|s" + p.shard();
+    Cached c = byShard.get(key);
+    if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();
+    ResolveResponse r = coordCall(() -> coord.resolve(ResolveRequest.newBuilder()
+            .setInstanceId(instanceId).setCallerRegion(nz(callerRegion)).build()));
+    Endpoint e = r.getEndpoint();
+    long ttlNanos = Math.max(1, e.getTtlSeconds()) * 1_000_000_000L;
+    byShard.put(key, new Cached(e, System.nanoTime() + ttlNanos));
+    return e;
+}
 ```
 
 ---
@@ -82,6 +90,7 @@ byShard.put(key, new Cached(e, System.nanoTime() + ttlNanos));
 TTL expiry is the passive path; the active path is `invalidate(namespace)`, which drops every cached
 instance-resolution for a namespace:
 
+<!-- snippet: coordinated-connection/invalidate -->
 ```java
 public void invalidate(String namespace) {
     byShard.keySet().removeIf(k -> k.startsWith(namespace + "|"));

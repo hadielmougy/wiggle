@@ -16,6 +16,7 @@ its handlers, runs one instance of each, and prints the resulting context.
 
 Each recipe is an **interface** declaring its steps, and a class implementing them:
 
+<!-- snippet: cookbook-contract/contract -->
 ```java
 public interface LinearGateSteps {
     Signup     normalise(Signup s);
@@ -25,7 +26,9 @@ public interface LinearGateSteps {
 }
 
 @ForFlow("tcb-linear-gate")
-public static final class LinearWithGate implements LinearGateSteps { … }
+public static final class LinearWithGate implements LinearGateSteps {
+    ...
+}
 ```
 
 The spec names its steps **through the interface** — `s::normalise`, never an implementation —

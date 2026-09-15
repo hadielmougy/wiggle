@@ -181,13 +181,14 @@ in where the step names come from.
 name them through it, and the compiler checks that every step consumes what the one before it
 produced, while a rename carries the step name with it:
 
+<!-- snippet: onboarding/contract,topology -->
 ```java
 interface OrderSteps {
     Order   validate(Order o);
     boolean inStock(Order o);
     Order   authorise(Order o);
     Order   merge(@Context Order base, Order payment, Order shipping);
-    ...
+        ...
 }
 
 FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
@@ -227,17 +228,19 @@ A topology written where its handlers are not — registered by an author with n
 its classpath, or served by several independent workers that each bind a subset — declares the
 interface and stops there:
 
+<!-- snippet: onboarding/contract,register-line -->
 ```java
-public interface OrderSteps {
+interface OrderSteps {
     Order   validate(Order o);
     boolean inStock(Order o);
     Order   authorise(Order o);
-    Order   capture(Order o);
-    // ...
+    Order   merge(@Context Order base, Order payment, Order shipping);
+        ...
 }
 
 // the author registers this without implementing a single step
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
+FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class,
+                (f, s) -> { … });
 ```
 
 The step logic is a separate class annotated `@ForFlow("<workflow-name>")`, bound on a worker by
@@ -246,6 +249,7 @@ is a handler; its signature defines the step — one parameter is the input (dec
 `boolean` return is a gate, `void` is an effect, any other return is a task whose value becomes the
 next context (types may change from step to step, like `Stream.map`):
 
+<!-- snippet: onboarding-handlers/handlers -->
 ```java
 @ForFlow("order-fulfilment")
 class OrderHandlers {
@@ -253,7 +257,7 @@ class OrderHandlers {
     public boolean inStock(Order o)   { return o.quantity() > 0; }        // gate
     public Order   authorise(Order o) { return o.withPaymentRef(auth(o)); }
     public Order   capture(Order o)   { return o.log("captured"); }
-    public Order   reserve(Order o)   { return o.withShipmentRef(reserve(o)); }
+    public Order   reserve(Order o)   { return o.withShipmentRef(reserveRef(o)); }
     public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
     public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
 }
@@ -300,23 +304,25 @@ raw JSON (`Map<String, Object>`) and returns the current type, running instead o
 wherever a step or combine parameter of that type is bound. It's the seam for schema-version upcasts
 or a bespoke codec:
 
+<!-- snippet: decode/decode -->
 ```java
 @ForFlow("order-fulfilment")
 class OrderHandlers {
     @Decode
     public Order load(Map<String, Object> raw) {     // upcast an older shape to the current Order
         raw.putIfAbsent("currency", "USD");           // e.g. default a field added in a later version
-        return RecordMapper.fromJson(raw, Order.class);
+        return (Order) RecordMapper.fromJson(raw, Order.class);
     }
-    // ... step methods, which now receive the upcast Order ...
+        // ... step methods, which now receive the upcast Order ...
 }
 ```
 
 ### 5.2 Running instances
 
+<!-- snippet: onboarding/client-lifecycle -->
 ```java
 try (WiggleClient client = new WiggleClient("localhost:8080")) {
-    String id = client.start(orders, Order.of(...));                       // same-JVM convenience: by FlowSpec
+    String id = client.start(orders, Order.of("A-1001"));                  // same-JVM convenience: by FlowSpec
     InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(30));   // COMPLETED | FAILED | CANCELLED
     client.cancel(id, "reason");
 }
@@ -326,6 +332,7 @@ try (WiggleClient client = new WiggleClient("localhost:8080")) {
 the FlowSpec or any shared artifact: the graph is data the server owns, so the submitter's whole
 contract is the workflow **name** plus the agreed context shape (document it like any API schema).
 
+<!-- snippet: onboarding/start-by-name -->
 ```java
 String id = client.start("order-fulfilment", Map.of("orderId", "A-1001", "quantity", 3L));
 
@@ -347,6 +354,7 @@ or never, if they pin.
 version of the workflow they bind, which is almost always what you want: step names are stable
 across versions, so one implementation covers them all. Pass a version to narrow that:
 
+<!-- snippet: onboarding/version-pinning -->
 ```java
 new Worker(client, "service-a").registerHandler(new OrderHandlers(), v1.version());  // claims only v1
 new Worker(client, "service-b").registerHandler(new OrderHandlers(), v2.version());  // claims only v2
@@ -422,6 +430,7 @@ benchmark numbers: `docs/local-execution.md`.
 
 ### 6.5 Worker — `WorkerOptions` (programmatic)
 
+<!-- snippet: onboarding/worker-options -->
 ```java
 new Worker(client, "worker-1", WorkerOptions.defaults()
         .withConcurrency(16)
