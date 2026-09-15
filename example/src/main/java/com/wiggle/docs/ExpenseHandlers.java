@@ -1,12 +1,13 @@
 package com.wiggle.docs;
 
+import com.wiggle.docs.ApprovalSnippet.ExpenseSteps;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.docs.ApprovalSnippet.Expense;
 
 /** The handler half of <a href="https://wiggle.sh/patterns/approval/">wiggle.sh/patterns/approval</a>. */
 // docs:begin handlers
 @ForFlow("expense-approval")
-class ExpenseHandlers {
+class ExpenseHandlers implements ExpenseSteps {
     // docs:skip
     private Mail mail;
 

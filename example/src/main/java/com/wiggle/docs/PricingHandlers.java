@@ -1,5 +1,6 @@
 package com.wiggle.docs;
 
+import com.wiggle.docs.FanOutSnippet.PricingSteps;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
@@ -13,7 +14,7 @@ import java.util.List;
 /** The handler half of <a href="https://wiggle.sh/patterns/fan-out/">wiggle.sh/patterns/fan-out</a>. */
 // docs:begin handlers
 @ForFlow("price-order")
-class PricingHandlers {
+class PricingHandlers implements PricingSteps {
     // docs:skip
     private Repo repo;
 

@@ -71,6 +71,9 @@ class DocSnippetsTest {
                         "start-by-name", "version-pinning", "worker-options"));
         EXPECTED.put("onboarding/OrderHandlers.java", List.of("handlers"));
         EXPECTED.put("decode/OrderHandlers.java", List.of("decode"));
+        // the tutorial -- also run end to end by TutorialTest
+        EXPECTED.put("../tutorial/Orders.java", List.of("records", "contract", "topology", "main"));
+        EXPECTED.put("../tutorial/OrderHandlers.java", List.of("handlers"));
     }
 
     /** Regions the main repo's own docs draw on, beyond the site fixtures above. */
@@ -92,7 +95,8 @@ class DocSnippetsTest {
     private static final Pattern ELIDE = Pattern.compile("^(\\s*)// docs:elide(?: (.*))?\\s*$");
 
     private static Path fixture(String name) {
-        Path p = DIR.resolve(name);
+        // a "../" key reaches a sibling package (the tutorial lives in com.wiggle.tutorial)
+        Path p = DIR.resolve(name).normalize();
         assertTrue(Files.exists(p), "fixture not found at " + p.toAbsolutePath()
                 + " -- if it moved, wiggle-site's scripts/snippets.py must move with it");
         return p;
@@ -153,7 +157,11 @@ class DocSnippetsTest {
                 }
             }
         }
-        assertEquals(new TreeSet<>(EXPECTED.keySet()), withRegions,
+        Set<String> expectedHere = new TreeSet<>();
+        for (String k : EXPECTED.keySet()) {
+            if (!k.startsWith("../")) expectedHere.add(k);   // "../" keys live outside this package
+        }
+        assertEquals(expectedHere, withRegions,
                 "a fixture gained or lost docs regions without the site being told");
     }
 
@@ -279,6 +287,8 @@ class DocSnippetsTest {
             Map.entry("onboarding", "docs/onboarding/OnboardingSnippet.java"),
             Map.entry("onboarding-handlers", "docs/onboarding/OrderHandlers.java"),
             Map.entry("decode", "docs/decode/OrderHandlers.java"),
+            Map.entry("tutorial", "tutorial/Orders.java"),
+            Map.entry("tutorial-handlers", "tutorial/OrderHandlers.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
             Map.entry("id-codec", "../core/src/main/java/com/wiggle/core/IdCodec.java"),
@@ -378,7 +388,7 @@ class DocSnippetsTest {
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(22, EXPECTED.size(), "every wired page and doc should have a fixture");
+        assertEquals(24, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }

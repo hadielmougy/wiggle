@@ -1,5 +1,6 @@
 package com.wiggle.docs;
 
+import com.wiggle.docs.SagaSnippet.BookingSteps;
 import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.client.worker.Compensation;
 import com.wiggle.client.worker.ForFlow;
@@ -20,7 +21,7 @@ import com.wiggle.docs.SagaSnippet.Booking;
  */
 // docs:begin handlers
 @ForFlow("booking")
-class BookingHandlers {
+class BookingHandlers implements BookingSteps {
     // docs:skip
     private Wms wms;
     private Gateway gateway;
