@@ -59,6 +59,8 @@ class DocSnippetsTest {
         EXPECTED.put("RetriesHandlers.java", List.of("gate-handler", "poll-handlers"));
         EXPECTED.put("ScheduledSnippet.java", List.of("contract", "topology"));
         EXPECTED.put("CellsSnippet.java", List.of("connect"));
+        EXPECTED.put("VersioningSnippet.java",
+                List.of("contract-v1", "topology-v1", "topology-v2", "start", "scoped-workers", "decode"));
         // the main repo's own docs
         EXPECTED.put("CookbookContract.java", List.of("contract"));
         EXPECTED.put("SagaDocSnippet.java", List.of("contract", "topology"));
@@ -283,6 +285,7 @@ class DocSnippetsTest {
             Map.entry("cookbook", "../example/src/main/java/com/wiggle/cookbook/Cookbook.java"),
             Map.entry("cookbook-contract", "docs/CookbookContract.java"),
             Map.entry("saga", "docs/SagaSnippet.java"),
+            Map.entry("versioning", "docs/VersioningSnippet.java"),
             Map.entry("saga-handlers", "docs/BookingHandlers.java"),
             Map.entry("saga-doc", "docs/SagaDocSnippet.java"),
             Map.entry("saga-doc-activity", "docs/CapturePayment.java"),
@@ -394,7 +397,7 @@ class DocSnippetsTest {
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(27, EXPECTED.size(), "every wired page and doc should have a fixture");
+        assertEquals(28, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }
