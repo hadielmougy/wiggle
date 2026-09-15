@@ -366,14 +366,30 @@ final class GraphBuilder {
         return this;
     }
 
+    /**
+     * The two shapes a choice cannot have, rejected in the caller's vocabulary rather than the
+     * builder's -- {@code oneOf} is the only way here, so an author reading this wrote arms, not
+     * cases.
+     *
+     * @return whether the last arm is the unguarded default
+     */
     private boolean validateChoose(List<Case> cases) {
-        if (cases.isEmpty()) throw new IllegalArgumentException("choose needs at least one case");
+        if (cases.isEmpty()) throw new IllegalArgumentException("oneOf needs at least one arm");
         for (int i = 0; i < cases.size() - 1; i++) {
-            if (!cases.get(i).guarded()) throw new IllegalArgumentException("otherwise() must be the last case");
+            if (!cases.get(i).guarded()) {
+                throw new IllegalArgumentException(
+                        "otherwise() must be the last arm of oneOf, and there can only be one: guards "
+                        + "are evaluated in the order the arms are given and the first to hold wins, "
+                        + "so an arm after otherwise() could never run. Arm " + (i + 1) + " of "
+                        + cases.size() + " is otherwise().");
+            }
         }
         boolean hasDefault = !cases.get(cases.size() - 1).guarded();
         if (hasDefault && cases.size() == 1) {
-            throw new IllegalArgumentException("choose needs at least one guarded case");
+            throw new IllegalArgumentException(
+                    "oneOf needs at least one when(...) arm beside otherwise(): otherwise() runs when "
+                    + "no guard held, so on its own there is no guard for it to be the alternative to "
+                    + "-- it would always run, which is the straight line you already had.");
         }
         return hasDefault;
     }
