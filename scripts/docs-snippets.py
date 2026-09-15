@@ -52,6 +52,7 @@ SOURCES = {
     "cookbook": FIXTURES / "cookbook/Cookbook.java",
     "cookbook-contract": FIXTURES / "docs/CookbookContract.java",
     "versioning": FIXTURES / "docs/VersioningSnippet.java",
+    "errors": FIXTURES / "docs/ErrorHandlingSnippet.java",
     "saga": FIXTURES / "docs/SagaSnippet.java",
     "saga-handlers": FIXTURES / "docs/BookingHandlers.java",
     "saga-doc": FIXTURES / "docs/SagaDocSnippet.java",
