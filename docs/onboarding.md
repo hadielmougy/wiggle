@@ -85,6 +85,20 @@ per-artifact pins), and **`wiggle-client-all`** (the client shaded into one jar 
 and Guava relocated under `com.wiggle.shaded`, so it has **zero transitive dependencies** and can't
 clash with anything already on the classpath). See the README's install section for snippets.
 
+**Do not put `wiggle-client-all` on a classpath that also has `wiggle-server`.** The shaded jar
+carries the generated `com.wiggle.proto` stubs compiled against the relocated gRPC; `wiggle-server`
+brings the same stubs compiled against the real one. Two copies, and whichever wins decides — the
+server then registers a service the gRPC builder does not recognise:
+
+```text
+java.lang.ClassCastException: class com.wiggle.server.grpc.GrpcApi
+    cannot be cast to class io.grpc.BindableService
+```
+
+The rule is which side of the wire you are on. **Talking to a server** (a submitter, a worker) —
+`wiggle-client-all`, and nothing else needed. **Hosting the engine in your own JVM** — the unshaded
+modules: `wiggle-client` plus the storage module you want, aligned by `wiggle-bom`.
+
 ---
 
 ## 4. Running it
