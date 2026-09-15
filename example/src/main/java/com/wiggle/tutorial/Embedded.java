@@ -16,6 +16,11 @@ import java.util.List;
  * Tutorial 1: the server embedded in your own JVM, on your own database. One process, one main
  * method. See {@link Orders} for the flow it runs and why this lives as compiled source.
  *
+ * <p>An embedding app must use the <em>unshaded</em> modules -- {@code wiggle-client} plus a storage
+ * module -- not {@code wiggle-client-all}. The shaded jar carries {@code com.wiggle.proto} compiled
+ * against a relocated gRPC, and {@code wiggle-server} carries it compiled against the real one; both
+ * on one classpath is a ClassCastException when the server registers its service.
+ *
  * <p>Storage is an explicit factory rather than classpath discovery.
  * {@link PostgresStorageFactory} is the mapping the project ships and it arrives with
  * {@code wiggle-postgres}, so an embedding app needs no more than that -- and {@code StorageFactory}
