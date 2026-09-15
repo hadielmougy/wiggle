@@ -117,10 +117,10 @@ One codebase, four postures — start embedded, end sharded, **without rewriting
 
 | Mode | What it is | When |
 |---|---|---|
-| **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store | dev, tests, single-process apps |
-| **Standalone server** | one node, gRPC `:8080`, in-memory or a database | small services, first deploy |
-| **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery | production, HA |
-| **Cellular (sharded)** | many cells (each its own DB + cluster) behind a **coordinator** | multi-tenant isolation, scale-out |
+| **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store |
+| **Standalone server** | one node, gRPC `:8080`, in-memory or a database |
+| **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery |
+| **Cellular (sharded)** | many cells (each its own DB + cluster) behind a **coordinator** |
 
 ### 2.1 Embedded — one JVM, zero infrastructure
 
@@ -358,8 +358,8 @@ Dynamic fan-out is just as explicit — **the element is the item's context** (`
 elements the way `fork` transforms contexts):
 
 ```java
-.thenForEach("items", Item.class, item -> item.thenApply(s::price))   // one isolated branch per element
-        .combine("collect")
+.thenForEach(Order::items, item -> item.thenApply(s::price))   // one isolated branch per element
+        .combine(s::collect) 
 
 Priced price(LineItem line) {                       // the parameter IS the element
     Order base = Step.base(Order.class);            // frozen pre-forEach context, read-only
