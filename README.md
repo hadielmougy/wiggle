@@ -116,7 +116,7 @@ steps it serves:
 One codebase, four postures — start embedded, end sharded, **without rewriting your workflows**.
 
 | Mode | What it is |
-|---|---|---|
+|---|---|
 | **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store |
 | **Standalone server** | one node, gRPC `:8080`, in-memory or a database |
 | **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery |
