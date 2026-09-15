@@ -14,6 +14,10 @@ dependencies {
     // :postgres supplies both dialects -- PostgreSQL, and H2 for the runs with nothing installed.
     testImplementation(project(":jdbc"))
     testImplementation(project(":postgres"))
+    // TutorialTest runs the tutorial's own program, so the fixture it quotes is the code under
+    // test rather than a copy of it. :example depends only on :client/:server/:jdbc/:postgres,
+    // all of which are already here, so this adds no new edge to the graph.
+    testImplementation(project(":example"))
     // The dist module supplies the explicit WiggleStorageFactory used to run a WiggleServer against
     // a real database in tests (the same one the standalone image uses).
     testImplementation(project(":dist"))

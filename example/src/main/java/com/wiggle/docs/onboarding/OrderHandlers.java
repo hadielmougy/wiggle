@@ -1,12 +1,14 @@
 package com.wiggle.docs.onboarding;
 
+import com.wiggle.docs.onboarding.OnboardingSnippet.OrderSteps;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.docs.onboarding.OnboardingSnippet.Order;
 
 /** The handler class quoted in {@code docs/onboarding.md}. */
 // docs:begin handlers
 @ForFlow("order-fulfilment")
-class OrderHandlers {
+class OrderHandlers implements OrderSteps {
     // docs:skip
     static String auth(Order o) { return "auth"; }
     static String reserveRef(Order o) { return "ship"; }
@@ -19,5 +21,11 @@ class OrderHandlers {
     public Order   reserve(Order o)   { return o.withShipmentRef(reserveRef(o)); }
     public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
     public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
+
+    // one parameter per arm, in fork order; @Context is the pre-fork context
+    public Order merge(@Context Order base, Order payment, Order shipping) {
+        return base.withPaymentRef(payment.paymentRef())
+                   .withShipmentRef(shipping.shipmentRef());
+    }
 }
 // docs:end handlers

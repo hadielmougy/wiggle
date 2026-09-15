@@ -252,7 +252,7 @@ next context (types may change from step to step, like `Stream.map`):
 <!-- snippet: onboarding-handlers/handlers -->
 ```java
 @ForFlow("order-fulfilment")
-class OrderHandlers {
+class OrderHandlers implements OrderSteps {
     public Order   validate(Order o)  { return o.withStatus("VALIDATED"); }
     public boolean inStock(Order o)   { return o.quantity() > 0; }        // gate
     public Order   authorise(Order o) { return o.withPaymentRef(auth(o)); }
@@ -260,6 +260,12 @@ class OrderHandlers {
     public Order   reserve(Order o)   { return o.withShipmentRef(reserveRef(o)); }
     public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
     public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
+
+    // one parameter per arm, in fork order; @Context is the pre-fork context
+    public Order merge(@Context Order base, Order payment, Order shipping) {
+        return base.withPaymentRef(payment.paymentRef())
+                   .withShipmentRef(shipping.shipmentRef());
+    }
 }
 ```
 
