@@ -69,9 +69,9 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
 | `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
-| `postgres` | PostgreSQL dialect, plus H2 for tests and local runs | `wiggle-postgres` |
+| `postgres` | PostgreSQL dialect, plus H2 for tests and local runs, and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
 | `election` | leader election by announce-and-heartbeat, shared by `server` and `coordinator` | *(not published)* |
-| `dist` | runnable standalone server (what the Docker image runs) | *(not published)* |
+| `dist` | runnable standalone server (what the Docker image runs); its `WiggleStorageFactory` is `PostgresStorageFactory` under the published name | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
@@ -562,16 +562,18 @@ any RPC; layer the console's login/Basic auth or an external gateway on top for 
 ### 7.2 Storage backends
 
 No URL → in-memory (single node, dev/test). With one, the server builds its store from an injected
-`StorageFactory` — **no `ServiceLoader`**: the distribution's `WiggleStorageFactory` maps the URL
-scheme to a backend at runtime. Both dialects live in `wiggle-postgres` over one HikariCP-pooled
+`StorageFactory` — **no `ServiceLoader`**: `PostgresStorageFactory` maps the URL scheme to a backend
+at runtime (the distribution's `WiggleStorageFactory` is that class under the image's own name). Both dialects live in `wiggle-postgres` over one HikariCP-pooled
 store (`wiggle-jdbc`): **PostgreSQL** is what you deploy on, and **H2** (in PostgreSQL mode) is for
 tests and local runs — it takes the same schema but has no `SKIP LOCKED`, so it claims tasks by
 compare-and-set rather than in a single statement, and is not a deployment target. So the image
 serves `jdbc:postgresql:` and `jdbc:h2:`.
 
-Embedding the server in your own JVM? Pass the factory explicitly, e.g.
-`new WiggleServer(config, cfg -> new JdbcStorage(cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(),
-cfg.jdbcPoolSize(), new PostgresDialect()))` — you depend only on the storage module(s) you use.
+Embedding the server in your own JVM? `new WiggleServer(config, new PostgresStorageFactory())` —
+it ships in `wiggle-postgres`, which brings `wiggle-jdbc` and `wiggle-server` with it, so that one
+dependency is the whole requirement. `StorageFactory` is a functional interface, so an application
+that wants a different mapping (a dialect of its own, a wrapper that instruments the store) passes
+its own lambda instead.
 
 **The coordinator has its own, separate store.** It keeps the control plane's state (placement
 policy, the cell roster, the definition and namespace registries) in the `coord_*` schema, and it

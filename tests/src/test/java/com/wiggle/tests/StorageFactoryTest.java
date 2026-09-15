@@ -1,6 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.dist.WiggleStorageFactory;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.InMemoryStorage;
@@ -10,14 +11,15 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Storage selection is now an explicit factory (no ServiceLoader): {@link WiggleStorageFactory}
- * maps the URL scheme to a store, and the server's default (single-arg) construction is in-memory
- * only. This covers the pure-logic branches -- the ones that don't need a live database.
+ * Storage selection is an explicit factory (no ServiceLoader): {@link PostgresStorageFactory} maps
+ * the URL scheme to a store, and the server's default (single-arg) construction is in-memory only.
+ * This covers the pure-logic branches -- the ones that don't need a live database.
  */
 class StorageFactoryTest {
 
@@ -58,5 +60,27 @@ class StorageFactoryTest {
                 () -> new WiggleServer(config("jdbc:postgresql://localhost/nope")));
         assertTrue(e.getMessage().contains("no StorageFactory"), e.getMessage());
         assertTrue(e.getMessage().contains("jdbc:postgresql://localhost/nope"), "names the offending URL");
+    }
+
+    @Test @DisplayName("the published factory is the same mapping the distribution runs")
+    void theDistributionDelegatesRatherThanDuplicating() {
+        // The mapping lives in the published postgres module so an embedding app can have it;
+        // dist keeps the name its image and docs already use. If someone re-implements one of
+        // them, an app and the image would select storage differently for the same URL.
+        assertTrue(PostgresStorageFactory.class.isAssignableFrom(WiggleStorageFactory.class),
+                "WiggleStorageFactory must remain PostgresStorageFactory under another name");
+
+        String url = "jdbc:h2:mem:sf-rel-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (Storage a = new PostgresStorageFactory().create(config(url));
+             Storage b = new WiggleStorageFactory().create(config(url))) {
+            assertEquals(a.getClass(), b.getClass(), "same URL, same store type");
+        }
+    }
+
+    @Test @DisplayName("an unknown scheme names what is supported, from the published class too")
+    void unknownSchemeFromThePublishedClass() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new PostgresStorageFactory().create(config("jdbc:oracle:thin:@//h:1521/x")));
+        assertTrue(e.getMessage().contains("jdbc:postgresql:"), e.getMessage());
     }
 }
