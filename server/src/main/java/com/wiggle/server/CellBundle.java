@@ -1,7 +1,6 @@
 package com.wiggle.server;
 
 import com.wiggle.placement.LivePlacement;
-import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Ids;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
@@ -64,11 +63,7 @@ final class CellBundle implements ServerBundle {
             return () -> Ids.next("wfi");
         }
         LivePlacement live = placement == null ? new LivePlacement() : placement;
-        return () -> {
-            String ulid = Ids.token();
-            LivePlacement.Stamp st = live.stampFor(ulid);   // atomic (epoch, shard) -- see LivePlacement
-            return IdCodec.format(ns, cellId, st.epoch(), st.shard(), ulid);
-        };
+        return live.minter(ns, cellId, Ids::token);   // the sequence is placement's; the token is ours
     }
 
     /** The coordinator-managed placement (epoch + owned shards); null for a standalone cell. */

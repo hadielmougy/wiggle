@@ -1,6 +1,7 @@
 package com.wiggle.placement;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * One cell's <em>current</em> placement: the epoch it mints into and the shards it owns there.
@@ -83,6 +84,35 @@ public final class LivePlacement {
             s = snap;                             // the callback may have re-pointed us
         }
         return new Stamp(s.epoch(), shardOf(s, ulid));   // still standby -> mintShard throws
+    }
+
+    /**
+     * A supplier of well-formed instance ids for one namespace and cell.
+     *
+     * <p>Minting is three steps in a fixed order — generate the ulid, stamp it, format the result —
+     * and the order is the whole point. The stamp has to be taken <em>for the ulid being minted</em>
+     * and used for that same id: take the stamp first and format with a re-read epoch, or stamp one
+     * ulid and format another, and the id claims a placement that was never true. That is the tear
+     * {@link #stampFor} exists to prevent, and leaving the sequence for each caller to assemble is
+     * how it gets reintroduced.
+     *
+     * <p>{@code ulids} supplies the opaque token. Placement never generates one and makes no
+     * assumption about its shape beyond the {@link IdCodec} character rules — the shard is a hash of
+     * whatever arrives, so the token primitive stays the host's choice.
+     *
+     * @throws IllegalArgumentException when {@code namespace} is blank; an id with no namespace is
+     *         not routable, and minting one is a decision this class will not make silently
+     */
+    public Supplier<String> minter(String namespace, String cellId, Supplier<String> ulids) {
+        if (namespace == null || namespace.isBlank()) {
+            throw new IllegalArgumentException("an instance id needs a namespace to be routable");
+        }
+        if (ulids == null) throw new IllegalArgumentException("no ulid source");
+        return () -> {
+            String ulid = ulids.get();
+            Stamp st = stampFor(ulid);            // atomic (epoch, shard) for THIS ulid
+            return IdCodec.format(namespace, cellId, st.epoch(), st.shard(), ulid);
+        };
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.wiggle.tests;
 
 import com.wiggle.core.Ids;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.placement.LivePlacement;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,80 @@ class LivePlacementTest {
         for (int i = 0; i < 200; i++) seen.add(p.stampFor(Ids.token()).shard());
         assertTrue(Set.of(3, 8).containsAll(seen), "only owned shards are stamped, saw " + seen);
         assertEquals(Set.of(3, 8), seen, "both owned shards get used over many ids");
+    }
+
+    @Test @DisplayName("a minted id parses back to exactly the placement it was stamped with")
+    void minterRoundTrips() {
+        LivePlacement p = new LivePlacement(7, new int[]{3});
+        String id = p.minter("orders", "cell-a", Ids::token).get();
+
+        IdCodec.Placement parsed = IdCodec.parse(id).orElseThrow();
+        assertEquals("orders", parsed.namespace());
+        assertEquals("cell-a", parsed.cellId());
+        assertEquals(7, parsed.epoch());
+        assertEquals(3, parsed.shard());
+        assertTrue(id.endsWith(parsed.ulid()), "the ulid in the id is the one that was stamped");
+    }
+
+    @Test @DisplayName("the minter stamps the same ulid it formats, not a freshly generated one")
+    void minterStampsTheUlidItFormats() {
+        // A source that hands out a different token each call: if the sequence generated a ulid to
+        // stamp and then generated ANOTHER to format, the shard would be a hash of the wrong one.
+        AtomicInteger n = new AtomicInteger();
+        LivePlacement p = new LivePlacement(0, new int[]{0, 1, 2, 3, 4, 5, 6, 7});
+
+        for (int i = 0; i < 500; i++) {
+            String id = p.minter("orders", null, () -> "ulid" + n.incrementAndGet()).get();
+            IdCodec.Placement parsed = IdCodec.parse(id).orElseThrow();
+            assertEquals(IdCodec.shardFor(parsed.ulid(), 8), parsed.shard(),
+                    "the id's shard must be the hash of the id's OWN ulid: " + id);
+        }
+    }
+
+    @Test @DisplayName("a minted id never carries one generation's epoch with another's shard")
+    void minterIsAtomicUnderReconfig() throws Exception {
+        // Same disjoint-generations trick as stampForIsAtomicUnderReconfig, but through the whole
+        // mint sequence and asserted on the PARSED id -- so formatting with a re-read epoch, rather
+        // than the one the stamp fixed, is caught here even though stampFor itself stays correct.
+        LivePlacement p = new LivePlacement(10, new int[]{10, 11});
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<String> tear = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.function.Supplier<String> mint = p.minter("orders", "cell-a", Ids::token);
+
+        Thread flipper = new Thread(() -> {
+            boolean a = true;
+            while (!stop.get()) {
+                if (a) p.set(10, new int[]{10, 11}); else p.set(20, new int[]{20, 21});
+                a = !a;
+            }
+        });
+        Thread minter = new Thread(() -> {
+            for (int i = 0; i < 2_000_000 && tear.get() == null; i++) {
+                IdCodec.Placement id = IdCodec.parse(mint.get()).orElseThrow();
+                Set<Integer> expected = id.epoch() == 10 ? Set.of(10, 11) : Set.of(20, 21);
+                if (!expected.contains((int) id.shard())) {
+                    tear.set("minted epoch " + id.epoch() + " with shard " + id.shard());
+                }
+            }
+        });
+        flipper.start(); minter.start();
+        minter.join(); stop.set(true); flipper.join();
+        assertNull(tear.get(), tear.get());
+    }
+
+    @Test @DisplayName("a cell with no namespace cannot mint a routable id")
+    void minterRefusesABlankNamespace() {
+        LivePlacement p = new LivePlacement();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> p.minter("  ", "cell-a", Ids::token));
+        assertTrue(e.getMessage().contains("namespace"), e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> p.minter(null, "cell-a", Ids::token));
+    }
+
+    @Test @DisplayName("a standby cell mints no id at all, rather than one it has no right to")
+    void minterRefusesOnStandby() {
+        LivePlacement p = new LivePlacement(4, new int[]{});
+        assertThrows(IllegalStateException.class, () -> p.minter("orders", "cell-a", Ids::token).get());
     }
 
     @Test @DisplayName("stampFor never splits an id's epoch from its shard across a concurrent set()")
