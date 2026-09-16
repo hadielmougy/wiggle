@@ -205,6 +205,27 @@ public final class CoordinatorService implements AutoCloseable {
             namespace = p.namespace();
             epoch = p.epoch();
             shard = (int) p.shard();
+
+            // An id that names its cell routes there directly. The ring answers "where does this
+            // shard belong"; the label answers "where was this instance actually written", and only
+            // the second is the question being asked. They agree whenever the minting cell owned the
+            // shard in that epoch -- which is the normal case, and then this changes nothing. They
+            // disagree when a cell minted into the genesis default before the coordinator placed it,
+            // and there the label is right and the ring would send the caller to a cell that has
+            // never held the instance. Falls through to the ring when the labelled cell has no live
+            // nodes, so a decommissioned cell still resolves the old way rather than failing.
+            if (p.hasCell()) {
+                Endpoint labelled = endpointForCellOrNull(namespace, p.cellId(),
+                        emptyToNull(req.getCallerRegion()));
+                if (labelled != null) {
+                    return ResolveResponse.newBuilder()
+                            .setNamespace(namespace)
+                            .setEpoch(epoch)
+                            .setEndpoint(labelled)
+                            .setTtlSeconds(RESOLVE_TTL_S)
+                            .build();
+                }
+            }
         } else {
             namespace = req.getNamespace();
             epoch = store.getPolicy(namespace).map(CoordPolicy::currentEpoch).orElse(0L);

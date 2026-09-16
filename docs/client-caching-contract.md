@@ -50,8 +50,16 @@ never mint into a stale epoch. The soft-failure guard (a draining/stray cell rej
 
 ## 3. Instance routing IS cached — bounded and TTL'd
 
-`resolveInstance` parses the id's baked-in `namespace.epoch.shard` ([IdCodec](sharding-and-epochs.md#2-the-self-routing-id))
-and caches the endpoint under the key `namespace|e{epoch}|s{shard}`.
+`resolveInstance` parses what the id bakes in — `namespace`, the optional `cell`, `epoch` and
+`shard` ([IdCodec](sharding-and-epochs.md#2-the-self-routing-id)) — and caches the endpoint under
+the key `namespace|c{cell}|e{epoch}|s{shard}`.
+
+**Why the cell is in the key.** Under a ring it is derivable: `(namespace, epoch, shard)` names
+exactly one cell. But a node mints into the genesis default — epoch 0, shard 0 — until the
+coordinator places it, so two cells in one namespace started while the coordinator is unreachable
+mint ids that differ *only* by their label, and the coordinator now resolves those to different
+endpoints. Keyed without the cell, the first resolution would answer for both until its TTL expired.
+An id with no label keys exactly as it did before (an empty cell segment).
 
 **Why it's safe to cache.** A past epoch's ring is **immutable** — once epoch N is open, its
 `shard → cell` map never changes (it only moves OPEN → DRAINING → RETIRED). So the logical answer to
@@ -71,7 +79,8 @@ of 0 is floored to 1 s, never treated as "cache forever".
 private Endpoint resolveInstance(String instanceId) {
     IdCodec.Placement p = IdCodec.parse(instanceId).orElseThrow(() -> new IllegalArgumentException(
             "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"));
-    String key = p.namespace() + "|e" + p.epoch() + "|s" + p.shard();
+    String key = p.namespace() + "|c" + (p.cellId() == null ? "" : p.cellId())
+            + "|e" + p.epoch() + "|s" + p.shard();
     Cached c = byShard.get(key);
     if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();
     ResolveResponse r = coordCall(() -> coord.resolve(ResolveRequest.newBuilder()
