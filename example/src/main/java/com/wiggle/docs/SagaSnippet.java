@@ -7,16 +7,10 @@ import com.wiggle.client.worker.CompensableActivity;
  * The code published on <a href="https://wiggle.sh/patterns/saga/">wiggle.sh/patterns/saga</a>,
  * as source the compiler checks.
  *
- * <p>The page is <em>site-only</em> -- it lives in the wiggle-site repo and is not one of the five
- * docs {@code sync-docs.sh} vendors -- so nothing used to check its Java, and it sat on an API that
- * had been removed (a trailing {@code .compensate()}, a one-parameter {@code Activity<Order>})
- * through several syncs before anyone noticed. A reader copying it got code that would not compile.
- *
- * <p>So the page no longer holds its own copy. The regions below are the source of truth: this class
- * is compiled by the ordinary build, and {@code sync-docs.sh} rewrites the page's fenced blocks from
- * these regions. Break the API and the build fails here; edit the page's Java by hand and the next
- * sync overwrites it. The marker comments are load-bearing -- {@code SagaSnippetTest} checks they
- * stay well formed, since a silent extraction failure would quietly publish nothing.
+ * <p>The regions below are the source of truth: this class is compiled by the ordinary build, and
+ * {@code sync-docs.sh} rewrites the page's fenced blocks from them. Break the API and the build
+ * fails here; edit the page's Java by hand and the next sync overwrites it. {@code SagaSnippetTest}
+ * checks the marker comments stay well formed, since a silent extraction failure publishes nothing.
  *
  * <p>Its companion is {@link BookingHandlers}, which the same page shows under "The handlers".
  */

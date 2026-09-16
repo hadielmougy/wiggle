@@ -77,7 +77,6 @@ class IdCodecTest {
         }
     }
 
-    // ---------------------------------------------------------------- the cell label
 
     @Test @DisplayName("an id carries the cell that minted it, and round-trips")
     void cellRoundTrip() {

@@ -170,15 +170,13 @@ public final class Wiggle {
      * return Wiggle.oneOf(vip, standard);
      * }</pre>
      *
-     * <p>Where {@code allOf} needs a combine, this needs nothing: the arms are alternatives on the one
-     * context, not parallel branches on isolated copies, so there is no join to merge and control
-     * simply continues from whichever arm ran. That is also why the arms must agree on the type they
-     * end at -- which one ran is not knowable until run time. Use {@link WiggleFlow#as} after it if
-     * they genuinely differ.
+     * <p>No combine, unlike {@code allOf}: the arms are alternatives on the one context, not parallel
+     * branches on isolated copies, so control continues from whichever arm ran. The arms must agree
+     * on the type they end at, since which one runs is not known until run time; use
+     * {@link WiggleFlow#as} after it if they differ.
      *
-     * <p>With no {@code otherwise} arm, a choice where nothing matched skips straight past to the step
-     * after it -- which is why a single guarded arm is legal here where a single-armed
-     * {@link #allOf} is not. One arm and no default reads as "run this if the guard holds".
+     * <p>With no {@code otherwise}, a choice where nothing matched skips to the step after it -- so a
+     * single guarded arm is legal here where a single-armed {@link #allOf} is not.
      */
     @SafeVarargs
     public static <R> WiggleFlow<R> oneOf(WiggleFlow<R>... arms) {

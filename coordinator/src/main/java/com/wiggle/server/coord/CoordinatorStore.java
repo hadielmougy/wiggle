@@ -13,7 +13,6 @@ import java.util.Optional;
  */
 public interface CoordinatorStore extends AutoCloseable {
 
-    // ---- policy (CAS-guarded) ----
 
     Optional<CoordPolicy> getPolicy(String namespace);
 
@@ -34,7 +33,6 @@ public interface CoordinatorStore extends AutoCloseable {
      */
     long casPolicy(String namespace, long expectedRevision, CoordPolicy desired);
 
-    // ---- node roster ----
 
     void upsertNode(CoordNode node);
 
@@ -50,7 +48,6 @@ public interface CoordinatorStore extends AutoCloseable {
     /** Removes nodes whose last heartbeat is older than {@code deadlineMillis}. Returns the count removed. */
     int expireNodes(long deadlineMillis);
 
-    // ---- cell-identity binding (guards a reused cell id, atomically) ----
 
     /**
      * Atomically claim the binding {@code (namespace, cellId) -> fingerprint}, so two distinct cells cannot
@@ -73,7 +70,6 @@ public interface CoordinatorStore extends AutoCloseable {
      */
     int pruneOrphanCellBindings();
 
-    // ---- definition registry (R23) ----
 
     Optional<CoordDefinition> getDefinition(String namespace, String name);
 
@@ -85,7 +81,6 @@ public interface CoordinatorStore extends AutoCloseable {
 
     List<CoordDefinition> definitions(String namespace);
 
-    // ---- namespace registry (provisioning, T13) ----
 
     Optional<CoordNamespace> getNamespace(String namespace);
 
@@ -94,7 +89,6 @@ public interface CoordinatorStore extends AutoCloseable {
     /** Idempotent upsert keyed by namespace; drives the provisioning state machine's persistence. */
     void putNamespace(CoordNamespace ns);
 
-    // ---- leader election (coordinator HA) ----
 
     /**
      * The roster of <em>coordinator processes</em>, for {@link com.wiggle.election.LeaderElection} --

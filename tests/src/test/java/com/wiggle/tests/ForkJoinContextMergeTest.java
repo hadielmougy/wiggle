@@ -118,7 +118,6 @@ class ForkJoinContextMergeTest {
         return o instanceof Map ? (Map<String, Object>) o : Map.of();
     }
 
-    // ---- the OrderFulfilment pattern: a typed record via a VersionedContextCodec ----
 
     public record Parcel(String id, String payment, String tracking) {
         Parcel withPayment(String p) { return new Parcel(id, p, tracking); }

@@ -4,24 +4,19 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * The instance id: {@code {namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}}. The id <em>is</em> the
- * routing record -- an instance's cell is a pure function of its id plus the (bounded) placement
- * policy, so the coordinator never stores a per-instance directory (R16). See the design reference §6.
+ * The instance id: {@code {namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}}. An instance's cell is a
+ * pure function of its id plus the placement policy, so there is no per-instance directory.
  *
- * <p>The optional {@code .c{cell}} segment names the cell that <em>minted</em> the id. Epoch and
- * shard say where an instance belongs under the current ring, which is what makes resharding
- * possible; the cell says where it was actually written, which is what makes routing possible with
- * no ring at all. A deployment that never reshards can route on the label alone and ignore the
- * placement policy entirely.
+ * <p>The optional {@code .c{cell}} segment names the cell that minted the id. Epoch and shard say
+ * where an instance belongs under the current ring; the cell says where it was actually written, so
+ * a deployment that never reshards can route on the label alone.
  *
- * <p>It sits between the namespace and the epoch rather than after the shard, and that position is
- * load-bearing. A ulid may contain dots ({@link #format} only forbids them in the namespace and the
- * cell), so an optional trailing segment would be ambiguous: the legacy id
- * {@code ns.e0.s0.cfoo.bar} would parse as cell {@code foo} with ulid {@code bar}. Anchored between
- * two fixed markers it cannot be confused with anything.
+ * <p>That segment sits before the epoch, not after the shard: a ulid may contain dots, so a
+ * trailing segment would be ambiguous -- {@code ns.e0.s0.cfoo.bar} would parse as cell {@code foo}
+ * with ulid {@code bar}.
  *
- * <p>Legacy ids (a bare {@code wfi_...} minted before a namespace was configured, or pre-adoption)
- * do not match and {@link #parse} returns empty; callers route those to the genesis cell (§7).
+ * <p>Legacy ids (a bare {@code wfi_...}) do not match and {@link #parse} returns empty; callers
+ * route those to the genesis cell.
  */
 public final class IdCodec {
 
@@ -30,29 +25,22 @@ public final class IdCodec {
             Pattern.compile("^([^.]+)(?:\\.c([^.]+))?\\.e(\\d+)\\.s(\\d+)\\.(.+)$");
 
     /**
-     * Instance-id columns are {@code VARCHAR(128)} (schema v9); minting something longer would fail
-     * at the insert, so {@link #format} refuses it here where the message can name the cause.
-     *
-     * <p>A database still on v8 has 64-character columns. The migration runs at startup before the
-     * node serves, so a normally-deployed cell cannot mint an id its own store rejects -- but a
-     * schema owned by a DBA ({@code WIGGLE_SCHEMA_MODE=verify}) must be migrated before the cell
-     * that uses long names starts.
+     * Instance-id columns are {@code VARCHAR(128)} (schema v9); {@link #format} refuses anything
+     * longer. A schema owned by a DBA ({@code WIGGLE_SCHEMA_MODE=verify}) must be migrated to v9
+     * before a cell using long namespace or cell names starts.
      */
     public static final int MAX_LENGTH = 128;
 
     private IdCodec() {}
 
-    /**
-     * A parsed id. {@code cellId} is null for an id minted before cells were stamped, which is not
-     * an error -- it means "ask the placement policy", exactly as before.
-     */
+    /** A parsed id. A null {@code cellId} is not an error: it means "ask the placement policy". */
     public record Placement(String namespace, String cellId, long epoch, long shard, String ulid) {
 
         /** True when the id names the cell that minted it, so routing needs no ring. */
         public boolean hasCell() { return cellId != null; }
     }
 
-    /** Builds an id with no cell label -- the pre-cell format, still minted by a cell that has no id. */
+    /** Builds an id with no cell label, for a cell that has no id configured. */
     public static String format(String namespace, long epoch, long shard, String ulid) {
         return format(namespace, null, epoch, shard, ulid);
     }
@@ -69,7 +57,6 @@ public final class IdCodec {
         String id = namespace + (cell == null ? "" : ".c" + cell)
                 + ".e" + epoch + ".s" + shard + "." + ulid;
         if (id.length() > MAX_LENGTH) {
-            // Fail here rather than at the insert, where the message is about a column
             throw new IllegalArgumentException("instance id would be " + id.length()
                     + " characters, over the " + MAX_LENGTH + " an id column holds: '" + id
                     + "'. Shorten the namespace or the cell id.");
@@ -103,10 +90,9 @@ public final class IdCodec {
     }
 
     /**
-     * The shard a new id lands on: a well-mixed hash of the ulid reduced to {@code [0, ringSize)}
-     * (0 for a single-cell ring). Deterministic across JVMs -- pure integer arithmetic on the ulid's
-     * code units -- so the same ulid always maps to the same shard. The result is stamped into the id
-     * at mint time and read back verbatim on resolve, never recomputed.
+     * The shard a new id lands on: a hash of the ulid reduced to {@code [0, ringSize)}, 0 for a
+     * single-cell ring. Deterministic across JVMs. Stamped into the id at mint time and read back
+     * verbatim on resolve, never recomputed.
      */
     // docs:begin shard-for
     public static long shardFor(String ulid, int ringSize) {
@@ -115,9 +101,9 @@ public final class IdCodec {
     // docs:end shard-for
 
     /**
-     * 64-bit FNV-1a over the ulid, finished with a murmur3 fmix64 avalanche so every input bit affects
-     * every output bit. {@link String#hashCode()} barely mixes and clusters on the shared timestamp
-     * prefix of ULIDs minted close together; the finalizer is what spreads the random suffix evenly.
+     * 64-bit FNV-1a over the ulid, finished with a murmur3 fmix64 avalanche. {@link String#hashCode()}
+     * clusters on the shared timestamp prefix of ULIDs minted close together; the finalizer is what
+     * spreads the random suffix evenly.
      */
     private static long hash64(String s) {
         long h = 0xcbf29ce484222325L;              // FNV-1a 64 offset basis

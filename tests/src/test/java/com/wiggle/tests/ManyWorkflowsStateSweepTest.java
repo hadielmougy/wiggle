@@ -110,7 +110,6 @@ class ManyWorkflowsStateSweepTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    // ------------------------------------------------------------------ the shapes
 
     /** 1. linear, SERVER mode -> COMPLETED */
     private static FlowSpec linear() {
@@ -179,7 +178,6 @@ class ManyWorkflowsStateSweepTest {
                 .thenApply(s::after));
     }
 
-    // ------------------------------------------------------------------ the handlers
 
     @ForFlow(PREFIX + "linear")
     public static final class LinearH {
@@ -269,7 +267,6 @@ class ManyWorkflowsStateSweepTest {
         public Map<String, Object> after(Map<String, Object> c) { return put(c, "after", 1L); }
     }
 
-    // ------------------------------------------------------------------ the sweep
 
     @Test
     @DisplayName("many workflows in every state at once: totals, terminal states and coverage all hold")
@@ -294,7 +291,6 @@ class ManyWorkflowsStateSweepTest {
                     .registerHandler(new SagaH(undos)).registerHandler(new ParkedH())) {
                 w.start();
 
-                // ---- start everything at once, so the store holds every shape concurrently
                 Map<String, List<String>> started = new LinkedHashMap<>();
                 for (FlowSpec s : specs) {
                     List<String> ids = new ArrayList<>();
@@ -304,7 +300,6 @@ class ManyWorkflowsStateSweepTest {
                 int total = WORKFLOWS * PER_WORKFLOW;
                 assertEquals(total, started.values().stream().mapToInt(List::size).sum());
 
-                // ---- the terminal shapes must all settle
                 awaitAll(client, started.get(PREFIX + "linear"), "COMPLETED");
                 awaitAll(client, started.get(PREFIX + "forked"), "COMPLETED");
                 awaitAll(client, started.get(PREFIX + "foreach"), "COMPLETED");
@@ -322,7 +317,6 @@ class ManyWorkflowsStateSweepTest {
                             "nothing downstream of the gate ran");
                 }
 
-                // ---- cancel half the parked instances; the rest stay parked on a signal
                 List<String> parkedIds = started.get(PREFIX + "parked");
                 for (int i = 0; i < parkedIds.size() / 2; i++) {
                     client.cancel(parkedIds.get(i), "sweep: cancelled while awaiting a signal");
@@ -333,11 +327,9 @@ class ManyWorkflowsStateSweepTest {
                             "an instance waiting on a signal nobody sends stays RUNNING");
                 }
 
-                // ---- every compensable step of every saga ran its undo, exactly once each
                 assertEquals(PER_WORKFLOW, undos.getOrDefault("reserved", 0), "every reserve was undone");
                 assertEquals(PER_WORKFLOW, undos.getOrDefault("charged", 0), "every charge was undone");
 
-                // ---- totals hold when counted per workflow, not just per instance.
                 // Counted over this run's own ids: a live database keeps its rows, so an absolute
                 // count would pick up every previous run's instances too.
                 for (FlowSpec s : specs) {
@@ -350,7 +342,6 @@ class ManyWorkflowsStateSweepTest {
                             s.name() + " handed out a duplicate instance id");
                 }
 
-                // ---- and the coverage view, read across all of it, blames nothing
                 List<WiggleClient.BacklogSlice> slices = sweepSlices(client);
                 for (WiggleClient.BacklogSlice slice : slices) {
                     assertTrue(slice.covered(),
@@ -360,12 +351,10 @@ class ManyWorkflowsStateSweepTest {
                 }
             }
 
-            // ---- with the worker gone, the parked work has no cover at all
             awaitUncovered(client);
         }
     }
 
-    // ------------------------------------------------------------------ helpers
 
     private static Map<String, Object> seed(String workflow, int i) {
         if (workflow.equals(PREFIX + "foreach")) {

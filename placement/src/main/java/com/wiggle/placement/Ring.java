@@ -7,11 +7,8 @@ import java.util.Map;
  * A namespace's placement: which cell owns which shard, in which epoch.
  *
  * <p>A ring is published per epoch and never edited afterwards -- reshaping means opening a new
- * epoch, which is what lets an id minted long ago still resolve correctly. The status moves
- * {@code OPEN -> DRAINING -> RETIRED} as work moves on; the mapping itself does not change.
- *
- * <p>These are values, with no storage concerns attached. The coordinator's own record wraps this
- * with the compare-and-set token its store needs.
+ * epoch, so an id minted long ago still resolves. The status moves {@code OPEN -> DRAINING ->
+ * RETIRED} as work moves on; the mapping itself does not change.
  */
 public final class Ring {
 
@@ -40,8 +37,7 @@ public final class Ring {
 
     /**
      * The whole placement for one namespace: every epoch's ring, and which one new ids are minted
-     * into. Epochs are kept, not replaced, because an id carries the epoch it was minted in and must
-     * stay resolvable for its whole life.
+     * into. Epochs are kept rather than replaced -- an id carries the epoch it was minted in.
      */
     public record Policy(String namespace, long currentEpoch, Map<Long, Epoch> epochs) {
         public Policy {

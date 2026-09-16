@@ -18,21 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The placement rules, stated once and attacked with generated ring histories.
- *
- * <p>This is what the extraction was for. The same rules used to be spread across the server's
- * minter, the coordinator's resolver and the client's cache, where the only reachable tests were
- * end-to-end ones that start servers — so each rule was exercised through a handful of hand-built
- * scenarios, and a case nobody thought of was a case nobody tested. Here they are pure functions,
- * and a few thousand random histories cost milliseconds.
- *
- * <p>The seed is fixed so a failure is reproducible; it is printed in the assertion messages.
+ * The placement rules, attacked with generated ring histories. The seed is fixed so a failure is
+ * reproducible; it is printed in the assertion messages.
  */
 class PlacementsTest {
 
     private static final long SEED = 20260916L;
 
-    // ---------------------------------------------------------------- invariants, over random rings
 
     @Test @DisplayName("an id always resolves to the cell that owned its shard in ITS epoch, whatever came after")
     void resolutionIsStableAcrossLaterEpochs() {
@@ -104,7 +96,6 @@ class PlacementsTest {
         }
     }
 
-    // ---------------------------------------------------------------- the rules, stated directly
 
     @Test @DisplayName("a ring that does not name a cell puts it on standby, distinct from no ring at all")
     void standbyIsNotTheSameAsUnplaced() {
@@ -193,7 +184,6 @@ class PlacementsTest {
         assertTrue(e.getMessage().contains("standby"), e.getMessage());
     }
 
-    // ---------------------------------------------------------------- generators
 
     private static List<String> cells(Random rnd, int n) {
         List<String> out = new ArrayList<>(n);

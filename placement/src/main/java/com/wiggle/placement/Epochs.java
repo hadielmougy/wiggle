@@ -8,15 +8,9 @@ import java.util.Optional;
 /**
  * The epoch lifecycle: opening a new placement, draining the old one, retiring it once empty.
  *
- * <p>Split in two on purpose. The <b>transitions</b> ({@link #opening}, {@link #withStatus}) are
- * pure functions from one policy to the next, so they can be generated against and reasoned about
- * without a database. The <b>operations</b> ({@link #openEpoch}, {@link #retire}) add the
+ * <p>The <b>transitions</b> ({@link #opening}, {@link #withStatus}) are pure functions from one
+ * policy to the next. The <b>operations</b> ({@link #openEpoch}, {@link #retire}) add the
  * compare-and-set retry that makes a transition safe when several coordinators share a store.
- *
- * <p>That split is not tidiness. The transition is where the rules live — a new epoch is
- * {@code current + 1}, the previous one becomes DRAINING and keeps its ring forever, a retired epoch
- * is never reopened — and those rules were previously expressible only through a store, which is why
- * they were tested by starting a coordinator.
  */
 public final class Epochs {
 
@@ -25,15 +19,10 @@ public final class Epochs {
 
     private Epochs() {}
 
-    // ---------------------------------------------------------------- transitions (pure)
-
     /**
-     * The policy that results from publishing {@code ring} as a new epoch.
-     *
-     * <p>A namespace with no policy starts at epoch 0. Otherwise the epoch advances by one, the
-     * outgoing epoch moves to DRAINING — keeping its ring, because ids minted into it must stay
-     * resolvable for as long as their instances live — and every older epoch is left exactly as it
-     * was, including retired ones.
+     * The policy that results from publishing {@code ring} as a new epoch. A namespace with no
+     * policy starts at epoch 0; otherwise the epoch advances by one and the outgoing epoch moves to
+     * DRAINING, keeping its ring so ids minted into it stay resolvable. Older epochs are untouched.
      */
     public static Ring.Policy opening(String namespace, Ring.Policy previous, List<Ring.Slot> ring) {
         if (ring == null || ring.isEmpty()) {
@@ -52,13 +41,7 @@ public final class Epochs {
         return new Ring.Policy(namespace, next, epochs);
     }
 
-    /**
-     * The policy with one epoch moved to {@code status}.
-     *
-     * <p>Only forwards: OPEN → DRAINING → RETIRED. Going back would resurrect a placement that work
-     * has already drained away from, so it is refused rather than ignored — a caller asking for it
-     * has misunderstood something, and silently doing nothing would hide that.
-     */
+    /** The policy with one epoch moved to {@code status}. Only forwards: OPEN → DRAINING → RETIRED. */
     public static Ring.Policy withStatus(Ring.Policy policy, long epoch, Ring.Status status) {
         if (policy == null) throw new IllegalArgumentException("no policy to change");
         Ring.Epoch current = policy.epochs().get(epoch);
@@ -78,8 +61,6 @@ public final class Epochs {
         epochs.put(epoch, new Ring.Epoch(current.ring(), status));
         return new Ring.Policy(policy.namespace(), policy.currentEpoch(), epochs);
     }
-
-    // ---------------------------------------------------------------- operations (store + retry)
 
     /**
      * Publishes {@code ring} as a new epoch, retrying on a lost compare-and-set.
@@ -105,9 +86,6 @@ public final class Epochs {
             Optional<PlacementStore.Versioned> current = store.get(namespace);
             Ring.Policy previous = current.map(PlacementStore.Versioned::policy).orElse(null);
             long revision = current.map(PlacementStore.Versioned::revision).orElse(0L);
-
-            // recomputed from THIS attempt's read: a transition built from a stale policy would
-            // reopen an epoch someone else just drained
             Ring.Policy updated = transition.apply(previous);
             if (store.compareAndSet(namespace, revision, updated)) return updated;
         }

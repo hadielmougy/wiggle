@@ -97,7 +97,6 @@ public final class CoordinatorService implements AutoCloseable {
         cellStubs.clear();
     }
 
-    // ---- node-lifecycle logic (directly unit-testable) ----
 
     /**
      * The config for a node in {@code cellId} of {@code namespace}: the current config generation (the
@@ -285,7 +284,6 @@ public final class CoordinatorService implements AutoCloseable {
         return Placements.cellFor(policy.ring(), epoch, shard).orElse(null);
     }
 
-    // ---- definition fan-out (R23) ----
 
     /**
      * Deallocates a workflow from a namespace: removes its allocation from the coordinator's registry,
@@ -487,7 +485,6 @@ public final class CoordinatorService implements AutoCloseable {
         return b.build();
     }
 
-    // ---- admin reshard: the sole ring-writing path (directly unit-testable, no gRPC plumbing) ----
 
     /**
      * Opens a new epoch for {@code namespace}: creates epoch 0 if none exists, else appends
@@ -500,7 +497,6 @@ public final class CoordinatorService implements AutoCloseable {
         return toProto(store.getPolicy(namespace).orElseThrow());
     }
 
-    // ---- mapping (domain <-> proto) ----
 
     private static List<Ring.Slot> toDomainRing(List<RingSlot> ring) {
         List<Ring.Slot> out = new ArrayList<>();

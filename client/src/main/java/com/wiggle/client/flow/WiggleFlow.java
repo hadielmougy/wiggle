@@ -78,7 +78,6 @@ public final class WiggleFlow<T> {
         return new WiggleFlow<>(new Plan.Step(step, op, label));
     }
 
-    // ------------------------------------------------------------------ steps
 
     public <R> WiggleFlow<R> apply(FlowFn<T, R> step) {
         return task(step, null, null);
@@ -305,7 +304,6 @@ public final class WiggleFlow<T> {
         return record(name, b -> b.gate(name, retry, queue));
     }
 
-    // ------------------------------------------------------------------ waiting
 
     /** A server-side timer. No worker is held while the instance waits. */
     public WiggleFlow<T> thenSleep(Duration duration) {
@@ -350,7 +348,6 @@ public final class WiggleFlow<T> {
         return record(node, b -> b.subWorkflow(node, workflow));
     }
 
-    // ------------------------------------------------------------------ dynamic fan-out
 
     /**
      * Runtime fan-out: when the instance reaches this node the engine reads the collection stored in
@@ -443,7 +440,6 @@ public final class WiggleFlow<T> {
         return fanOut(name, StepNames.ofKey(items), loopBody);
     }
 
-    // ------------------------------------------------------------------ branching and looping
 
     /**
      * Opens an arm of a {@link Wiggle#oneOf}: the steps chained after this run only when {@code guard}
@@ -533,7 +529,6 @@ public final class WiggleFlow<T> {
         return record(name, b -> b.doWhile(name, maxIterations, body, queue));
     }
 
-    // ------------------------------------------------------------------ per-step and workflow settings
 
     /** Marks the step just added as a flush boundary under {@code LOCAL_ASYNC}. */
     public WiggleFlow<T> checkpoint() {
@@ -561,7 +556,6 @@ public final class WiggleFlow<T> {
         return (WiggleFlow<R>) this;
     }
 
-    // ------------------------------------------------------------------ nested bodies
 
     /**
      * Compiles a nested body (escalation, case, loop, forEach) into the builder's sub-stream shape.

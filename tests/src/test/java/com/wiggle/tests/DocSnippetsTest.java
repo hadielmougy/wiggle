@@ -27,16 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code scripts/snippets.py} in the wiggle-site repo extracts to rewrite the Java on the pattern
  * pages.
  *
- * <p>Those pages are site-only -- they live in the other repo and are not among the docs
- * {@code sync-docs.sh} vendors -- so nothing used to compile their code, and it rotted. The saga
- * page published a removed API for weeks; the fan-out page named a handler {@code load} against a
- * contract that said {@code loadOrder}, a step that could never have bound. Keeping the code as
- * source fixes that, because the compiler reads it.
- *
- * <p>What the compiler cannot read is the markers. Rename a region, drop an {@code end}, leave a
- * {@code docs:skip} unresumed, and extraction silently yields nothing or too little while the build
- * stays green -- and the page publishes an empty block, which reads as deliberate and so is a worse
- * failure than the stale text this replaced. That is what this test is for.
+ * <p>Keeping the code as compiled source catches API drift. What the compiler cannot read is the
+ * markers: rename a region, drop an {@code end}, leave a {@code docs:skip} unresumed, and extraction
+ * silently yields nothing while the build stays green, publishing an empty block.
  *
  * <p>The region names are a contract with a script in another repository, so the whole map is
  * pinned: a fixture that gains a region nobody asked for, or loses one a page needs, fails here

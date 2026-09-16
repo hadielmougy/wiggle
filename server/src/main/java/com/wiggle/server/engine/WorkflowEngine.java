@@ -1032,10 +1032,9 @@ public final class WorkflowEngine {
     /**
      * Applies a step result where it belongs: a branch's private overlay when scoped, else shared.
      * In every case the handler's return REPLACES the previous value — it is the complete next
-     * context, and keys it omits do not survive. There is deliberately no diff/merge of old and new
-     * anywhere in step execution; the only merges left are signal payloads and a sub-workflow's
-     * result folding back into its parent (external inputs, not step returns). A null return leaves
-     * the context untouched.
+     * context, and keys it omits do not survive. Step execution never diffs or merges; the only
+     * merges are signal payloads and a sub-workflow's result folding into its parent. A null return
+     * leaves the context untouched.
      */
     private static void applyStepResult(Instance inst, Token t, Node node, Object result) {
         if (isCombineNode(node)) { replaceCombineResult(inst, t, node, result); return; }

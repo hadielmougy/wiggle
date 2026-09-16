@@ -5,13 +5,10 @@ import java.util.function.Function;
 
 /**
  * The durable roster an election runs on. Implemented once per side -- over the cell's node table,
- * over the coordinator's -- so the election rule itself lives in exactly one place.
+ * over the coordinator's -- so the election rule lives in one place.
  *
- * <p>There is deliberately only one method that matters. Splitting the step into
- * "upsert, then read, then write the verdict" would let two nodes interleave and reach different
- * answers from different snapshots, and the whole scheme rests on every node computing the same
- * answer from the same table. So the store is handed the rule and must run the lot in one
- * transaction.
+ * <p>One method, and it must run in a single transaction: split into "upsert, then read, then write
+ * the verdict" and two nodes can interleave and reach different answers from different snapshots.
  */
 public interface ElectionStore {
 

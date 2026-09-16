@@ -157,7 +157,6 @@ class LivePlacementTest {
         assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
     }
 
-    // ---- standby self-heal: a start routed to a cell just before its heartbeat applied a new epoch ----
 
     @Test @DisplayName("a standby mint re-fetches on-demand, then mints once placed")
     void standbyRefreshesThenMints() {

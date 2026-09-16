@@ -18,10 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The epoch lifecycle: the transitions as pure functions, and the operations against a store.
- *
- * <p>The transitions were previously reachable only by standing up a coordinator, so the properties
- * below — an old ring is never rewritten, statuses only go forwards, the current epoch is always
- * open — were things the code did rather than things anything checked.
+ * Properties covered: an old ring is never rewritten, statuses only go forwards, exactly one epoch
+ * is open.
  */
 class EpochsTest {
 
@@ -33,7 +31,6 @@ class EpochsTest {
         return out;
     }
 
-    // ---------------------------------------------------------------- transitions
 
     @Test @DisplayName("opening a first epoch starts at 0 and is OPEN")
     void firstEpoch() {
@@ -119,7 +116,6 @@ class EpochsTest {
         assertThrows(IllegalArgumentException.class, () -> Epochs.opening("acme", null, List.of()));
     }
 
-    // ---------------------------------------------------------------- operations against a store
 
     /** A store that loses the first n compare-and-sets, to exercise the retry. */
     static final class FlakyStore implements PlacementStore {

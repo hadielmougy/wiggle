@@ -109,7 +109,6 @@ class DynamicConstructsTest {
         }
     }
 
-    // ------------------------------------------------------------------ doWhile
 
     private static FlowSpec counterLoop(ExecutionMode mode) {
         return FlowSpec.define("dyn-loop", Map.class, LoopSteps.class, (f, s) -> f
@@ -170,7 +169,6 @@ class DynamicConstructsTest {
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "done", true); }
     }
 
-    // ----------------------------------------------------------------- forEach
 
     /** Two-step body: the item value evolves scalar -> map, proving the value threads the body. */
     private static FlowSpec fanOut(ExecutionMode mode) {
@@ -326,7 +324,6 @@ class DynamicConstructsTest {
         assertFalse(ctx.containsKey("per-item"), "scratch stayed out of the shared context on JDBC too");
     }
 
-    // ---------------------------------------------------------------- forEach by accessor
 
     public record Cart(List<String> items, String joined) {}
 

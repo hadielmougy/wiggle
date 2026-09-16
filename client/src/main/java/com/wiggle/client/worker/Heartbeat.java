@@ -6,13 +6,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Keeps one task's lease alive while its handler runs, and -- the reason this is its own
- * class -- guarantees that once the task is settled no further lease extension is ever sent.
+ * Keeps one task's lease alive while its handler runs, and guarantees no lease extension is sent
+ * once the task is settled.
  *
- * <p>The periodic beat and {@link #stop()} share a lock and a {@code settled} flag: a beat
- * that has not started yet sees {@code settled} and skips; a beat already in flight finishes
- * before {@code stop()} returns. So a caller that calls {@code stop()} <em>before</em>
- * completing or failing the task can be sure no extension races or trails the settle RPC.
+ * <p>The periodic beat and {@link #stop()} share a lock and a {@code settled} flag: a beat that has
+ * not started sees {@code settled} and skips; one already in flight finishes before {@code stop()}
+ * returns. A caller that stops before completing or failing the task gets no extension trailing the
+ * settle RPC.
  */
 final class Heartbeat {
 

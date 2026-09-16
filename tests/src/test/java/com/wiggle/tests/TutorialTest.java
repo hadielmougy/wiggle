@@ -73,7 +73,6 @@ class TutorialTest {
         assertEquals(2, ((List<?>) ctx.get("items")).size(), "the priced items survive the join");
     }
 
-    // ---------------------------------------------------------------- 1: embedded
 
     @Test @DisplayName("tutorial 1 -- server embedded in the app's own JVM, on a database")
     void embedded() throws Exception {
@@ -90,7 +89,6 @@ class TutorialTest {
         }
     }
 
-    // ---------------------------------------------------------------- 2: standalone server
 
     @Test @DisplayName("tutorial 2 -- a separate server process; submitter and worker are clients")
     void standalone() throws Exception {
@@ -112,7 +110,6 @@ class TutorialTest {
         }
     }
 
-    // ---------------------------------------------------------------- 3: coordinator + cell
 
     @Test @DisplayName("tutorial 3 -- coordinator places the namespace; ids are self-routing")
     void coordinated() throws Exception {
@@ -165,7 +162,6 @@ class TutorialTest {
         }
     }
 
-    // ---------------------------------------------------------------- the flow itself
 
     @Test @DisplayName("the gate ends the instance cleanly -- the point every page makes about thenFilter")
     void theGateEndsCleanlyRatherThanFailing() throws Exception {

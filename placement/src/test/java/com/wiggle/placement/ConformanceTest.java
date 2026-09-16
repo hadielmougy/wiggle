@@ -20,16 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Runs {@code conformance/placement-v1.json} against this implementation.
+ * Runs {@code conformance/placement-v1.json} against this implementation. Java, Go and Python each
+ * carry their own id codec and resolver; the file is the shared answer and this is one of three
+ * runners.
  *
- * <p>Java, Go and Python each carry their own id codec and resolver, so each can drift — and the
- * usual way that happens is silently, because every implementation passes its own tests. The file is
- * the shared answer; this is one of three runners, and it doubles as the reference for porting the
- * other two.
- *
- * <p>Deliberately data-driven rather than translated into Java assertions: a case added to the JSON
- * has to be picked up here without anyone editing this file, or the fixtures stop being the source
- * of truth and become a copy of it.
+ * <p>Data-driven on purpose: a case added to the JSON runs here without anyone editing this file.
  */
 class ConformanceTest {
 
@@ -63,7 +58,6 @@ class ConformanceTest {
         return tests;
     }
 
-    // ---------------------------------------------------------------- the four case kinds
 
     private static void runFormat(Map<String, Object> c) {
         String ns = (String) c.get("namespace");
@@ -125,7 +119,6 @@ class ConformanceTest {
         }
     }
 
-    // ---------------------------------------------------------------- fixture decoding
 
     private static Map<String, Ring.Policy> policies(Map<String, Object> raw) {
         Map<String, Ring.Policy> out = new LinkedHashMap<>();

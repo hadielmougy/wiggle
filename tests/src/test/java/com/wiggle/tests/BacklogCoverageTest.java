@@ -194,7 +194,6 @@ class BacklogCoverageTest {
         }
     }
 
-    // ------------------------------------------------------------------ helpers
 
     /** Cancels leftovers: a live database keeps its rows, and these tests assert on counts. */
     private static void clear(WiggleClient client, String workflow) {

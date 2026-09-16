@@ -56,7 +56,6 @@ final class GraphBuilder {
         return new GraphBuilder(pipeline, pipeline::startAt, null);
     }
 
-    // ------------------------------------------------------ step / effect (both TASK nodes)
 
     /** A task step; its handler is bound on the worker by {@code name}. */
     public GraphBuilder step(String name) {
@@ -110,7 +109,6 @@ final class GraphBuilder {
         return this;
     }
 
-    // ------------------------------------------------------ gate
 
     /** A guard; its boolean handler is bound on the worker by {@code name}. */
     public GraphBuilder gate(String name) {
@@ -143,7 +141,6 @@ final class GraphBuilder {
         return this;
     }
 
-    // ------------------------------------------------------ sleep / signal / sub-workflow
 
     /** Server-side timer. No worker is occupied while the instance waits. */
     public GraphBuilder sleep(Duration duration) {
@@ -202,7 +199,6 @@ final class GraphBuilder {
         return this;
     }
 
-    // ------------------------------------------------------ fork / combine
 
     /**
      * Fans out into parallel branches that run independently (possibly on different workers) and all
@@ -438,7 +434,6 @@ final class GraphBuilder {
         return new Sub(start[0], tail);
     }
 
-    // ------------------------------------------------------ workflow-level settings / terminal
 
     /** Sets the queue used by every subsequently defined step (per-step {@code queue} overrides it). */
     public GraphBuilder defaultQueue(String queue) {
@@ -494,7 +489,6 @@ final class GraphBuilder {
         return pipeline.build();
     }
 
-    // ------------------------------------------------------ open-end bookkeeping
 
     /** Appends {@code id}: routes any pending open ends into it (or reports it as the start), then
      *  makes it the sole open end on its NEXT edge. */

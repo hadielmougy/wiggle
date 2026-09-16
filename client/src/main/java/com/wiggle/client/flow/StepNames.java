@@ -67,25 +67,12 @@ final class StepNames {
      * The <em>context key</em> a reference to the context's own accessor stands for:
      * {@code Basket::items} yields {@code "items"}.
      *
-     * <p>Deliberately not {@link #of}, because a key is not a step and the three rules that make a
-     * step name would each be wrong here:
-     * <ul>
-     *   <li><b>the contract rule does not apply.</b> {@link #requireContract} insists a step be named
-     *       through an interface, since a spec only names its steps and the code is bound elsewhere.
-     *       A key names a <em>field of the context</em> -- there is no worker binding to mislead
-     *       about -- and the field lives on the context record, which is a class;</li>
-     *   <li><b>{@link Handles} does not apply.</b> That annotation renames a node so a handler and
-     *       the graph can differ; a key is matched against the persisted JSON, where a record
-     *       component is written under its own name, so an override would silently look up a key
-     *       that is not there;</li>
-     *   <li><b>the worker's name folding does not apply</b> either, for the same reason: the engine
-     *       reads {@code context.get(itemsKey)} exactly, with no folding and no nesting.</li>
-     * </ul>
+     * <p>Not {@link #of}: a key names a field of the context record, so the contract rule,
+     * {@link Handles} overrides and the worker's name folding all deliberately do not apply -- the
+     * key is matched verbatim against the persisted JSON.
      *
-     * <p>What does carry over is the rejection of lambdas and of captured values -- a key must come
-     * from the context type, not from a value in the defining JVM -- and it is stricter: an accessor
-     * bound to a particular instance ({@code someBasket::items}) captures that instance and is
-     * refused, where a step reference legitimately captures its contract.
+     * <p>Lambdas and captured values are refused as in {@link #of}, and more strictly: an accessor
+     * bound to an instance ({@code someBasket::items}) is refused too.
      */
     static String ofKey(Serializable accessorRef) {
         SerializedLambda lambda = serializedForm(accessorRef);

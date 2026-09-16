@@ -20,8 +20,7 @@ import java.util.TreeSet;
 
 /**
  * The worker's reflective seam: turns a {@link ForFlow @ForFlow}-annotated object into
- * executable {@link ActivityHandler}s. Two pure operations, deliberately free of I/O and of the
- * worker's runtime state so every signature rule here is unit-testable against a compiled graph:
+ * executable {@link ActivityHandler}s. Two pure operations -- no I/O, no worker runtime state:
  *
  * <ul>
  *   <li>{@link #scan(Object)} — inventory an object's step methods (by canonical name) and its
@@ -264,7 +263,6 @@ final class HandlerBinder {
         return b.toString();
     }
 
-    // ------------------------------------------------------------------ wrapper construction
 
     /** Builds the handler for a graph node from its matched candidate, validating signature vs kind. */
     private static ActivityHandler buildHandler(HandlerSet set, Node node, Candidate c) {
@@ -507,7 +505,6 @@ final class HandlerBinder {
         return Object.class;
     }
 
-    // ------------------------------------------------------------------ invocation
 
     /** Decodes JSON into {@code type}: a class's {@link Decode @Decode} method if one is registered,
      *  otherwise a raw {@code Map} for Map types, else the record type via reflection. */

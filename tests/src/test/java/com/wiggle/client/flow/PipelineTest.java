@@ -54,7 +54,6 @@ class PipelineTest {
         return p.build().definition();
     }
 
-    // -------------------------------------------------------------------- node ids
 
     @Nested
     @DisplayName("node ids")

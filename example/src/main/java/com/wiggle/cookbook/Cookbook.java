@@ -39,9 +39,7 @@ public final class Cookbook {
 
     private Cookbook() {}
 
-    // ---------------------------------------------------------------------------------------
     // The contexts. Records, so a step's signature says what it consumes and produces.
-    // ---------------------------------------------------------------------------------------
 
     public record Signup(String email) {}
 
@@ -62,9 +60,7 @@ public final class Cookbook {
 
     public record Batch(int done) {}
 
-    // ---------------------------------------------------------------------------------------
     // 1. step + effect + gate -- the smallest linear pipeline with a filter, and a type change.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-linear-gate names; LinearWithGate implements it. */
     public interface LinearGateSteps {
         Signup normalise(Signup s);
@@ -101,9 +97,7 @@ public final class Cookbook {
         }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 2. oneOf + allOf + retry -- an exclusive branch whose arm itself fans out.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-choose-fork names; ChooseThenFork implements it. */
     public interface ChooseForkSteps {
         boolean isLarge(Purchase p);
@@ -155,10 +149,8 @@ public final class Cookbook {
         public Purchase settle(Purchase p) { return new Purchase(p.amount(), p.outcome() + "+settled"); }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 3. forEach + per-step queue -- dynamic fan-out with mixed worker pools. The element IS each
     //    item's context, so the body's steps take an Item, not the Basket.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-foreach-queues names; ForEachAcrossQueues implements it. */
     public interface ForEachSteps {
         Item price(Item i);
@@ -200,10 +192,8 @@ public final class Cookbook {
         }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 4. repeatWhile + gate -- poll-until-ready, with an inner gate short-circuiting a cancelled
     //    job straight out of the loop.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-poll-until-ready names; PollUntilReady implements it. */
     public interface PollSteps {
         boolean notCancelled(Job j);
@@ -238,9 +228,7 @@ public final class Cookbook {
         public Job finish(Job j) { return j; }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 5. thenAwait (timeout + escalation) + oneOf -- branch on how the wait resolved.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-approval-escalation names; ApprovalWithEscalation implements it. */
     public interface ApprovalSteps {
         Expense submit(Expense e);
@@ -283,9 +271,7 @@ public final class Cookbook {
         public void notifySubmitter(Expense e) { System.out.println("   [typed] approval relayed"); }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 6. thenSubFlow + gate + allOf -- compose a registered child workflow into a bigger one.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-parent names; ChildCheckThenFork implements it. */
     public interface ParentSteps {
         boolean childPassed(Classified c);
@@ -328,10 +314,8 @@ public final class Cookbook {
         }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 7. execution(LOCAL_ASYNC) + checkpoint + repeatWhile -- batched local execution with a
     //    deliberate commit point, so a crash mid-loop only replays the current iteration.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-batched-loop names; BatchedLoopWithCheckpoint implements it. */
     public interface BatchedSteps {
         Batch processBatch(Batch b);
@@ -361,11 +345,9 @@ public final class Cookbook {
         public Batch finalise(Batch b) { return b; }
     }
 
-    // ---------------------------------------------------------------------------------------
     // 8. Everything at once -- gate, sub-workflow, oneOf whose arms fan out and fan over a
     //    collection, sleep, signal + escalation, loop, checkpoint, queues. Not idiomatic; a
     //    deliberate stress test of the combination space.
-    // ---------------------------------------------------------------------------------------
     /** What tcb-kitchen-sink names; KitchenSink implements it. */
     public interface KitchenSinkSteps {
         Basket intake(Basket b);

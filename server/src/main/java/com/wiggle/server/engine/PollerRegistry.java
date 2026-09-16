@@ -12,17 +12,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * serves and — for a version-scoped worker — which (workflow, version) pairs it will claim; this
  * remembers the most recent of those per worker, for as long as the worker keeps polling.
  *
- * <p>It exists to answer one question: <b>is there anything READY that no running worker can take?</b>
- * A queue nobody polls, or a version every worker has scoped itself out of, leaves tokens sitting
- * dispatchable forever — not failed, not retried, simply never claimed. That is invisible in every
- * other view, because the instance looks RUNNING and the token looks READY, which is exactly what a
- * healthy system looks like a moment before a worker picks it up.
+ * <p>It answers one question: <b>is there anything READY that no running worker can take?</b> A
+ * queue nobody polls, or a version every worker has scoped itself out of, leaves tokens dispatchable
+ * forever -- not failed, not retried, simply never claimed.
  *
- * <p>Deliberately in memory and deliberately not durable. It is updated on the hottest path in the
- * system, so it must cost a map write and nothing else — no row, no flush. The cost of that choice is
- * that it only knows this node's pollers: in a multi-node cell a worker polling another node is
- * invisible here, so coverage is reported per node and a console aggregates. An entry expires when a
- * worker stops polling for {@link #ttlMillis}, which is how a dead worker stops counting as cover.
+ * <p>In memory and not durable: it is updated on the hottest path, so it costs a map write and
+ * nothing else. It therefore knows only this node's pollers, so coverage is reported per node and a
+ * console aggregates. An entry expires after {@link #ttlMillis} without a poll.
  */
 public final class PollerRegistry {
 
