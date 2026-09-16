@@ -223,6 +223,21 @@ public final class JdbcStorage implements Storage {
               compensated  INT          NOT NULL,
               PRIMARY KEY (instance_id, seq)
             );
+            """),
+            // Instance ids gained an optional cell label ({ns}.c{cell}.e{epoch}.s{shard}.{ulid}), so
+            // 64 characters stopped being comfortable: the fixed part is 31 and the rest is split
+            // between a namespace and a cell id that operators choose. Widening is additive -- every
+            // existing value still fits -- so old and new nodes can share the database through a
+            // rolling deploy. Only the three columns that actually hold an INSTANCE id move; node,
+            // token and schedule ids are generated and bounded, and widening those would be noise.
+            //
+            // On a large wf_token this rewrites the table and its indexes under a lock, so run it in
+            // a maintenance window (or ahead of the deploy with WIGGLE_MIGRATE_ONLY=true) when the
+            // table is big.
+            new Migration(9, "wider-instance-ids", """
+            ALTER TABLE wf_instance ALTER COLUMN id TYPE VARCHAR(128);
+            ALTER TABLE wf_token    ALTER COLUMN instance_id TYPE VARCHAR(128);
+            ALTER TABLE wf_comp_log ALTER COLUMN instance_id TYPE VARCHAR(128);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */

@@ -69,9 +69,16 @@ a ulid may contain dots, so a trailing optional segment would make the legacy id
 parse as cell `foo` with ulid `bar` — silently routing an instance to a cell that never held it.
 Anchored between two fixed markers it cannot be confused with anything.
 
-Ids are capped at 64 characters, the width of the columns that store them, so
-`namespace + cell` has a budget of 33 for a single-digit epoch and shard. `IdCodec.format` refuses
-to mint anything longer rather than letting it fail at the insert.
+Ids are capped at 128 characters, the width of the columns that store them (schema v9 widened
+`wf_instance.id`, `wf_token.instance_id` and `wf_comp_log.instance_id` from 64), so
+`namespace + cell` has a budget of 97 for a single-digit epoch and shard. `IdCodec.format` refuses
+to mint anything longer rather than letting it fail at the insert, where the error would be about a
+column rather than a name.
+
+The migration is additive — every existing value still fits — so old and new nodes can share the
+database through a rolling deploy. On a large `wf_token` it rewrites the table and its indexes under
+a lock, so apply it in a maintenance window, or ahead of the deploy with `WIGGLE_MIGRATE_ONLY=true`,
+when that table is big.
 
 Because epoch and shard are **baked into the id at birth and never recomputed**, resolution is a pure
 lookup — no directory, and the id stays valid for the instance's whole life even as topology changes.
