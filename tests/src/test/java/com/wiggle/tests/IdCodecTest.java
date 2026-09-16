@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Ids;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

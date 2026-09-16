@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.placement.IdCodec;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -88,7 +89,7 @@ class DocSnippetsTest {
             List.of("linear-gate", "choose-fork", "foreach-queues", "poll-until-ready",
                     "approval-escalation", "parent", "batched-loop", "kitchen-sink"),
             // docs that quote the implementation itself, so the quote cannot drift from it
-            "../core/src/main/java/com/wiggle/core/IdCodec.java", List.of("shard-for"),
+            "../placement/src/main/java/com/wiggle/placement/IdCodec.java", List.of("shard-for"),
             "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java",
             List.of("resolve", "invalidate"));
 
@@ -302,7 +303,7 @@ class DocSnippetsTest {
             Map.entry("tut-coordinated", "tutorial/Coordinated.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
-            Map.entry("id-codec", "../core/src/main/java/com/wiggle/core/IdCodec.java"),
+            Map.entry("id-codec", "../placement/src/main/java/com/wiggle/placement/IdCodec.java"),
             Map.entry("coordinated-connection",
                     "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java"));
 

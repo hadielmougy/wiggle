@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.*;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;

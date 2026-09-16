@@ -1,4 +1,4 @@
-package com.wiggle.core;
+package com.wiggle.placement;
 
 import java.util.Optional;
 import java.util.regex.Pattern;

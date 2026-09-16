@@ -43,7 +43,7 @@ Consequences that surprise people:
 
 ## 2. The self-routing id
 
-`core/IdCodec` — `{namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}`:
+`placement/IdCodec` — `{namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}`:
 
 ```
 orders.ccell-a.e2.s5.01H8XK9ABCDEF…

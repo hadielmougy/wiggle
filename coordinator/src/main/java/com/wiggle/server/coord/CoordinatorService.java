@@ -1,13 +1,14 @@
 package com.wiggle.server.coord;
 
 import com.google.protobuf.Struct;
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.proto.ActiveCellsResponse;
 import com.wiggle.proto.AllocatedWorkflow;
 import com.wiggle.proto.CoordinatorHeartbeatResponse;
 import com.wiggle.proto.DeregisterWorkflowResponse;
 import com.wiggle.proto.DumpResponse;
+import com.wiggle.placement.Epochs;
 import com.wiggle.placement.Placements;
 import com.wiggle.placement.Ring;
 import com.wiggle.proto.Endpoint;
@@ -493,29 +494,10 @@ public final class CoordinatorService implements AutoCloseable {
      * {@code currentEpoch + 1} (marking the previous epoch DRAINING). CAS-guarded and retried.
      */
     public Policy doOpenEpoch(String namespace, List<RingSlot> ring) {
-        for (int attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-            Optional<CoordPolicy> current = store.getPolicy(namespace);
-            if (current.isEmpty()) {
-                Map<Long, Ring.Epoch> epochs = new LinkedHashMap<>();
-                epochs.put(0L, new Ring.Epoch(toDomainRing(ring), Ring.Status.OPEN));
-                if (store.casPolicy(namespace, 0, new CoordPolicy(namespace, 0, 0, epochs)) > 0) {
-                    return toProto(store.getPolicy(namespace).orElseThrow());
-                }
-            } else {
-                CoordPolicy c = current.get();
-                long newEpoch = c.currentEpoch() + 1;
-                Map<Long, Ring.Epoch> epochs = new LinkedHashMap<>(c.epochs());
-                Ring.Epoch prev = epochs.get(c.currentEpoch());
-                if (prev != null) {
-                    epochs.put(c.currentEpoch(), new Ring.Epoch(prev.ring(), Ring.Status.DRAINING));
-                }
-                epochs.put(newEpoch, new Ring.Epoch(toDomainRing(ring), Ring.Status.OPEN));
-                if (store.casPolicy(namespace, c.revision(), new CoordPolicy(namespace, newEpoch, 0, epochs)) > 0) {
-                    return toProto(store.getPolicy(namespace).orElseThrow());
-                }
-            }
-        }
-        throw new IllegalStateException("openEpoch: concurrent modification, retries exhausted for " + namespace);
+        // The transition and its compare-and-set retry live in :placement; what stays here is the
+        // wire mapping and the store this coordinator happens to use.
+        Epochs.openEpoch(new CoordinatorPlacementStore(store), namespace, toDomainRing(ring));
+        return toProto(store.getPolicy(namespace).orElseThrow());
     }
 
     // ---- mapping (domain <-> proto) ----

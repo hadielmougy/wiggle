@@ -1,6 +1,5 @@
 package com.wiggle.placement;
 
-import com.wiggle.core.IdCodec;
 import com.wiggle.core.Json;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DynamicTest;

@@ -1,7 +1,7 @@
 package com.wiggle.server;
 
 import com.wiggle.placement.Placements;
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 
 import java.util.ArrayList;
 import java.util.List;

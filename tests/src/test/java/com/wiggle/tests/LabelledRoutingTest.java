@@ -4,7 +4,7 @@ import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 import com.wiggle.dist.WiggleStorageFactory;

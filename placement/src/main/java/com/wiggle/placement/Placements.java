@@ -1,6 +1,5 @@
 package com.wiggle.placement;
 
-import com.wiggle.core.IdCodec;
 
 import java.util.ArrayList;
 import java.util.List;
