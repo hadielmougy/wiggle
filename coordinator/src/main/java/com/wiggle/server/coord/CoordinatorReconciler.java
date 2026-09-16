@@ -1,8 +1,7 @@
 package com.wiggle.server.coord;
 
-import com.wiggle.server.coord.CoordPolicy.EpochRing;
-import com.wiggle.server.coord.CoordPolicy.EpochStatus;
 
+import com.wiggle.placement.Ring;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -82,12 +81,12 @@ public final class CoordinatorReconciler implements AutoCloseable {
             LiveCensus.Aggregate live = census.aggregate(namespace, freshSince);
             if (!live.hasFresh()) return;   // no recent report -> no confirmation of zero -> do not retire
 
-            Map<Long, EpochRing> epochs = new LinkedHashMap<>(c.epochs());
+            Map<Long, Ring.Epoch> epochs = new LinkedHashMap<>(c.epochs());
             boolean changed = false;
-            for (Map.Entry<Long, EpochRing> e : c.epochs().entrySet()) {
-                EpochRing er = e.getValue();
-                if (er.status() == EpochStatus.DRAINING && live.count(e.getKey()) == 0) {
-                    epochs.put(e.getKey(), new EpochRing(er.ring(), EpochStatus.RETIRED));
+            for (Map.Entry<Long, Ring.Epoch> e : c.epochs().entrySet()) {
+                Ring.Epoch er = e.getValue();
+                if (er.status() == Ring.Status.DRAINING && live.count(e.getKey()) == 0) {
+                    epochs.put(e.getKey(), new Ring.Epoch(er.ring(), Ring.Status.RETIRED));
                     changed = true;
                 }
             }
