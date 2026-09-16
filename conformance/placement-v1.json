@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "about": [
+    "Language-neutral conformance cases for wiggle's placement rules: the instance-id format, and",
+    "the decisions that map an id to the cell holding it.",
+    "",
+    "Java, Go and Python each implement these, so each can drift. This file is the shared answer.",
+    "Vendor it beside the .proto files and run it in each client's test suite.",
+    "",
+    "Numbers are integers. 'cell': null means the id carries no cell label, which is not an error --",
+    "it means 'ask the ring', the behaviour of every id minted before labels existed."
+  ],
+
+  "format": [
+    {
+      "name": "namespace, cell, epoch, shard and ulid",
+      "namespace": "acme", "cell": "cell-a", "epoch": 7, "shard": 2, "ulid": "01ABCDEF",
+      "expect": "acme.ccell-a.e7.s2.01ABCDEF"
+    },
+    {
+      "name": "no cell omits the segment -- the pre-label format, unchanged",
+      "namespace": "acme", "cell": null, "epoch": 7, "shard": 2, "ulid": "01ABCDEF",
+      "expect": "acme.e7.s2.01ABCDEF"
+    },
+    {
+      "name": "a blank cell omits it too, rather than minting an empty segment",
+      "namespace": "acme", "cell": "", "epoch": 0, "shard": 0, "ulid": "01ABCDEF",
+      "expect": "acme.e0.s0.01ABCDEF"
+    },
+    {
+      "name": "a ulid may contain dots",
+      "namespace": "ns", "cell": null, "epoch": 0, "shard": 0, "ulid": "weird.ulid.value",
+      "expect": "ns.e0.s0.weird.ulid.value"
+    },
+    {
+      "name": "a namespace with a dot is rejected -- it is the first segment",
+      "namespace": "a.b", "cell": null, "epoch": 0, "shard": 0, "ulid": "01ABCDEF",
+      "error": "namespace"
+    },
+    {
+      "name": "a cell with a dot is rejected for the same reason",
+      "namespace": "ns", "cell": "cell.a", "epoch": 0, "shard": 0, "ulid": "01ABCDEF",
+      "error": "cell id"
+    },
+    {
+      "name": "an id longer than a storage column is refused at mint, not at insert",
+      "namespace": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cell": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "epoch": 0, "shard": 0, "ulid": "01ABCDEF0123456789012345",
+      "error": "128"
+    }
+  ],
+
+  "parse": [
+    {
+      "name": "a labelled id",
+      "id": "acme.ccell-a.e7.s2.01ABCDEF",
+      "namespace": "acme", "cell": "cell-a", "epoch": 7, "shard": 2, "ulid": "01ABCDEF"
+    },
+    {
+      "name": "an unlabelled id parses with a null cell -- not an error",
+      "id": "acme.e7.s2.01ABCDEF",
+      "namespace": "acme", "cell": null, "epoch": 7, "shard": 2, "ulid": "01ABCDEF"
+    },
+    {
+      "name": "a ulid beginning with 'c' and containing a dot is NOT a cell segment",
+      "why": "the label sits before the epoch precisely so this cannot be misread",
+      "id": "ns.e0.s0.cfoo.bar",
+      "namespace": "ns", "cell": null, "epoch": 0, "shard": 0, "ulid": "cfoo.bar"
+    },
+    {
+      "name": "a bare wfi_ id is legacy",
+      "id": "wfi_01ABCDEF", "legacy": true
+    },
+    {
+      "name": "a non-numeric epoch is legacy, not an error",
+      "id": "ns.eX.s0.01ABCDEF", "legacy": true
+    },
+    {
+      "name": "an empty string is legacy",
+      "id": "", "legacy": true
+    }
+  ],
+
+  "policies": {
+    "unplaced": null,
+
+    "single": {
+      "namespace": "acme", "currentEpoch": 0,
+      "epochs": { "0": { "status": "OPEN", "ring": [ { "shard": 0, "cellId": "cell-a" } ] } }
+    },
+
+    "two-cells": {
+      "namespace": "acme", "currentEpoch": 0,
+      "epochs": { "0": { "status": "OPEN", "ring": [
+        { "shard": 0, "cellId": "cell-a" },
+        { "shard": 1, "cellId": "cell-b" }
+      ] } }
+    },
+
+    "resharded": {
+      "namespace": "acme", "currentEpoch": 1,
+      "epochs": {
+        "0": { "status": "DRAINING", "ring": [ { "shard": 0, "cellId": "cell-a" },
+                                               { "shard": 1, "cellId": "cell-a" } ] },
+        "1": { "status": "OPEN",     "ring": [ { "shard": 0, "cellId": "cell-a" },
+                                               { "shard": 1, "cellId": "cell-b" } ] }
+      }
+    },
+
+    "retired-old": {
+      "namespace": "acme", "currentEpoch": 1,
+      "epochs": {
+        "0": { "status": "RETIRED", "ring": [ { "shard": 0, "cellId": "old-cell" } ] },
+        "1": { "status": "OPEN",    "ring": [ { "shard": 0, "cellId": "cell-a" } ] }
+      }
+    }
+  },
+
+  "resolve": [
+    {
+      "name": "unlabelled: the epoch's ring answers",
+      "policy": "single", "id": "acme.e0.s0.01ABCDEF", "live": ["cell-a"], "expect": "cell-a"
+    },
+    {
+      "name": "a shard beyond the ring wraps into it, so no id is unroutable",
+      "policy": "two-cells", "id": "acme.e0.s7.01ABCDEF", "live": ["cell-a", "cell-b"],
+      "expect": "cell-b"
+    },
+    {
+      "name": "an id keeps resolving through ITS epoch after a reshard moved its shard",
+      "why": "shard 1 belongs to cell-b at epoch 1, but this instance was written at epoch 0",
+      "policy": "resharded", "id": "acme.e0.s1.01ABCDEF", "live": ["cell-a", "cell-b"],
+      "expect": "cell-a"
+    },
+    {
+      "name": "a new id on the same shard goes to the new owner",
+      "policy": "resharded", "id": "acme.e1.s1.01ABCDEF", "live": ["cell-a", "cell-b"],
+      "expect": "cell-b"
+    },
+    {
+      "name": "the label wins over the ring when its cell is live",
+      "why": "the ring says where a shard belongs; the label says where the instance was written",
+      "policy": "single", "id": "acme.ccell-b.e0.s0.01ABCDEF", "live": ["cell-a", "cell-b"],
+      "expect": "cell-b"
+    },
+    {
+      "name": "a label whose cell has no live nodes falls back to the ring",
+      "policy": "single", "id": "acme.ccell-b.e0.s0.01ABCDEF", "live": ["cell-a"],
+      "expect": "cell-a"
+    },
+    {
+      "name": "a label agreeing with the ring changes nothing",
+      "policy": "single", "id": "acme.ccell-a.e0.s0.01ABCDEF", "live": ["cell-a"],
+      "expect": "cell-a"
+    },
+    {
+      "name": "an unplaced namespace resolves to nothing",
+      "policy": "unplaced", "id": "acme.e0.s0.01ABCDEF", "live": [], "expect": null
+    },
+    {
+      "name": "an epoch with no ring resolves to nothing",
+      "policy": "single", "id": "acme.e9.s0.01ABCDEF", "live": ["cell-a"], "expect": null
+    },
+    {
+      "name": "a retired epoch still resolves -- retired is about work, not addressing",
+      "policy": "retired-old", "id": "acme.e0.s0.01ABCDEF", "live": ["cell-a", "old-cell"],
+      "expect": "old-cell"
+    }
+  ],
+
+  "mintable": [
+    {
+      "name": "a cell the current ring names may mint its own shards",
+      "policy": "two-cells", "cell": "cell-a",
+      "expect": { "epoch": 0, "shards": [0], "reason": "OK" }
+    },
+    {
+      "name": "and only its own",
+      "policy": "two-cells", "cell": "cell-b",
+      "expect": { "epoch": 0, "shards": [1], "reason": "OK" }
+    },
+    {
+      "name": "a ring that excludes the cell puts it on standby",
+      "policy": "single", "cell": "cell-b",
+      "expect": { "epoch": 0, "shards": [], "reason": "STANDBY" }
+    },
+    {
+      "name": "an unplaced namespace is not standby -- nobody decided anything",
+      "policy": "unplaced", "cell": "cell-a",
+      "expect": { "epoch": 0, "shards": [], "reason": "NO_RING" }
+    },
+    {
+      "name": "a draining epoch serves but does not mint",
+      "policy": "resharded", "cell": "cell-a",
+      "expect": { "epoch": 1, "shards": [0], "reason": "OK" }
+    },
+    {
+      "name": "after a reshard the new owner mints its shard",
+      "policy": "resharded", "cell": "cell-b",
+      "expect": { "epoch": 1, "shards": [1], "reason": "OK" }
+    },
+    {
+      "name": "a cell only in a retired epoch mints nothing",
+      "policy": "retired-old", "cell": "old-cell",
+      "expect": { "epoch": 1, "shards": [], "reason": "STANDBY" }
+    }
+  ]
+}
