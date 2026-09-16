@@ -1,7 +1,9 @@
 package com.wiggle.server;
 
+import com.wiggle.placement.Placements;
 import com.wiggle.core.IdCodec;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -110,12 +112,19 @@ public final class CellPlacement {
     /** The epoch and shard a single new id is stamped with. */
     public record Stamp(long epoch, int shard) {}
 
+    /**
+     * Which shard a new id lands on, from the shared rule in {@link Placements}. The refusal when
+     * this cell owns nothing -- standby -- is the same decision the coordinator makes when it tells
+     * a cell it may not mint, so it is stated once rather than in both.
+     */
     private static int shardOf(Snapshot s, String ulid) {
         int[] sh = s.shards();
-        if (sh.length == 0) {
-            throw new IllegalStateException("cell is on standby (not named in epoch " + s.epoch()
-                    + "'s ring); it is not accepting new instances until an epoch places it");
+        List<Integer> owned = new ArrayList<>(sh.length);
+        for (int shard : sh) owned.add(shard);
+        try {
+            return Placements.mintShard(owned, ulid);
+        } catch (IllegalStateException e) {
+            throw new IllegalStateException(e.getMessage() + " (epoch " + s.epoch() + ")", e);
         }
-        return sh.length == 1 ? sh[0] : sh[(int) IdCodec.shardFor(ulid, sh.length)];
     }
 }

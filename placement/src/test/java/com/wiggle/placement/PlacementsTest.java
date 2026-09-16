@@ -165,6 +165,35 @@ class PlacementsTest {
         assertFalse(active.contains("old-cell"), "retired means drained: nothing left to poll");
     }
 
+    @Test @DisplayName("a cell only ever mints a shard it owns -- never index arithmetic into the shard space")
+    void mintShardStaysWithinTheOwnedSet() {
+        Random rnd = new Random(SEED);
+        for (int trial = 0; trial < 3000; trial++) {
+            // an arbitrary, non-contiguous set of owned shards -- the case that breaks a naive
+            // implementation that hashes over the shard space instead of over the owned set
+            List<Integer> owned = new ArrayList<>();
+            int candidates = 1 + rnd.nextInt(12);
+            for (int i = 0; i < candidates; i++) {
+                int shard = rnd.nextInt(64);
+                if (!owned.contains(shard)) owned.add(shard);
+            }
+            String ulid = Ids.token();
+
+            int got = Placements.mintShard(owned, ulid);
+            assertTrue(owned.contains(got), "trial " + trial + " (seed " + SEED + "): owned " + owned
+                    + " minted " + got + ", which it does not hold");
+            assertEquals(got, Placements.mintShard(owned, ulid),
+                    "the same ulid must always land on the same shard");
+        }
+    }
+
+    @Test @DisplayName("a cell owning nothing refuses to mint rather than falling back to shard 0")
+    void standbyRefusesToMint() {
+        IllegalStateException e = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> Placements.mintShard(List.of(), Ids.token()));
+        assertTrue(e.getMessage().contains("standby"), e.getMessage());
+    }
+
     // ---------------------------------------------------------------- generators
 
     private static List<String> cells(Random rnd, int n) {

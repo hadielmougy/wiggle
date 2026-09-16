@@ -106,6 +106,28 @@ public final class Placements {
         return Optional.of(ring.get(Math.floorMod(shard, ring.size())).cellId());
     }
 
+    /**
+     * Which of a cell's own shards a new id lands on.
+     *
+     * <p>The counterpart to {@link #cellFor}: that maps a shard to its cell, this maps a ulid to one
+     * of the shards a cell holds. The hash runs over the <em>size of the owned set</em> and indexes
+     * into it, so a cell owning {@code [3, 7]} mints 3 or 7 and never 0 or 1 — getting that wrong
+     * puts ids on shards the cell does not own, which resolves them to somebody else.
+     *
+     * <p>Refuses when the cell owns nothing. That is standby, and minting the genesis shard from it
+     * would forge an id claiming a placement this cell does not hold.
+     *
+     * @throws IllegalStateException when {@code owned} is empty
+     */
+    public static int mintShard(List<Integer> owned, String ulid) {
+        if (owned == null || owned.isEmpty()) {
+            throw new IllegalStateException("cell is on standby (its epoch's ring does not name it); "
+                    + "it is not accepting new instances until an epoch places it");
+        }
+        if (owned.size() == 1) return owned.get(0);
+        return owned.get((int) IdCodec.shardFor(ulid, owned.size()));
+    }
+
     /** Every cell hosting live work: any that appears in an epoch still open or draining. */
     public static List<String> activeCells(Ring.Policy policy) {
         if (policy == null) return List.of();
