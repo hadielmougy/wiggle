@@ -43,18 +43,35 @@ Consequences that surprise people:
 
 ## 2. The self-routing id
 
-`core/IdCodec` — `{namespace}.e{epoch}.s{shard}.{ulid}`:
+`core/IdCodec` — `{namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}`:
 
 ```
-orders.e2.s5.01H8XK9ABCDEF…
-└─┬──┘ ┬  ┬  └──── ulid ────┘
- ns   epoch shard
+orders.ccell-a.e2.s5.01H8XK9ABCDEF…
+└─┬──┘  └─┬──┘ ┬  ┬  └──── ulid ────┘
+ ns      cell epoch shard
 ```
 
 - **namespace** — the tenant/workflow family (no `.`; it's the first segment).
+- **cell** — *optional*: the cell that minted this id, stamped when `WIGGLE_CELL_ID` is set.
 - **epoch** — which *version* of the placement map applies to this instance (§4).
 - **shard** — which logical slice of the key space this instance belongs to (§3).
 - Legacy `wfi_…` ids don't parse and route to the genesis cell (pre-adoption compatibility).
+
+**Why both a cell and a shard.** Epoch and shard say where an instance *belongs* under the current
+ring, which is what makes resharding possible. The cell says where it was actually *written*, which
+is what makes routing possible with no ring at all — a deployment that never reshards can route on
+the label alone and ignore the placement policy entirely. Under a coordinator the label is
+redundant, because the id's own epoch already resolves through the ring that was live when it was
+minted; without one it is the only thing that can answer the question.
+
+The label sits **before** the epoch rather than after the shard, and that position is load-bearing:
+a ulid may contain dots, so a trailing optional segment would make the legacy id `ns.e0.s0.cfoo.bar`
+parse as cell `foo` with ulid `bar` — silently routing an instance to a cell that never held it.
+Anchored between two fixed markers it cannot be confused with anything.
+
+Ids are capped at 64 characters, the width of the columns that store them, so
+`namespace + cell` has a budget of 33 for a single-digit epoch and shard. `IdCodec.format` refuses
+to mint anything longer rather than letting it fail at the insert.
 
 Because epoch and shard are **baked into the id at birth and never recomputed**, resolution is a pure
 lookup — no directory, and the id stays valid for the instance's whole life even as topology changes.

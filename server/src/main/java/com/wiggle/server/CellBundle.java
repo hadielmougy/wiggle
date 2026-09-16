@@ -35,7 +35,7 @@ final class CellBundle implements ServerBundle {
         String ns = config.namespace();
         this.placement = ns == null || ns.isBlank() ? null : new CellPlacement();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
-                idMinter(ns, placement));
+                idMinter(ns, config.cellId(), placement));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch());
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
@@ -47,20 +47,26 @@ final class CellBundle implements ServerBundle {
     }
 
     /**
-     * How new instance ids are minted. With a namespace configured (a coordinator-managed cell) the id
-     * is epoch-aware ({@code ns.e{epoch}.s{shard}.ulid}), with the epoch and shard taken from the live
-     * {@link CellPlacement} the coordinator supplies at registration (defaulting to epoch 0 / shard 0
-     * until then). Without a namespace (standalone) it stays the legacy {@code wfi_} form, which the
-     * codec treats as a legacy id routed to the genesis cell.
+     * How new instance ids are minted: {@code ns[.c{cell}].e{epoch}.s{shard}.ulid}.
+     *
+     * <p>The namespace is what makes an id routable at all, so without one this stays the legacy
+     * {@code wfi_} form. Epoch and shard come from the live {@link CellPlacement} the coordinator
+     * supplies at registration (epoch 0 / shard 0 until then, and for a cell with no coordinator).
+     *
+     * <p>The cell label is stamped whenever {@code WIGGLE_CELL_ID} is set, <em>including</em> on a
+     * cell that runs without a coordinator. That is the point of it: epoch and shard say where an
+     * instance belongs under a ring, the cell says where it was actually written, and only the
+     * second one still means something in a deployment that has no ring to consult.
      */
-    private static Supplier<String> idMinter(String ns, CellPlacement placement) {
-        if (placement == null) {
+    private static Supplier<String> idMinter(String ns, String cellId, CellPlacement placement) {
+        if (ns == null || ns.isBlank()) {
             return () -> Ids.next("wfi");
         }
+        CellPlacement live = placement == null ? new CellPlacement() : placement;
         return () -> {
             String ulid = Ids.token();
-            CellPlacement.Stamp st = placement.stampFor(ulid);   // atomic (epoch, shard) -- see CellPlacement
-            return IdCodec.format(ns, st.epoch(), st.shard(), ulid);
+            CellPlacement.Stamp st = live.stampFor(ulid);   // atomic (epoch, shard) -- see CellPlacement
+            return IdCodec.format(ns, cellId, st.epoch(), st.shard(), ulid);
         };
     }
 

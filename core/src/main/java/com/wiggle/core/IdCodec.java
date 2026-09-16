@@ -4,39 +4,86 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * The epoch-aware instance id: {@code {namespace}.e{epoch}.s{shard}.{ulid}}. The id <em>is</em> the
+ * The instance id: {@code {namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}}. The id <em>is</em> the
  * routing record -- an instance's cell is a pure function of its id plus the (bounded) placement
  * policy, so the coordinator never stores a per-instance directory (R16). See the design reference §6.
+ *
+ * <p>The optional {@code .c{cell}} segment names the cell that <em>minted</em> the id. Epoch and
+ * shard say where an instance belongs under the current ring, which is what makes resharding
+ * possible; the cell says where it was actually written, which is what makes routing possible with
+ * no ring at all. A deployment that never reshards can route on the label alone and ignore the
+ * placement policy entirely.
+ *
+ * <p>It sits between the namespace and the epoch rather than after the shard, and that position is
+ * load-bearing. A ulid may contain dots ({@link #format} only forbids them in the namespace and the
+ * cell), so an optional trailing segment would be ambiguous: the legacy id
+ * {@code ns.e0.s0.cfoo.bar} would parse as cell {@code foo} with ulid {@code bar}. Anchored between
+ * two fixed markers it cannot be confused with anything.
  *
  * <p>Legacy ids (a bare {@code wfi_...} minted before a namespace was configured, or pre-adoption)
  * do not match and {@link #parse} returns empty; callers route those to the genesis cell (§7).
  */
 public final class IdCodec {
 
-    // namespace has no '.', then .e<digits> .s<digits> . <ulid rest>
-    private static final Pattern PATTERN = Pattern.compile("^([^.]+)\\.e(\\d+)\\.s(\\d+)\\.(.+)$");
+    // namespace (no '.'), optional .c<cell> (no '.'), then .e<digits> .s<digits> . <ulid rest>
+    private static final Pattern PATTERN =
+            Pattern.compile("^([^.]+)(?:\\.c([^.]+))?\\.e(\\d+)\\.s(\\d+)\\.(.+)$");
+
+    /** Instance-id columns are {@code VARCHAR(64)}; minting something longer fails at insert. */
+    public static final int MAX_LENGTH = 64;
 
     private IdCodec() {}
 
-    /** A parsed epoch-aware id. */
-    public record Placement(String namespace, long epoch, long shard, String ulid) {}
+    /**
+     * A parsed id. {@code cellId} is null for an id minted before cells were stamped, which is not
+     * an error -- it means "ask the placement policy", exactly as before.
+     */
+    public record Placement(String namespace, String cellId, long epoch, long shard, String ulid) {
 
-    /** Builds an id. The namespace must not contain '.' (it is the id's first segment). */
-    public static String format(String namespace, long epoch, long shard, String ulid) {
-        if (namespace == null || namespace.isEmpty() || namespace.indexOf('.') >= 0) {
-            throw new IllegalArgumentException("namespace must be non-empty and contain no '.': '" + namespace + "'");
-        }
-        return namespace + ".e" + epoch + ".s" + shard + "." + ulid;
+        /** True when the id names the cell that minted it, so routing needs no ring. */
+        public boolean hasCell() { return cellId != null; }
     }
 
-    /** Parses an epoch-aware id, or empty for a legacy id. */
+    /** Builds an id with no cell label -- the pre-cell format, still minted by a cell that has no id. */
+    public static String format(String namespace, long epoch, long shard, String ulid) {
+        return format(namespace, null, epoch, shard, ulid);
+    }
+
+    /**
+     * Builds an id. The namespace and cell must not contain {@code '.'} (they are id segments); a
+     * null or blank cell omits the segment.
+     */
+    public static String format(String namespace, String cellId, long epoch, long shard, String ulid) {
+        requireSegment(namespace, "namespace");
+        String cell = cellId == null || cellId.isBlank() ? null : cellId;
+        if (cell != null) requireSegment(cell, "cell id");
+
+        String id = namespace + (cell == null ? "" : ".c" + cell)
+                + ".e" + epoch + ".s" + shard + "." + ulid;
+        if (id.length() > MAX_LENGTH) {
+            // Fail here rather than at the insert, where the message is about a column
+            throw new IllegalArgumentException("instance id would be " + id.length()
+                    + " characters, over the " + MAX_LENGTH + " an id column holds: '" + id
+                    + "'. Shorten the namespace or the cell id.");
+        }
+        return id;
+    }
+
+    private static void requireSegment(String value, String what) {
+        if (value == null || value.isEmpty() || value.indexOf('.') >= 0) {
+            throw new IllegalArgumentException(
+                    what + " must be non-empty and contain no '.': '" + value + "'");
+        }
+    }
+
+    /** Parses an id, or empty for a legacy one. */
     public static Optional<Placement> parse(String id) {
         if (id == null) return Optional.empty();
         var m = PATTERN.matcher(id);
         if (!m.matches()) return Optional.empty();
         try {
-            return Optional.of(new Placement(m.group(1), Long.parseLong(m.group(2)),
-                    Long.parseLong(m.group(3)), m.group(4)));
+            return Optional.of(new Placement(m.group(1), m.group(2), Long.parseLong(m.group(3)),
+                    Long.parseLong(m.group(4)), m.group(5)));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
