@@ -77,7 +77,8 @@ public final class Main {
         String logFile = System.getenv("WIGGLE_LOG_FILE");
         if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
 
-        String cellId = System.getenv().getOrDefault("WIGGLE_CELL_ID", "");
+        // read once, by ServerConfig -- the cell also stamps it into every id it mints
+        String cellId = config.cellId() == null ? "" : config.cellId();
         // A coordinator-role node runs no cell (no placement, no engine) -> no runtime to report.
         CoordinatorLink.CellRuntime runtime = server.placement() == null ? null
                 : new CoordinatorLink.CellRuntime(server.placement(), server.engine()::liveCountByEpoch);
