@@ -29,8 +29,16 @@ public final class IdCodec {
     private static final Pattern PATTERN =
             Pattern.compile("^([^.]+)(?:\\.c([^.]+))?\\.e(\\d+)\\.s(\\d+)\\.(.+)$");
 
-    /** Instance-id columns are {@code VARCHAR(64)}; minting something longer fails at insert. */
-    public static final int MAX_LENGTH = 64;
+    /**
+     * Instance-id columns are {@code VARCHAR(128)} (schema v9); minting something longer would fail
+     * at the insert, so {@link #format} refuses it here where the message can name the cause.
+     *
+     * <p>A database still on v8 has 64-character columns. The migration runs at startup before the
+     * node serves, so a normally-deployed cell cannot mint an id its own store rejects -- but a
+     * schema owned by a DBA ({@code WIGGLE_SCHEMA_MODE=verify}) must be migrated before the cell
+     * that uses long names starts.
+     */
+    public static final int MAX_LENGTH = 128;
 
     private IdCodec() {}
 

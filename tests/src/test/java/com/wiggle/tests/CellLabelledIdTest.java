@@ -94,4 +94,27 @@ class CellLabelledIdTest {
             assertEquals("cell-a", IdCodec.parse(persisted).orElseThrow().cellId());
         }
     }
+
+    @Test @DisplayName("a long namespace and cell round-trip through storage -- what widening bought")
+    void longIdsFitTheWidenedColumn() throws Exception {
+        // 64 characters would not have held this; schema v9 widened the three instance-id columns.
+        String ns = "orders-fulfilment-eu-west";          // 25
+        String cell = "pooled-cell-frankfurt-03";         // 24
+        ServerConfig config = config().withNamespace(ns).withCellId(cell);
+
+        try (WiggleServer server = new WiggleServer(config, new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+            client.register(spec());
+            String id = client.start("labelled", Map.of());
+
+            assertTrue(id.length() > 64, "the point of the migration: " + id + " is " + id.length());
+            assertTrue(id.length() <= IdCodec.MAX_LENGTH, id);
+
+            // it is not enough that the id was minted -- it has to survive the insert and come back
+            assertEquals(id, client.instance(id).id());
+            IdCodec.Placement p = IdCodec.parse(id).orElseThrow();
+            assertEquals(ns, p.namespace());
+            assertEquals(cell, p.cellId());
+        }
+    }
 }

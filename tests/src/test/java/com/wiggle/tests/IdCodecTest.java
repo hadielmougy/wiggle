@@ -136,9 +136,9 @@ class IdCodecTest {
 
     @Test @DisplayName("an id too long for its column fails at mint, naming the reason")
     void lengthIsGuardedAtMint() {
-        // id columns are VARCHAR(64); the budget is namespace + cell + 31 for a single-digit
-        // epoch and shard. Failing here beats failing at the insert with a column error.
-        String longNs = "a".repeat(30);
+        // id columns are VARCHAR(128) from schema v9; the budget is namespace + cell + 31 for a
+        // single-digit epoch and shard. Failing here beats failing at the insert with a column error.
+        String longNs = "a".repeat(100);
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> IdCodec.format(longNs, "some-rather-long-cell-name", 0, 0, Ids.token()));
         assertTrue(e.getMessage().contains("over the " + IdCodec.MAX_LENGTH), e.getMessage());
