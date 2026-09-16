@@ -10,7 +10,7 @@ import com.wiggle.proto.NodeConfig;
 import com.wiggle.proto.RegisterRequest;
 import com.wiggle.proto.RegisterResponse;
 import com.wiggle.proto.RegisteredNode;
-import com.wiggle.server.CellPlacement;
+import com.wiggle.placement.LivePlacement;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
@@ -64,7 +64,7 @@ public final class HttpCoordinatorLink implements CoordinatorLink {
         beat.scheduleAtFixedRate(this::heartbeat, period, period, TimeUnit.SECONDS);
     }
 
-    private CellPlacement placement() {
+    private LivePlacement placement() {
         CoordinatorLink.CellRuntime r = runtime;
         return r == null ? null : r.placement();
     }
@@ -125,7 +125,7 @@ public final class HttpCoordinatorLink implements CoordinatorLink {
     }
 
     private void applyPlacement(long epoch, java.util.List<Integer> shards) {
-        CellPlacement p = placement();
+        LivePlacement p = placement();
         if (p != null) p.set(epoch, shards);
     }
 

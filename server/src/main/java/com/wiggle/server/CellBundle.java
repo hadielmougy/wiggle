@@ -1,5 +1,6 @@
 package com.wiggle.server;
 
+import com.wiggle.placement.LivePlacement;
 import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Ids;
 import com.wiggle.server.cluster.ClusterManager;
@@ -29,11 +30,11 @@ final class CellBundle implements ServerBundle {
     /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
     private final HealthServer health;
     /** Null for a standalone cell; the coordinator-managed placement otherwise. */
-    private final CellPlacement placement;
+    private final LivePlacement placement;
 
     CellBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
         String ns = config.namespace();
-        this.placement = ns == null || ns.isBlank() ? null : new CellPlacement();
+        this.placement = ns == null || ns.isBlank() ? null : new LivePlacement();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
                 idMinter(ns, config.cellId(), placement));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
@@ -50,7 +51,7 @@ final class CellBundle implements ServerBundle {
      * How new instance ids are minted: {@code ns[.c{cell}].e{epoch}.s{shard}.ulid}.
      *
      * <p>The namespace is what makes an id routable at all, so without one this stays the legacy
-     * {@code wfi_} form. Epoch and shard come from the live {@link CellPlacement} the coordinator
+     * {@code wfi_} form. Epoch and shard come from the live {@link LivePlacement} the coordinator
      * supplies at registration (epoch 0 / shard 0 until then, and for a cell with no coordinator).
      *
      * <p>The cell label is stamped whenever {@code WIGGLE_CELL_ID} is set, <em>including</em> on a
@@ -58,20 +59,20 @@ final class CellBundle implements ServerBundle {
      * instance belongs under a ring, the cell says where it was actually written, and only the
      * second one still means something in a deployment that has no ring to consult.
      */
-    private static Supplier<String> idMinter(String ns, String cellId, CellPlacement placement) {
+    private static Supplier<String> idMinter(String ns, String cellId, LivePlacement placement) {
         if (ns == null || ns.isBlank()) {
             return () -> Ids.next("wfi");
         }
-        CellPlacement live = placement == null ? new CellPlacement() : placement;
+        LivePlacement live = placement == null ? new LivePlacement() : placement;
         return () -> {
             String ulid = Ids.token();
-            CellPlacement.Stamp st = live.stampFor(ulid);   // atomic (epoch, shard) -- see CellPlacement
+            LivePlacement.Stamp st = live.stampFor(ulid);   // atomic (epoch, shard) -- see LivePlacement
             return IdCodec.format(ns, cellId, st.epoch(), st.shard(), ulid);
         };
     }
 
     /** The coordinator-managed placement (epoch + owned shards); null for a standalone cell. */
-    @Override public CellPlacement placement() { return placement; }
+    @Override public LivePlacement placement() { return placement; }
 
     @Override public void start() {
         housekeeper.start();

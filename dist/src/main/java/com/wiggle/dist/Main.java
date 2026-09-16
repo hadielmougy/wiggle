@@ -88,7 +88,7 @@ public final class Main {
         // Self-heal: if a start hits standby (routed here right after an epoch bump, before our next
         // heartbeat applied it), re-fetch placement on-demand and retry instead of failing.
         if (server.placement() != null) {
-            server.placement().onStandbyRefresh(coordinator::refreshPlacement);
+            server.placement().onStandby(coordinator::refreshPlacement);
         }
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

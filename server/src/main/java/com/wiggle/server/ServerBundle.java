@@ -1,5 +1,6 @@
 package com.wiggle.server;
 
+import com.wiggle.placement.LivePlacement;
 import com.wiggle.server.engine.WorkflowEngine;
 
 /**
@@ -27,5 +28,5 @@ interface ServerBundle {
      * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
      * cell and for the coordinator role. The coordinator link re-points it when the policy changes.
      */
-    default CellPlacement placement() { return null; }
+    default LivePlacement placement() { return null; }
 }

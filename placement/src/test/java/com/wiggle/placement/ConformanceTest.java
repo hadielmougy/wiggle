@@ -16,7 +16,6 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -60,7 +59,7 @@ class ConformanceTest {
             tests.add(DynamicTest.dynamicTest("mintable: " + c.get("name"), () -> runMintable(c, policies)));
         }
 
-        assertEquals(30, tests.size(), "every case in the file must run; found " + tests.size());
+        assertEquals(31, tests.size(), "every case in the file must run; found " + tests.size());
         return tests;
     }
 
@@ -119,7 +118,11 @@ class ConformanceTest {
         assertEquals(ints(expect.get("shards")), m.shards(), "shards");
         assertEquals(String.valueOf(expect.get("reason")), m.reason().name(), "reason");
         assertEquals("OK".equals(expect.get("reason")), m.allowed(), "allowed");
-        if (!m.allowed()) assertFalse(m.shards().isEmpty() && !m.shards().isEmpty());   // shards empty
+        if (!m.allowed()) {
+            assertTrue(m.shards().isEmpty(),
+                    "a cell that may not mint must be offered no shards, or a caller that checks the "
+                    + "list instead of the reason would mint anyway: " + m.shards());
+        }
     }
 
     // ---------------------------------------------------------------- fixture decoding

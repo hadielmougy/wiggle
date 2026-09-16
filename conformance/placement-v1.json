@@ -114,6 +114,13 @@
         "0": { "status": "RETIRED", "ring": [ { "shard": 0, "cellId": "old-cell" } ] },
         "1": { "status": "OPEN",    "ring": [ { "shard": 0, "cellId": "cell-a" } ] }
       }
+    },
+
+    "current-draining": {
+      "namespace": "acme", "currentEpoch": 0,
+      "epochs": {
+        "0": { "status": "DRAINING", "ring": [ { "shard": 0, "cellId": "cell-a" } ] }
+      }
     }
   },
 
@@ -191,7 +198,7 @@
       "expect": { "epoch": 0, "shards": [], "reason": "NO_RING" }
     },
     {
-      "name": "a draining epoch serves but does not mint",
+      "name": "a cell also named by a draining epoch still mints into the current one",
       "policy": "resharded", "cell": "cell-a",
       "expect": { "epoch": 1, "shards": [0], "reason": "OK" }
     },
@@ -204,6 +211,12 @@
       "name": "a cell only in a retired epoch mints nothing",
       "policy": "retired-old", "cell": "old-cell",
       "expect": { "epoch": 1, "shards": [], "reason": "STANDBY" }
+    },
+    {
+      "name": "a cell owning shards in a current epoch that is not open mints nothing",
+      "why": "no correct writer leaves a policy like this -- but it is read from a shared store, so a peer running older or wrong code can, and minting into a draining epoch must be refused rather than assumed impossible",
+      "policy": "current-draining", "cell": "cell-a",
+      "expect": { "epoch": 0, "shards": [], "reason": "NOT_OPEN" }
     }
   ]
 }
