@@ -67,7 +67,7 @@ the two parallel arms.
 
 ## 1. What is Wiggle?
 
-Wiggle is a **durable workflow engine** — and the control plane to shard it. You define a
+Wiggle is a **durable workflow engine**: a JAR and a database. You define a
 business process as pure **topology** (named steps and how they chain, branch, and rejoin);
 Wiggle persists every instance as tokens moving over that graph, so a process **survives
 restarts, retries, and worker death** and resumes exactly where it left off. Steps are executed
@@ -106,7 +106,7 @@ steps it serves:
 
 ## 2. Deployment & running options
 
-One codebase, four postures — start embedded, end sharded, **without rewriting your workflows**.
+One codebase, three postures — start embedded, grow into a cluster, **without rewriting your workflows**.
 
 | Mode | What it is |
 |---|---|
@@ -401,8 +401,6 @@ class per recipe where the other is a topology file plus a handlers file.
   an identical graph is a no-op; in-flight instances keep the version they started on.
 - **Queues route steps** — each step can name a queue (`step("render", "gpu")`); worker pools
   subscribe to queues, so one flow's steps spread across many services with no broker.
-- **Epochs, not migrations** — resharding publishes a new ring under a new epoch. New work lands
-  by the new ring; old work drains in place. The id says which ring applies.
 - **Local step chaining** — `LOCAL_SYNC` / `LOCAL_ASYNC` execution modes let a worker run
   consecutive same-queue steps back-to-back, cutting server round-trips for step-heavy flows
   (see [docs/local-execution.md](docs/local-execution.md)).
@@ -446,7 +444,7 @@ combine → notify → audit, `LOCAL_ASYNC` mode), every step durably committed 
 | Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
 | Cluster | kind (Kubernetes-in-Docker) inside a 10-CPU / 7.7 GB Docker Desktop VM |
 | Topology | 2 server nodes, **each its own PostgreSQL 16** (fresh DBs) · no pod resource limits<br><sub>(run on the multi-cell topology of the time; the control plane sat outside the execution path)</sub> |
-| Client side | submitter + 1 worker (`concurrency=100` per cell) on the host, gRPC via `kubectl port-forward` |
+| Client side | submitter + 1 worker (`concurrency=100` per node) on the host, gRPC via `kubectl port-forward` |
 | Runtime | OpenJDK 21 |
 
 **Adaptive polling** (opt-in flags; each reacts to what the last poll observed — never to queue
@@ -465,7 +463,7 @@ measurably ate the ceiling — the fix and its A/B are in the repo history).
 
 Honest footnotes: the submitter, worker, Kubernetes, the server nodes, and the databases all
 share those 10 cores — a floor, not a ceiling.
-The same is true of nodes: an A/B run showed 2 nodes per cell on this single box does *not*
+The same is true of nodes: an A/B run showed 2 nodes on one database on this single box does *not*
 raise the ceiling — nodes multiply availability and API capacity, never database throughput.
 And measured on **fresh databases** deliberately: after a day of accumulated benchmark history
 (~500k retained instances / ~900k token rows) the same setup showed ~2× the latency at 300/s —
@@ -491,7 +489,7 @@ Everything defaults sensibly; override by environment variable (or the same-name
 property). The tables below are the ones you'll actually touch — the **complete** reference,
 including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onboarding.md)**.
 
-### Server / cell node
+### Server node
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -527,7 +525,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_DASHBOARD_PORT` | `8090` | HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS + the client certs it presents to cells |
+| `WIGGLE_TLS_*` | *(unset)* | HTTPS + the client certs it presents to the server |
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
 > upgrades it to mTLS; the console adds operator/viewer authorization. TLS authenticates the
