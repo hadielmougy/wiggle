@@ -67,6 +67,13 @@ public final class InMemoryStorage implements Storage {
         }
     }
 
+    /** A global lock over direct mutation: an aborted unit leaves its writes behind. */
+    @Override public boolean transactional() { return false; }
+
+    private String journalOwner;
+    private long journalGeneration;
+    private long journalLeaseUntil;
+
     @Override public void close() { }
 
     /** instanceId -> compensation log entries (seq-ordered append). */
@@ -207,6 +214,42 @@ public final class InMemoryStorage implements Storage {
                 claimed.add(live.clone());
             }
             return claimed;
+        }
+
+        @Override public List<Token> readyTasks(Set<String> queues, Set<WorkflowVersion> versions,
+                                                 int max, long now) {
+            List<Token> out = new ArrayList<>();
+            for (Token live : readyTasks) {
+                if (out.size() >= max) break;
+                if (live.availableAt > now) break;   // ordered by availableAt: the rest are future
+                if (queues != null && !queues.isEmpty() && !queues.contains(live.queue)) continue;
+                if (versions != null && !versions.isEmpty()
+                        && !versions.contains(new WorkflowVersion(live.workflow, live.version))) continue;
+                out.add(live.clone());
+            }
+            return out;
+        }
+
+        @Override public long claimJournalLease(String owner, long leaseMillis) {
+            long now = System.currentTimeMillis();
+            if (journalOwner != null && !journalOwner.equals(owner) && journalLeaseUntil >= now) return -1;
+            journalOwner = owner;
+            journalGeneration++;
+            journalLeaseUntil = now + leaseMillis;
+            return journalGeneration;
+        }
+
+        @Override public boolean fenceJournalLease(String owner, long generation, long leaseUntil) {
+            if (!owner.equals(journalOwner) || generation != journalGeneration) return false;
+            journalLeaseUntil = leaseUntil;
+            return true;
+        }
+
+        @Override public void releaseJournalLease(String owner, long generation) {
+            if (owner.equals(journalOwner) && generation == journalGeneration) {
+                journalOwner = null;
+                journalLeaseUntil = 0;
+            }
         }
 
         @Override public List<Token> dueTimers(long now, int max) {

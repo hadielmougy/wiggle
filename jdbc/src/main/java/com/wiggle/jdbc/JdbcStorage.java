@@ -238,6 +238,15 @@ public final class JdbcStorage implements Storage {
             ALTER TABLE wf_instance ALTER COLUMN id TYPE VARCHAR(128);
             ALTER TABLE wf_token    ALTER COLUMN instance_id TYPE VARCHAR(128);
             ALTER TABLE wf_comp_log ALTER COLUMN instance_id TYPE VARCHAR(128);
+            """),
+            new Migration(10, "journal-lease", """
+            CREATE TABLE wf_journal_lease (
+              id          INT PRIMARY KEY,
+              owner       VARCHAR(120),
+              generation  BIGINT NOT NULL DEFAULT 0,
+              lease_until BIGINT NOT NULL DEFAULT 0
+            );
+            INSERT INTO wf_journal_lease (id, owner, generation, lease_until) VALUES (0, NULL, 0, 0);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -927,6 +936,66 @@ public final class JdbcStorage implements Storage {
                     while (rs.next()) out.add(readToken(rs));
                     return out;
                 }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Token> readyTasks(Set<String> queues, Set<WorkflowVersion> versions,
+                                                 int max, long now) {
+            StringBuilder sql = new StringBuilder(
+                    "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
+            if (queues != null && !queues.isEmpty()) {
+                sql.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
+            }
+            appendVersions(sql, versions);
+            sql.append(" ORDER BY available_at, id LIMIT ?");
+            try (PreparedStatement p = ps(sql.toString())) {
+                int idx = 1;
+                p.setLong(idx++, now);
+                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
+                idx = bindVersions(p, idx, versions);
+                p.setInt(idx, max);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Token> out = new ArrayList<>();
+                    while (rs.next()) out.add(readToken(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public long claimJournalLease(String owner, long leaseMillis) {
+            long now = System.currentTimeMillis();
+            try (PreparedStatement p = ps("UPDATE wf_journal_lease SET owner=?, generation=generation+1, " +
+                    "lease_until=? WHERE id=0 AND (owner IS NULL OR owner=? OR lease_until<?)")) {
+                p.setString(1, owner);
+                p.setLong(2, now + leaseMillis);
+                p.setString(3, owner);
+                p.setLong(4, now);
+                if (p.executeUpdate() == 0) return -1;
+            } catch (SQLException e) { throw wrap(e); }
+            try (PreparedStatement p = ps("SELECT generation FROM wf_journal_lease WHERE id=0")) {
+                try (ResultSet rs = p.executeQuery()) {
+                    rs.next();
+                    return rs.getLong(1);
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public boolean fenceJournalLease(String owner, long generation, long leaseUntil) {
+            try (PreparedStatement p = ps("UPDATE wf_journal_lease SET lease_until=? " +
+                    "WHERE id=0 AND owner=? AND generation=?")) {
+                p.setLong(1, leaseUntil);
+                p.setString(2, owner);
+                p.setLong(3, generation);
+                return p.executeUpdate() == 1;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void releaseJournalLease(String owner, long generation) {
+            try (PreparedStatement p = ps("UPDATE wf_journal_lease SET owner=NULL, lease_until=0 " +
+                    "WHERE id=0 AND owner=? AND generation=?")) {
+                p.setString(1, owner);
+                p.setLong(2, generation);
+                p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
 

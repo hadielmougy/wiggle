@@ -51,6 +51,21 @@ public interface Tx extends GraphStore {
     List<Token> claimTasks(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
                            int max, long now, long leaseUntil);
 
+    /** The dispatchable tokens {@link #claimTasks} would consider, WITHOUT claiming them -- the
+     *  journal's candidate scan; it stamps leases in memory and revalidates every hint. */
+    List<Token> readyTasks(Set<String> queues, Set<WorkflowVersion> versions, int max, long now);
+
+    /** Claims the journal's single-writer lease: returns the new generation, or -1 when a live
+     *  lease is held by someone else. Reclaiming an expired lease bumps the generation. */
+    long claimJournalLease(String owner, long leaseMillis);
+
+    /** The journal flush fence: renews the lease iff {@code owner} still holds {@code generation}.
+     *  False means ownership moved -- the caller must abort the flush and demote. */
+    boolean fenceJournalLease(String owner, long generation, long leaseUntil);
+
+    /** Releases the lease iff {@code owner} still holds {@code generation} (clean shutdown). */
+    void releaseJournalLease(String owner, long generation);
+
     /** WAITING timer tokens whose fire time has passed. */
     List<Token> dueTimers(long now, int max);
 

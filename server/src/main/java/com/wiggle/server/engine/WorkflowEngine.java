@@ -91,6 +91,10 @@ public final class WorkflowEngine {
 
     /** Wake-on-produce for long-polling workers (Layer 1; see docs/in-memory-dispatch.md). */
     private final DispatchNotifier notifier = new DispatchNotifier();
+
+    /** The single-writer journal (WIGGLE_JOURNAL): resident memory + a fenced flush mirror. Null =
+     *  the per-operation DB-authoritative path, unchanged. */
+    final Journal journal;
     /** Queues that had a token parked READY during the in-flight transaction, flushed to the notifier
      *  after it commits. Set by {@link #parkAtWorkerStep}, drained by {@link #tx}/{@link #txVoid}. */
     private final ThreadLocal<Set<String>> readyQueues = new ThreadLocal<>();
@@ -104,6 +108,7 @@ public final class WorkflowEngine {
     /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue that had a
      *  token parked READY during it. Nesting is safe: an inner scope defers to the outermost. */
     private <T> T tx(java.util.function.Function<Tx, T> body) {
+        if (journal != null) return journal.run(body);
         Set<String> outer = readyQueues.get();
         Set<String> mine = new HashSet<>();
         readyQueues.set(mine);
@@ -120,6 +125,10 @@ public final class WorkflowEngine {
 
     /** {@link #tx} for a body with no return value. */
     private void txVoid(java.util.function.Consumer<Tx> body) {
+        if (journal != null) {
+            journal.run(tx -> { body.accept(tx); return null; });
+            return;
+        }
         Set<String> outer = readyQueues.get();
         Set<String> mine = new HashSet<>();
         readyQueues.set(mine);
@@ -140,11 +149,34 @@ public final class WorkflowEngine {
      *  ids ({@link com.wiggle.core.IdCodec}) when the cell is placed under a coordinator. */
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis,
                           java.util.function.Supplier<String> idMinter) {
+        this(storage, definitions, defaultLeaseMillis, idMinter,
+                Boolean.parseBoolean(System.getenv().getOrDefault("WIGGLE_JOURNAL", "false")));
+    }
+
+    WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis,
+                   java.util.function.Supplier<String> idMinter, boolean journalEnabled) {
         this.storage = storage;
         this.definitions = definitions;
         this.queries = new Queries(storage, pollers);
         this.defaultLeaseMillis = defaultLeaseMillis;
         this.idMinter = idMinter;
+        if (journalEnabled && !storage.transactional()) {
+            LOG.log(System.Logger.Level.WARNING, "WIGGLE_JOURNAL ignored: "
+                    + storage.getClass().getSimpleName() + " cannot roll back a partial flush");
+            journalEnabled = false;
+        }
+        this.journal = journalEnabled
+                ? new Journal(storage, notifier, readyQueues, "journal-" + Ids.next("j"),
+                        envLong("WIGGLE_JOURNAL_LINGER_MILLIS", 5),
+                        (int) envLong("WIGGLE_JOURNAL_MAX_OPS", 256),
+                        envLong("WIGGLE_JOURNAL_LEASE_MILLIS", 10_000),
+                        (int) envLong("WIGGLE_JOURNAL_RESIDENT_MAX", 50_000))
+                : null;
+    }
+
+    /** Drains and releases the journal (no-op without one). Call after the API stops accepting. */
+    public void close() {
+        if (journal != null) journal.close();
     }
 
     public DefinitionRegistry definitions() { return definitions; }
@@ -343,7 +375,41 @@ public final class WorkflowEngine {
                                           Set<com.wiggle.core.WorkflowVersion> versions,
                                           int max, long lease) {
         long now = System.currentTimeMillis();
+        if (journal != null) return claimViaJournal(workerId, queues, versions, max, now, now + lease);
         return storage.inTx(tx -> claimActivations(tx, workerId, queues, versions, max, now, now + lease));
+    }
+
+    /**
+     * Journal-mode claim: the database supplies READY candidates as of the last flush (a hint, at
+     * most one linger stale), and the claim itself -- validate, stamp the lease, build the
+     * activation -- happens in resident memory. The poll response waits for the flush carrying the
+     * lease writes, so dispatch stays exactly-once per attempt, as before.
+     */
+    private List<TaskActivation> claimViaJournal(String workerId, Set<String> queues,
+                                                 Set<com.wiggle.core.WorkflowVersion> versions,
+                                                 int max, long now, long until) {
+        List<Token> hints = storage.inTx(tx -> tx.readyTasks(queues, versions, max, now));
+        if (hints.isEmpty()) return List.of();
+        hints.sort(java.util.Comparator.comparing(t -> t.instanceId));   // one lock order across claimers
+        return journal.run(tx -> {
+            List<TaskActivation> out = new ArrayList<>(hints.size());
+            for (Token hint : hints) {
+                Instance inst = tx.lockInstance(hint.instanceId).orElse(null);
+                if (inst == null) continue;
+                Token t = tx.findToken(hint.id).orElse(null);
+                if (t == null || t.status != TokenStatus.READY || t.availableAt > now) continue;
+                if (queues != null && !queues.isEmpty() && !queues.contains(t.queue)) continue;
+                if (versions != null && !versions.isEmpty()
+                        && !versions.contains(new com.wiggle.core.WorkflowVersion(t.workflow, t.version))) continue;
+                t.status = TokenStatus.RUNNING;
+                t.leaseOwner = workerId;
+                t.leaseExpiresAt = until;
+                t.updatedAt = now;
+                tx.updateToken(t);
+                activationFor(tx, inst, t, workerId, until).ifPresent(out::add);
+            }
+            return out;
+        });
     }
 
     /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
@@ -405,14 +471,15 @@ public final class WorkflowEngine {
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
-        long until = storage.inTx(tx -> {
+        java.util.function.Function<Tx, Long> body = tx -> {
             Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
             requireLease(t, leaseOwner);
             t.leaseExpiresAt = System.currentTimeMillis() + extraMillis;
             t.updatedAt = System.currentTimeMillis();
             tx.updateToken(t);
             return t.leaseExpiresAt;
-        });
+        };
+        long until = journal != null ? journal.run(body) : storage.inTx(body);
         LOG.log(System.Logger.Level.DEBUG, () ->
                 "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
         return until;
