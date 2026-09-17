@@ -50,7 +50,7 @@ public final class WorkflowEngine {
      *  unbounded loop with a buggy condition is a self-inflicted denial of service — it hot-spins
      *  workers and the database and grows the instance's token rows without limit — so every
      *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
-    private final long loopMaxIterations = envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
+    final long loopMaxIterations = envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
 
     /** Token-payload bookkeeping: per-loop-guard true-evaluation counts ({nodeId: n}), carried
      *  along the token chain and stripped from every dispatched context. */
@@ -184,7 +184,7 @@ public final class WorkflowEngine {
     }
 
     /** Starts an instance inside an existing transaction; {@code parentTokenId} links a sub-workflow. */
-    private String startInTx(Tx tx, String workflow, Integer version, Object context,
+    String startInTx(Tx tx, String workflow, Integer version, Object context,
                              String correlationId, String parentTokenId) {
         int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
@@ -444,11 +444,11 @@ public final class WorkflowEngine {
             requireRunning(inst);
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
+            NodeBehaviours behaviour = NodeBehaviours.of(node.kind());
             Object compInput = node.compensable() ? dispatchContext(inst, t) : null;
-            String next = routeCompletion(inst, t, node, result);
+            String next = behaviour.route(inst, t, node, result);
             if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
-            String overrun = node.kind() == NodeKind.PREDICATE
-                    ? tickLoopBudget(t, node, predicateValue(result)) : null;
+            String overrun = behaviour.overrunAfter(this, t, node, result);
             if (overrun != null) {
                 settleToken(tx, t, now);
                 failInstance(tx, inst, overrun, now);
@@ -460,45 +460,6 @@ public final class WorkflowEngine {
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
-    }
-
-    /**
-     * Counts a loop guard's true evaluation against its budget. Returns the failure message when
-     * the budget is exhausted (the caller fails the instance and mints no continuation); otherwise
-     * records the incremented count in the token's payload — the continuation inherits it, so the
-     * count survives the whole loop. Non-loop guards (loopBudget 0) are untouched.
-     */
-    private String tickLoopBudget(Token t, Node node, boolean value) {
-        if (node.kind() != NodeKind.PREDICATE || !value || node.loopBudget() == 0) return null;
-        long budget = node.loopBudget() > 0 ? node.loopBudget() : loopMaxIterations;
-        Map<String, Object> payload = t.payloadJson == null
-                ? new java.util.LinkedHashMap<>() : Json.parseObject(t.payloadJson);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> counts = (Map<String, Object>) payload
-                .computeIfAbsent(LOOP_COUNTS, k -> new java.util.LinkedHashMap<String, Object>());
-        long n = ((Number) counts.getOrDefault(node.id(), 0L)).longValue() + 1;
-        if (n > budget) {
-            return "loop '" + node.name() + "' exceeded its budget of " + budget
-                    + " iterations (raise it with doWhile(name, maxIterations, body) or fix the condition)";
-        }
-        counts.put(node.id(), n);
-        t.payloadJson = Json.write(payload);
-        return null;
-    }
-
-    /** Merges a task result (or routes a predicate) and returns the successor node id. */
-    private static String routeCompletion(Instance inst, Token t, Node node, Object result) {
-        if (node.kind() != NodeKind.PREDICATE) {
-            applyStepResult(inst, t, node, result);
-            LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
-                    + " of instance " + inst.id + " done -> " + node.next());
-            return node.next();
-        }
-        boolean value = predicateValue(result);
-        String next = GraphTraversal.successor(node, value);
-        LOG.log(System.Logger.Level.DEBUG, () -> "complete: predicate " + node.name()
-                + " of instance " + inst.id + " evaluated " + value + " -> " + next);
-        return next;
     }
 
     /** Marks a token consumed and releases its lease. */
@@ -555,11 +516,11 @@ public final class WorkflowEngine {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
             requireReportedNode(node, step, current);
+            NodeBehaviours behaviour = NodeBehaviours.of(node.kind());
             Object compInput = node.compensable() ? dispatchContext(inst, current) : null;
-            String next = routeReportedStep(inst, current, node, step);
+            String next = behaviour.routeReported(inst, current, node, step);
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
-            String overrun = node.kind() == NodeKind.PREDICATE
-                    ? tickLoopBudget(current, node, step.predicateValue() != null && step.predicateValue()) : null;
+            String overrun = behaviour.overrunReported(this, current, node, step);
             if (overrun != null) {
                 settleToken(tx, current, now);
                 failInstance(tx, inst, overrun, now);
@@ -588,15 +549,6 @@ public final class WorkflowEngine {
             throw EngineException.conflict("reported step " + step.nodeId() + " but token "
                     + current.id + " is at " + node.id());
         }
-    }
-
-    private static String routeReportedStep(Instance inst, Token t, Node node, StepInput step) {
-        if (node.kind() == NodeKind.PREDICATE) {
-            boolean value = step.predicateValue() != null && step.predicateValue();
-            return GraphTraversal.successor(node, value);
-        }
-        applyStepResult(inst, t, node, step.merge());
-        return node.next();
     }
 
     /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */
@@ -908,12 +860,6 @@ public final class WorkflowEngine {
         return purged;
     }
 
-    private static boolean predicateValue(Object result) {
-        if (result instanceof Boolean b) return b;
-        if (result instanceof Map<?, ?> m && m.get("value") instanceof Boolean b) return b;
-        throw EngineException.badRequest("predicate result must be a boolean or {\"value\": <boolean>}");
-    }
-
     private static void requireLease(Token t, String leaseOwner) {
         if (t.status != TokenStatus.RUNNING) {
             throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
@@ -930,7 +876,7 @@ public final class WorkflowEngine {
      * context, so siblings never see each other's writes and there is no implicit merge. It is
      * stripped before dispatch ({@link #dispatchContext}) and consumed at the join.
      */
-    private static final String ARM_IDX = "__armIdx__";
+    static final String ARM_IDX = "__armIdx__";
 
     /** True when {@code t} runs inside an isolated fork branch (its payload carries the arm tag). */
     private static boolean inScopedBranch(Token t) {
@@ -939,12 +885,12 @@ public final class WorkflowEngine {
 
     /** Internal bookkeeping on a forEach item token: the map key its element came from (map input
      *  only). Never reaches user context, like {@link #ARM_IDX}. */
-    private static final String ITEM_MAP_KEY = "__itemMapKey__";
+    static final String ITEM_MAP_KEY = "__itemMapKey__";
 
     /** A forEach item token's working value: the element itself (any JSON value, scalars included).
      *  The item's branch context IS this value — item steps receive it as their context, their
      *  return replaces it, and the join collects the final values for the combine. */
-    private static final String ITEM_VALUE = "__item__";
+    static final String ITEM_VALUE = "__item__";
 
     /** True when {@code t} is a forEach item token (its payload carries the item value slot). */
     private static boolean isItemToken(Token t) {
@@ -953,7 +899,7 @@ public final class WorkflowEngine {
 
     /** A fork combine's itemsKey is a JSON ARRAY of arm names; a forEach combine's is a JSON STRING
      *  naming the scratch key its collected results are staged under. */
-    private static String forEachScratchKey(Node combineNode) {
+    static String forEachScratchKey(Node combineNode) {
         Object parsed = Json.parse(combineNode.itemsKey());
         return parsed instanceof String s ? s : null;
     }
@@ -961,12 +907,12 @@ public final class WorkflowEngine {
     /** A combine aggregator carries its arm names (a JSON array) on the node's itemsKey -- a field
      *  that round-trips through every store, unlike a TASK node's edge-derived branches (see
      *  {@code Pipeline.addAggregator}). */
-    private static boolean isCombineNode(Node node) {
+    static boolean isCombineNode(Node node) {
         return node != null && node.kind() == NodeKind.TASK && node.itemsKey() != null;
     }
 
     /** The branch (arm) names a combine node keys its inputs by, in fork order. */
-    private static List<String> armNames(Node combineNode) {
+    static List<String> armNames(Node combineNode) {
         return Json.asArray(Json.parse(combineNode.itemsKey())).stream().map(String::valueOf).toList();
     }
 
@@ -990,7 +936,7 @@ public final class WorkflowEngine {
      * merges are signal payloads and a sub-workflow's result folding into its parent. A null return
      * leaves the context untouched.
      */
-    private static void applyStepResult(Instance inst, Token t, Node node, Object result) {
+    static void applyStepResult(Instance inst, Token t, Node node, Object result) {
         if (isCombineNode(node)) { replaceCombineResult(inst, t, node, result); return; }
         if (result == null) return;
         if (isItemToken(t)) {
@@ -1085,98 +1031,8 @@ public final class WorkflowEngine {
             if (++guard > 10_000) throw new IllegalStateException("cycle detected in workflow " + def.key());
             Token t = work.pop();
             Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
-            boolean keepDriving = switch (s.node().kind()) {
-                case TASK, PREDICATE -> parkAtWorkerStep(s);
-                case SLEEP -> parkAtSleep(s);
-                case SIGNAL -> parkAtSignal(s);
-                case SUB_WORKFLOW -> launchSubWorkflow(s);
-                case FORK -> spawnForkBranches(s);
-                case DYN_FORK -> spawnDynamicBranches(s);
-                case JOIN -> arriveAtJoin(s);
-                case END -> finishAtEnd(s);
-            };
-            if (!keepDriving) return;
+            if (!NodeBehaviours.of(s.node().kind()).advance(this, s)) return;
         }
-    }
-
-    private boolean parkAtWorkerStep(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.READY;
-        t.kind = node.kind();
-        t.activity = node.activity();
-        t.queue = node.queue();
-        t.availableAt = now;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        Set<String> ready = readyQueues.get();   // signalled post-commit by tx()/txVoid()
-        if (ready != null && node.queue() != null) ready.add(node.queue());
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
-        return true;
-    }
-
-    private boolean parkAtSleep(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.WAITING;
-        t.kind = NodeKind.SLEEP;
-        t.availableAt = now + node.sleepMillis();
-        t.updatedAt = now;
-        tx.updateToken(t);
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
-                + " (" + node.sleepMillis() + "ms)");
-        return true;
-    }
-
-    /**
-     * Parks until the named signal arrives. No worker leases an AWAITING token; a positive
-     * availableAt is the (optional) deadline the leader sweeps.
-     */
-    private boolean parkAtSignal(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.AWAITING;
-        t.kind = NodeKind.SIGNAL;
-        t.activity = node.name();     // the signal's name, matched by signal()
-        t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (SIGNAL) " + before + " -> AWAITING, deadline="
-                + (t.availableAt > 0 ? t.availableAt : "none"));
-        return true;
-    }
-
-    /**
-     * Starts a child instance of the workflow named by the node and parks this token until the
-     * child reaches a terminal state ({@link #notifyParent}). The child's input is the parent's
-     * context (with any branch payload overlaid); an unregistered child workflow fails the parent.
-     */
-    private boolean launchSubWorkflow(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.AWAITING;
-        t.kind = NodeKind.SUB_WORKFLOW;
-        t.activity = node.activity();   // the child workflow's name
-        t.availableAt = 0;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        String childId;
-        try {
-            childId = startInTx(tx, node.activity(), null, dispatchContext(inst, t), "sub:" + t.id, t.id);
-        } catch (EngineException e) {
-            failInstance(tx, inst, "sub-workflow '" + node.activity() + "': " + e.getMessage(), now);
-            return false;
-        }
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (SUB_WORKFLOW) " + before + " -> AWAITING child " + childId);
-        return true;
     }
 
     /**
@@ -1212,210 +1068,8 @@ public final class WorkflowEngine {
         drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);
     }
 
-    private boolean spawnForkBranches(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.DONE;
-        t.kind = NodeKind.FORK;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        String group = t.id;   // unique per fork execution; the join finds the fork token by it
-        String childStack = t.pushJoinStack(group);
-        List<String> starts = node.branches();
-        for (int i = 0; i < starts.size(); i++) {
-            // Tag each branch with its arm index and give it a private context overlay, so its
-            // writes stay isolated from its siblings and the shared context until the combine.
-            Token child = newToken(inst, starts.get(i), childStack, branchScope(t.payloadJson, i), now);
-            tx.insertToken(child);
-            work.push(child);
-        }
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (FORK) " + before + " -> DONE, spawned " + node.branches().size()
-                + " branch(es) in group " + group + ": " + node.branches());
-        return true;
-    }
-
-    /**
-     * Runtime fan-out: one child per element of the list at the node's {@code itemsKey}, each
-     * carrying its element (and index) as a branch-scoped payload. The join group encodes the
-     * width, since a dynamic join's expected count varies per execution. An empty or missing
-     * list skips straight past the paired join; a non-list value fails the instance.
-     */
-    private boolean spawnDynamicBranches(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-        Object items = Json.parseObject(inst.contextJson).get(node.itemsKey());
-        if (items != null && !(items instanceof List) && !(items instanceof Map)) {
-            failInstance(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
-                    + "' holds " + items.getClass().getSimpleName() + ", not a list or map", now);
-            return false;
-        }
-        List<?> elements;
-        List<String> mapKeys = null;   // non-null when iterating a map: the key each element came from
-        if (items instanceof Map<?, ?> m) {
-            mapKeys = new ArrayList<>(m.size());
-            List<Object> vals = new ArrayList<>(m.size());
-            for (Map.Entry<?, ?> e : m.entrySet()) { mapKeys.add(String.valueOf(e.getKey())); vals.add(e.getValue()); }
-            elements = vals;
-        } else {
-            elements = items == null ? List.of() : (List<?>) items;
-        }
-        TokenStatus before = t.status;
-        t.status = TokenStatus.DONE;
-        t.kind = NodeKind.DYN_FORK;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        if (elements.isEmpty()) {
-            // Nothing to fan out over: continue past the paired join AND its combine (there is
-            // nothing to collect, so the combine is skipped and the context is untouched).
-            LazyGraph def = def(tx, inst);
-            Node join = def.node(node.next());
-            Node after = def.node(join.next());
-            String next = isCombineNode(after) ? after.next() : join.next();
-            Token cont = newToken(inst, next, t.joinStack, t.payloadJson, now);
-            tx.insertToken(cont);
-            work.push(cont);
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (DYN_FORK) " + before + " -> DONE, empty '" + node.itemsKey()
-                    + "' skips the join and combine");
-            return true;
-        }
-        String group = t.id + "#" + elements.size();   // fork token id + width, parsed back at the join
-        String childStack = t.pushJoinStack(group);
-        String branchStart = node.branches().getFirst();
-        for (int i = 0; i < elements.size(); i++) {
-            String key = mapKeys == null ? null : mapKeys.get(i);
-            Token child = newToken(inst, branchStart, childStack, itemPayload(t, node, elements.get(i), i, key), now);
-            tx.insertToken(child);
-            work.push(child);
-        }
-        int n = elements.size();
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (DYN_FORK) " + before + " -> DONE, spawned " + n
-                + " isolated branch(es) over '" + node.itemsKey() + "' in group " + group);
-        return true;
-    }
-
-    /** A static-fork branch's initial payload: the fork token's payload (so nesting keeps the outer
-     *  scope) tagged with this branch's arm index, which marks it isolated. */
-    private static String branchScope(String basePayload, int armIndex) {
-        Map<String, Object> payload = basePayload == null
-                ? new LinkedHashMap<>() : Json.parseObject(basePayload);
-        payload.put(ARM_IDX, (long) armIndex);
-        return Json.write(payload);
-    }
-
-    /** The child's payload: the fork token's own payload (nesting) plus the element as the item's
-     *  working value — arm-tagged so the item runs ISOLATED. Nothing is injected under user keys;
-     *  the element IS the item's context, and the base travels on the activation instead. */
-    private static String itemPayload(Token forkToken, Node node, Object item, int index, String mapKey) {
-        Map<String, Object> payload = forkToken.payloadJson == null
-                ? new LinkedHashMap<>() : Json.parseObject(forkToken.payloadJson);
-        payload.put(ARM_IDX, (long) index);
-        payload.put(ITEM_VALUE, item);
-        if (mapKey != null) payload.put(ITEM_MAP_KEY, mapKey);
-        return Json.write(payload);
-    }
-
-    private LazyGraph def(Tx tx, Instance inst) {
+    LazyGraph def(Tx tx, Instance inst) {
         return definitions.graph(tx, inst.workflow, inst.version);
-    }
-
-    private boolean arriveAtJoin(Step s) {
-        Tx tx = s.tx(); LazyGraph def = s.def(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-        String group = t.currentJoinGroup();
-        int expected = expectedAt(node, group);
-        TokenStatus before = t.status;
-        t.status = TokenStatus.JOINED;
-        t.kind = NodeKind.JOIN;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        List<Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
-        if (atBarrier.size() < expected) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (JOIN) " + before + " -> JOINED, waiting on barrier " + group
-                    + " (" + atBarrier.size() + "/" + expected + ")");
-            return true;
-        }
-        consumeBarrier(tx, atBarrier, now);
-        // Restore the payload the branches started from, so nesting scopes correctly, then (for a
-        // combine fork) stage each isolated branch's result under its arm name for the aggregator.
-        String contPayload = combinePayload(def, node, atBarrier, forkPayload(tx, group));
-        Token cont = newToken(inst, node.next(), t.popJoinStack(), contPayload, now);
-        tx.insertToken(cont);
-        work.push(cont);
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
-                + " satisfied (" + atBarrier.size() + "/" + expected + ") -> " + node.next());
-        return true;
-    }
-
-    /** A static join's width comes from the graph; a dynamic one travels in the group as "#n". */
-    private static int expectedAt(Node node, String group) {
-        if (node.expected() > 0) return node.expected();
-        int hash = group == null ? -1 : group.lastIndexOf('#');
-        return hash < 0 ? 1 : Integer.parseInt(group.substring(hash + 1));
-    }
-
-    /** The payload the fork token had when it spawned this group, or null for legacy groups. */
-    private static String forkPayload(Tx tx, String group) {
-        if (group == null) return null;
-        int hash = group.lastIndexOf('#');
-        String forkTokenId = hash < 0 ? group : group.substring(0, hash);
-        return tx.findToken(forkTokenId).map(f -> f.payloadJson).orElse(null);
-    }
-
-    /**
-     * The continuation payload after a join, staging the branches' results for the mandatory
-     * combine. A fork combine (itemsKey = arm-name array) gets each branch's final view staged
-     * under its arm name. A forEach combine (itemsKey = a scratch-key string) gets the items'
-     * final views COLLECTED — a list ordered by item index, or, when the input was a map, a map
-     * keyed like the input — staged under that one scratch key. The arm tags are consumed.
-     */
-    private static String combinePayload(LazyGraph def, Node joinNode, List<Token> atBarrier, String basePayload) {
-        Node agg = def.node(joinNode.next());
-        if (!isCombineNode(agg)) return basePayload;
-        Map<String, Object> staged = basePayload == null
-                ? new LinkedHashMap<>() : Json.parseObject(basePayload);
-        String scratch = forEachScratchKey(agg);
-        if (scratch == null) {
-            List<String> armNames = armNames(agg);
-            for (Token bt : atBarrier) {
-                Map<String, Object> branch = bt.payloadJson == null
-                        ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
-                Object idx = branch.remove(ARM_IDX);
-                branch.remove(LOOP_COUNTS);
-                if (idx == null) continue;   // defensive: a token that never carried an arm tag
-                staged.put(ScratchKeys.arm(armNames.get(((Number) idx).intValue())), branch);
-            }
-            return Json.write(staged);
-        }
-        // forEach: collect each item's FINAL VALUE, ordered by arm index; key by the source map
-        // key when the input was a map. The values are exactly what each item's last step returned.
-        java.util.TreeMap<Long, Map<String, Object>> ordered = new java.util.TreeMap<>();
-        boolean mapInput = false;
-        for (Token bt : atBarrier) {
-            Map<String, Object> payload = bt.payloadJson == null
-                    ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
-            Object idx = payload.get(ARM_IDX);
-            if (idx == null) continue;
-            mapInput |= payload.containsKey(ITEM_MAP_KEY);
-            ordered.put(((Number) idx).longValue(), payload);
-        }
-        if (mapInput) {
-            Map<String, Object> byKey = new LinkedHashMap<>();
-            for (Map<String, Object> payload : ordered.values()) {
-                byKey.put(String.valueOf(payload.get(ITEM_MAP_KEY)), payload.get(ITEM_VALUE));
-            }
-            staged.put(scratch, byKey);
-        } else {
-            List<Object> values = new ArrayList<>(ordered.size());
-            for (Map<String, Object> payload : ordered.values()) values.add(payload.get(ITEM_VALUE));
-            staged.put(scratch, values);
-        }
-        return Json.write(staged);
     }
 
     /** The context a worker sees. For a forEach item token it is the ITEM's working value itself;
@@ -1445,58 +1099,7 @@ public final class WorkflowEngine {
         return ctx;
     }
 
-    private static List<Token> joinedAtBarrier(Tx tx, Instance inst, Node node, String group) {
-        return tx.tokensOf(inst.id).stream()
-                .filter(x -> x.status == TokenStatus.JOINED)
-                .filter(x -> node.id().equals(x.nodeId))
-                .filter(x -> Objects.equals(group, x.currentJoinGroup()))
-                .toList();
-    }
-
-    /**
-     * Consumes the barrier: these tokens have served their purpose, and leaving them parked
-     * would keep the instance looking active forever.
-     */
-    private static void consumeBarrier(Tx tx, List<Token> atBarrier, long now) {
-        for (Token parked : atBarrier) {
-            parked.status = TokenStatus.DONE;
-            parked.updatedAt = now;
-            tx.updateToken(parked);
-        }
-    }
-
-    private boolean finishAtEnd(Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.DONE;
-        t.kind = NodeKind.END;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        if (!node.success()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
-            failInstance(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
-            return false;
-        }
-        boolean anyActive = tx.tokensOf(inst.id).stream().anyMatch(Token::isActive);
-        if (anyActive || !work.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (END) " + before + " -> DONE, other tokens still active");
-            return true;
-        }
-        inst.status = InstanceStatus.COMPLETED;
-        inst.terminationReason = node.reason();
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
-                + (node.reason() != null ? " (" + node.reason() + ")" : ""));
-        notifyParent(tx, inst, now);
-        return true;
-    }
-
-    private void failInstance(Tx tx, Instance inst, String error, long now) {
+    void failInstance(Tx tx, Instance inst, String error, long now) {
         cancelActiveTokens(tx, inst.id, null, now);
         if (sagas.begin(tx, inst, error, now)) return;
         inst.status = InstanceStatus.FAILED;
