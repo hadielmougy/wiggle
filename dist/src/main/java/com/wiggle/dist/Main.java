@@ -31,9 +31,11 @@ public final class Main {
     public static void main(String[] args) throws Exception {
         Logging.configureFromEnv();   // opt-in file logging, before anything logs
 
-        // The ops console is a third role in the one image: a pure gRPC client + web UI, not a cell
-        // (no engine, no storage). It reads its own env (WIGGLE_URL / WIGGLE_COORDINATOR_URL + namespace).
-        if ("console".equalsIgnoreCase(System.getenv().getOrDefault("WIGGLE_ROLE", "cell").trim())) {
+        Role role = Role.fromEnvironment();
+
+        // The ops console is a third role in the one image: a pure gRPC client + web UI, not a
+        // server (no engine, no storage). It reads its own env (WIGGLE_URL + namespace).
+        if (role == Role.CONSOLE) {
             com.wiggle.console.ConsoleMain.main(args);
             return;
         }
@@ -46,9 +48,9 @@ public final class Main {
 
         ServerConfig config = configSource.load();
 
-        // Cell vs coordinator is an app-layer choice (WIGGLE_ROLE), not an engine concept: the engine
-        // and the coordinator are decoupled libraries composed here.
-        if ("coordinator".equalsIgnoreCase(System.getenv().getOrDefault("WIGGLE_ROLE", "cell").trim())) {
+        // Server vs coordinator is an app-layer choice (WIGGLE_ROLE), not an engine concept: the
+        // engine and the coordinator are decoupled libraries composed here.
+        if (role == Role.COORDINATOR) {
             runCoordinator(config);   // a separate, engine-free control plane; never a WiggleServer
             return;
         }

@@ -85,7 +85,7 @@ public final class ProcessCellDeployer implements CellDeployer {
     private Process fork(NamespaceSpec spec, int port) throws IOException {
         ProcessBuilder pb = new ProcessBuilder(launchCommand);
         Map<String, String> env = pb.environment();
-        env.put("WIGGLE_ROLE", "cell");
+        env.put("WIGGLE_ROLE", "server");
         env.put("WIGGLE_NAMESPACE", spec.namespace());
         env.put("WIGGLE_CELL_ID", spec.namespace());
         env.put("WIGGLE_PORT", Integer.toString(port));
