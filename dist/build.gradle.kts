@@ -17,6 +17,10 @@ dependencies {
     implementation(project(":coordinator"))
     implementation(project(":jdbc"))
     implementation(project(":postgres"))
+
+    testImplementation(platform("org.junit:junit-bom:${property("junitVersion")}"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 application {

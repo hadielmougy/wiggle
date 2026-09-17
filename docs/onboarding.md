@@ -111,7 +111,7 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=cell ∣ console`,
+The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=server ∣ console`,
 every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
 keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
@@ -388,6 +388,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
+| `WIGGLE_ROLE` | — | `server` | which process this image runs: `server` or `console`. `cell` is the old name for `server` and still works; an unrecognised value fails at startup |
 | `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port (`0` = pick a free one) |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name shown in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | **unset = in-memory, single node**; set to cluster on a database |
