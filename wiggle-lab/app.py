@@ -424,18 +424,22 @@ with forwards:
 
     st.divider()
     st.markdown("**Ops console (web UI)**")
-    st.caption("The console is a per-namespace pod: a pure gRPC client of the coordinator that fans "
-               "instance queries across the namespace's cells and serves the web UI. Deploy one per "
-               "namespace, forward it, and open the link. (Cells no longer serve a dashboard — they "
-               "expose only a /healthz probe.) Leave passwords blank for open access; set an **operator** "
-               "password to require login, and optionally a **viewer** password for a read-only account "
-               "(can view, but not cancel/signal/schedule).")
+    st.caption("The console is a pod serving the web UI: a pure gRPC client. Point it at a **standalone "
+               "server** (no coordinator, no namespace) or at a **namespace** whose cells a coordinator "
+               "places. Deploy one, forward it, and open the link. (Server nodes serve no dashboard — "
+               "they expose only a /healthz probe.) Leave passwords blank for open access; set an "
+               "**operator** password to require login, and optionally a **viewer** password for a "
+               "read-only account (can view, but not cancel/signal/schedule).")
+    # A target is either a standalone server (keyed by its id) or a coordinated namespace.
+    standalone = sorted(c["cell"] for c in cells if not c["namespace"])
     all_ns = sorted({c["namespace"] for c in cells if c["namespace"]})
-    consoles = {cn["namespace"]: cn for cn in lab.consoles()}
-    if not all_ns:
-        st.caption("No namespaces yet — create a cell first.")
-    for ns in all_ns:
-        cn = consoles.get(ns)
+    targets = [(s, s) for s in standalone] + [(n, None) for n in all_ns]
+    consoles = {cn["target"]: cn for cn in lab.consoles()}
+    if not targets:
+        st.caption("No servers yet — deploy one on the Servers tab first.")
+    for ns, server in targets:
+        cn = consoles.get(ns.lower())
+        st.caption(f"`{ns}` — " + ("standalone server" if server else "coordinated namespace"))
         k1, k2, k3 = st.columns([2, 3, 1.3])
         deployed = cn is not None
         ready = deployed and cn["ready"] == cn["desired"] and cn["desired"] > 0
@@ -450,7 +454,8 @@ with forwards:
             if vw and not op:
                 k2.caption("⚠️ a viewer password needs an operator password too — it's ignored otherwise")
             if k3.button("Deploy", key=f"console-deploy-{ns}"):
-                action(f"Deploy console for {ns}", lab.deploy_console, ns, op or None, vw or None)
+                action(f"Deploy console for {ns}", lab.deploy_console, ns, op or None, vw or None,
+                       server)
                 st.rerun()
             continue
         addr = lab.console_target(ns)
