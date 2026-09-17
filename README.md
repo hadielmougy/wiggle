@@ -543,7 +543,7 @@ Where it's going — the honest list:
       (a `PendingSignals` RPC).
 - [ ] **Per-RPC authorization** — identity-based (client-certificate) allow-listing and role
       separation on the control plane itself; SSO for the console.
-- [ ] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
+- [x] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
       stops; it does not roll back).
 - [ ] **Buffered signals** — deliver-before-wait semantics as an option (today a signal is
       rejected unless the instance is already waiting on it).
