@@ -324,14 +324,8 @@ public final class WorkflowEngine {
                                      Set<com.wiggle.core.WorkflowVersion> versions, int max,
                                      Long leaseMillis, long deadline,
                                      java.util.function.BooleanSupplier cancelled) {
-        // Remember what this worker serves, so coverage can be reported: a queue nobody polls or a
-        // version everyone has scoped out of leaves work dispatchable and unclaimable.
         pollers.seen(workerId, queues, versions, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
-        // Wake-on-produce (Layer 1): snapshot the signal counts BEFORE claiming so a token parked
-        // between our claim and our wait is never lost, then either claim it or block until a local
-        // completion signals one of our queues -- falling back to a periodic re-claim so cross-node
-        // production (and any missed signal) is still caught. The DB claim stays the arbiter.
         if (cancelled.getAsBoolean()) return List.of();
         Map<String, Long> since = notifier.snapshot(queues);
         List<TaskActivation> tasks = claimNow(workerId, queues, versions, max, lease);
@@ -340,15 +334,11 @@ public final class WorkflowEngine {
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
             long remaining = deadline - System.currentTimeMillis();
             boolean signaled = notifier.awaitChange(queues, since, Math.min(fallbackWait, remaining));
-            // A signal means a burst may be arriving; let a little more land so one claim batches it
-            // (fewer round trips under load) rather than claiming a single token eagerly.
             if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.getAsBoolean()) return List.of();   // worker gone -- leave the work for a live one
             since = notifier.snapshot(queues);
             tasks = claimNow(workerId, queues, versions, max, lease);
             if (adaptiveFallbackPoll) {
-                // Signaled: local wake-on-produce covers this node — no point re-claiming fast.
-                // Unsignaled empty round: decay toward the configured interval (25 → 50 → cap).
                 fallbackWait = signaled ? fallbackPollMillis : Math.min(fallbackWait * 2, fallbackPollMillis);
             }
         }
@@ -1130,22 +1120,24 @@ public final class WorkflowEngine {
         while (!work.isEmpty()) {
             if (++guard > 10_000) throw new IllegalStateException("cycle detected in workflow " + def.key());
             Token t = work.pop();
-            Node node = def.node(t.nodeId);
-            boolean keepDriving = switch (node.kind()) {
-                case TASK, PREDICATE -> parkAtWorkerStep(tx, inst, t, node, now);
-                case SLEEP -> parkAtSleep(tx, inst, t, node, now);
-                case SIGNAL -> parkAtSignal(tx, inst, t, node, now);
-                case SUB_WORKFLOW -> launchSubWorkflow(tx, inst, t, node, now);
-                case FORK -> spawnForkBranches(tx, inst, t, node, work, now);
-                case DYN_FORK -> spawnDynamicBranches(tx, inst, t, node, work, now);
-                case JOIN -> arriveAtJoin(tx, def, inst, t, node, work, now);
-                case END -> finishAtEnd(tx, inst, t, node, work, now);
+            Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
+            boolean keepDriving = switch (s.node().kind()) {
+                case TASK, PREDICATE -> parkAtWorkerStep(s);
+                case SLEEP -> parkAtSleep(s);
+                case SIGNAL -> parkAtSignal(s);
+                case SUB_WORKFLOW -> launchSubWorkflow(s);
+                case FORK -> spawnForkBranches(s);
+                case DYN_FORK -> spawnDynamicBranches(s);
+                case JOIN -> arriveAtJoin(s);
+                case END -> finishAtEnd(s);
             };
             if (!keepDriving) return;
         }
     }
 
-    private boolean parkAtWorkerStep(Tx tx, Instance inst, Token t, Node node, long now) {
+    private boolean parkAtWorkerStep(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); long now = s.now();
         TokenStatus before = t.status;
         t.status = TokenStatus.READY;
         t.kind = node.kind();
@@ -1161,7 +1153,9 @@ public final class WorkflowEngine {
         return true;
     }
 
-    private boolean parkAtSleep(Tx tx, Instance inst, Token t, Node node, long now) {
+    private boolean parkAtSleep(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); long now = s.now();
         TokenStatus before = t.status;
         t.status = TokenStatus.WAITING;
         t.kind = NodeKind.SLEEP;
@@ -1178,7 +1172,9 @@ public final class WorkflowEngine {
      * Parks until the named signal arrives. No worker leases an AWAITING token; a positive
      * availableAt is the (optional) deadline the leader sweeps.
      */
-    private boolean parkAtSignal(Tx tx, Instance inst, Token t, Node node, long now) {
+    private boolean parkAtSignal(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); long now = s.now();
         TokenStatus before = t.status;
         t.status = TokenStatus.AWAITING;
         t.kind = NodeKind.SIGNAL;
@@ -1197,7 +1193,9 @@ public final class WorkflowEngine {
      * child reaches a terminal state ({@link #notifyParent}). The child's input is the parent's
      * context (with any branch payload overlaid); an unregistered child workflow fails the parent.
      */
-    private boolean launchSubWorkflow(Tx tx, Instance inst, Token t, Node node, long now) {
+    private boolean launchSubWorkflow(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); long now = s.now();
         TokenStatus before = t.status;
         t.status = TokenStatus.AWAITING;
         t.kind = NodeKind.SUB_WORKFLOW;
@@ -1250,7 +1248,9 @@ public final class WorkflowEngine {
         drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);
     }
 
-    private boolean spawnForkBranches(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+    private boolean spawnForkBranches(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
         TokenStatus before = t.status;
         t.status = TokenStatus.DONE;
         t.kind = NodeKind.FORK;
@@ -1278,7 +1278,9 @@ public final class WorkflowEngine {
      * width, since a dynamic join's expected count varies per execution. An empty or missing
      * list skips straight past the paired join; a non-list value fails the instance.
      */
-    private boolean spawnDynamicBranches(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+    private boolean spawnDynamicBranches(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
         Object items = Json.parseObject(inst.contextJson).get(node.itemsKey());
         if (items != null && !(items instanceof List) && !(items instanceof Map)) {
             failInstance(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
@@ -1317,7 +1319,7 @@ public final class WorkflowEngine {
         }
         String group = t.id + "#" + elements.size();   // fork token id + width, parsed back at the join
         String childStack = t.pushJoinStack(group);
-        String branchStart = node.branches().get(0);
+        String branchStart = node.branches().getFirst();
         for (int i = 0; i < elements.size(); i++) {
             String key = mapKeys == null ? null : mapKeys.get(i);
             Token child = newToken(inst, branchStart, childStack, itemPayload(t, node, elements.get(i), i, key), now);
@@ -1356,7 +1358,9 @@ public final class WorkflowEngine {
         return definitions.graph(tx, inst.workflow, inst.version);
     }
 
-    private boolean arriveAtJoin(Tx tx, LazyGraph def, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+    private boolean arriveAtJoin(Step s) {
+        Tx tx = s.tx(); LazyGraph def = s.def(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
         String group = t.currentJoinGroup();
         int expected = expectedAt(node, group);
         TokenStatus before = t.status;
@@ -1497,7 +1501,9 @@ public final class WorkflowEngine {
         }
     }
 
-    private boolean finishAtEnd(Tx tx, Instance inst, Token t, Node node, Deque<Token> work, long now) {
+    private boolean finishAtEnd(Step s) {
+        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
+        Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
         TokenStatus before = t.status;
         t.status = TokenStatus.DONE;
         t.kind = NodeKind.END;
