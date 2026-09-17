@@ -1,6 +1,7 @@
 package com.wiggle.sandbox;
 
 import com.wiggle.client.CoordinatedConnection;
+import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
@@ -26,8 +27,8 @@ public class WorkerMain {
     record Order() {}
 
     public static void main(String[] args) throws InterruptedException {
-        CoordinatedConnection conn = WiggleConnection.coordinator("127.0.0.1:18099");
-        var client = conn.clientForNamespace("abc");
+        DirectConnection conn = WiggleConnection.direct("127.0.0.1:18100");
+        var client = conn.client();
         FlowSpec spec = FlowSpec.define("test-flow",RetryPolicy.fixed(5, Duration.ofSeconds(1)),Order.class, OrderSteps.class, (f, s) -> {
             var checked = f.apply(s::validate).thenFilter(s::inStock);
             var payment  = checked.thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))

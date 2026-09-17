@@ -35,7 +35,7 @@ public final class Json {
             }
             case Float f -> write(f.doubleValue(), sb);
             case BigDecimal bd -> sb.append(bd.toPlainString());
-            case Number n -> sb.append(n.toString());
+            case Number n -> sb.append(n);
             case Map<?, ?> m -> {
                 sb.append('{');
                 boolean first = true;
