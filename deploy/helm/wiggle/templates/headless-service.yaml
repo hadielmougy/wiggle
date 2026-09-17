@@ -1,0 +1,20 @@
+{{- if .Values.headlessService.enabled }}
+# Per-pod discovery: DNS on this name answers with every READY pod IP, so a worker or client that
+# wants a channel per node (instead of the ClusterIP lottery -- gRPC pins one connection to one
+# random pod) resolves {{ include "wiggle.fullname" . }}-nodes and dials each address directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wiggle.fullname" . }}-nodes
+  labels:
+    {{- include "wiggle.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "wiggle.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.service.grpcPort }}
+      targetPort: grpc
+{{- end }}
