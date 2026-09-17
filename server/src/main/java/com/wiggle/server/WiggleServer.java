@@ -45,7 +45,7 @@ public final class WiggleServer implements AutoCloseable {
         this.storage.migrate();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
-        this.bundle = new CellBundle(config, storage, cluster);
+        this.bundle = new ServerBundle(config, storage, cluster);
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */

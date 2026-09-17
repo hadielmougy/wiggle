@@ -33,7 +33,7 @@ public final class Ring {
         public boolean mints() { return status == Status.OPEN; }
     }
 
-    public enum Status { OPEN, DRAINING, RETIRED }
+    public enum Status {OPEN, DRAINING, RETIRED}
 
     /**
      * The whole placement for one namespace: every epoch's ring, and which one new ids are minted
@@ -46,5 +46,9 @@ public final class Ring {
 
         /** The ring new ids are minted into, or null when the namespace has never been placed. */
         public Epoch current() { return epochs.get(currentEpoch); }
+
+        public boolean isCurrentEpoch(long epoch) {
+            return currentEpoch == epoch;
+        }
     }
 }

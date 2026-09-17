@@ -53,7 +53,7 @@ public final class Epochs {
             throw new IllegalArgumentException("epoch " + epoch + " of '" + policy.namespace()
                     + "' is " + current.status() + "; it cannot go back to " + status);
         }
-        if (epoch == policy.currentEpoch() && status == Ring.Status.RETIRED) {
+        if (policy.isCurrentEpoch(epoch) && status == Ring.Status.RETIRED) {
             throw new IllegalArgumentException("epoch " + epoch + " of '" + policy.namespace()
                     + "' is the one new ids are minted into; open a new epoch before retiring it");
         }
