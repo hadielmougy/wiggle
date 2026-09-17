@@ -60,6 +60,7 @@ final class ServerBundle {
     public void close() {
         if (health != null) health.close();
         api.close();
+        engine.close();   // drain the journal (if any) once no new operations can arrive
         queueLagMonitor.close();
         housekeeper.close();
     }

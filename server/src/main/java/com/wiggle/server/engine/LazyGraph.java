@@ -15,6 +15,10 @@ import java.util.Map;
  * <p>Scoped to one transaction / one {@code drive} loop and used single-threaded, so the
  * bounded LRU below needs no synchronisation; it just keeps a hot {@code drive} from
  * re-querying the same handful of nodes.
+ *
+ * <p>The registry's cache uses the second constructor instead: every node preloaded once from the
+ * same normalised rows, immutable, shared across transactions and threads (the LRU is never
+ * touched in that mode).
  */
 public final class LazyGraph {
 
@@ -29,11 +33,22 @@ public final class LazyGraph {
         }
     };
     private String startNode; // resolved lazily; only lifecycle start needs it
+    /** Null in lazy mode; the complete, immutable node set when registry-cached. */
+    private final Map<String, Node> all;
 
     LazyGraph(GraphStore graphs, String name, int version) {
         this.graphs = graphs;
         this.name = name;
         this.version = version;
+        this.all = null;
+    }
+
+    LazyGraph(String name, int version, String startNode, Map<String, Node> nodes) {
+        this.graphs = null;
+        this.name = name;
+        this.version = version;
+        this.startNode = startNode;
+        this.all = nodes;
     }
 
     public String name() { return name; }
@@ -51,6 +66,11 @@ public final class LazyGraph {
     }
 
     public Node node(String id) {
+        if (all != null) {
+            Node n = all.get(id);
+            if (n == null) throw new IllegalStateException("unknown node '" + id + "' in workflow " + name);
+            return n;
+        }
         Node cached = lru.get(id);
         if (cached != null) return cached;
         Node n = graphs.graphNode(name, version, id).orElseThrow(

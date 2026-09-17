@@ -76,7 +76,7 @@ enum NodeBehaviours {
             t.kind = NodeKind.SLEEP;
             t.availableAt = now + node.sleepMillis();
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
                     + " (" + node.sleepMillis() + "ms)");
@@ -96,7 +96,7 @@ enum NodeBehaviours {
             t.activity = node.name();     // the signal's name, matched by signal()
             t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (SIGNAL) " + before + " -> AWAITING, deadline="
                     + (t.availableAt > 0 ? t.availableAt : "none"));
@@ -117,7 +117,7 @@ enum NodeBehaviours {
             t.activity = node.activity();   // the child workflow's name
             t.availableAt = 0;
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             String childId;
             try {
                 childId = e.startInTx(tx, node.activity(), null,
@@ -140,7 +140,7 @@ enum NodeBehaviours {
             t.status = TokenStatus.DONE;
             t.kind = NodeKind.FORK;
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             String group = t.id;   // unique per fork execution; the join finds the fork token by it
             String childStack = t.pushJoinStack(group);
             List<String> starts = node.branches();
@@ -149,7 +149,6 @@ enum NodeBehaviours {
                 // writes stay isolated from its siblings and the shared context until the combine.
                 Token child = WorkflowEngine.newToken(inst, starts.get(i), childStack,
                         branchScope(t.payloadJson, i), now);
-                tx.insertToken(child);
                 work.push(child);
             }
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -187,7 +186,7 @@ enum NodeBehaviours {
             t.status = TokenStatus.DONE;
             t.kind = NodeKind.DYN_FORK;
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             if (elements.isEmpty()) {
                 // Nothing to fan out over: continue past the paired join AND its combine (there is
                 // nothing to collect, so the combine is skipped and the context is untouched).
@@ -196,7 +195,6 @@ enum NodeBehaviours {
                 Node after = def.node(join.next());
                 String next = WorkflowEngine.isCombineNode(after) ? after.next() : join.next();
                 Token cont = WorkflowEngine.newToken(inst, next, t.joinStack, t.payloadJson, now);
-                tx.insertToken(cont);
                 work.push(cont);
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                         + node.name() + " (DYN_FORK) " + before + " -> DONE, empty '" + node.itemsKey()
@@ -210,7 +208,6 @@ enum NodeBehaviours {
                 String key = mapKeys == null ? null : mapKeys.get(i);
                 Token child = WorkflowEngine.newToken(inst, branchStart, childStack,
                         itemPayload(t, node, elements.get(i), i, key), now);
-                tx.insertToken(child);
                 work.push(child);
             }
             int n = elements.size();
@@ -231,7 +228,7 @@ enum NodeBehaviours {
             t.status = TokenStatus.JOINED;
             t.kind = NodeKind.JOIN;
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             List<Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
             if (atBarrier.size() < expected) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -244,7 +241,6 @@ enum NodeBehaviours {
             // combine fork) stage each isolated branch's result under its arm name for the aggregator.
             String contPayload = combinePayload(def, node, atBarrier, forkPayload(tx, group));
             Token cont = WorkflowEngine.newToken(inst, node.next(), t.popJoinStack(), contPayload, now);
-            tx.insertToken(cont);
             work.push(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
@@ -261,7 +257,7 @@ enum NodeBehaviours {
             t.status = TokenStatus.DONE;
             t.kind = NodeKind.END;
             t.updatedAt = now;
-            tx.updateToken(t);
+            WorkflowEngine.saveToken(tx, t);
             if (!node.success()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                         + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
@@ -325,7 +321,7 @@ enum NodeBehaviours {
         t.queue = node.queue();
         t.availableAt = now;
         t.updatedAt = now;
-        tx.updateToken(t);
+        WorkflowEngine.saveToken(tx, t);
         e.wakeQueue(node.queue());   // signalled post-commit by tx()/txVoid()
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                 + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());

@@ -139,7 +139,7 @@ final class Sagas {
         Token t = WorkflowEngine.newToken(inst, next.nodeId, "", payload, now);
         t.activity = next.activity + "#compensate";
         t.queue = next.queue;
-        tx.insertToken(t);
+        WorkflowEngine.saveToken(tx, t);
         engine.wakeQueue(t.queue);   // wake-on-produce, post-commit
         Rows.CompLog fNext = next;
         LOG.log(System.Logger.Level.DEBUG, () -> "compensation: instance " + inst.id

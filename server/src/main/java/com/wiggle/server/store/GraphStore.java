@@ -52,6 +52,10 @@ public interface GraphStore {
     /** One node plus its outgoing edges, reconstructed from the normalised rows. */
     Optional<Node> graphNode(String workflow, int version, String nodeId);
 
+    /** Every node of one graph, reconstructed from the same normalised rows as {@link #graphNode} --
+     *  the registry's cache loader. Empty when the workflow/version is unknown. */
+    List<Node> graphNodes(String workflow, int version);
+
     /** The graph's entry node, without loading any other node. */
     Optional<String> graphStartNode(String workflow, int version);
 }

@@ -20,6 +20,11 @@ public interface Storage extends AutoCloseable {
         inTx(tx -> { work.accept(tx); return null; });
     }
 
+    /** Whether {@link #inTx} really rolls back on failure. The journal refuses to run without it:
+     *  its flush writes many rows in one unit, and a partial flush surviving an abort would leave
+     *  the mirror corrupt. */
+    default boolean transactional() { return true; }
+
     /**
      * A stable identity of the underlying store, shared by every node of the same cell (they point at
      * the same database) and distinct across cells (different databases). The coordinator uses it to
