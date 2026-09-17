@@ -94,6 +94,11 @@ public final class InMemoryStorage implements Storage {
             return Optional.ofNullable(ns == null ? null : ns.get(nodeId));
         }
 
+        @Override public List<Node> graphNodes(String workflow, int version) {
+            Map<String, Node> ns = graphNodes.get(workflow + ":" + version);
+            return ns == null ? List.of() : List.copyOf(ns.values());
+        }
+
         @Override public Optional<String> graphStartNode(String workflow, int version) {
             return Optional.ofNullable(graphStart.get(workflow + ":" + version));
         }

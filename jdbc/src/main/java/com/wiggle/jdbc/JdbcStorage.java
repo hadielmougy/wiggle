@@ -619,6 +619,50 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        /** Every node of one graph in two statements: the node rows, then the edge rows folded back
+         *  through the same {@link EdgeTargets} rules as {@link #graphNode}. */
+        @Override public List<Node> graphNodes(String workflow, int version) {
+            record Raw(NodeKind kind, String name, String activity, String queue, RetryPolicy retry,
+                       long sleep, int expected, boolean success, String reason, String itemsKey,
+                       String itemKey, int loopBudget, boolean compensable, EdgeTargets targets) {}
+            Map<String, Raw> raws = new LinkedHashMap<>();
+            try (PreparedStatement p = ps("SELECT node_id,kind,name,activity,queue,retry_json,sleep_millis,expected," +
+                    "success,reason,items_key,item_key,loop_budget,compensable FROM wf_graph_node " +
+                    "WHERE workflow=? AND version=?")) {
+                p.setString(1, workflow); p.setInt(2, version);
+                try (ResultSet rs = p.executeQuery()) {
+                    while (rs.next()) {
+                        NodeKind kind = NodeKind.valueOf(rs.getString(2));
+                        String retryJson = rs.getString(6);
+                        raws.put(rs.getString(1), new Raw(kind, rs.getString(3), rs.getString(4), rs.getString(5),
+                                retryJson == null ? null : RetryPolicy.fromJson(Json.parse(retryJson)),
+                                rs.getLong(7), rs.getInt(8), rs.getInt(9) != 0, rs.getString(10),
+                                rs.getString(11), rs.getString(12), rs.getInt(13), rs.getInt(14) != 0,
+                                new EdgeTargets(kind)));
+                    }
+                }
+            } catch (SQLException e) { throw wrap(e); }
+            try (PreparedStatement p = ps("SELECT from_node,to_node,cond FROM wf_graph_edge " +
+                    "WHERE workflow=? AND version=? ORDER BY from_node, ordinal")) {
+                p.setString(1, workflow); p.setInt(2, version);
+                try (ResultSet rs = p.executeQuery()) {
+                    while (rs.next()) {
+                        Raw r = raws.get(rs.getString(1));
+                        if (r != null) r.targets().absorb(rs.getString(2), rs.getString(3));
+                    }
+                }
+            } catch (SQLException e) { throw wrap(e); }
+            List<Node> out = new ArrayList<>(raws.size());
+            for (Map.Entry<String, Raw> e : raws.entrySet()) {
+                Raw r = e.getValue();
+                Node n = new Node(e.getKey(), r.kind(), r.name(), r.activity(), r.queue(), r.retry(), r.sleep(),
+                        r.targets().next, r.targets().altNext, List.copyOf(r.targets().branches),
+                        r.expected(), r.success(), r.reason(), r.itemsKey(), r.itemKey(), r.loopBudget(), false);
+                out.add(r.compensable() ? n.withCompensable() : n);
+            }
+            return out;
+        }
+
         @Override public Optional<String> definition(String name, int version) {
             try (PreparedStatement p = ps("SELECT body FROM wf_definition WHERE name=? AND version=?")) {
                 p.setString(1, name); p.setInt(2, version);
