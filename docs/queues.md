@@ -207,7 +207,6 @@ even inside a local chain, a step on another queue crosses to another service. E
 | stamp token queue / claim-filter by queue | `server/**/engine/WorkflowEngine.java` (`parkAtWorkerStep`), `server/**/store/*Storage.java` (`claimTasks`) |
 | local-vs-handback decision | `core/**/GraphTraversal.java` (`classify`), `server/**/engine/WorkflowEngine.java` (`applyRun`) |
 | RPCs (`PollTasks`, `CompleteTask`, `AdvanceRun`, …) | `proto/src/main/proto/wiggle.proto` |
-| queues across sharded cells | `client/**/worker/NamespaceWorker.java` |
 
 ---
 

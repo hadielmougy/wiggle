@@ -111,7 +111,7 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=cell ∣ console`,
+The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=server ∣ console`,
 every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
 keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
@@ -388,6 +388,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
+| `WIGGLE_ROLE` | — | `server` | which process this image runs: `server` or `console`. `cell` is the old name for `server` and still works; an unrecognised value fails at startup |
 | `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port (`0` = pick a free one) |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name shown in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | **unset = in-memory, single node**; set to cluster on a database |
@@ -448,7 +449,7 @@ new Worker(client, "worker-1", WorkerOptions.defaults()
 | `localBatchSize` | 64 | LOCAL_ASYNC steps buffered before a flush (ignored by SERVER/LOCAL_SYNC) |
 
 **RPC retry (client + worker).** Every `WiggleClient` call — and therefore every worker RPC (poll,
-complete, fail, heartbeat) — retries on `UNAVAILABLE`, so an operation issued while a cell is
+complete, fail, heartbeat) — retries on `UNAVAILABLE`, so an operation issued while a node is
 momentarily gone (a restart, or an active/passive failover taking over the address) rides out the
 outage instead of failing. Only `UNAVAILABLE` is retried (the RPC almost certainly never ran, so
 it's safe even for non-idempotent calls); permanent errors and `DEADLINE_EXCEEDED` are not. Tune per
@@ -498,7 +499,7 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 ### 7.1 The ops console (web UI)
 
 The web UI is the standalone **ops console** — the `console` module, a separate process that is a
-**pure gRPC client** (embedded Tomcat + servlets). Server/cell nodes serve **no UI**; a node's
+**pure gRPC client** (embedded Tomcat + servlets). Server nodes serve **no UI**; a node's
 `WIGGLE_DASHBOARD_PORT` (default `0` = off) exposes only the **`/healthz`** probe for
 liveness/readiness checks.
 
@@ -536,7 +537,7 @@ for anything exposed.
 | `WIGGLE_DASHBOARD_PORT` | `8090` | console HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console + the client certs it presents to cells |
+| `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console + the client certs it presents to the server |
 
 ### 7.1a Transport security (TLS / mTLS)
 
@@ -645,9 +646,8 @@ Also on the wire as `GetBacklogCoverage`, and over HTTP at `/api/backlog`:
 ```
 
 The registry behind it is in memory and deliberately not durable — it is written on the poll path
-and must cost a map write — so it knows only its own node's pollers, and the console aggregates
-across a namespace's cells. A worker that stops polling stops counting as cover once its entry
-times out.
+and must cost a map write — so it knows only its own node's pollers, and coverage is therefore
+reported per node. A worker that stops polling stops counting as cover once its entry times out.
 
 ### 7.6 Queue-lag monitoring
 
