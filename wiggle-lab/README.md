@@ -56,8 +56,10 @@ streamlit run app.py           # opens http://localhost:8501
    yourself first with `docker build -t wiggle:local ..`), then **Load image → kind**.
 3. **Servers tab →** deploy `srv1` with the namespace **left blank** (1 node). You get a Postgres and
    a wiggle node; no coordinator is involved.
-4. **Client tests tab →** pick the `sleep` workflow → **Start instances → Observe**.
-5. **Scale/kill/remove** the server from the Servers tab; **Tear down cluster** from the sidebar when
+4. **Forwards tab →** deploy the **ops console** against `srv1` and open the link. A console for a
+   standalone server talks straight to it (`WIGGLE_URL`) — no coordinator, no namespace.
+5. **Client tests tab →** pick the `sleep` workflow → **Start instances → Observe**.
+6. **Scale/kill/remove** the server from the Servers tab; **Tear down cluster** from the sidebar when
    done.
 
 <details>

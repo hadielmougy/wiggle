@@ -52,10 +52,14 @@ def labels(role: str, cell: str | None = None, namespace: str | None = None) -> 
     return lb
 
 
+def dns_safe(value: str) -> str:
+    """``value`` reduced to DNS-1123 characters, e.g. 'cellA' -> 'cella'."""
+    return "".join(c if (c.isalnum() or c == "-") else "-" for c in value.lower()).strip("-")
+
+
 def dns_name(prefix: str, value: str) -> str:
     """A DNS-1123 safe resource name, e.g. ('cell', 'cellA') -> 'cell-cella'."""
-    safe = "".join(c if (c.isalnum() or c == "-") else "-" for c in value.lower()).strip("-")
-    return f"{prefix}-{safe}"
+    return f"{prefix}-{dns_safe(value)}"
 
 
 # ---- editable pod tunables ----------------------------------------------------------------------
