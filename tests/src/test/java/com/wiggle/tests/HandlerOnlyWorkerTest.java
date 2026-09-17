@@ -119,9 +119,10 @@ class HandlerOnlyWorkerTest {
     @DisplayName("a handler-only worker still runs locally: it holds the graph, so no server fallback")
     void localModesDoNotFallBackToServerDriven() throws Exception {
         // Worker.execute takes the local path only when it holds the definition for the task's exact
-        // version: graphs.get(workflow + ":" + version) != null. Completing the flow does not prove
-        // that -- a worker without the graph completes too, one server round trip per step. So assert
-        // the branch condition itself, which is the thing removing Worker.register could have broken.
+        // version: registrations.graphFor(workflow + ":" + version) != null. Completing the flow does
+        // not prove that -- a worker without the graph completes too, one server round trip per step.
+        // So assert the branch condition itself, which is the thing removing Worker.register could
+        // have broken.
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             FlowSpec spec = linear(mode);
             try (WiggleServer server = new WiggleServer(config()).start();
@@ -134,9 +135,12 @@ class HandlerOnlyWorkerTest {
                         .registerHandler(new LinearH(new AtomicInteger()))) {
                     w.start();
 
-                    java.lang.reflect.Field f = Worker.class.getDeclaredField("graphs");
+                    java.lang.reflect.Field rf = Worker.class.getDeclaredField("registrations");
+                    rf.setAccessible(true);
+                    Object regs = rf.get(w);
+                    java.lang.reflect.Field f = regs.getClass().getDeclaredField("graphs");
                     f.setAccessible(true);
-                    Map<?, ?> graphs = (Map<?, ?>) f.get(w);
+                    Map<?, ?> graphs = (Map<?, ?>) f.get(regs);
 
                     String key = spec.name() + ":" + spec.version();
                     assertTrue(graphs.containsKey(key),
