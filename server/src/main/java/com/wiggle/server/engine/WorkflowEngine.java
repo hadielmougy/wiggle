@@ -1,7 +1,15 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.placement.IdCodec;
-import com.wiggle.core.*;
+import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.Ids;
+import com.wiggle.core.InstanceView;
+import com.wiggle.core.Json;
+import com.wiggle.core.Node;
+import com.wiggle.core.NodeKind;
+import com.wiggle.core.RetryPolicy;
+import com.wiggle.core.ScratchKeys;
+import com.wiggle.core.TaskActivation;
+import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.InstanceStatus;
@@ -9,10 +17,7 @@ import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
-
 import java.util.*;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListSet;
 
 /**
  * The state machine. Everything an instance does is expressed as tokens moving over
@@ -224,7 +229,7 @@ public final class WorkflowEngine {
                 return List.of();
             }
             long now = System.currentTimeMillis();
-            cancelActiveTokens(tx, inst.id, null, now);
+            cancelActiveTokens(tx, inst.id, now);
             inst.status = InstanceStatus.CANCELLED;
             inst.terminationReason = reason;
             inst.updatedAt = now;
@@ -427,8 +432,6 @@ public final class WorkflowEngine {
      * leaves the context untouched. For PREDICATE nodes it must carry a boolean under
      * {@code "value"}.
      */
-
-    // TODO here I should calculate the next task
     public void complete(String taskId, String leaseOwner, Object result) {
         txVoid(tx -> {
             LockedTask locked = lockTask(tx, taskId);
@@ -1100,7 +1103,7 @@ public final class WorkflowEngine {
     }
 
     void failInstance(Tx tx, Instance inst, String error, long now) {
-        cancelActiveTokens(tx, inst.id, null, now);
+        cancelActiveTokens(tx, inst.id, now);
         if (sagas.begin(tx, inst, error, now)) return;
         inst.status = InstanceStatus.FAILED;
         inst.error = error;
@@ -1110,9 +1113,9 @@ public final class WorkflowEngine {
         notifyParent(tx, inst, now);
     }
 
-    private static void cancelActiveTokens(Tx tx, String instanceId, String except, long now) {
+    private static void cancelActiveTokens(Tx tx, String instanceId, long now) {
         for (Token t : tx.tokensOf(instanceId)) {
-            if (!t.isActive() || t.id.equals(except)) continue;
+            if (!t.isActive() || t.id == null) continue;
             TokenStatus before = t.status;
             t.status = TokenStatus.CANCELLED;
             t.leaseOwner = null;
