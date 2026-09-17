@@ -123,7 +123,6 @@ public final class CoordinatorFailoverBench {
         }
     }
 
-    // ---- reporting -------------------------------------------------------------------------------
 
     private static void report(ConcurrentLinkedQueue<Attempt> attempts, ConcurrentLinkedQueue<Probe> probes,
                                long runMillis, int rate) {

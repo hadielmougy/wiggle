@@ -73,7 +73,6 @@ class TlsTest {
         importCert(trust, "client", clientCrt);
     }
 
-    // ---------------------------------------------------------------- gRPC
 
     @Test @DisplayName("gRPC server-side TLS: a trusting client works, a plaintext client is refused")
     void grpcServerTls() throws Exception {
@@ -116,7 +115,6 @@ class TlsTest {
         }
     }
 
-    // ---------------------------------------------------------------- helpers
 
     private static Tls.Options opts(Path keystore, Path truststore) {
         return new Tls.Options(
@@ -148,7 +146,6 @@ class TlsTest {
         return TestPorts.free();
     }
 
-    // ---- keytool wrappers ----
 
     private static String keytool() {
         return System.getProperty("java.home") + "/bin/keytool";

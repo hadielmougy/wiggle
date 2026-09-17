@@ -1,0 +1,203 @@
+package com.wiggle.tests;
+
+import com.wiggle.core.Ids;
+import com.wiggle.placement.IdCodec;
+import com.wiggle.placement.LivePlacement;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/** T12 increment 2: the mutable placement a coordinator-managed cell mints into. */
+class LivePlacementTest {
+
+    @Test @DisplayName("defaults to epoch 0, shard 0 (the single implicit cell)")
+    void defaults() {
+        LivePlacement p = new LivePlacement();
+        assertEquals(0, p.epoch());
+        assertEquals(0, p.stampFor(Ids.token()).shard());
+    }
+
+    @Test @DisplayName("stamps only shards the cell owns, spread across them")
+    void stampsOwnedShards() {
+        LivePlacement p = new LivePlacement(2, new int[]{3, 8});
+        assertEquals(2, p.epoch());
+        Set<Integer> seen = new HashSet<>();
+        for (int i = 0; i < 200; i++) seen.add(p.stampFor(Ids.token()).shard());
+        assertTrue(Set.of(3, 8).containsAll(seen), "only owned shards are stamped, saw " + seen);
+        assertEquals(Set.of(3, 8), seen, "both owned shards get used over many ids");
+    }
+
+    @Test @DisplayName("a minted id parses back to exactly the placement it was stamped with")
+    void minterRoundTrips() {
+        LivePlacement p = new LivePlacement(7, new int[]{3});
+        String id = p.minter("orders", "cell-a", Ids::token).get();
+
+        IdCodec.Placement parsed = IdCodec.parse(id).orElseThrow();
+        assertEquals("orders", parsed.namespace());
+        assertEquals("cell-a", parsed.cellId());
+        assertEquals(7, parsed.epoch());
+        assertEquals(3, parsed.shard());
+        assertTrue(id.endsWith(parsed.ulid()), "the ulid in the id is the one that was stamped");
+    }
+
+    @Test @DisplayName("the minter stamps the same ulid it formats, not a freshly generated one")
+    void minterStampsTheUlidItFormats() {
+        // A source that hands out a different token each call: if the sequence generated a ulid to
+        // stamp and then generated ANOTHER to format, the shard would be a hash of the wrong one.
+        AtomicInteger n = new AtomicInteger();
+        LivePlacement p = new LivePlacement(0, new int[]{0, 1, 2, 3, 4, 5, 6, 7});
+
+        for (int i = 0; i < 500; i++) {
+            String id = p.minter("orders", null, () -> "ulid" + n.incrementAndGet()).get();
+            IdCodec.Placement parsed = IdCodec.parse(id).orElseThrow();
+            assertEquals(IdCodec.shardFor(parsed.ulid(), 8), parsed.shard(),
+                    "the id's shard must be the hash of the id's OWN ulid: " + id);
+        }
+    }
+
+    @Test @DisplayName("a minted id never carries one generation's epoch with another's shard")
+    void minterIsAtomicUnderReconfig() throws Exception {
+        // Same disjoint-generations trick as stampForIsAtomicUnderReconfig, but through the whole
+        // mint sequence and asserted on the PARSED id -- so formatting with a re-read epoch, rather
+        // than the one the stamp fixed, is caught here even though stampFor itself stays correct.
+        LivePlacement p = new LivePlacement(10, new int[]{10, 11});
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<String> tear = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.function.Supplier<String> mint = p.minter("orders", "cell-a", Ids::token);
+
+        Thread flipper = new Thread(() -> {
+            boolean a = true;
+            while (!stop.get()) {
+                if (a) p.set(10, new int[]{10, 11}); else p.set(20, new int[]{20, 21});
+                a = !a;
+            }
+        });
+        Thread minter = new Thread(() -> {
+            for (int i = 0; i < 2_000_000 && tear.get() == null; i++) {
+                IdCodec.Placement id = IdCodec.parse(mint.get()).orElseThrow();
+                Set<Integer> expected = id.epoch() == 10 ? Set.of(10, 11) : Set.of(20, 21);
+                if (!expected.contains((int) id.shard())) {
+                    tear.set("minted epoch " + id.epoch() + " with shard " + id.shard());
+                }
+            }
+        });
+        flipper.start(); minter.start();
+        minter.join(); stop.set(true); flipper.join();
+        assertNull(tear.get(), tear.get());
+    }
+
+    @Test @DisplayName("a cell with no namespace cannot mint a routable id")
+    void minterRefusesABlankNamespace() {
+        LivePlacement p = new LivePlacement();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> p.minter("  ", "cell-a", Ids::token));
+        assertTrue(e.getMessage().contains("namespace"), e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> p.minter(null, "cell-a", Ids::token));
+    }
+
+    @Test @DisplayName("a standby cell mints no id at all, rather than one it has no right to")
+    void minterRefusesOnStandby() {
+        LivePlacement p = new LivePlacement(4, new int[]{});
+        assertThrows(IllegalStateException.class, () -> p.minter("orders", "cell-a", Ids::token).get());
+    }
+
+    @Test @DisplayName("stampFor never splits an id's epoch from its shard across a concurrent set()")
+    void stampForIsAtomicUnderReconfig() throws Exception {
+        // Two generations with DISJOINT shard sets, so any (epoch,shard) mix is unambiguously a torn read.
+        LivePlacement p = new LivePlacement(10, new int[]{10, 11});
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<String> tear = new java.util.concurrent.atomic.AtomicReference<>();
+
+        Thread flipper = new Thread(() -> {
+            boolean a = true;
+            while (!stop.get()) {
+                if (a) p.set(10, new int[]{10, 11}); else p.set(20, new int[]{20, 21});
+                a = !a;
+            }
+        });
+        Thread minter = new Thread(() -> {
+            for (int i = 0; i < 2_000_000 && tear.get() == null; i++) {
+                LivePlacement.Stamp s = p.stampFor(Ids.token());
+                Set<Integer> expected = s.epoch() == 10 ? Set.of(10, 11) : Set.of(20, 21);
+                if (!expected.contains(s.shard())) {
+                    tear.set("epoch " + s.epoch() + " stamped with shard " + s.shard());
+                }
+            }
+        });
+
+        flipper.start(); minter.start();
+        minter.join();
+        stop.set(true);
+        flipper.join();
+        assertNull(tear.get(), "a mint saw a torn (epoch, shard) pair: " + tear.get());
+    }
+
+    @Test @DisplayName("set() re-points a running node; an empty shard set is standby, not genesis")
+    void repoint() {
+        LivePlacement p = new LivePlacement(0, new int[]{0});
+        p.set(5, List.of(9));
+        assertEquals(5, p.epoch());
+        assertTrue(p.mintable());
+        assertEquals(9, p.stampFor(Ids.token()).shard());
+
+        p.set(6, new int[]{});   // empty -> standby (a ring exists but does not name this cell)
+        assertEquals(6, p.epoch());
+        assertFalse(p.mintable(), "empty shard set means standby");
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()).shard(), "standby cell refuses to mint");
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
+    }
+
+
+    @Test @DisplayName("a standby mint re-fetches on-demand, then mints once placed")
+    void standbyRefreshesThenMints() {
+        LivePlacement p = new LivePlacement(1, new int[]{});   // standby in epoch 1
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandby(() -> {                             // the on-demand re-fetch places this cell
+            calls.incrementAndGet();
+            p.set(1, new int[]{3});
+        });
+
+        LivePlacement.Stamp s = p.stampFor(Ids.token());
+        assertEquals(1, s.epoch());
+        assertEquals(3, s.shard());
+        assertEquals(1, calls.get(), "refreshed exactly once");
+    }
+
+    @Test @DisplayName("a mintable cell never triggers a standby refresh")
+    void mintableDoesNotRefresh() {
+        LivePlacement p = new LivePlacement(1, new int[]{2});
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandby(calls::incrementAndGet);
+        assertEquals(2, p.stampFor(Ids.token()).shard());
+        assertEquals(0, calls.get());
+    }
+
+    @Test @DisplayName("still-standby after refresh throws (self-heal doesn't loop forever)")
+    void stillStandbyThrows() {
+        LivePlacement p = new LivePlacement(0, new int[]{});
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandby(calls::incrementAndGet);            // refresh does not place it
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
+        assertEquals(1, calls.get());
+    }
+
+    @Test @DisplayName("bursty standby mints are debounced to one refresh")
+    void refreshIsDebounced() {
+        LivePlacement p = new LivePlacement(0, new int[]{});
+        AtomicInteger calls = new AtomicInteger();
+        p.onStandby(calls::incrementAndGet);            // never places it -> stays standby
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));
+        assertThrows(IllegalStateException.class, () -> p.stampFor(Ids.token()));   // within the window
+        assertEquals(1, calls.get(), "a second standby mint within the debounce window does not re-refresh");
+    }
+}

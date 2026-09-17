@@ -1,8 +1,6 @@
 package com.wiggle.server.coord;
 
-import com.wiggle.server.coord.CoordPolicy.EpochRing;
-import com.wiggle.server.coord.CoordPolicy.EpochStatus;
-import com.wiggle.server.coord.CoordPolicy.RingSlot;
+import com.wiggle.placement.Ring;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -22,9 +20,9 @@ class EpochRetireTest {
 
     /** orders: epoch 0 DRAINING (shard 0 -> cellA), epoch 1 OPEN (current). */
     private static long seedDrainingPolicy(InMemoryCoordinatorStore store) {
-        Map<Long, EpochRing> epochs = new LinkedHashMap<>();
-        epochs.put(0L, new EpochRing(List.of(new RingSlot(0, "cellA", null)), EpochStatus.DRAINING));
-        epochs.put(1L, new EpochRing(List.of(new RingSlot(0, "cellA", null)), EpochStatus.OPEN));
+        Map<Long, Ring.Epoch> epochs = new LinkedHashMap<>();
+        epochs.put(0L, new Ring.Epoch(List.of(new Ring.Slot(0, "cellA", null)), Ring.Status.DRAINING));
+        epochs.put(1L, new Ring.Epoch(List.of(new Ring.Slot(0, "cellA", null)), Ring.Status.OPEN));
         return store.casPolicy("orders", 0, new CoordPolicy("orders", 1, 0, epochs));
     }
 
@@ -42,8 +40,8 @@ class EpochRetireTest {
         reconciler(store, census, true).retireDrained("orders");
 
         CoordPolicy p = store.getPolicy("orders").orElseThrow();
-        assertEquals(EpochStatus.RETIRED, p.epochs().get(0L).status(), "drained epoch 0 retired");
-        assertEquals(EpochStatus.OPEN, p.epochs().get(1L).status(), "current epoch untouched");
+        assertEquals(Ring.Status.RETIRED, p.epochs().get(0L).status(), "drained epoch 0 retired");
+        assertEquals(Ring.Status.OPEN, p.epochs().get(1L).status(), "current epoch untouched");
         assertEquals(rev + 1, p.revision(), "retire bumps the policy generation");
     }
 
@@ -57,7 +55,7 @@ class EpochRetireTest {
         reconciler(store, census, true).retireDrained("orders");
 
         CoordPolicy p = store.getPolicy("orders").orElseThrow();
-        assertEquals(EpochStatus.DRAINING, p.epochs().get(0L).status(), "still draining");
+        assertEquals(Ring.Status.DRAINING, p.epochs().get(0L).status(), "still draining");
         assertEquals(rev, p.revision(), "no change, no generation bump");
     }
 
@@ -69,7 +67,7 @@ class EpochRetireTest {
         reconciler(store, new LiveCensus(), true).retireDrained("orders");
 
         CoordPolicy p = store.getPolicy("orders").orElseThrow();
-        assertEquals(EpochStatus.DRAINING, p.epochs().get(0L).status());
+        assertEquals(Ring.Status.DRAINING, p.epochs().get(0L).status());
         assertEquals(rev, p.revision());
     }
 
@@ -83,7 +81,7 @@ class EpochRetireTest {
         CoordinatorReconciler r = reconciler(store, census, false);
         try {
             r.tick();   // not leader
-            assertEquals(EpochStatus.DRAINING, store.getPolicy("orders").orElseThrow().epochs().get(0L).status());
+            assertEquals(Ring.Status.DRAINING, store.getPolicy("orders").orElseThrow().epochs().get(0L).status());
             assertEquals(rev, store.getPolicy("orders").orElseThrow().revision());
         } finally {
             r.close();

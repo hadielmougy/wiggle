@@ -30,13 +30,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * produce are the names the worker binds back. A step named differently would fail to bind before
  * the instance ever ran.
  *
- * <p>These used to be written twice -- once by name, once by method reference -- and compared by
- * content hash. That comparison went with the by-name mode; what it was protecting (that both said
- * the same thing) cannot be violated by one mode.
  */
 class FlowApiRegressionTest {
 
-    // ------------------------------------------------------------------ linear: steps and gates
 
     @Test
     @DisplayName("a linear pipeline: the context accumulates in order")
@@ -67,7 +63,6 @@ class FlowApiRegressionTest {
         assertEquals(0, downstream.get(), "nothing downstream of the gate ran");
     }
 
-    // ------------------------------------------------------------------ fan-out and combine
 
     @Test
     @DisplayName("fork/combine: both arms' writes survive the join")
@@ -145,7 +140,6 @@ class FlowApiRegressionTest {
         assertEquals(true, out.get("after"), "and the join was not stranded");
     }
 
-    // ------------------------------------------------------------------ failure handling
 
     @Test
     @DisplayName("a per-step retry policy retries a transient failure")
@@ -177,7 +171,6 @@ class FlowApiRegressionTest {
         assertTrue(after - before >= 350, "the timer actually deferred: " + (after - before) + "ms");
     }
 
-    // ------------------------------------------------------------------ the graph itself
 
     @Test
     @DisplayName("a typed definition is content-addressed the same way, and rejects the same graphs")
@@ -199,7 +192,6 @@ class FlowApiRegressionTest {
                 .getMessage().contains("duplicate step name"));
     }
 
-    // ------------------------------------------------------------------ step contracts
     //
     // What each spec names. The handlers below implement them, so the compiler checks that every step
     // the spec declares exists with the right signature -- and none of these interfaces has, or needs,
@@ -265,7 +257,6 @@ class FlowApiRegressionTest {
         Map<String, Object> after(Map<String, Object> c);
     }
 
-    // ------------------------------------------------------------------ fan-out handlers
     //
     // Same logic as the conformance suite's. A combine takes one parameter per arm, in fork order.
 
@@ -331,7 +322,6 @@ class FlowApiRegressionTest {
         public Map<String, Object> after(Map<String, Object> c) { return Scenarios.put(c, "after", true); }
     }
 
-    // ------------------------------------------------------------------ harness
 
     /** Equal content hashes: the two definitions are the same graph, so the engine cannot tell them apart. */
 

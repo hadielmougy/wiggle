@@ -2,7 +2,7 @@
 
 How the cell coordinator shards a namespace's instances across cells, routes them without a
 directory, and reshards (grow / split / rebalance / shrink) with **zero data migration**. This is the
-conceptual reference for the code in `core/IdCodec`, `server/CellPlacement`, and
+conceptual reference for the code in `placement/IdCodec`, `placement/LivePlacement`, and
 `coordinator/**/CoordinatorService`.
 
 > One-line model: **the instance id carries its own routing.** An instance's cell is a pure function
@@ -43,18 +43,42 @@ Consequences that surprise people:
 
 ## 2. The self-routing id
 
-`core/IdCodec` — `{namespace}.e{epoch}.s{shard}.{ulid}`:
+`placement/IdCodec` — `{namespace}[.c{cell}].e{epoch}.s{shard}.{ulid}`:
 
 ```
-orders.e2.s5.01H8XK9ABCDEF…
-└─┬──┘ ┬  ┬  └──── ulid ────┘
- ns   epoch shard
+orders.ccell-a.e2.s5.01H8XK9ABCDEF…
+└─┬──┘  └─┬──┘ ┬  ┬  └──── ulid ────┘
+ ns      cell epoch shard
 ```
 
 - **namespace** — the tenant/workflow family (no `.`; it's the first segment).
+- **cell** — *optional*: the cell that minted this id, stamped when `WIGGLE_CELL_ID` is set.
 - **epoch** — which *version* of the placement map applies to this instance (§4).
 - **shard** — which logical slice of the key space this instance belongs to (§3).
 - Legacy `wfi_…` ids don't parse and route to the genesis cell (pre-adoption compatibility).
+
+**Why both a cell and a shard.** Epoch and shard say where an instance *belongs* under the current
+ring, which is what makes resharding possible. The cell says where it was actually *written*, which
+is what makes routing possible with no ring at all — a deployment that never reshards can route on
+the label alone and ignore the placement policy entirely. Under a coordinator the label is
+redundant, because the id's own epoch already resolves through the ring that was live when it was
+minted; without one it is the only thing that can answer the question.
+
+The label sits **before** the epoch rather than after the shard, and that position is load-bearing:
+a ulid may contain dots, so a trailing optional segment would make the legacy id `ns.e0.s0.cfoo.bar`
+parse as cell `foo` with ulid `bar` — silently routing an instance to a cell that never held it.
+Anchored between two fixed markers it cannot be confused with anything.
+
+Ids are capped at 128 characters, the width of the columns that store them (schema v9 widened
+`wf_instance.id`, `wf_token.instance_id` and `wf_comp_log.instance_id` from 64), so
+`namespace + cell` has a budget of 97 for a single-digit epoch and shard. `IdCodec.format` refuses
+to mint anything longer rather than letting it fail at the insert, where the error would be about a
+column rather than a name.
+
+The migration is additive — every existing value still fits — so old and new nodes can share the
+database through a rolling deploy. On a large `wf_token` it rewrites the table and its indexes under
+a lock, so apply it in a maintenance window, or ahead of the deploy with `WIGGLE_MIGRATE_ONLY=true`,
+when that table is big.
 
 Because epoch and shard are **baked into the id at birth and never recomputed**, resolution is a pure
 lookup — no directory, and the id stays valid for the instance's whole life even as topology changes.
@@ -67,7 +91,7 @@ A **shard** is a number that appears in a ring; the shard set for an epoch is ex
 numbers its ring names. Shards are a **fixed carving of the key space you choose up front**, then
 assign to cells — they are *not* created when nodes or cells join.
 
-At mint time a cell spreads its new ids across the shards **it owns** (`server/CellPlacement.shardFor`
+At mint time a cell spreads its new ids across the shards **it owns** (`placement/LivePlacement.stampFor`
 → `IdCodec.shardFor`):
 
 <!-- snippet: id-codec/shard-for -->
@@ -210,11 +234,11 @@ none of which is a distributed lock on the mint path:
    Concurrent mints are safe *because* reshards go into new epochs, not over old ones.
 2. **Coordinator (ring write).** `casPolicy` is a single compare-and-set on `revision`; readers see
    the whole old ring or the whole new ring, never a torn one.
-3. **Node (per-mint).** `CellPlacement` holds `(epoch, shards)` as one immutable snapshot behind a
+3. **Node (per-mint).** `LivePlacement` holds `(epoch, shards)` as one immutable snapshot behind a
    single `volatile` reference, and a mint takes it atomically via `stampFor(ulid)`. Reading `epoch()`
    and `shardFor()` separately could interleave a re-point between them and stamp one generation's
    epoch with another's shard (→ mis-route after a reshard); `stampFor` closes that window.
-   Test: `CellPlacementTest.stampForIsAtomicUnderReconfig`.
+   Test: `LivePlacementTest.stampForIsAtomicUnderReconfig`.
 
 ---
 
@@ -256,7 +280,7 @@ Take `orders` from one cell (`cellA`, owning all shards) to two (`cellA` + new `
 2. **Cut over.** `OpenEpoch` with the split ring → epoch N `DRAINING` (ring retained), epoch N+1 `OPEN`
    with `s0,s1→cellA, s2,s3→cellB`; `revision` bumps (CAS-guarded).
 3. **Re-point nodes live.** On the next heartbeat each node sees the new generation, re-fetches, and
-   swaps its `CellPlacement` — no restart. cellA now mints `[0,1]`, cellB `[2,3]`.
+   swaps its `LivePlacement` — no restart. cellA now mints `[0,1]`, cellB `[2,3]`.
 4. **Route old + new.** `orders.eN.s2.…` (born before) still resolves to cellA via epoch N's ring;
    `orders.e{N+1}.s2.…` resolves to cellB. The id's epoch selects the ring.
 5. **Keep draining.** `activeCells` returns every cell in any non-retired epoch, so workers poll both
@@ -274,7 +298,7 @@ No id is ever rewritten and no instance data is moved.
 |---|---|
 | id format + `shardFor` hash | `core/src/main/java/com/wiggle/core/IdCodec.java` |
 | ring & epoch model (`RingSlot`, `EpochRing`, status) | `coordinator/spi/**/CoordPolicy.java` |
-| node's live placement + atomic `stampFor` | `server/src/main/java/com/wiggle/server/CellPlacement.java` |
+| node's live placement + atomic `stampFor` | `placement/src/main/java/com/wiggle/placement/LivePlacement.java` |
 | minting (uses `stampFor`) | `server/src/main/java/com/wiggle/server/CellBundle.java` |
 | register / resolve / openEpoch / fingerprint guard | `coordinator/runtime/**/CoordinatorService.java` (gRPC adapter: `CoordinatorApi.java`) |
 | drain → retire lifecycle (census-driven) | `coordinator/runtime/**/CoordinatorReconciler.java` |

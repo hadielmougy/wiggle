@@ -26,7 +26,7 @@ dependencies {
             "wiggle-jdbc", "wiggle-postgres", "wiggle-client-all",
             // wiggle-server has an api dependency on it, so a consumer resolves it whether or
             // not they name it; the BOM should pin it like everything else it can drag in.
-            "wiggle-election",
+            "wiggle-election", "wiggle-placement",
         ).forEach { api("sh.wiggle:$it:$version") }
 
         // --- the control-plane stack wiggle-proto exposes transitively ---

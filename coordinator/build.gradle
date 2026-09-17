@@ -11,6 +11,9 @@ dependencies {
     api(project(":core"))
     // The shared leader election -- the same one :server runs. Depends on neither side.
     api(project(":election"))
+    // The placement rules (ring model, mint/resolve decisions) -- pure, shared with :server,
+    // depending on neither side.
+    api(project(":placement"))
     api(project(":proto"))
 
     // The JDBC coordinator-store backend: connection pooling only. The JDBC driver is supplied at

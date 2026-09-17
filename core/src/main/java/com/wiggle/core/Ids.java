@@ -1,7 +1,6 @@
 package com.wiggle.core;
 
 import java.security.SecureRandom;
-import java.util.UUID;
 
 public final class Ids {
     private static final SecureRandom RND = new SecureRandom();
@@ -21,9 +20,5 @@ public final class Ids {
         for (int i = 9; i >= 0; i--) sb.append(B32[(int) ((t >>> (i * 5)) & 31)]);
         for (int i = 0; i < 12; i++) sb.append(B32[RND.nextInt(32)]);
         return sb.toString();
-    }
-
-    public static String uuid() {
-        return UUID.randomUUID().toString();
     }
 }

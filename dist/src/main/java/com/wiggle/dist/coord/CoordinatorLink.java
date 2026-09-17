@@ -1,6 +1,6 @@
 package com.wiggle.dist.coord;
 
-import com.wiggle.server.CellPlacement;
+import com.wiggle.placement.LivePlacement;
 
 import java.util.Map;
 import java.util.function.Supplier;
@@ -36,5 +36,5 @@ public interface CoordinatorLink extends AutoCloseable {
                     String cellFingerprint) {}
 
     /** The cell-side handles the link needs: where to apply placement, and how to read live counts. */
-    record CellRuntime(CellPlacement placement, Supplier<Map<Long, Integer>> liveByEpoch) {}
+    record CellRuntime(LivePlacement placement, Supplier<Map<Long, Integer>> liveByEpoch) {}
 }

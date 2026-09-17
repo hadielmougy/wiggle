@@ -1,13 +1,16 @@
 package com.wiggle.server.coord;
 
 import com.google.protobuf.Struct;
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.proto.ActiveCellsResponse;
 import com.wiggle.proto.AllocatedWorkflow;
 import com.wiggle.proto.CoordinatorHeartbeatResponse;
 import com.wiggle.proto.DeregisterWorkflowResponse;
 import com.wiggle.proto.DumpResponse;
+import com.wiggle.placement.Epochs;
+import com.wiggle.placement.Placements;
+import com.wiggle.placement.Ring;
 import com.wiggle.proto.Endpoint;
 import com.wiggle.proto.EpochRing;
 import com.wiggle.proto.EpochStatus;
@@ -94,7 +97,6 @@ public final class CoordinatorService implements AutoCloseable {
         cellStubs.clear();
     }
 
-    // ---- node-lifecycle logic (directly unit-testable) ----
 
     /**
      * The config for a node in {@code cellId} of {@code namespace}: the current config generation (the
@@ -144,12 +146,8 @@ public final class CoordinatorService implements AutoCloseable {
      * no implicit/inferred cell: a coordinated namespace is placed only by an explicit ring (OpenEpoch).
      */
     private Placement placementFor(CoordPolicy policy, String cellId) {
-        if (policy == null) return new Placement(0, List.of());   // no ring yet -> standby
-        long epoch = policy.currentEpoch();
-        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
-        List<Integer> shards = new ArrayList<>();
-        if (er != null) for (CoordPolicy.RingSlot s : er.ring()) if (cellId.equals(s.cellId())) shards.add(s.shard());
-        return new Placement(epoch, shards);   // empty when the ring does not name this cell -> standby
+        Placements.Mintable m = Placements.mintable(policy == null ? null : policy.ring(), cellId);
+        return new Placement(m.epoch(), m.shards());   // empty shards -> standby, as before
     }
 
     private record Placement(long epoch, List<Integer> shards) {}
@@ -195,25 +193,32 @@ public final class CoordinatorService implements AutoCloseable {
      * it throws {@link NamespaceNotReadyException} (open an epoch first); there is no implicit-cell fallback.
      */
     public ResolveResponse doResolve(ResolveRequest req) {
-        String namespace;
-        long epoch;
-        int shard;   // -1 => "any" (namespace resolve, no specific instance)
+        String region = emptyToNull(req.getCallerRegion());
+
         if (req.getByCase() == ResolveRequest.ByCase.INSTANCE_ID) {
             IdCodec.Placement p = IdCodec.parse(req.getInstanceId()).orElseThrow(() ->
                     new IllegalArgumentException("cannot route a legacy instance id ('" + req.getInstanceId()
                             + "'); resolve by namespace instead"));
-            namespace = p.namespace();
-            epoch = p.epoch();
-            shard = (int) p.shard();
-        } else {
-            namespace = req.getNamespace();
-            epoch = store.getPolicy(namespace).map(CoordPolicy::currentEpoch).orElse(0L);
-            shard = -1;
+            String namespace = p.namespace();
+            CoordPolicy policy = store.getPolicy(namespace).orElse(null);
+
+            // One rule, in one place: the label when the id carries one and that cell is live,
+            // otherwise the epoch's ring. Placements owns the decision; membership is ours, so we
+            // pass liveness in.
+            String cellId = Placements.resolve(p, policy == null ? null : policy.ring(),
+                    c -> endpointForCellOrNull(namespace, c, region) != null).orElse(null);
+            if (cellId == null) throw new NamespaceNotReadyException(namespace);
+            return resolved(namespace, p.epoch(), endpointForCell(namespace, cellId, region));
         }
-        String cellId = cellFor(namespace, epoch, shard);
-        if (cellId == null) throw new NamespaceNotReadyException(namespace);   // no ring -> not resolvable
-        String region = emptyToNull(req.getCallerRegion());
-        Endpoint endpoint = endpointForCell(namespace, cellId, region);
+
+        String namespace = req.getNamespace();
+        long epoch = store.getPolicy(namespace).map(CoordPolicy::currentEpoch).orElse(0L);
+        String cellId = cellFor(namespace, epoch, -1);            // -1: any cell of the namespace
+        if (cellId == null) throw new NamespaceNotReadyException(namespace);
+        return resolved(namespace, epoch, endpointForCell(namespace, cellId, region));
+    }
+
+    private static ResolveResponse resolved(String namespace, long epoch, Endpoint endpoint) {
         return ResolveResponse.newBuilder()
                 .setNamespace(namespace)
                 .setEpoch(epoch)
@@ -247,9 +252,9 @@ public final class CoordinatorService implements AutoCloseable {
     private static List<String> activeCellIds(CoordPolicy policy) {
         List<String> out = new ArrayList<>();
         if (policy == null) return out;
-        for (CoordPolicy.EpochRing er : policy.epochs().values()) {
-            if (er.status() == CoordPolicy.EpochStatus.RETIRED) continue;
-            for (CoordPolicy.RingSlot s : er.ring()) {
+        for (Ring.Epoch er : policy.epochs().values()) {
+            if (er.status() == Ring.Status.RETIRED) continue;
+            for (Ring.Slot s : er.ring()) {
                 if (!out.contains(s.cellId())) out.add(s.cellId());
             }
         }
@@ -263,18 +268,22 @@ public final class CoordinatorService implements AutoCloseable {
      * cells/shards rather than piling onto the first slot. The client resolves per new start, so this spread
      * takes effect per start.
      */
+    /**
+     * The cell a shard belongs to, from {@link Placements}. A negative shard means "any cell of the
+     * namespace" (a namespace resolve with no specific instance), which is a coordinator concern
+     * rather than a placement rule, so it is answered here.
+     */
     private String cellFor(String namespace, long epoch, int shard) {
         CoordPolicy policy = store.getPolicy(namespace).orElse(null);
         if (policy == null) return null;
-        CoordPolicy.EpochRing er = policy.epochs().get(epoch);
-        if (er == null || er.ring().isEmpty()) return null;
-        List<CoordPolicy.RingSlot> ring = er.ring();
-        if (shard < 0) return ring.get(ThreadLocalRandom.current().nextInt(ring.size())).cellId();
-        for (CoordPolicy.RingSlot s : ring) if (s.shard() == shard) return s.cellId();
-        return ring.get(Math.floorMod(shard, ring.size())).cellId();   // ring smaller than shard space
+        if (shard < 0) {
+            Ring.Epoch er = policy.epochs().get(epoch);
+            if (er == null || er.ring().isEmpty()) return null;
+            return er.ring().get(ThreadLocalRandom.current().nextInt(er.ring().size())).cellId();
+        }
+        return Placements.cellFor(policy.ring(), epoch, shard).orElse(null);
     }
 
-    // ---- definition fan-out (R23) ----
 
     /**
      * Deallocates a workflow from a namespace: removes its allocation from the coordinator's registry,
@@ -476,53 +485,32 @@ public final class CoordinatorService implements AutoCloseable {
         return b.build();
     }
 
-    // ---- admin reshard: the sole ring-writing path (directly unit-testable, no gRPC plumbing) ----
 
     /**
      * Opens a new epoch for {@code namespace}: creates epoch 0 if none exists, else appends
      * {@code currentEpoch + 1} (marking the previous epoch DRAINING). CAS-guarded and retried.
      */
     public Policy doOpenEpoch(String namespace, List<RingSlot> ring) {
-        for (int attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-            Optional<CoordPolicy> current = store.getPolicy(namespace);
-            if (current.isEmpty()) {
-                Map<Long, CoordPolicy.EpochRing> epochs = new LinkedHashMap<>();
-                epochs.put(0L, new CoordPolicy.EpochRing(toDomainRing(ring), CoordPolicy.EpochStatus.OPEN));
-                if (store.casPolicy(namespace, 0, new CoordPolicy(namespace, 0, 0, epochs)) > 0) {
-                    return toProto(store.getPolicy(namespace).orElseThrow());
-                }
-            } else {
-                CoordPolicy c = current.get();
-                long newEpoch = c.currentEpoch() + 1;
-                Map<Long, CoordPolicy.EpochRing> epochs = new LinkedHashMap<>(c.epochs());
-                CoordPolicy.EpochRing prev = epochs.get(c.currentEpoch());
-                if (prev != null) {
-                    epochs.put(c.currentEpoch(), new CoordPolicy.EpochRing(prev.ring(), CoordPolicy.EpochStatus.DRAINING));
-                }
-                epochs.put(newEpoch, new CoordPolicy.EpochRing(toDomainRing(ring), CoordPolicy.EpochStatus.OPEN));
-                if (store.casPolicy(namespace, c.revision(), new CoordPolicy(namespace, newEpoch, 0, epochs)) > 0) {
-                    return toProto(store.getPolicy(namespace).orElseThrow());
-                }
-            }
-        }
-        throw new IllegalStateException("openEpoch: concurrent modification, retries exhausted for " + namespace);
+        // The transition and its compare-and-set retry live in :placement; what stays here is the
+        // wire mapping and the store this coordinator happens to use.
+        Epochs.openEpoch(new CoordinatorPlacementStore(store), namespace, toDomainRing(ring));
+        return toProto(store.getPolicy(namespace).orElseThrow());
     }
 
-    // ---- mapping (domain <-> proto) ----
 
-    private static List<CoordPolicy.RingSlot> toDomainRing(List<RingSlot> ring) {
-        List<CoordPolicy.RingSlot> out = new ArrayList<>();
-        for (RingSlot s : ring) out.add(new CoordPolicy.RingSlot(s.getShard(), s.getCellId(), s.getRegion()));
+    private static List<Ring.Slot> toDomainRing(List<RingSlot> ring) {
+        List<Ring.Slot> out = new ArrayList<>();
+        for (RingSlot s : ring) out.add(new Ring.Slot(s.getShard(), s.getCellId(), s.getRegion()));
         return out;
     }
 
     private static Policy toProto(CoordPolicy p) {
         Policy.Builder b = Policy.newBuilder()
                 .setNamespace(p.namespace()).setCurrentEpoch(p.currentEpoch()).setRevision(p.revision());
-        for (Map.Entry<Long, CoordPolicy.EpochRing> e : p.epochs().entrySet()) {
+        for (Map.Entry<Long, Ring.Epoch> e : p.epochs().entrySet()) {
             EpochRing.Builder er = EpochRing.newBuilder()
                     .setStatus(EpochStatus.valueOf(e.getValue().status().name()));
-            for (CoordPolicy.RingSlot s : e.getValue().ring()) {
+            for (Ring.Slot s : e.getValue().ring()) {
                 er.addRing(RingSlot.newBuilder()
                         .setShard(s.shard()).setCellId(s.cellId())
                         .setRegion(s.region() == null ? "" : s.region()).build());

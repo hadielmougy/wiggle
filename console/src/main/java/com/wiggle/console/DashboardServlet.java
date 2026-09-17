@@ -59,7 +59,6 @@ public final class DashboardServlet extends HttpServlet {
         }
     }
 
-    // ---- auth endpoints (open; the filter lets these through) ----
 
     private void authInfo(HttpServletRequest req, HttpServletResponse res) throws IOException {
         ConsoleAuth.Role role = auth.role(req);   // null if auth is required and the caller isn't authenticated
@@ -95,7 +94,6 @@ public final class DashboardServlet extends HttpServlet {
         html(res, ConsoleAuth.LOGIN_HTML);
     }
 
-    // ---- JSON API ----
 
     private void workflows(HttpServletResponse res, String[] parts) throws IOException {
         if (parts.length == 0) { json(res, 200, Map.of("workflows", data.workflowNames())); return; }
@@ -210,7 +208,6 @@ public final class DashboardServlet extends HttpServlet {
         }
     }
 
-    // ---- static SPA ----
 
     private void staticFile(HttpServletResponse res, String path) throws IOException {
         byte[] index = resource("dashboard/index.html");
@@ -222,7 +219,6 @@ public final class DashboardServlet extends HttpServlet {
         bytes(res, 200, contentType(rel), body);
     }
 
-    // ---- helpers ----
 
     private static String[] sub(String path, String prefix) {
         String rest = path.substring(prefix.length());

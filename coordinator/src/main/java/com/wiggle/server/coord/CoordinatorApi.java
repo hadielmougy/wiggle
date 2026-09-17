@@ -121,7 +121,6 @@ public final class CoordinatorApi extends CellCoordinatorGrpc.CellCoordinatorImp
         pool.shutdownNow();
     }
 
-    // ---- gRPC handlers (unwrap request -> service -> response) ----
 
     @Override public void openEpoch(OpenEpochRequest req, StreamObserver<Policy> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc OpenEpoch namespace=" + req.getNamespace());

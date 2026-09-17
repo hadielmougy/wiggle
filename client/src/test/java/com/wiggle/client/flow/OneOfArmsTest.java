@@ -17,9 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * has to be last, or the arms after it are unreachable; and it needs a guarded arm beside it, or
  * there is no guard for it to be the alternative to and it simply always runs.
  *
- * <p>The rules held before this test existed; nothing covered them. That is the gap it fills: they
- * live in one private method that a refactor could drop without any other test noticing, and the
- * damage would be silent — a workflow that compiles, registers, and quietly never runs an arm.
+ * <p>Both rules live in one private validator that a refactor could drop silently: the result is a
+ * workflow that compiles, registers, and never runs an arm.
  */
 class OneOfArmsTest {
 

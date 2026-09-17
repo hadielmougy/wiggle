@@ -4,6 +4,7 @@ include(
     "core",
     "proto",
     "election",
+    "placement",
     "coordinator",
     "server",
     "jdbc",

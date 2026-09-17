@@ -1,5 +1,6 @@
 package com.wiggle.coordinator.jdbc;
 
+import com.wiggle.placement.Ring;
 import com.wiggle.election.ElectionStore;
 import com.wiggle.election.LeaderElection;
 import com.wiggle.election.Member;
@@ -7,9 +8,6 @@ import com.wiggle.server.coord.CoordDefinition;
 import com.wiggle.server.coord.CoordNamespace;
 import com.wiggle.server.coord.CoordNode;
 import com.wiggle.server.coord.CoordPolicy;
-import com.wiggle.server.coord.CoordPolicy.EpochRing;
-import com.wiggle.server.coord.CoordPolicy.EpochStatus;
-import com.wiggle.server.coord.CoordPolicy.RingSlot;
 import com.wiggle.server.coord.CoordinatorStore;
 import com.wiggle.server.coord.ProvisionState;
 import com.wiggle.server.coord.StorageConfig;
@@ -81,8 +79,8 @@ class JdbcCoordinatorStoreTest {
     }
 
     private static CoordPolicy policy(String ns, long epoch, long rev) {
-        Map<Long, EpochRing> epochs = Map.of(epoch, new EpochRing(
-                List.of(new RingSlot(0, "cellA", "eu"), new RingSlot(1, "cellB", "us")), EpochStatus.OPEN));
+        Map<Long, Ring.Epoch> epochs = Map.of(epoch, new Ring.Epoch(
+                List.of(new Ring.Slot(0, "cellA", "eu"), new Ring.Slot(1, "cellB", "us")), Ring.Status.OPEN));
         return new CoordPolicy(ns, epoch, rev, epochs);
     }
 
@@ -97,8 +95,8 @@ class JdbcCoordinatorStoreTest {
         CoordPolicy stored = store.getPolicy("orders").orElseThrow();
         assertEquals(2, stored.revision());
         assertEquals(6, stored.currentEpoch());
-        EpochRing ring = stored.epochs().get(6L);
-        assertEquals(EpochStatus.OPEN, ring.status());
+        Ring.Epoch ring = stored.epochs().get(6L);
+        assertEquals(Ring.Status.OPEN, ring.status());
         assertEquals("cellA", ring.ring().get(0).cellId());
         assertEquals("us", ring.ring().get(1).region());
         assertEquals(1, store.listPolicies().size());

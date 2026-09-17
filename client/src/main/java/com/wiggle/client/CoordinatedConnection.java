@@ -2,7 +2,7 @@ package com.wiggle.client;
 
 import com.google.protobuf.ByteString;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.*;
@@ -137,13 +137,23 @@ public final class CoordinatedConnection implements AutoCloseable {
                 .setNamespace(namespace).setCallerRegion(nz(callerRegion)).build())).getEndpoint();
     }
 
-    /** Resolves the cell that owns an existing instance, by its baked-in epoch+shard. Cached by
-     *  (namespace, epoch, shard) -- bounded, since every instance on a shard shares one cell. */
+    /**
+     * Resolves the cell that owns an existing instance, from what its id bakes in. Cached by
+     * (namespace, cell, epoch, shard) -- bounded, since every instance sharing those shares one cell.
+     *
+     * <p>The cell belongs in the key even though a ring makes it derivable. Under a ring,
+     * {@code (namespace, epoch, shard)} names exactly one cell and the label adds nothing. But a node
+     * that has not yet heard from the coordinator mints into the genesis default -- epoch 0, shard 0
+     * -- so two cells in one namespace, started while the coordinator is unreachable, mint ids that
+     * differ only by their label. Keyed without it, the first to populate the cache would answer for
+     * both until the TTL expired. Unlabelled ids key exactly as they did before.
+     */
     // docs:begin resolve
     private Endpoint resolveInstance(String instanceId) {
         IdCodec.Placement p = IdCodec.parse(instanceId).orElseThrow(() -> new IllegalArgumentException(
                 "cannot route a legacy instance id ('" + instanceId + "') under a coordinator"));
-        String key = p.namespace() + "|e" + p.epoch() + "|s" + p.shard();
+        String key = p.namespace() + "|c" + (p.cellId() == null ? "" : p.cellId())
+                + "|e" + p.epoch() + "|s" + p.shard();
         Cached c = byShard.get(key);
         if (c != null && System.nanoTime() < c.expiryNanos()) return c.endpoint();
         ResolveResponse r = coordCall(() -> coord.resolve(ResolveRequest.newBuilder()

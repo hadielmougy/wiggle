@@ -33,7 +33,6 @@ public final class Scenarios {
 
     private Scenarios() {}
 
-    // ---- step contracts: each scenario's steps, declared. The @ForFlow classes below implement
     // them by name; nothing here runs a step.
 
     interface SeqSteps {

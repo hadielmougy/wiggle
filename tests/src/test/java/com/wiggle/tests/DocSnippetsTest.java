@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.placement.IdCodec;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -26,16 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code scripts/snippets.py} in the wiggle-site repo extracts to rewrite the Java on the pattern
  * pages.
  *
- * <p>Those pages are site-only -- they live in the other repo and are not among the docs
- * {@code sync-docs.sh} vendors -- so nothing used to compile their code, and it rotted. The saga
- * page published a removed API for weeks; the fan-out page named a handler {@code load} against a
- * contract that said {@code loadOrder}, a step that could never have bound. Keeping the code as
- * source fixes that, because the compiler reads it.
- *
- * <p>What the compiler cannot read is the markers. Rename a region, drop an {@code end}, leave a
- * {@code docs:skip} unresumed, and extraction silently yields nothing or too little while the build
- * stays green -- and the page publishes an empty block, which reads as deliberate and so is a worse
- * failure than the stale text this replaced. That is what this test is for.
+ * <p>Keeping the code as compiled source catches API drift. What the compiler cannot read is the
+ * markers: rename a region, drop an {@code end}, leave a {@code docs:skip} unresumed, and extraction
+ * silently yields nothing while the build stays green, publishing an empty block.
  *
  * <p>The region names are a contract with a script in another repository, so the whole map is
  * pinned: a fixture that gains a region nobody asked for, or loses one a page needs, fails here
@@ -88,7 +82,7 @@ class DocSnippetsTest {
             List.of("linear-gate", "choose-fork", "foreach-queues", "poll-until-ready",
                     "approval-escalation", "parent", "batched-loop", "kitchen-sink"),
             // docs that quote the implementation itself, so the quote cannot drift from it
-            "../core/src/main/java/com/wiggle/core/IdCodec.java", List.of("shard-for"),
+            "../placement/src/main/java/com/wiggle/placement/IdCodec.java", List.of("shard-for"),
             "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java",
             List.of("resolve", "invalidate"));
 
@@ -302,7 +296,7 @@ class DocSnippetsTest {
             Map.entry("tut-coordinated", "tutorial/Coordinated.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
-            Map.entry("id-codec", "../core/src/main/java/com/wiggle/core/IdCodec.java"),
+            Map.entry("id-codec", "../placement/src/main/java/com/wiggle/placement/IdCodec.java"),
             Map.entry("coordinated-connection",
                     "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java"));
 

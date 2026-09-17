@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.core.IdCodec;
+import com.wiggle.placement.IdCodec;
 import com.wiggle.core.Ids;
 import com.wiggle.proto.ActiveCellsResponse;
 import com.wiggle.proto.Endpoint;

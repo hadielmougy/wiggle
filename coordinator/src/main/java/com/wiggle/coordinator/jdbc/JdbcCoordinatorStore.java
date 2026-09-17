@@ -52,7 +52,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         migrate();
     }
 
-    // ---------------------------------------------------------------- schema
 
     private void migrate() {
         try (Connection c = ds.getConnection()) {
@@ -118,7 +117,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         return false;
     }
 
-    // ---------------------------------------------------------------- policy (CAS-guarded)
 
     @Override public Optional<CoordPolicy> getPolicy(String namespace) {
         return query("SELECT * FROM coord_policy WHERE namespace = ?",
@@ -171,7 +169,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 rs.getLong("revision"), EpochCodec.decode(rs.getString("epochs")));
     }
 
-    // ---------------------------------------------------------------- node roster
 
     private static final String NODE_UPDATE =
             "UPDATE coord_node SET namespace=?, cell_id=?, endpoint=?, region=?, engine_version=?, " +
@@ -237,7 +234,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 rs.getString("cell_fingerprint"), rs.getLong("config_generation"), rs.getLong("last_heartbeat"));
     }
 
-    // ---------------------------------------------------------------- cell-identity binding
 
     @Override public boolean bindCell(String namespace, String cellId, String fingerprint) {
         if (fingerprint == null) return true;
@@ -261,7 +257,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 "AND n.cell_id = coord_cell_binding.cell_id)", ps -> { });
     }
 
-    // ---------------------------------------------------------------- definition registry
 
     @Override public Optional<CoordDefinition> getDefinition(String namespace, String name) {
         return query("SELECT * FROM coord_definition WHERE namespace = ? AND name = ?",
@@ -309,7 +304,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 rs.getInt("version"), rs.getString("hash"), rs.getLong("registered_at"));
     }
 
-    // ---------------------------------------------------------------- namespace registry
 
     @Override public Optional<CoordNamespace> getNamespace(String namespace) {
         return query("SELECT * FROM coord_namespace WHERE namespace = ?", ps -> ps.setString(1, namespace),
@@ -374,7 +368,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                 Json.str(m, "user", null), Json.str(m, "secretRef", null), (int) Json.num(m, "poolSize", 0));
     }
 
-    // ---------------------------------------------------------------- leader election
 
     /**
      * The coordinator roster, as the shared election needs it. The step runs in one transaction
@@ -471,7 +464,6 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         }
     }
 
-    // ---------------------------------------------------------------- tiny JDBC helpers
 
     @FunctionalInterface private interface Binder { void bind(PreparedStatement ps) throws SQLException; }
     @FunctionalInterface private interface Reader<T> { T read(ResultSet rs) throws SQLException; }

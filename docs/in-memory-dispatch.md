@@ -40,7 +40,7 @@ Confirmed from the code:
 |---|---|
 | A cell = homogeneous nodes over **one shared database**; **any node drives any instance**. | `WorkflowEngine.java:16-24`, `WiggleServer.java:12-27` |
 | The only cross-node serialization is the per-instance row lock (`SELECT … FOR UPDATE`). | `lockInstance`, `Tx.java:20-22`, `JdbcStorage.java:537-556` |
-| No per-instance / per-shard node affinity inside a cell. Sharding is a **cell-level** concept (coordinator → cells), never node-level. | `CellPlacement.java:28-59`, `CoordinatorService.java:189-220` |
+| No per-instance / per-shard node affinity inside a cell. Sharding is a **cell-level** concept (coordinator → cells), never node-level. | `LivePlacement.java`, `CoordinatorService.java:189-220` |
 | Workers **pull**; nothing is pushed. Client resolution stops at a **cell**, not a node (`Endpoint.target = nodes.get(0)`, `// TODO stable cell DNS name`), but the response already carries **every** node address. | `GrpcApi.java:260-288`, `CoordinatorService.java:447-477` |
 | A same-worker handback already exists (`leaseBack`) and bypasses poll/claim, but only in `LOCAL_SYNC` / `LOCAL_ASYNC`. | `WorkflowEngine.java:346-422` |
 | Correctness rests **entirely** on the DB row lock + atomic claim — not on which node handles a request. | §5 of this doc |

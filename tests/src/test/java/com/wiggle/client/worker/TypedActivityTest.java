@@ -89,7 +89,6 @@ class TypedActivityTest {
                 .thenAccept(s::auditLog)).definition();
     }
 
-    // ------------------------------------------------------------------ binder-level
 
     @Test @DisplayName("factory methods register their activities under the method's name")
     void factoriesBindByMethodName() throws Exception {
@@ -121,7 +120,6 @@ class TypedActivityTest {
                 .filter(b -> b.step().equals("inStock")).findFirst().orElseThrow().compensator());
     }
 
-    // ---- an activity maps A -> B, so the two snapshots are different types ----------------------
 
     record Ord(String id) {}
 
@@ -223,7 +221,6 @@ class TypedActivityTest {
                 "boolean-shaped activity on a TASK node");
     }
 
-    // ------------------------------------------------------------------ end-to-end
 
     @Test @DisplayName("plain methods + factories + @ForFlow run a workflow to COMPLETED")
     void endToEnd() throws Exception {

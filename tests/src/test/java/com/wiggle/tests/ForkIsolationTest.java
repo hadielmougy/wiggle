@@ -225,7 +225,6 @@ class ForkIsolationTest {
         return o instanceof Map ? (Map<String, Object>) o : Map.of();
     }
 
-    // ---------------------------------------------------------------- arm name vs context key
 
     interface ClashSteps {
         Map<String, Object> seed(Map<String, Object> c);

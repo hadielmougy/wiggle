@@ -84,7 +84,6 @@ public final class Wiggle implements Runnable {
         }
     }
 
-    // ---- coordinator: allocate / deallocate flows to namespaces ----
 
     private static CoordinatedConnection resolver(String coordinator) {
         return WiggleConnection.coordinator(coordinator, Tls.Options.fromEnvironment(),

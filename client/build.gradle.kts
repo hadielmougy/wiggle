@@ -1,4 +1,6 @@
 dependencies {
+    // The id codec and placement rules: the client parses ids to route by them.
+    api(project(":placement"))
     api(project(":core"))
     api(project(":proto"))
 

@@ -130,7 +130,6 @@ final class Plan {
         }
     }
 
-    // ------------------------------------------------------------------ recording
 
     static Step root() {
         return new Step(null, null, null);
@@ -273,7 +272,6 @@ final class Plan {
         return path;
     }
 
-    // ------------------------------------------------------------------ compilation
 
     /** Walks the recorded tree once, appending each step to a real builder. */
     static FlowSpec compile(String workflow, RetryPolicy defaultRetry, Step root) {

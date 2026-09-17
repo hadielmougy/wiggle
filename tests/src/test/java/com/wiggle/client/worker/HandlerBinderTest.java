@@ -33,7 +33,6 @@ class HandlerBinderTest {
         Map<String, Object> work(Map<String, Object> ctx);
     }
 
-    // ------------------------------------------------------------------ scan
 
     @ForFlow("")
     static final class BlankH {
@@ -101,7 +100,6 @@ class HandlerBinderTest {
         public String helper() { return "not a handler"; }
     }
 
-    // ------------------------------------------------------------------ bind: kinds & signatures
 
     private static WorkflowDefinition linear() {
         return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
@@ -182,7 +180,6 @@ class HandlerBinderTest {
         public Map<String, Object> served(Map<String, Object> c) { return c; }
     }
 
-    // ------------------------------------------------------------------ @Context parameter
 
     @Test @DisplayName("a @Context parameter delivers Step.base(); outside a base scope it fails clearly")
     void contextParameter() throws Exception {
@@ -217,7 +214,6 @@ class HandlerBinderTest {
         public void log(Map<String, Object> c) { }
     }
 
-    // ------------------------------------------------------------------ combines
 
     private static WorkflowDefinition forked() {
         return FlowSpec.define("wf", Map.class, ForkSteps.class, (f, s) ->

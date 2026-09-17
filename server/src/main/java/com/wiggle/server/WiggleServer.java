@@ -1,5 +1,6 @@
 package com.wiggle.server;
 
+import com.wiggle.placement.LivePlacement;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -44,7 +45,7 @@ public final class WiggleServer implements AutoCloseable {
         this.storage.migrate();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
-        this.bundle = new CellBundle(config, storage, cluster);
+        this.bundle = new ServerBundle(config, storage, cluster);
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
@@ -87,7 +88,7 @@ public final class WiggleServer implements AutoCloseable {
      * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
      * cell (no namespace). The coordinator link updates it as policy moves.
      */
-    public CellPlacement placement() { return bundle.placement(); }
+    public LivePlacement placement() { return bundle.placement(); }
 
     /** The stable identity of this cell's shared storage; {@code null} when the backend has none
      *  (e.g. in-memory). The coordinator uses it to reject two cells reusing a cell id. */
