@@ -5,11 +5,11 @@
   <img alt="Wiggle" src="docs/img/wiggle-logo.svg" width="360">
 </picture>
 
-### Durable workflows, cellular by design.
+### Durable workflows, in a JAR and a database.
 
 **Describe a process as a graph. Wiggle runs it as a durable state machine that survives
-crashes, waits for humans, retries failures — and shards itself across isolated cells when
-one database is no longer enough.**
+crashes, waits for humans, and retries failures — with a server you can embed, and workers in
+the language you already use.**
 
 [![Maven Central](https://img.shields.io/maven-central/v/sh.wiggle/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/sh.wiggle/wiggle-client)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-hadielmougy%2Fwiggle-2496ed)](https://hub.docker.com/r/hadielmougy/wiggle)
@@ -73,17 +73,12 @@ Wiggle persists every instance as tokens moving over that graph, so a process **
 restarts, retries, and worker death** and resumes exactly where it left off. Steps are executed
 by **pull-based workers** over gRPC — your services, in your processes, in your language.
 
-Its distinctive move is being **cellular**: a namespace becomes a *cell* — its **own database
-and its own cluster** — and an optional coordinator shards work across cells with
-directory-free routing and zero-migration rebalancing. Blast-radius isolation and scale-out
-are built into the model, not bolted on.
+Its distinctive move is that the workflow **is data**: a compiled graph the server walks, not
+replayed code. So there is no determinism discipline to get wrong, and a running process can be
+inspected, traced and versioned like any other row in your database.
 
 **Why teams pick it:**
 
-- 🧫 **Cellular by design** — a namespace is a cell with its own database and cluster. A
-  coordinator places instances by consistent hashing over *epochs*; an instance id **carries its
-  own routing** (`orders.e0.s3.01J…`). Grow by adding cells, **drain and retire** old ones.
-  Physical per-tenant isolation, not just logical.
 - 💾 **Durable, honestly** — every instance is DB-backed. Exactly-once dispatch, at-least-once
   execution, lease-based recovery when a worker dies mid-step.
 - 🧭 **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals,
@@ -93,13 +88,11 @@ are built into the model, not bolted on.
   backpressure built in. Idiomatic **Java, Go, and Python** workers interoperate on one server —
   a single instance can have steps served by three languages, dispatched by activity name.
 - 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
-  (PostgreSQL, or in-memory for dev). Embed the server in your JVM
-  for tests; the coordinator is **opt-in** — a single cluster runs unchanged without one. No
-  Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
+  (PostgreSQL, or in-memory for dev). Embed the server in your JVM for tests, or run it as one
+  process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
 - 🖥 **Operable from day one** — a web **ops console** (live trace of every instance over the
-  workflow diagram, cancel, deliver signals, schedules, search by instance or correlation id), a
-  **CLI** for the cellular control plane, `/healthz` probes, queue-lag monitoring, memory
-  admission control.
+  workflow diagram, cancel, deliver signals, schedules, search by instance or correlation id),
+  `/healthz` probes, queue-lag monitoring, memory admission control.
 
 In one picture — a single `orders` instance whose steps run on **different microservices**,
 routed by each step's **queue**. The server keeps the durable state; each service just pulls the
@@ -120,7 +113,6 @@ One codebase, four postures — start embedded, end sharded, **without rewriting
 | **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store |
 | **Standalone server** | one node, gRPC `:8080`, in-memory or a database |
 | **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery |
-| **Cellular (sharded)** | many cells (each its own DB + cluster) behind a **coordinator** |
 
 ### 2.1 Embedded — one JVM, zero infrastructure
 
@@ -189,49 +181,12 @@ helm install wiggle deploy/helm/wiggle \
   --set replicaCount=3
 ```
 
-### 2.3 Sharding & the coordinator (cellular)
+### 2.3 The ops console
 
-When one database is no longer enough — or tenants must not share blast radius — go cellular.
-A **namespace** maps to one or more **cells**; each cell is a full cluster with its **own
-database**. The **coordinator** (stateless processes over a small PostgreSQL of their own)
-owns placement:
-
-- **Placement by epochs** — a namespace's instances spread over cells by consistent hashing over
-  a shard ring. Publishing a new ring is an *epoch bump*: new instances follow the new ring,
-  in-flight ones finish where they live. **Resharding never migrates data.**
-- **Directory-free routing** — the instance id embeds namespace, epoch, and shard
-  (`orders.e0.s3.01J…`), so any party can resolve the owning cell without a lookup table.
-- **One binary, three roles** — the same image runs everything, chosen by env:
-
-```bash
-WIGGLE_ROLE=coordinator WIGGLE_COORD_STORE=jdbc:postgresql://db/wiggle_coord  # control plane, :8099
-WIGGLE_ROLE=cell WIGGLE_CELL_ID=cellA WIGGLE_NAMESPACE=orders \
-  WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_JDBC_URL=jdbc:postgresql://dbA/wiggle  # a cell node
-WIGGLE_ROLE=console WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_NAMESPACE=orders     # the web UI
-```
-
-Clients don't change: `WiggleConnection.direct(url)` for a single cluster,
-`WiggleConnection.coordinator(url, tls, region)` for a sharded one — each returns a type that
-exposes only its valid operations. A `NamespaceWorker` fans one worker out across a namespace's
-live cells and follows rebalances automatically. The `wiggle` **CLI** drives the control plane:
-
-```bash
-wiggle use coordinator prod:8099
-wiggle open-epoch -n orders 0=cellA 1=cellB     # publish a new shard→cell ring (a reshard)
-wiggle allocations -n orders
-```
-
-<sub>The full cellular model → **[docs/sharding-and-epochs.md](docs/sharding-and-epochs.md)**</sub>
-
-### 2.4 The ops console
-
-A standalone web UI that is a **pure gRPC client** — the same binary works against a single
-cluster (`WIGGLE_URL`) or a whole sharded namespace (`WIGGLE_COORDINATOR_URL` +
-`WIGGLE_NAMESPACE`, fanning queries across the namespace's cells and routing operations to the
-owning cell by instance id). Live instance trace over the workflow diagram, cancel, deliver
-signals, schedules, and search by **instance id or correlation id**. Optional login with an
-operator account and a **read-only viewer** account. Cells themselves serve no UI — just a
-`/healthz` probe for Kubernetes.
+A standalone web UI that is a **pure gRPC client** — point it at a cluster with `WIGGLE_URL`.
+Live instance trace over the workflow diagram, cancel, deliver signals, schedules, and search by
+**instance id or correlation id**. Optional login with an operator account and a **read-only
+viewer** account. Server nodes themselves serve no UI — just a `/healthz` probe for Kubernetes.
 
 ```bash
 WIGGLE_URL=localhost:8080 ./gradlew :console:run    # → http://localhost:8090
@@ -426,17 +381,15 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 4. Architecture
 
-![Wiggle architecture: clients and pull-based workers talk gRPC to cells; each namespace is a cell with its own cluster and database; an optional Raft coordinator places namespaces on cells by consistent hashing over epochs; a standalone ops console and CLI operate everything.](docs/img/architecture.svg)
+![Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; a standalone ops console is another gRPC client.](docs/img/architecture.svg)
 
 | Component | Module | What it does |
 |---|---|---|
-| **Engine (cell node)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
+| **Engine (server)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
-| **Coordinator** | `coordinator` | Optional control plane: stateless processes over their own small database that allocate namespaces to cells, publish epoch rings, track node health, and answer "where does this instance live?". Several elect one leader with the same announce-and-heartbeat election the cells run (`election`). |
-| **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker` / `NamespaceWorker`, `WiggleConnection` (direct ∣ coordinator). |
-| **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client — single-cluster or namespace-wide. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
-| **CLI** | `cli` | `wiggle` — coordinator administration: epochs, allocations. |
-| **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ coordinator ∣ console`, every storage backend bundled. |
+| **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
+| **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
+| **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=cell ∣ console`, every storage backend bundled. |
 
 **The mechanics that make it hold together:**
 
@@ -492,7 +445,7 @@ combine → notify → audit, `LOCAL_ASYNC` mode), every step durably committed 
 |---|---|
 | Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
 | Cluster | kind (Kubernetes-in-Docker) inside a 10-CPU / 7.7 GB Docker Desktop VM |
-| Topology | 1 coordinator · 2 cells, **each its own server node + PostgreSQL 16** (fresh DBs) · no pod resource limits |
+| Topology | 2 server nodes, **each its own PostgreSQL 16** (fresh DBs) · no pod resource limits<br><sub>(run on the multi-cell topology of the time; the control plane sat outside the execution path)</sub> |
 | Client side | submitter + 1 worker (`concurrency=100` per cell) on the host, gRPC via `kubectl port-forward` |
 | Runtime | OpenJDK 21 |
 
@@ -510,14 +463,8 @@ measurably ate the ceiling — the fix and its A/B are in the repo history).
 
 ![Adaptive polling before/after: draining 2,000 due timers falls from 19.9s (100/sec, the batch-per-tick floor) to 1.18s (~1,700/sec); cross-node dispatch latency falls from p50 105ms / p99 117ms to p50 28ms / p99 39ms.](docs/img/bench-adaptive.svg)
 
-**Control-plane resiliency**, measured the hard way: SIGKILL the Raft coordinator mid-run at a
-paced 150 starts/sec — **9s to recovery with state byte-exact**, one contiguous **5.4s** gap on
-*new* starts (2.25% of 36,001), and running work never noticed (probe sojourns flat through the
-kill). The coordinator is not in the execution path, and now it's measured, not asserted.
-
-Honest footnotes: the submitter, worker, Kubernetes, coordinator, cells, and databases all
-share those 10 cores — a floor, not a ceiling, and the reason two cells on *one* box measure
-the same as one (cells buy throughput on separate hardware; that's the point of the model).
+Honest footnotes: the submitter, worker, Kubernetes, the server nodes, and the databases all
+share those 10 cores — a floor, not a ceiling.
 The same is true of nodes: an A/B run showed 2 nodes per cell on this single box does *not*
 raise the ceiling — nodes multiply availability and API capacity, never database throughput.
 And measured on **fresh databases** deliberately: after a day of accumulated benchmark history
@@ -529,15 +476,11 @@ Reproduce everything (the tools ship in the repo):
 ```bash
 ./gradlew :example:bench             # the embedded engine numbers (set WIGGLE_EXECUTION_MODE)
 
-WIGGLE_COORDINATOR_URL=… WIGGLE_NAMESPACE=… BENCH_RATES="300,340" \
-  ./gradlew :example:rateCeiling     # the cluster ceiling (needs a running worker)
-
 ./gradlew :example:timerBench        # timer promotion (WIGGLE_ADAPTIVE_HOUSEKEEPING=true to compare)
 
 WIGGLE_SUBMIT_URL=… WIGGLE_WORKER_URL=… \
   ./gradlew :example:fallbackProbe   # cross-node dispatch latency (pin two nodes of one cluster)
 
-./gradlew :example:coordFailover     # coordinator SIGKILL under load (kill it mid-run)
 ```
 
 ---
@@ -568,8 +511,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
-| `WIGGLE_NAMESPACE` | *(unset)* | the cell's namespace (cellular mode) |
-| `WIGGLE_CELL_ID` / `WIGGLE_COORDINATOR_URL` / `WIGGLE_ADVERTISE_HOST` | *(unset)* | cellular wiring: this cell's id, the coordinator to announce to, and the host advertised for routing |
+| `WIGGLE_NAMESPACE` | *(unset)* | opt-in placement namespace; unset for an ordinary server |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint (the UI moved to the console) |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
@@ -577,22 +519,11 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
 
-### Coordinator
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `WIGGLE_ROLE` | `cell` | set `coordinator` to run the control plane (no engine, no cell DB) |
-| `WIGGLE_PORT` | `8080` | coordinator gRPC port (`8099` by convention) |
-| `WIGGLE_COORD_STORE` | *(unset)* | coordinator store. **unset = in-memory**, a single process with nothing to install — fine locally, not durable. Set to its own database for HA (stateless coordinators, one leader by election): `jdbc:postgresql://host:5432/wiggle_coord` |
-| `WIGGLE_COORD_JDBC_USER` / `WIGGLE_COORD_JDBC_PASSWORD` / `WIGGLE_COORD_JDBC_POOL` | — / — / `4` | credentials + pool size for the JDBC coordinator store |
-| `WIGGLE_MISSED_HEARTBEATS` / `WIGGLE_NODE_NAME` / `WIGGLE_TLS_*` | as above | shared knobs |
-
 ### Ops console
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `WIGGLE_URL` | `localhost:8080` | direct mode: the one cluster to serve |
-| `WIGGLE_COORDINATOR_URL` + `WIGGLE_NAMESPACE` (+ `WIGGLE_REGION`) | *(unset)* | coordinator mode: fan queries across the namespace's cells, route ops by instance id |
 | `WIGGLE_DASHBOARD_PORT` | `8090` | HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |
@@ -608,11 +539,8 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 Where it's going — the honest list:
 
-- [ ] **Console: topology view** — namespaces → cells → epochs/ring/roster, live placement
-      visualization; multi-namespace switcher.
-- [ ] **Pending-signals over gRPC** — enumerate parked signal waits from the console in
-      coordinator mode (a `PendingSignals` RPC).
-- [ ] **Cross-cell pagination** — globally sorted instance listing across a namespace's cells.
+- [ ] **Pending-signals over gRPC** — enumerate parked signal waits from the console
+      (a `PendingSignals` RPC).
 - [ ] **Per-RPC authorization** — identity-based (client-certificate) allow-listing and role
       separation on the control plane itself; SSO for the console.
 - [ ] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
@@ -620,8 +548,6 @@ Where it's going — the honest list:
 - [ ] **Buffered signals** — deliver-before-wait semantics as an option (today a signal is
       rejected unless the instance is already waiting on it).
 - [ ] **Richer wire tokens** — queue / lease-expiry / updated-at on the gRPC token detail.
-- [ ] **Stable cell DNS** — coordinator provisioning records a stable per-cell address instead
-      of a node endpoint.
 
 Suggestions and PRs welcome — open an issue.
 
@@ -634,7 +560,6 @@ Suggestions and PRs welcome — open an issue.
 | 🚀 **[Onboarding + full configuration reference](docs/onboarding.md)** | everything, one page |
 | 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
-| 🧫 **[Sharding & epochs](docs/sharding-and-epochs.md)** | the cellular model in depth |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
 | 📽 **[Slide deck](https://hadielmougy.github.io/wiggle/presentation.html)** | the 5-minute tour |
 | 🐍 **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** · 🐹 **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** | idiomatic clients, same control plane |

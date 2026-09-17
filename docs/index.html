@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wiggle — durable workflows, cellular by design</title>
+<title>Wiggle — durable workflows, in a JAR and a database</title>
 <meta name="description" content="Wiggle is an open-source durable workflow engine. Describe a process as a graph; Wiggle runs it as a durable state machine that survives crashes, waits for humans, retries failures — and shards itself across isolated cells.">
-<meta property="og:title" content="Wiggle — durable workflows, cellular by design">
-<meta property="og:description" content="A durable workflow engine with no replay and no determinism rules: the workflow is data, not code. One JAR plus a database; cellular sharding built in. Java, Go, and Python workers.">
+<meta property="og:title" content="Wiggle — durable workflows, in a JAR and a database">
+<meta property="og:description" content="A durable workflow engine with no replay and no determinism rules: the workflow is data, not code. One JAR plus a database. Java, Go, and Python workers.">
 <meta property="og:url" content="https://wiggle.sh/">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%8C%80%3C/text%3E%3C/svg%3E">
@@ -175,7 +175,7 @@ footer .fin { margin-top: 34px; font-size: 13px; }
   <a class="logo" href="#">🌀 wiggle</a>
   <div class="links">
     <a href="#how">How it works</a>
-    <a href="#cellular">Architecture</a>
+    <a href="#architecture">Architecture</a>
     <a href="#performance">Performance</a>
     <a href="#quickstart">Quickstart</a>
     <a href="https://github.com/hadielmougy/wiggle/tree/main/docs">Docs</a>
@@ -184,7 +184,7 @@ footer .fin { margin-top: 34px; font-size: 13px; }
 </div></nav>
 
 <header class="hero"><div class="wrap">
-  <h1>Durable workflows,<br><span class="grad">cellular by design.</span></h1>
+  <h1>Durable workflows,<br><span class="grad">without the replay tax.</span></h1>
   <p class="sub">Describe a process as a graph. Wiggle runs it as a <strong>durable state machine</strong>
   that survives crashes, waits for humans, retries failures — and <strong>shards itself across isolated
   cells</strong> when one database is no longer enough.</p>
@@ -217,13 +217,9 @@ footer .fin { margin-top: 34px; font-size: 13px; }
 
 <section id="why"><div class="wrap">
   <h2>Why teams pick it</h2>
-  <p class="lead">Durable execution without the replay tax, and a sharding model that treats
-  <strong>isolation as a first-class deployment primitive</strong> — not an afterthought.</p>
+  <p class="lead">Durable execution without the replay tax: the workflow is <strong>data the server
+  walks</strong>, not code it replays.</p>
   <div class="grid">
-    <div class="card"><h3>🧫 Cellular by design</h3>
-      <p>A namespace is a <em>cell</em>: its own database, its own cluster. A Raft coordinator places
-      instances by consistent hashing over <em>epochs</em>; the instance id carries its own routing
-      (<code>orders.e0.s3.01J…</code>). Grow by adding cells; resharding never migrates data.</p></div>
     <div class="card"><h3>💾 Durable, honestly</h3>
       <p>Every instance is DB-backed rows, not a call stack. Exactly-once dispatch, at-least-once
       execution, lease-based recovery when a worker dies mid-step.</p></div>
@@ -236,8 +232,8 @@ footer .fin { margin-top: 34px; font-size: 13px; }
       Java, Go, and Python workers interoperate on one server — one instance, three languages.</p></div>
     <div class="card"><h3>🪶 Lightweight &amp; embeddable</h3>
       <p>One JAR plus a database (PostgreSQL, MySQL, Oracle, SQL Server — or in-memory for dev).
-      Embed the server in your JVM for tests. The coordinator is opt-in. No Elasticsearch, no sidecar
-      mesh, no mandatory Kubernetes.</p></div>
+      Embed the server in your JVM for tests. No Elasticsearch, no sidecar mesh, no mandatory
+      Kubernetes.</p></div>
     <div class="card"><h3>🖥 Operable from day one</h3>
       <p>A web ops console with a live trace of every instance over the workflow diagram — cancel,
       deliver signals, schedules, search by instance or correlation id. A CLI for the control plane.
@@ -299,15 +295,13 @@ footer .fin { margin-top: 34px; font-size: 13px; }
   and dynamic fan-out where <strong>the element is the item's context</strong>.</p>
 </div></section>
 
-<section id="cellular"><div class="wrap">
+<section id="architecture"><div class="wrap">
   <h2>Architecture</h2>
-  <p class="lead">Clients and pull-based workers speak gRPC to cells. Each cell is a complete
-  cluster with its own database; an optional <strong>Raft coordinator</strong> (embedded Ratis +
-  RocksDB — no external store) publishes shard→cell rings as <em>epochs</em>. New instances follow
-  the new ring; in-flight ones finish where they live — <strong>resharding never migrates data</strong>,
-  and any party can compute an instance's owning cell from its id alone.</p>
+  <p class="lead">Clients and pull-based workers speak gRPC to a wiggle server cluster: several
+  nodes over <strong>one database</strong>, where any node can drive any instance and the leader
+  runs timers and recovery. The ops console is another gRPC client, not a special one.</p>
   <figure class="figure">
-    <img src="img/architecture.svg" alt="Wiggle architecture: clients and workers talk gRPC to cells; each namespace is a cell with its own cluster and database; a Raft coordinator places namespaces on cells by consistent hashing over epochs; an ops console and CLI operate everything.">
+    <img src="img/architecture.svg" alt="Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; a standalone ops console is another gRPC client.">
   </figure>
 </div></section>
 
@@ -320,8 +314,8 @@ footer .fin { margin-top: 34px; font-size: 13px; }
       engine embedded in one JVM (11,478 instances/sec, batched local chaining)</div></div>
     <div class="stat"><div class="big">~300/s</div><div class="what">workflow starts sustained with
       sub-second end-to-end latency — real kind cluster, PostgreSQL-backed cells</div></div>
-    <div class="stat"><div class="big">5.4s</div><div class="what">start-availability gap when the
-      coordinator is SIGKILL-ed under load — state recovers exactly; running work never notices</div></div>
+    <div class="stat"><div class="big">0</div><div class="what">replay determinism bugs possible —
+      the workflow is a compiled graph, so there is no workflow code to re-execute</div></div>
   </div>
   <figure class="figure">
     <img src="img/bench-sojourn.svg" alt="Probe sojourn over time: at 300 starts/sec latency settles below one second; at 340 the backlog compounds. Ceiling ≈ 300–340 starts/sec on one laptop.">
@@ -339,7 +333,6 @@ footer .fin { margin-top: 34px; font-size: 13px; }
     <tr><td><b>Embedded</b></td><td><code>WiggleServer</code> inside your JVM, in-memory store</td><td>dev, tests, single-process apps</td></tr>
     <tr><td><b>Standalone</b></td><td>one node, gRPC <code>:8080</code>, in-memory or a database</td><td>small services, first deploy</td></tr>
     <tr><td><b>Cluster</b></td><td>several nodes on one database — shared queue, leader runs timers/recovery</td><td>production, HA</td></tr>
-    <tr><td><b>Cellular</b></td><td>many cells (each its own DB + cluster) behind a coordinator</td><td>multi-tenant isolation, scale-out</td></tr>
   </table></div>
 
   <div class="langs" style="margin-top:34px">

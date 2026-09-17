@@ -12,22 +12,15 @@ author workflows, and **every configuration option** in one place.
 
 ## 1. What Wiggle is
 
-A **durable, cellular state-machine platform**. You describe a process as a graph with a
+A **durable state-machine platform**. You describe a process as a graph with a
 `java.util.stream`-style DSL; a **server** runs it as a durable state machine (tokens over the graph)
 that survives crashes and resumes where it left off; **workers** pull work when they have capacity and
-run the step logic. Its distinctive move is **cellular**: a namespace becomes a *cell* — its own
-database and its own cluster — and an optional **coordinator** shards work across cells with
-directory-free routing and zero-migration rebalancing. See `README.md` for the elevator pitch and
-`docs/local-execution.md` for the execution-mode deep dive.
+run the step logic. See `README.md` for the elevator pitch and `docs/local-execution.md` for the
+execution-mode deep dive.
 
 Core properties: durable (survives restarts), exactly-once dispatch and at-least-once execution,
-pull-based workers (no inbound connectivity), content-addressed immutable definitions, multi-node
-clustering over a shared database, and **cellular sharding** — a namespace is a cell with its own
-database and cluster, placed by consistent hashing over epochs and rebalanced by drain/retire (a single
-cluster runs unchanged without a coordinator). Under a coordinator each node sets an explicit cell id
-(`WIGGLE_CELL_ID`), and a namespace becomes resolvable only after an epoch names its cells
-(`wiggle open-epoch`) — until then it is not-ready by design (no implicit cell). See
-`docs/sharding-and-epochs.md`.
+pull-based workers (no inbound connectivity), content-addressed immutable definitions, and multi-node
+clustering over a shared database.
 
 ---
 
@@ -70,7 +63,7 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
 | `postgres` | PostgreSQL dialect, plus H2 for tests and local runs, and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
-| `election` | leader election by announce-and-heartbeat, shared by `server` and `coordinator` | *(not published)* |
+| `election` | leader election by announce-and-heartbeat, used for intra-cluster leadership | *(not published)* |
 | `dist` | runnable standalone server (what the Docker image runs); its `WiggleStorageFactory` is `PostgresStorageFactory` under the published name | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
@@ -118,7 +111,7 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=cell ∣ coordinator ∣ console`,
+The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=cell ∣ console`,
 every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
 keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
@@ -515,9 +508,6 @@ One binary, two modes, chosen by env:
 # direct mode: one cluster
 WIGGLE_URL=localhost:8080 ./gradlew :console:run          # → http://localhost:8090
 
-# coordinator mode: a whole sharded namespace (fan queries across its cells,
-# route cancel/signal to the owning cell by instance id)
-WIGGLE_COORDINATOR_URL=coordinator:8099 WIGGLE_NAMESPACE=orders ./gradlew :console:run
 
 # or via the Docker image
 WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
@@ -543,7 +533,6 @@ for anything exposed.
 | Env var | Default | Meaning |
 |---|---|---|
 | `WIGGLE_URL` | `localhost:8080` | direct mode: the one cluster to serve |
-| `WIGGLE_COORDINATOR_URL` + `WIGGLE_NAMESPACE` (+ `WIGGLE_REGION`) | *(unset)* | coordinator mode |
 | `WIGGLE_DASHBOARD_PORT` | `8090` | console HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
@@ -581,28 +570,16 @@ dependency is the whole requirement. `StorageFactory` is a functional interface,
 that wants a different mapping (a dialect of its own, a wrapper that instruments the store) passes
 its own lambda instead.
 
-**The coordinator has its own, separate store.** It keeps the control plane's state (placement
-policy, the cell roster, the definition and namespace registries) in the `coord_*` schema, and it
-is deliberately not the engine's store: a cell must never know about coordinators, so the two are
-linked by nothing but the gRPC contract.
-
-| Env var | Default | Meaning |
-|---|---|---|
-| `WIGGLE_COORD_STORE` | *(unset)* | **unset = in-memory**: one process, nothing to install, state lost on restart. Set `jdbc:postgresql://host:5432/wiggle_coord` for a durable, HA control plane |
-| `WIGGLE_COORD_JDBC_USER` / `WIGGLE_COORD_JDBC_PASSWORD` | *(unset)* | credentials for that database |
-| `WIGGLE_COORD_JDBC_POOL` | `4` | pool size (the control plane's traffic is small) |
-
-Coordinators are otherwise stateless, so HA is just several of them over one database. They elect a
-single leader between themselves — the reconcile/retire loop runs only on the leader — using the
-**same announce-and-heartbeat election the cells run** (the `election` module, shared by `server`
-and `coordinator` and depended on by neither of each other): every process announces itself and
+**Leader election inside a cluster.** Several nodes over one database elect a single leader — the
+reconcile and housekeeping loops run only there — using an announce-and-heartbeat scheme (the
+`election` module): every process announces itself and
 heartbeats, the longest-running live process leads with ties broken by id, and a process whose own
 heartbeat has gone stale stands down before doing leader work. No consensus protocol, because there
 is nothing to agree on — the shared table is the only source of truth and the rule over it is a pure
 function every process evaluates identically. What makes that safe is that the leader's duties are
 idempotent and re-entrant: a brief overlap during failover duplicates work but cannot corrupt state,
-and every policy write is a compare-and-set on `revision`, so a stale ex-leader's write matches zero
-rows and loses.
+and leader-guarded writes are compare-and-set, so a stale ex-leader's write matches zero rows and
+loses.
 
 ### 7.3 Signals, sub-workflows and schedules
 

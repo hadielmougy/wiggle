@@ -359,10 +359,6 @@ class DocSnippetsTest {
      * appears without a decision being made about it.
      */
     private static final Map<String, String> UNWIRED = Map.of(
-            "ring-immutability-guard.md", "quotes the code as it was BEFORE the guard, to show the "
-                    + "bug -- wiring it to today's source would erase the point",
-            "sharding-and-epochs.md", "shows a wrong fallback (\"would wrap to the WRONG cell\") that "
-                    + "must not exist in the repo",
             "local-execution.md", "an abridged signature sketch of GraphTraversal -- methods with no "
                     + "bodies, which is a summary, not source",
             "saga-compensation.md", "a record sketch of the wire model, not a compilable declaration");
