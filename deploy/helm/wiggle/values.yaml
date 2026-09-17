@@ -28,6 +28,11 @@ service:
   grpcPort: 8080     # the gRPC control plane
   healthPort: 8090   # serves the always-open /healthz probe (and the console, if enabled)
 
+# A headless twin ({{fullname}}-nodes) whose DNS answers with every ready pod IP, for per-pod
+# gRPC channels. Harmless when unused.
+headlessService:
+  enabled: true
+
 # Extra environment: any WIGGLE_* tunable, TLS, the console password, etc.
 env: {}
   # WIGGLE_POLL_INTERVAL_MILLIS: "200"
