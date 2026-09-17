@@ -373,7 +373,7 @@ public final class WorkflowEngine {
 
     private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
         Instance inst = tx.findInstance(t.instanceId).orElse(null);
-        boolean comp = t != null && Sagas.isCompensation(t);
+        boolean comp = Sagas.isCompensation(t);
         if (inst == null || inst.status != (comp ? InstanceStatus.COMPENSATING : InstanceStatus.RUNNING)) {
             return Optional.empty();
         }
