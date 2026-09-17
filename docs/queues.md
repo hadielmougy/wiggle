@@ -193,10 +193,6 @@ even inside a local chain, a step on another queue crosses to another service. E
   twice.
 - **Queue lag monitoring:** the server can warn when a queue accumulates a backlog with no throughput —
   see README → *Queue lag monitoring*.
-- **Queues × cells are orthogonal.** Under a coordinator, `NamespaceWorker` runs one worker per active
-  *cell* (sharded databases) and reconciles that set; it fans the *same* handlers/queues across cells and
-  does not change queue semantics. Queues split a flow **by step**; cells shard instances **by id**. See
-  [sharding-and-epochs.md](sharding-and-epochs.md).
 
 ---
 

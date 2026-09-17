@@ -1,6 +1,8 @@
-"""Kubernetes manifest builders. Everything is one image (the wiggle dist), specialised by env:
-a coordinator (WIGGLE_ROLE=coordinator, over its own small Postgres) and per-cell (its own Postgres +
-wiggle nodes pointed at that DB and at the coordinator)."""
+"""Kubernetes manifest builders. Everything is one image (the wiggle dist), specialised by env.
+
+A server deployment is its own Postgres plus one or more wiggle nodes pointed at that DB. Give it a
+namespace and it also joins a coordinator for multi-cell placement; leave the namespace blank and it
+is a standalone server, which is the ordinary way to run wiggle."""
 from __future__ import annotations
 
 import yaml
@@ -132,6 +134,8 @@ def cell_db_manifests(cell: str) -> list[dict]:
 
 def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
                    tunables: dict | None = None) -> list[dict]:
+    """``replicas`` wiggle nodes over one Postgres. A blank ``namespace`` deploys a standalone
+    server: no placement, no coordinator, ids minted as ``wfi_...``."""
     name = C.dns_name("cell", cell)
     db = C.dns_name("db", cell)
     labels = C.labels("cell", cell=cell, namespace=namespace)
@@ -149,8 +153,10 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
                 "WIGGLE_JDBC_USER": "wiggle",
                 "WIGGLE_JDBC_PASSWORD": "wiggle",
                 "WIGGLE_CELL_ID": cell,
-                "WIGGLE_NAMESPACE": namespace,
-                "WIGGLE_COORDINATOR_URL": f"coordinator:{C.COORD_GRPC_PORT}",
+                # No namespace => a plain standalone server: it mints wfi_ ids, needs no placement
+                # and never dials a coordinator. _env drops None, so both keys simply vanish.
+                "WIGGLE_NAMESPACE": namespace or None,
+                "WIGGLE_COORDINATOR_URL": (f"coordinator:{C.COORD_GRPC_PORT}" if namespace else None),
                 "WIGGLE_REGION": region or None,
             }),
             # Operational tunables from the UI (poll interval + housekeeping default here); unset ones

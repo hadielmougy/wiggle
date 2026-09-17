@@ -168,6 +168,8 @@ def rewrite(page, cache):
 def main():
     cache, total, touched = {}, 0, []
     for page in sorted(ROOT.glob("docs/**/*.md")):
+        if "archive" in page.relative_to(ROOT).parts:   # retired pages keep their old snippets
+            continue
         text = page.read_text()
         if "<!-- snippet:" not in text:
             continue

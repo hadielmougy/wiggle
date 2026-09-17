@@ -225,7 +225,7 @@ cols[1].metric("Cells", len(cells))
 cols[2].metric("Namespaces", len({c["namespace"] for c in cells if c["namespace"]}))
 
 overview, cells_tab, placement, coord_tab, client, forwards, logs_tab, db_tab = st.tabs(
-    ["📊 Overview", "🗄 Cells", "🧭 Placement (epochs)", "⚙️ Coordinator", "🚀 Client tests",
+    ["📊 Overview", "🗄 Servers", "🧭 Placement (epochs)", "⚙️ Coordinator", "🚀 Client tests",
      "🔌 Forwards", "📜 Logs", "🗃 Database"])
 
 # ---- Overview ----
@@ -250,21 +250,25 @@ with overview:
 
 # ---- Cells ----
 with cells_tab:
-    st.subheader("Create a cell")
-    st.caption("A cell gets its **own Postgres** container and one or more wiggle nodes pointed at it "
-               "and at the coordinator.")
+    st.subheader("Deploy a server")
+    st.caption("A server gets its **own Postgres** container and one or more wiggle nodes pointed at "
+               "it. Leave **Namespace** blank for a standalone server — no coordinator needed, which "
+               "is the ordinary way to run wiggle. Set a namespace to place it in a coordinated ring "
+               "instead.")
     with st.form("create_cell"):
         c1, c2, c3, c4 = st.columns(4)
-        cell_id = c1.text_input("Cell id", value="cellA")
-        ns = c2.text_input("Namespace", value="orders")
+        cell_id = c1.text_input("Server id", value="srv1")
+        ns = c2.text_input("Namespace (blank = standalone)", value="")
         replicas = c3.number_input("Nodes", min_value=1, max_value=9, value=1)
         region = c4.text_input("Region", value="")
-        if st.form_submit_button("Create cell", disabled=not coord_ready):
-            action(f"Create cell {cell_id}", lab.create_cell, cell_id, ns, int(replicas), region,
-                   spinner="Applying DB + cell manifests…")
+        standalone = not ns.strip()
+        if st.form_submit_button("Deploy server", disabled=not (standalone or coord_ready)):
+            action(f"Deploy server {cell_id}", lab.create_cell, cell_id, ns.strip(), int(replicas),
+                   region, spinner="Applying DB + server manifests…")
             st.rerun()
     if not coord_ready:
-        st.warning("Deploy the coordinator (sidebar) before creating cells.")
+        st.info("No coordinator running — that is fine. Leave the namespace blank to deploy a "
+                "standalone server. A namespace needs a coordinator (sidebar).")
 
     st.divider()
     st.subheader("Manage cells")

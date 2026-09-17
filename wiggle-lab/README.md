@@ -14,15 +14,24 @@ It talks to the cluster two ways:
 ## What you can do
 
 - Create/tear down a kind cluster.
-- Deploy the **coordinator**: a small Postgres for the control plane, and one or more
-  stateless coordinator pods over it.
-- Create **cells**, each getting its **own Postgres container** and N wiggle nodes, wired to the
-  coordinator and namespace.
+- Deploy a **server**: its own Postgres container and N wiggle nodes over it. Leave the namespace
+  blank and that is all you need — no coordinator, no placement. This is the ordinary way to run
+  wiggle and the fastest path through this lab.
+- **Scale** a server up/down, **kill** individual pods, **remove** it (and its DB).
+- Run **client scenarios**: start instances and watch them run.
+
+<details>
+<summary>Multi-cell placement (optional, needs a coordinator)</summary>
+
+Give a server a **namespace** and it joins a coordinated ring instead of standing alone. That path
+needs the coordinator deployed first (sidebar), and adds:
+
 - **Reshard**: open a placement epoch with a `shard→cell` ring; opening a new epoch drains the old one
   (the coordinator retires it automatically once instances finish).
-- **Scale** a cell up/down, **kill** individual pods, **remove** a whole cell (and its DB).
-- Run **client scenarios**: allocate a built-in workflow to a namespace, start instances, and watch
-  where they land across cells/epochs.
+- Client scenarios that allocate a workflow to a namespace and show where instances land across
+  cells and epochs.
+
+</details>
 
 ## Prerequisites
 
@@ -45,14 +54,20 @@ streamlit run app.py           # opens http://localhost:8501
 1. **Sidebar → Create kind cluster.**
 2. **Build image** (compiles the Java dist + dashboard — several minutes; or build `wiggle:local`
    yourself first with `docker build -t wiggle:local ..`), then **Load image → kind**.
-3. **Deploy coordinator.**
-4. **Cells tab →** create `cellA` in namespace `orders` (1 node). Repeat for `cellB` if you like.
-5. **Placement tab →** open an epoch for `orders` with ring `0=cellA`.
-6. **Client tests tab →** pick the `sleep` workflow → **Allocate → Start instances → Observe**.
-   Watch instances run and complete on `cellA`.
-7. **Reshard:** create `cellB`, then open a new epoch `0=cellB`. New instances now land on `cellB`;
-   `cellA`'s epoch goes **DRAINING** and retires once its instances finish.
-8. **Scale/kill/remove** cells from the Cells tab; **Tear down cluster** from the sidebar when done.
+3. **Servers tab →** deploy `srv1` with the namespace **left blank** (1 node). You get a Postgres and
+   a wiggle node; no coordinator is involved.
+4. **Client tests tab →** pick the `sleep` workflow → **Start instances → Observe**.
+5. **Scale/kill/remove** the server from the Servers tab; **Tear down cluster** from the sidebar when
+   done.
+
+<details>
+<summary>The coordinated path (optional)</summary>
+
+Deploy the coordinator from the sidebar first, then create `cellA` **with** namespace `orders`, open
+an epoch for `orders` with ring `0=cellA` on the Placement tab, and run the client scenarios. Add
+`cellB` and open `0=cellB` to watch a reshard drain the old epoch.
+
+</details>
 
 ## Record & replay (reproduce an issue)
 
