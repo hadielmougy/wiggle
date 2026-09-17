@@ -41,6 +41,9 @@ public final class Rows {
     }
 
     public static final class Token implements Cloneable {
+        /** Runtime bookkeeping, never stored: false until first written. The engine mints fresh
+         *  tokens unpersisted and writes them once, already in their parked state. */
+        public boolean persisted = true;
         public String id;
         public String instanceId;
         public String workflow;

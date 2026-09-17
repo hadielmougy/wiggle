@@ -22,6 +22,13 @@ public interface Tx extends GraphStore {
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
     Optional<Instance> findInstance(String id);
+
+    /** Every instance in {@code ids}, unlocked -- the poll path's one-read batch. */
+    java.util.List<Instance> findInstances(java.util.Collection<String> ids);
+
+    /** The write lock of the instance owning {@code taskId}, taken in one statement. Empty when the
+     *  task (or its instance) does not exist. */
+    Optional<Instance> lockInstanceOfTask(String taskId);
     void updateInstance(Instance instance);
     List<Instance> listInstances(String workflow, InstanceStatus status, int limit);
     /** Instances started with {@code correlationId} (a business key), newest first. */

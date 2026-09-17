@@ -115,6 +115,19 @@ public final class InMemoryStorage implements Storage {
 
         @Override public Optional<Instance> lockInstance(String id) { return findInstance(id); }
 
+        @Override public List<Instance> findInstances(java.util.Collection<String> ids) {
+            List<Instance> out = new ArrayList<>(ids.size());
+            for (String id : ids) {
+                Instance i = instances.get(id);
+                if (i != null) out.add(i);
+            }
+            return out;
+        }
+
+        @Override public Optional<Instance> lockInstanceOfTask(String taskId) {
+            return findToken(taskId).flatMap(t -> findInstance(t.instanceId));
+        }
+
         @Override public Optional<Instance> findInstance(String id) {
             Instance i = instances.get(id);
             return Optional.ofNullable(i == null ? null : i.clone());

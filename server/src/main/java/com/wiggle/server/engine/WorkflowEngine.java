@@ -197,7 +197,6 @@ public final class WorkflowEngine {
         long now = System.currentTimeMillis();
         Instance inst = insertNewInstance(tx, def, context, correlationId, parentTokenId, now);
         Token t = newToken(inst, def.startNode(), "", null, now);
-        tx.insertToken(t);
         LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
         drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
@@ -364,15 +363,25 @@ public final class WorkflowEngine {
                                                   Set<com.wiggle.core.WorkflowVersion> versions,
                                                   int max, long now, long until) {
         List<Token> claimed = tx.claimTasks(workerId, queues, versions, max, now, until);
+        Map<String, Instance> instances = instancesOf(tx, claimed);
         List<TaskActivation> activations = new ArrayList<>(claimed.size());
         for (Token t : claimed) {
-            activationFor(tx, t, workerId, until).ifPresent(activations::add);
+            activationFor(tx, instances.get(t.instanceId), t, workerId, until).ifPresent(activations::add);
         }
         return activations;
     }
 
-    private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
-        Instance inst = tx.findInstance(t.instanceId).orElse(null);
+    /** The claimed batch's instances in one read; an instance can be gone (purged) -> absent. */
+    private static Map<String, Instance> instancesOf(Tx tx, List<Token> claimed) {
+        if (claimed.isEmpty()) return Map.of();
+        Set<String> ids = new LinkedHashSet<>();
+        for (Token t : claimed) ids.add(t.instanceId);
+        Map<String, Instance> out = new HashMap<>();
+        for (Instance i : tx.findInstances(ids)) out.put(i.id, i);
+        return out;
+    }
+
+    private Optional<TaskActivation> activationFor(Tx tx, Instance inst, Token t, String workerId, long until) {
         boolean comp = Sagas.isCompensation(t);
         if (inst == null || inst.status != (comp ? InstanceStatus.COMPENSATING : InstanceStatus.RUNNING)) {
             return Optional.empty();
@@ -412,10 +421,10 @@ public final class WorkflowEngine {
     /** A task's token re-read under its instance's write lock. */
     private record LockedTask(Instance inst, Token token) {}
 
-    /** Takes the instance lock first, then re-reads the token under it. */
+    /** Takes the instance's write lock (resolved from the task in the same statement), then reads
+     *  the token under it. */
     private static LockedTask lockTask(Tx tx, String taskId) {
-        Token probe = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-        Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+        Instance inst = tx.lockInstanceOfTask(taskId).orElseThrow(() -> EngineException.notFound("task"));
         Token token = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
         return new LockedTask(inst, token);
     }
@@ -460,9 +469,19 @@ public final class WorkflowEngine {
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
             Token cont = newToken(inst, next, t.joinStack, stripCombineScratch(node, t.payloadJson), now);
-            tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
+    }
+
+    /** First write inserts, later writes update: a fresh token reaches the store once, already in
+     *  its parked state. */
+    static void saveToken(Tx tx, Token t) {
+        if (t.persisted) {
+            tx.updateToken(t);
+        } else {
+            tx.insertToken(t);
+            t.persisted = true;
+        }
     }
 
     /** Marks a token consumed and releases its lease. */
@@ -556,7 +575,6 @@ public final class WorkflowEngine {
 
     /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */
     private void handBack(Tx tx, LazyGraph def, Instance inst, Token cont, Node nextNode, long now) {
-        tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
                 + " handing back at " + cont.nodeId + " (" + nextNode.kind() + ")");
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
@@ -572,7 +590,7 @@ public final class WorkflowEngine {
         cont.leaseExpiresAt = lease;
         cont.availableAt = now;
         cont.updatedAt = now;
-        tx.insertToken(cont);
+        saveToken(tx, cont);
     }
 
 
@@ -603,7 +621,6 @@ public final class WorkflowEngine {
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
             Token cont = newToken(inst, node.next(), t.joinStack, t.payloadJson, now);
-            tx.insertToken(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
                     + inst.id + " -> " + node.next());
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
@@ -654,7 +671,6 @@ public final class WorkflowEngine {
         t.updatedAt = ts;
         tx.updateToken(t);
         Token cont = newToken(inst, node.next(), t.joinStack, t.payloadJson, ts);
-        tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
@@ -686,7 +702,6 @@ public final class WorkflowEngine {
             return;
         }
         Token cont = newToken(inst, node.altNext(), t.joinStack, t.payloadJson, ts);
-        tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
@@ -1065,7 +1080,6 @@ public final class WorkflowEngine {
         settleToken(tx, t, now);
         touchInstance(tx, parent, now);
         Token cont = newToken(parent, node.next(), t.joinStack, t.payloadJson, now);
-        tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "sub-workflow " + child.id + " completed -> resuming parent "
                 + parent.id + " at " + node.next());
         drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);
@@ -1129,6 +1143,7 @@ public final class WorkflowEngine {
 
     static Token newToken(Instance inst, String nodeId, String joinStack, String payload, long now) {
         Token t = new Token();
+        t.persisted = false;
         t.payloadJson = payload;
         t.id = Ids.next("tok");
         t.instanceId = inst.id;

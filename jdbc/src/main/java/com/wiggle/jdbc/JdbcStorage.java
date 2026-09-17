@@ -708,6 +708,32 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
+        @Override public List<Instance> findInstances(java.util.Collection<String> ids) {
+            if (ids.isEmpty()) return List.of();
+            String in = "?,".repeat(ids.size() - 1) + "?";
+            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE id IN (" + in + ")")) {
+                int i = 1;
+                for (String id : ids) p.setString(i++, id);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Instance> out = new ArrayList<>(ids.size());
+                    while (rs.next()) out.add(readInstance(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public Optional<Instance> lockInstanceOfTask(String taskId) {
+            // The subquery only resolves the token's immutable instance_id; every state decision is
+            // made on rows read under the FOR UPDATE lock this statement takes.
+            try (PreparedStatement p = ps("SELECT * FROM wf_instance " +
+                    "WHERE id=(SELECT instance_id FROM wf_token WHERE id=?) FOR UPDATE")) {
+                p.setString(1, taskId);
+                try (ResultSet rs = p.executeQuery()) {
+                    return rs.next() ? Optional.of(readInstance(rs)) : Optional.empty();
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
             String sql = forUpdate
                     ? "SELECT * FROM wf_instance WHERE id=? FOR UPDATE"
