@@ -28,19 +28,7 @@ public final class Worker implements AutoCloseable {
     private final WiggleClient client;
     private final String workerId;
     private final WorkerOptions options;
-    private final Map<String, ActivityHandler> handlers = new ConcurrentHashMap<>();
-    private final Set<String> queues = ConcurrentHashMap.newKeySet();
-    /** Compiled graphs by "name:version", for local-execution traversal. */
-    private final Map<String, WorkflowDefinition> graphs = new ConcurrentHashMap<>();
-    /** {@link ForFlow @ForFlow} objects, matched to graph steps by name on start. */
-    /** One {@code handlers(...)} call: the scanned methods, and the version they were bound for. */
-    private record Registration(HandlerBinder.HandlerSet set, Integer version) {}
-
-    private final List<Registration> handlerSets = new CopyOnWriteArrayList<>();
-    /** The (workflow, version) pairs this worker claims; empty while any registration is unversioned. */
-    private final Set<WorkflowVersion> servedVersions = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean servesEveryVersion = new AtomicBoolean();
-
+    private final Registrations registrations = new Registrations();
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -74,20 +62,19 @@ public final class Worker implements AutoCloseable {
     public String workerId() { return workerId; }
 
     /** The queues this worker actually serves: the explicit restriction, or everything registered. */
-    /**
-     * The versions this worker claims. Empty means every version -- which is the case whenever any
-     * registration was unversioned, since the scoping can only be as narrow as the least specific
-     * binding.
-     */
-    private Set<WorkflowVersion> claimedVersions() {
-        return servesEveryVersion.get() ? Set.of() : Set.copyOf(servedVersions);
-    }
-
-    private Set<String> servedQueues() {
-        return options.queues().isEmpty() ? queues : options.queues();
+    Set<String> servedQueues() {
+        return options.queues().isEmpty() ? registrations.queues() : options.queues();
     }
 
     public int inFlight() { return inFlight.get(); }
+
+    WiggleClient client() { return client; }
+
+    WorkerOptions options() { return options; }
+
+    ScheduledExecutorService heartbeatPool() { return heartbeats; }
+
+    Registrations registrations() { return registrations; }
 
     /** Whether the worker is currently running (started and not yet closed). */
     public boolean isRunning() { return running.get(); }
@@ -115,19 +102,7 @@ public final class Worker implements AutoCloseable {
 
 
     public Worker registerHandler(String flowName, Object handlerObject) {
-        HandlerBinder.HandlerSet handlerSet = null;
-        try {
-            handlerSet = HandlerBinder.scan(handlerObject);
-        } catch (IllegalArgumentException e) {
-            LOG.log(System.Logger.Level.ERROR, () -> "Error registering handler " + handlerObject, e);
-            throw e;
-        }
-        if (handlerSet.workflow() == null && flowName == null) {
-            throw new IllegalArgumentException("Handler " + handlerObject + " has no flow name or registered with flow name");
-        }
-        handlerSet = flowName == null ? handlerSet : handlerSet.withFlowName(flowName);
-        handlerSets.add(new Registration(handlerSet, null));
-        servesEveryVersion.set(true);
+        registrations.register(flowName, handlerObject);
         return this;
     }
 
@@ -148,15 +123,13 @@ public final class Worker implements AutoCloseable {
      * worker claims every version -- the scoping is only as narrow as its least specific binding.
      */
     public Worker registerHandler(Object handlerObject, int version) {
-        HandlerBinder.HandlerSet set = HandlerBinder.scan(handlerObject);
-        handlerSets.add(new Registration(set, version));
-        servedVersions.add(new WorkflowVersion(set.workflow(), version));
+        registrations.register(handlerObject, version);
         return this;
     }
 
     public Worker start() {
         if (!running.compareAndSet(false, true)) return this;
-        if (!handlerSets.isEmpty()) reconcile();
+        if (!registrations.isEmpty()) registrations.reconcile(client, options);
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
@@ -165,63 +138,6 @@ public final class Worker implements AutoCloseable {
         LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());
         return this;
-    }
-
-    private void reconcile() {
-        for (Registration r : handlerSets) matchHandlerSet(r);
-    }
-
-    /**
-     * Resolves a {@link ForFlow @ForFlow} object against the registered graph (fetched here — the
-     * binder itself is pure) and installs the resulting bindings. See {@link HandlerBinder}.
-     */
-    private void matchHandlerSet(Registration registration) {
-        HandlerBinder.HandlerSet set = registration.set();
-        WorkflowDefinition def = fetchGraph(set.workflow(), registration.version());
-        HandlerBinder.Result result = HandlerBinder.bind(set, def);
-        for (HandlerBinder.Binding b : result.bindings()) {
-            if (handlers.putIfAbsent(b.activity(), b.handler()) != null) {
-                throw new IllegalStateException("duplicate handler for activity '" + b.activity() + "'");
-            }
-            if (b.compensator() != null) {
-                // The undo is a normal claimable activity under "<activity>#compensate"; its
-                // context is the {input, result} snapshot pair the engine staged.
-                HandlerBinder.Compensator comp = b.compensator();
-                handlers.putIfAbsent(b.activity() + "#compensate", ctx -> {
-                    Map<String, Object> snaps = Json.asObject(ctx);
-                    comp.invoke(snaps.get("input"), snaps.get("result"));
-                    return null;
-                });
-            }
-            queues.add(b.queue());
-        }
-        graphs.put(def.key(), def);
-        if (!result.unserved().isEmpty()) {   // info, not an error: this worker may serve a subset
-            LOG.log(System.Logger.Level.INFO, () -> "workflow '" + set.workflow()
-                    + "' has steps served by no handler on this worker: " + result.unserved());
-        }
-    }
-
-    /** Fetches the registered graph, waiting out a registration race up to {@code awaitRegistration}. */
-    private WorkflowDefinition fetchGraph(String workflow, Integer version) {
-        long deadline = System.nanoTime() + options.awaitRegistration().toNanos();
-        while (true) {
-            try {
-                return client.getWorkflow(workflow, version);
-            } catch (WiggleClient.WiggleApiException e) {
-                boolean notFound = e.status() == 404;
-                if (notFound && System.nanoTime() < deadline) {
-                    sleep(250);
-                    continue;
-                }
-                if (notFound) {
-                    throw new IllegalStateException("workflow '" + workflow + "' is not registered; register "
-                            + "its graph before starting a worker that binds handlers to it (or set "
-                            + "WorkerOptions.withAwaitRegistration)", e);
-                }
-                throw e;
-            }
-        }
     }
 
     private void pollLoop() {
@@ -246,7 +162,7 @@ public final class Worker implements AutoCloseable {
         }
         int free = options.concurrency() - inFlight.get();
         long polledAt = System.currentTimeMillis();
-        PollResult result = client.poll(workerId, servedQueues(), claimedVersions(), free,
+        PollResult result = client.poll(workerId, servedQueues(), registrations.claimedVersions(), free,
                 options.lease().toMillis(), options.longPollWait().toMillis());
         List<TaskActivation> tasks = result.tasks();
         if (tasks.isEmpty()) {
@@ -305,244 +221,20 @@ public final class Worker implements AutoCloseable {
     }
 
     private void execute(TaskActivation task) {
-        WorkflowDefinition def = graphs.get(task.workflow() + ":" + task.version());
+        WorkflowDefinition def = registrations.graphFor(task.workflow() + ":" + task.version());
         // Local execution needs the graph to traverse; without it (unregistered version) fall back
         // to server-driven, one step at a time.
         if (task.executionMode() != ExecutionMode.SERVER && def != null) {
-            new LocalRun(task, def).run();
+            new LocalRun(this, task, def).run();
         } else {
-            executeServer(task);
+            new ServerRun(this, task).run();
         }
     }
 
-    /** Server-driven: run one step and report via complete/fail; the server advances the token. */
-    private void executeServer(TaskActivation task) {
-        ActivityHandler handler = handlers.get(task.activity());
-        if (handler == null) {
-            reportFailure(task, "no handler registered for activity '" + task.activity() + "'", false);
-            return;
-        }
-        Heartbeat lease = newHeartbeat(task.taskId(), task.leaseOwner());
-        lease.start();
-        Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId(),
-                task.baseContext(), task.baseContext() != null, task.itemIndex(), task.itemMapKey()));
-        try {
-            Object result = handler.invoke(task.context());
-            lease.stop();   // the handler is done: no extension may race or trail the settle below
-            settle(task, result);
-        } catch (PermanentActivityException e) {
-            lease.stop();
-            reportFailure(task, describe(e), false);
-        } catch (Exception e) {
-            LOG.log(System.Logger.Level.DEBUG,
-                    () -> "step " + task.stepName() + " of " + task.instanceId() + " failed: " + e);
-            lease.stop();
-            reportFailure(task, describe(e), true);
-        } catch (Throwable t) {
-            lease.stop();
-            reportFailure(task, describe(t), false);
-            throw t;
-        } finally {
-            lease.stop();
-            Step.end();
-        }
-    }
-
-    /** Reports a finished step: a predicate must have produced a boolean, a task merges its result. */
-    private void settle(TaskActivation task, Object result) {
-        if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
-            reportFailure(task, "predicate '" + task.stepName() + "' returned " + typeName(result), false);
-            return;
-        }
-        client.complete(task.taskId(), task.leaseOwner(),
-                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
-    }
-
-    private Heartbeat newHeartbeat(String taskId, String leaseOwner) {
+    Heartbeat newHeartbeat(String taskId, String leaseOwner) {
         return new Heartbeat(heartbeats,
                 extend -> client.heartbeat(taskId, leaseOwner, extend),
                 options.lease().toMillis(), taskId);
-    }
-
-    /**
-     * One local execution run (LOCAL_SYNC / LOCAL_ASYNC): consecutive same-queue steps executed
-     * in-worker until the next node is a boundary (sleep / fork / join / user task / other queue /
-     * end) or the instance stops running. LOCAL_SYNC flushes every step (one-step crash blast
-     * radius); LOCAL_ASYNC buffers up to {@code localBatchSize} steps and flushes the run in one
-     * call. Owning the chain state here keeps each step's logic flat.
-     */
-    private final class LocalRun {
-        private final WorkflowDefinition def;
-        private final String leaseOwner;
-        private final String instanceId;
-        private final int maxBatch;
-        /** forEach item scope, frozen for the whole local chain (null outside an item body). */
-        private final Object baseContext;
-        private final long itemIndex;
-        private final String itemMapKey;
-        private final List<WiggleClient.StepReport> buffer = new ArrayList<>();
-        /** The token the server currently has leased to us; read by the heartbeat thread. */
-        private volatile String serverTaskId;
-        private Node node;
-        private Object ctx;
-        private int attempt;
-
-        LocalRun(TaskActivation task, WorkflowDefinition def) {
-            this.def = def;
-            this.leaseOwner = task.leaseOwner();
-            this.instanceId = task.instanceId();
-            this.maxBatch = task.executionMode() == ExecutionMode.LOCAL_ASYNC ? options.localBatchSize() : 1;
-            this.serverTaskId = task.taskId();
-            this.node = def.node(task.nodeId());
-            this.ctx = task.context();
-            this.baseContext = task.baseContext();
-            this.itemIndex = task.itemIndex();
-            this.itemMapKey = task.itemMapKey();
-            this.attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
-        }
-
-        void run() {
-            Heartbeat lease = new Heartbeat(heartbeats,
-                    extend -> client.heartbeat(serverTaskId, leaseOwner, extend),
-                    options.lease().toMillis(), serverTaskId);
-            lease.start();
-            try {
-                boolean chaining = true;
-                // Re-checked between steps (never mid-handler), so a shutdown drains promptly:
-                // the step already in flight finishes normally, then the loop stops here instead
-                // of picking up another one.
-                while (chaining && running.get()) {
-                    chaining = runOneStep();
-                }
-                if (chaining) drainOnShutdown();
-            } finally {
-                lease.stop();
-            }
-        }
-
-        /**
-         * Called when the worker is closing while steps remain buffered or a further step could
-         * still run locally. Flushes what's already been computed -- so it survives the
-         * restart instead of being silently discarded -- and forces a handback (even though the
-         * next node may itself be locally runnable) so the continuation is immediately READY for
-         * another worker rather than sitting leased to one that is shutting down.
-         */
-        private void drainOnShutdown() {
-            if (buffer.isEmpty()) return;   // nothing computed yet; the claimed lease simply expires and is reclaimed
-            try {
-                client.advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), true);
-                int drained = buffer.size();
-                buffer.clear();
-                LOG.log(System.Logger.Level.DEBUG, () -> "drained " + drained
-                        + " buffered step(s) of instance " + instanceId + " on shutdown");
-            } catch (RuntimeException e) {
-                // Best effort: the lease will simply expire and the leader will reclaim it,
-                // re-running from the last successful flush -- the same guarantee a crash gives.
-                LOG.log(System.Logger.Level.WARNING,
-                        "could not drain buffered steps of instance " + instanceId + " on shutdown: " + e);
-            }
-        }
-
-        /** Executes the current node; true = keep chaining locally. */
-        private boolean runOneStep() {
-            ActivityHandler handler = handlers.get(node.activity());
-            if (handler == null) {
-                failRun("no handler registered for activity '" + node.activity() + "'", false);
-                return false;
-            }
-            Invocation outcome = invoke(handler);
-            if (!outcome.ok()) return false;
-            if (node.kind() == NodeKind.PREDICATE && !(outcome.result() instanceof Boolean)) {
-                failRun("predicate '" + node.name() + "' returned " + typeName(outcome.result()), false);
-                return false;
-            }
-            return advance(outcome.result());
-        }
-
-        private Invocation invoke(ActivityHandler handler) {
-            Step.begin(new Step.Info(attempt, node.name(), instanceId,
-                    baseContext, baseContext != null, itemIndex, itemMapKey));
-            try {
-                return Invocation.ok(handler.invoke(ctx));
-            } catch (PermanentActivityException e) {
-                failRun(describe(e), false);
-                return Invocation.failed();
-            } catch (Exception e) {
-                String stepName = node.name();
-                LOG.log(System.Logger.Level.DEBUG,
-                        () -> "local step " + stepName + " of " + instanceId + " failed: " + e);
-                failRun(describe(e), true);
-                return Invocation.failed();
-            } finally {
-                Step.end();
-            }
-        }
-
-        /** Records the step, flushes when due, and moves to the successor; false = run is over. */
-        private boolean advance(Object result) {
-            boolean isPredicate = node.kind() == NodeKind.PREDICATE;
-            boolean predicateValue = isPredicate && (Boolean) result;
-            Node next = def.node(GraphTraversal.successor(node, predicateValue));
-            boolean handback = GraphTraversal.classify(next, servedQueues()) != null;
-            buffer.add(isPredicate
-                    ? new WiggleClient.StepReport(node.id(), null, predicateValue)
-                    : new WiggleClient.StepReport(node.id(), result, null));
-            if (!isPredicate) ctx = applyReplace(ctx, result);
-            if (shouldFlush(handback) && !flushAndContinue(handback)) return false;
-            node = next;
-            attempt = 1;
-            return true;
-        }
-
-        /**
-         * A boundary or a full buffer always flushes; so does a checkpoint, which commits its step
-         * before the next runs even mid-chain (SYNC already flushes every step, so this only
-         * affects ASYNC).
-         */
-        private boolean shouldFlush(boolean handback) {
-            // A compensable step flushes like a checkpoint: its input/result snapshots must be
-            // durably captured (the engine's comp-log) before anything later can fail.
-            return handback || def.checkpoints().contains(node.id()) || node.compensable()
-                    || buffer.size() >= maxBatch;
-        }
-
-        /** Flushes the buffer; true = the server leased us the continuation, keep chaining. */
-        private boolean flushAndContinue(boolean handback) {
-            AdvanceResult advanced = client.advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), handback);
-            buffer.clear();
-            if (!advanced.running() || handback || advanced.nextTaskId() == null) return false;
-            serverTaskId = advanced.nextTaskId();
-            return true;
-        }
-
-        /**
-         * Commits any buffered successful steps (leaving {@code serverTaskId} at the failing node's
-         * token), then reports the failure -- unless the instance already stopped running.
-         */
-        private void failRun(String message, boolean retryable) {
-            if (!flushBeforeFailure()) return;
-            client.fail(serverTaskId, leaseOwner, message, retryable);
-        }
-
-        /** @return true if the instance is still running (safe to report a failure) */
-        private boolean flushBeforeFailure() {
-            if (buffer.isEmpty()) return true;
-            AdvanceResult advanced = client.advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), false);
-            buffer.clear();
-            if (advanced.nextTaskId() != null) serverTaskId = advanced.nextTaskId();
-            return advanced.running();
-        }
-    }
-
-    /** The outcome of invoking a handler: a result, or "already reported as failed". */
-    private record Invocation(boolean ok, Object result) {
-        static Invocation ok(Object result) { return new Invocation(true, result); }
-        static Invocation failed() { return new Invocation(false, null); }
-    }
-
-    /** Mirrors the server: a step's return REPLACES the context (null = unchanged, no merge). */
-    private static Object applyReplace(Object ctx, Object result) {
-        return result == null ? ctx : result;
     }
 
     /** A small pool: heartbeats are brief RPCs, so a handful of threads covers any concurrency. */
@@ -550,26 +242,16 @@ public final class Worker implements AutoCloseable {
         return Math.max(1, Math.min(4, options.concurrency()));
     }
 
-    private void reportFailure(TaskActivation task, String message, boolean retryable) {
-        try {
-            client.fail(task.taskId(), task.leaseOwner(), message, retryable);
-        } catch (RuntimeException e) {
-            // The lease will expire and the leader will reclaim the task; nothing else to do.
-            LOG.log(System.Logger.Level.WARNING,
-                    "could not report failure of task " + task.taskId() + ": " + e.getMessage());
-        }
-    }
-
-    private static String typeName(Object result) {
+    static String typeName(Object result) {
         return result == null ? "null" : result.getClass().getSimpleName();
     }
 
-    private static String describe(Throwable t) {
+    static String describe(Throwable t) {
         String msg = t.getMessage();
         return t.getClass().getSimpleName() + (msg == null ? "" : ": " + msg);
     }
 
-    private static void sleep(long millis) {
+    static void sleep(long millis) {
         if (millis <= 0) return;
         try {
             Thread.sleep(millis);
