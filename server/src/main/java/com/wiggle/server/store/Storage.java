@@ -20,6 +20,11 @@ public interface Storage extends AutoCloseable {
         inTx(tx -> { work.accept(tx); return null; });
     }
 
+    /** Whether {@link #inTx} really rolls back on failure. Group commit refuses to run without it:
+     *  its fallback replays a rolled-back batch one transaction at a time, which double-applies on a
+     *  store that mutated in place. */
+    default boolean transactional() { return true; }
+
     /**
      * A stable identity of the underlying store, shared by every node of the same cell (they point at
      * the same database) and distinct across cells (different databases). The coordinator uses it to

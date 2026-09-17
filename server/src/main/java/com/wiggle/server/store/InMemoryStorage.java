@@ -67,6 +67,9 @@ public final class InMemoryStorage implements Storage {
         }
     }
 
+    /** A global lock over direct mutation: an aborted unit leaves its writes behind. */
+    @Override public boolean transactional() { return false; }
+
     @Override public void close() { }
 
     /** instanceId -> compensation log entries (seq-ordered append). */

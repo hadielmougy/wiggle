@@ -91,6 +91,10 @@ public final class WorkflowEngine {
 
     /** Wake-on-produce for long-polling workers (Layer 1; see docs/in-memory-dispatch.md). */
     private final DispatchNotifier notifier = new DispatchNotifier();
+
+    /** Batches complete/fail/advance/extendLease into shared transactions when WIGGLE_GROUP_COMMIT
+     *  is set and the storage can roll back; null = the per-operation path, unchanged. */
+    private final GroupCommit groupCommit;
     /** Queues that had a token parked READY during the in-flight transaction, flushed to the notifier
      *  after it commits. Set by {@link #parkAtWorkerStep}, drained by {@link #tx}/{@link #txVoid}. */
     private final ThreadLocal<Set<String>> readyQueues = new ThreadLocal<>();
@@ -116,6 +120,16 @@ public final class WorkflowEngine {
         if (outer != null) outer.addAll(mine);   // let the outermost scope signal, post its commit
         else notifier.signal(mine);
         return result;
+    }
+
+    /** {@link #tx}, or the shared-transaction batch when group commit is on. */
+    private <T> T exec(java.util.function.Function<Tx, T> body) {
+        return groupCommit != null ? groupCommit.run(body) : tx(body);
+    }
+
+    private void execVoid(java.util.function.Consumer<Tx> body) {
+        if (groupCommit == null) { txVoid(body); return; }
+        groupCommit.run(tx -> { body.accept(tx); return null; });
     }
 
     /** {@link #tx} for a body with no return value. */
@@ -145,6 +159,18 @@ public final class WorkflowEngine {
         this.queries = new Queries(storage, pollers);
         this.defaultLeaseMillis = defaultLeaseMillis;
         this.idMinter = idMinter;
+        boolean batching = Boolean.parseBoolean(System.getenv().getOrDefault("WIGGLE_GROUP_COMMIT", "false"));
+        if (batching && !storage.transactional()) {
+            LOG.log(System.Logger.Level.WARNING, "WIGGLE_GROUP_COMMIT ignored: "
+                    + storage.getClass().getSimpleName() + " cannot roll back, so a failed batch could "
+                    + "not be replayed safely");
+            batching = false;
+        }
+        this.groupCommit = batching
+                ? new GroupCommit(storage, notifier, readyQueues,
+                        envLong("WIGGLE_GROUP_COMMIT_LINGER_MILLIS", 5),
+                        (int) envLong("WIGGLE_GROUP_COMMIT_MAX", 256))
+                : null;
     }
 
     public DefinitionRegistry definitions() { return definitions; }
@@ -396,14 +422,15 @@ public final class WorkflowEngine {
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
-        long until = storage.inTx(tx -> {
+        java.util.function.Function<Tx, Long> body = tx -> {
             Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
             requireLease(t, leaseOwner);
             t.leaseExpiresAt = System.currentTimeMillis() + extraMillis;
             t.updatedAt = System.currentTimeMillis();
             tx.updateToken(t);
             return t.leaseExpiresAt;
-        });
+        };
+        long until = groupCommit != null ? groupCommit.run(body) : storage.inTx(body);
         LOG.log(System.Logger.Level.DEBUG, () ->
                 "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
         return until;
@@ -433,7 +460,7 @@ public final class WorkflowEngine {
      * {@code "value"}.
      */
     public void complete(String taskId, String leaseOwner, Object result) {
-        txVoid(tx -> {
+        execVoid(tx -> {
             LockedTask locked = lockTask(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
@@ -498,7 +525,7 @@ public final class WorkflowEngine {
      * (or a boundary) it is driven normally, releasing the worker.
      */
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
-        return tx(tx -> {
+        return exec(tx -> {
             LockedTask locked = lockTask(tx, startTaskId);
             Instance inst = locked.inst();
             long now = System.currentTimeMillis();
@@ -713,7 +740,7 @@ public final class WorkflowEngine {
 
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
-        txVoid(tx -> {
+        execVoid(tx -> {
             LockedTask locked = lockTask(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
