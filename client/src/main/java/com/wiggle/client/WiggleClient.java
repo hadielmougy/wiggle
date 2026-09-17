@@ -73,14 +73,8 @@ public final class WiggleClient implements AutoCloseable {
      * nobody polls, or a version every worker has scoped itself out of.
      */
     public List<BacklogSlice> backlogCoverage(int max) {
-        com.wiggle.proto.BacklogCoverage res = call(() -> stub.getBacklogCoverage(
-                com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build()));
-        List<BacklogSlice> out = new ArrayList<>(res.getSlicesCount());
-        for (com.wiggle.proto.BacklogSlice s : res.getSlicesList()) {
-            out.add(new BacklogSlice(s.getWorkflow(), s.getVersion(), s.getQueue(),
-                    s.getReadyCount(), s.getOldestAvailableAt(), s.getCovered(), res.getLivePollers()));
-        }
-        return out;
+        return Wire.backlogSlices(call(() -> stub.getBacklogCoverage(
+                com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build())));
     }
 
     /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
@@ -123,7 +117,7 @@ public final class WiggleClient implements AutoCloseable {
     public com.wiggle.core.InstanceView instance(String instanceId) {
         InstanceDetail detail = call(() -> stub.getInstance(
                 InstanceIdRequest.newBuilder().setInstanceId(instanceId).build()));
-        return toInstanceView(detail.getInstance());
+        return Wire.instanceView(detail.getInstance());
     }
 
     /** An instance plus its tokens (the {@code GetInstance} detail; {@link #instance} drops the tokens). */
@@ -131,12 +125,8 @@ public final class WiggleClient implements AutoCloseable {
         InstanceDetail detail = call(() -> stub.getInstance(
                 InstanceIdRequest.newBuilder().setInstanceId(instanceId).build()));
         java.util.List<TokenInfo> tokens = new java.util.ArrayList<>();
-        for (Token t : detail.getTokensList()) {
-            tokens.add(new TokenInfo(t.getId(), t.getNodeId(), t.getKind(), t.getStatus(), t.getActivity(),
-                    t.getAttempt(), t.getAvailableAt(), t.hasLeaseOwner() ? t.getLeaseOwner() : null,
-                    t.hasLastError() ? t.getLastError() : null));
-        }
-        return new InstanceWithTokens(toInstanceView(detail.getInstance()), tokens);
+        for (Token t : detail.getTokensList()) tokens.add(Wire.tokenInfo(t));
+        return new InstanceWithTokens(Wire.instanceView(detail.getInstance()), tokens);
     }
 
     /** The names of all registered workflows. */
@@ -151,7 +141,7 @@ public final class WiggleClient implements AutoCloseable {
         if (status != null) req.setStatus(status);
         InstanceList list = call(() -> stub.listInstances(req.build()));
         java.util.List<com.wiggle.core.InstanceView> out = new java.util.ArrayList<>();
-        for (InstanceView v : list.getInstancesList()) out.add(toInstanceView(v));
+        for (InstanceView v : list.getInstancesList()) out.add(Wire.instanceView(v));
         return out;
     }
 
@@ -171,7 +161,7 @@ public final class WiggleClient implements AutoCloseable {
         InstanceList list = call(() -> stub.listInstances(ListInstancesRequest.newBuilder()
                 .setCorrelationId(correlationId).setLimit(limit).build()));
         java.util.List<com.wiggle.core.InstanceView> out = new java.util.ArrayList<>();
-        for (InstanceView v : list.getInstancesList()) out.add(toInstanceView(v));
+        for (InstanceView v : list.getInstancesList()) out.add(Wire.instanceView(v));
         return out;
     }
 
@@ -197,24 +187,7 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public Map<String, Object> cluster() {
-        ClusterView v = call(() -> stub.getCluster(Empty.getDefaultInstance()));
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("self", v.getSelf());
-        m.put("leader", v.getLeader());
-        List<Object> members = new ArrayList<>();
-        for (ClusterMember cm : v.getMembersList()) {
-            Map<String, Object> mm = new LinkedHashMap<>();
-            mm.put("id", cm.getId());
-            mm.put("name", cm.getName());
-            mm.put("firstHeartbeat", cm.getFirstHeartbeat());
-            mm.put("lastHeartbeat", cm.getLastHeartbeat());
-            mm.put("workers", (long) cm.getWorkers());
-            mm.put("leader", cm.getLeader());
-            mm.put("alive", cm.getAlive());
-            members.add(mm);
-        }
-        m.put("members", members);
-        return m;
+        return Wire.clusterMap(call(() -> stub.getCluster(Empty.getDefaultInstance())));
     }
 
     public PollResult poll(String workerId, Collection<String> queues, int max,
@@ -242,7 +215,7 @@ public final class WiggleClient implements AutoCloseable {
         PollRequest req = b.build();
         TaskList res = call(() -> stub.pollTasks(req));
         List<com.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
-        for (com.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(toTaskActivation(t));
+        for (com.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(Wire.taskActivation(t));
         return new PollResult(out, res.getRetryAfterMillis());
     }
 
@@ -289,8 +262,7 @@ public final class WiggleClient implements AutoCloseable {
     /** All schedules on the server. {@code everyMillis} is 0 for cron schedules; {@code cron} is null for interval ones. */
     public List<ScheduleInfo> schedules() {
         return call(() -> stub.listSchedules(Empty.getDefaultInstance())).getSchedulesList().stream()
-                .map(s -> new ScheduleInfo(s.getId(), s.getWorkflow(), s.getEveryMillis(),
-                        s.getCron().isEmpty() ? null : s.getCron(), s.getNextFireAt(), s.getCreatedAt()))
+                .map(Wire::scheduleInfo)
                 .toList();
     }
 
@@ -309,20 +281,6 @@ public final class WiggleClient implements AutoCloseable {
                 .build()));
     }
 
-    private static com.wiggle.core.InstanceView toInstanceView(InstanceView v) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", v.getId());
-        m.put("workflow", v.getWorkflow());
-        m.put("version", (long) v.getVersion());
-        m.put("status", v.getStatus());
-        if (v.hasTerminationReason()) m.put("terminationReason", v.getTerminationReason());
-        if (v.hasError()) m.put("error", v.getError());
-        if (v.hasContext()) m.put("context", ProtoJson.fromValue(v.getContext()));
-        m.put("createdAt", v.getCreatedAt());
-        m.put("updatedAt", v.getUpdatedAt());
-        return com.wiggle.core.InstanceView.fromJson(m);
-    }
-
     /**
      * Reports a locally-executed run (LOCAL_SYNC/LOCAL_ASYNC) and returns whether to keep going.
      * {@code steps} carries, per node, either a task merge (Object) or a predicate value (Boolean).
@@ -331,33 +289,12 @@ public final class WiggleClient implements AutoCloseable {
                                                     List<StepReport> steps, boolean finalHandback) {
         AdvanceRunRequest.Builder req = AdvanceRunRequest.newBuilder()
                 .setTaskId(taskId).setLeaseOwner(leaseOwner).setFinal(finalHandback);
-        for (StepReport s : steps) {
-            StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId());
-            if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
-            else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(s.merge()));
-            req.addSteps(sr);
-        }
-        AdvanceRunResult res = call(() -> stub.advanceRun(req.build()));
-        return new com.wiggle.core.AdvanceResult(res.getInstanceStatus(), res.getLeaseExpiresAt(),
-                res.getNextTaskId().isEmpty() ? null : res.getNextTaskId());
+        for (StepReport s : steps) req.addSteps(Wire.stepResult(s));
+        return Wire.advanceResult(call(() -> stub.advanceRun(req.build())));
     }
 
     /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
     public record StepReport(String nodeId, Object merge, Boolean predicateValue) {}
-
-    private static com.wiggle.core.TaskActivation toTaskActivation(com.wiggle.proto.TaskActivation t) {
-        return new com.wiggle.core.TaskActivation(
-                t.getTaskId(), t.getInstanceId(), t.getWorkflow(), t.getVersion(),
-                t.getNodeId(), t.getStepName().isEmpty() ? null : t.getStepName(), t.getActivity(),
-                NodeKind.valueOf(t.getKind()), t.getAttempt(), t.getLeaseExpiresAt(), t.getLeaseOwner(),
-                t.hasContext() ? ProtoJson.fromValue(t.getContext()) : null,
-                t.hasBaseContext() ? ProtoJson.fromValue(t.getBaseContext()) : null,
-                t.getItemIndex(),
-                t.getItemMapKey().isEmpty() ? null : t.getItemMapKey(),
-                t.getExecutionMode().isEmpty()
-                        ? com.wiggle.core.ExecutionMode.SERVER
-                        : com.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()));
-    }
 
     private interface Call<T> { T run(); }
 
