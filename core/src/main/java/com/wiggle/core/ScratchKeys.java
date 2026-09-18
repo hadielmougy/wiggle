@@ -21,7 +21,7 @@ package com.wiggle.core;
  * </ul>
  *
  * <p>The {@code __x__} convention is the one the engine's other internal keys already use
- * ({@code __loops__}, {@code __armIdx__}, {@code __item__}). These two are declared here, in core,
+ * ({@code __loops__}, {@code __scopes__}). These two are declared here, in core,
  * because the server writes them and the worker reads them: they are part of the contract between
  * the two, not an implementation detail of either.
  */

@@ -144,11 +144,13 @@ enum NodeBehaviours {
             String group = t.id;   // unique per fork execution; the join finds the fork token by it
             String childStack = t.pushJoinStack(group);
             List<String> starts = node.branches();
+            Object parentView = WorkflowEngine.currentView(inst, t);
             for (int i = 0; i < starts.size(); i++) {
-                // Tag each branch with its arm index and give it a private context overlay, so its
-                // writes stay isolated from its siblings and the shared context until the combine.
+                // Each branch gets its own scope frame whose view starts as a copy of the fork's
+                // current view, so its writes stay isolated from its siblings and the enclosing
+                // scope until the combine.
                 Token child = WorkflowEngine.newToken(inst, starts.get(i), childStack,
-                        branchScope(t.payloadJson, i), now);
+                        Scopes.push(t.payloadJson, Scopes.ARM, i, null, parentView), now);
                 tx.insertToken(child);
                 work.push(child);
             }
@@ -167,7 +169,8 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-            Object items = Json.parseObject(inst.contextJson).get(node.itemsKey());
+            Object view = WorkflowEngine.currentView(inst, t);
+            Object items = view instanceof Map<?, ?> vm ? vm.get(node.itemsKey()) : null;
             if (items != null && !(items instanceof List) && !(items instanceof Map)) {
                 e.failInstance(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
                         + "' holds " + items.getClass().getSimpleName() + ", not a list or map", now);
@@ -209,7 +212,7 @@ enum NodeBehaviours {
             for (int i = 0; i < elements.size(); i++) {
                 String key = mapKeys == null ? null : mapKeys.get(i);
                 Token child = WorkflowEngine.newToken(inst, branchStart, childStack,
-                        itemPayload(t, node, elements.get(i), i, key), now);
+                        Scopes.push(t.payloadJson, Scopes.ITEM, i, key, elements.get(i)), now);
                 tx.insertToken(child);
                 work.push(child);
             }
@@ -362,27 +365,6 @@ enum NodeBehaviours {
         return null;
     }
 
-    /** A static-fork branch's initial payload: the fork token's payload (so nesting keeps the outer
-     *  scope) tagged with this branch's arm index, which marks it isolated. */
-    private static String branchScope(String basePayload, int armIndex) {
-        Map<String, Object> payload = basePayload == null
-                ? new LinkedHashMap<>() : Json.parseObject(basePayload);
-        payload.put(WorkflowEngine.ARM_IDX, (long) armIndex);
-        return Json.write(payload);
-    }
-
-    /** The child's payload: the fork token's own payload (nesting) plus the element as the item's
-     *  working value — arm-tagged so the item runs ISOLATED. Nothing is injected under user keys;
-     *  the element IS the item's context, and the base travels on the activation instead. */
-    private static String itemPayload(Token forkToken, Node node, Object item, int index, String mapKey) {
-        Map<String, Object> payload = forkToken.payloadJson == null
-                ? new LinkedHashMap<>() : Json.parseObject(forkToken.payloadJson);
-        payload.put(WorkflowEngine.ARM_IDX, (long) index);
-        payload.put(WorkflowEngine.ITEM_VALUE, item);
-        if (mapKey != null) payload.put(WorkflowEngine.ITEM_MAP_KEY, mapKey);
-        return Json.write(payload);
-    }
-
     /** A static join's width comes from the graph; a dynamic one travels in the group as "#n". */
     private static int expectedAt(Node node, String group) {
         if (node.expected() > 0) return node.expected();
@@ -417,54 +399,55 @@ enum NodeBehaviours {
     }
 
     /**
-     * The continuation payload after a join, staging the branches' results for the mandatory
-     * combine. A fork combine (itemsKey = arm-name array) gets each branch's final view staged
-     * under its arm name. A forEach combine (itemsKey = a scratch-key string) gets the items'
-     * final views COLLECTED — a list ordered by item index, or, when the input was a map, a map
-     * keyed like the input — staged under that one scratch key. The arm tags are consumed.
+     * The continuation payload after a join: the fork token's own payload restored (which pops the
+     * children's scope frame), with the branches' final views staged for the mandatory combine. A
+     * fork combine (itemsKey = arm-name array) gets each branch's final view staged under its arm
+     * name. A forEach combine (itemsKey = a scratch-key string) gets the items' final views
+     * COLLECTED — a list ordered by item index, or, when the input was a map, a map keyed like the
+     * input — staged under that one scratch key.
      */
     private static String combinePayload(LazyGraph def, Node joinNode, List<Token> atBarrier, String basePayload) {
         Node agg = def.node(joinNode.next());
         if (!WorkflowEngine.isCombineNode(agg)) return basePayload;
-        Map<String, Object> staged = basePayload == null
-                ? new LinkedHashMap<>() : Json.parseObject(basePayload);
+        Map<String, Object> payload = Scopes.payload(basePayload);
         String scratch = WorkflowEngine.forEachScratchKey(agg);
         if (scratch == null) {
             List<String> armNames = WorkflowEngine.armNames(agg);
             for (Token bt : atBarrier) {
-                Map<String, Object> branch = bt.payloadJson == null
-                        ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
-                Object idx = branch.remove(WorkflowEngine.ARM_IDX);
-                branch.remove(WorkflowEngine.LOOP_COUNTS);
-                if (idx == null) continue;   // defensive: a token that never carried an arm tag
-                staged.put(ScratchKeys.arm(armNames.get(((Number) idx).intValue())), branch);
+                Map<String, Object> frame = topFrame(bt);
+                if (frame == null) continue;   // defensive: a token that never carried a frame
+                int idx = ((Number) frame.get(Scopes.IDX)).intValue();
+                payload.put(ScratchKeys.arm(armNames.get(idx)), frame.get(Scopes.VIEW));
             }
-            return Json.write(staged);
+            return Json.write(payload);
         }
-        // forEach: collect each item's FINAL VALUE, ordered by arm index; key by the source map
-        // key when the input was a map. The values are exactly what each item's last step returned.
+        // forEach: collect each item's FINAL VIEW, ordered by item index; key by the source map
+        // key when the input was a map. The views are exactly what each item's last step returned.
         TreeMap<Long, Map<String, Object>> ordered = new TreeMap<>();
         boolean mapInput = false;
         for (Token bt : atBarrier) {
-            Map<String, Object> payload = bt.payloadJson == null
-                    ? new LinkedHashMap<>() : Json.parseObject(bt.payloadJson);
-            Object idx = payload.get(WorkflowEngine.ARM_IDX);
-            if (idx == null) continue;
-            mapInput |= payload.containsKey(WorkflowEngine.ITEM_MAP_KEY);
-            ordered.put(((Number) idx).longValue(), payload);
+            Map<String, Object> frame = topFrame(bt);
+            if (frame == null) continue;
+            mapInput |= frame.get(Scopes.MAP_KEY) != null;
+            ordered.put(((Number) frame.get(Scopes.IDX)).longValue(), frame);
         }
         if (mapInput) {
             Map<String, Object> byKey = new LinkedHashMap<>();
-            for (Map<String, Object> payload : ordered.values()) {
-                byKey.put(String.valueOf(payload.get(WorkflowEngine.ITEM_MAP_KEY)),
-                        payload.get(WorkflowEngine.ITEM_VALUE));
+            for (Map<String, Object> frame : ordered.values()) {
+                byKey.put(String.valueOf(frame.get(Scopes.MAP_KEY)), frame.get(Scopes.VIEW));
             }
-            staged.put(scratch, byKey);
+            payload.put(scratch, byKey);
         } else {
             List<Object> values = new ArrayList<>(ordered.size());
-            for (Map<String, Object> payload : ordered.values()) values.add(payload.get(WorkflowEngine.ITEM_VALUE));
-            staged.put(scratch, values);
+            for (Map<String, Object> frame : ordered.values()) values.add(frame.get(Scopes.VIEW));
+            payload.put(scratch, values);
         }
-        return Json.write(staged);
+        return Json.write(payload);
+    }
+
+    /** The scope frame a joined child ran under: the top of its stack. */
+    private static Map<String, Object> topFrame(Token bt) {
+        List<Map<String, Object>> frames = Scopes.frames(Scopes.payload(bt.payloadJson));
+        return frames.isEmpty() ? null : frames.getLast();
     }
 }
