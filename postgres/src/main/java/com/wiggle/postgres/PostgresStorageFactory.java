@@ -5,7 +5,7 @@ import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.StorageFactory;
+import com.wiggle.server.StorageFactory;
 
 /**
  * Storage selection by URL scheme: an explicit switch the compiler checks, not a {@code

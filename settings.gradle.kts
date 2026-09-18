@@ -6,6 +6,7 @@ include(
     "election",
     "placement",
     "coordinator",
+    "engine",
     "server",
     "jdbc",
     "postgres",

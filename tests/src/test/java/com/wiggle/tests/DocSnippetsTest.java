@@ -296,6 +296,8 @@ class DocSnippetsTest {
             Map.entry("tut-coordinated", "tutorial/Coordinated.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
+            Map.entry("embedded-engine",
+                    "../engine/src/test/java/com/wiggle/server/engine/EmbeddedEngineTest.java"),
             Map.entry("id-codec", "../placement/src/main/java/com/wiggle/placement/IdCodec.java"),
             Map.entry("coordinated-connection",
                     "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java"));

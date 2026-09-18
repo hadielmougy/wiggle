@@ -5,7 +5,7 @@ import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.StorageFactory;
+import com.wiggle.server.StorageFactory;
 
 import java.io.IOException;
 

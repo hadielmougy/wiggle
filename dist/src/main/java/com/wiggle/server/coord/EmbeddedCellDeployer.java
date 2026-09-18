@@ -4,7 +4,7 @@ import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.StorageFactory;
+import com.wiggle.server.StorageFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
