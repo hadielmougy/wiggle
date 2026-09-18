@@ -414,8 +414,9 @@ final class HandlerBinder {
         String[] sources = combineSources(node, m, params, arms);
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
-            Map<String, Object> base = new LinkedHashMap<>(map);
-            arms.stream().map(ScratchKeys::arm).forEach(base::remove);
+            Map<String, Object> stripped = new LinkedHashMap<>(map);
+            arms.stream().map(ScratchKeys::arm).forEach(stripped::remove);
+            Object base = combineBase(stripped);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
                 args[i] = sources[i] == null
@@ -428,6 +429,16 @@ final class HandlerBinder {
         };
     }
 
+    /** The combine's base (its @Context / Step.base() view): the dispatched context minus the
+     *  staged keys — or, when that leaves nothing and the activation carried a base, the
+     *  activation's base: a combine nested inside a scope whose view is not a JSON object gets
+     *  the staged inputs alone as its context, with the enclosing view riding on the base. */
+    private static Object combineBase(Map<String, Object> stripped) {
+        if (!stripped.isEmpty()) return stripped;
+        Object ambient = Step.current().base();
+        return ambient != null ? ambient : stripped;
+    }
+
     /** The forEach flavor: bind the staged collection (list or map of item results) plus @Context. */
     private static ActivityHandler forEachCombineHandler(Node node, Method m, Object target, Object decoderOwner,
                                                          Map<Class<?>, Method> decoders, String scratch) {
@@ -435,13 +446,14 @@ final class HandlerBinder {
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Object staged = map.get(scratch);
+            Map<String, Object> stripped = new LinkedHashMap<>(map);
+            stripped.remove(scratch);
+            Object base = combineBase(stripped);
             Object[] args = new Object[params.length];
             boolean itemsBound = false;
             for (int i = 0; i < params.length; i++) {
                 java.lang.reflect.Parameter p = params[i];
                 if (p.isAnnotationPresent(Context.class)) {
-                    Map<String, Object> base = new LinkedHashMap<>(map);
-                    base.remove(scratch);
                     args[i] = decode(base, p.getType(), decoderOwner, decoders);
                 } else if (!itemsBound) {
                     args[i] = decodeCollection(staged, p, decoderOwner, decoders, node.name());
@@ -456,8 +468,6 @@ final class HandlerBinder {
                 throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
                         + m.getName() + "' needs a collection parameter (List/Set/Map) for the item results");
             }
-            Map<String, Object> base = new LinkedHashMap<>(map);
-            base.remove(scratch);
             // Both access styles work: a @Context parameter, or Step.base() inside the method.
             Object out = Step.withBase(base, () -> call(m, target, args));
             return out == null ? null : RecordMapper.toJson(out);

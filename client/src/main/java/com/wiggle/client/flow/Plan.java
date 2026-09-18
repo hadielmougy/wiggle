@@ -220,7 +220,10 @@ final class Plan {
      */
     private static String armName(List<Step> arm) {
         for (int i = arm.size() - 1; i >= 0; i--) {
-            if (arm.get(i).label != null) return arm.get(i).label;
+            Step s = arm.get(i);
+            if (s.label != null) return s.label;
+            // An arm ending at a nested fan-out: its last graph node is that fan-out's combine.
+            if (s instanceof Fork f && f.combineName != null) return f.combineName;
         }
         throw new IllegalArgumentException(
                 "an allOf arm has no step to take its name from -- it must contain at least one step,"
