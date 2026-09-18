@@ -69,6 +69,34 @@ class DeepNestingTest {
         }
     }
 
+    @Test @DisplayName("deep nesting survives the JDBC store: join_stack grows with depth, unbounded")
+    void deepNestingOnJdbc() throws Exception {
+        // join_stack carries one group id per enclosing fan-out, so its LENGTH tracks nesting depth
+        // -- it was VARCHAR(1000), which capped nesting near 38 levels with a driver-level "value
+        // too long". Only a real store shows it; the in-memory one holds a plain String.
+        String url = "jdbc:h2:mem:deep-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (com.wiggle.jdbc.JdbcStorage storage = new com.wiggle.jdbc.JdbcStorage(
+                url, "sa", "", 4, new com.wiggle.postgres.H2Dialect())) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = buildLevel(Workflow.define("deep-jdbc"), DEPTH).build();
+            registry.register(bp.definition());
+            Set<String> queues = bp.definition().queues();
+
+            String id = engine.start(bp.name(), bp.version(), inputFor(DEPTH), null);
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(120).toNanos();
+            while (engine.instance(id).orElseThrow().status().equals("RUNNING")) {
+                if (System.nanoTime() > deadline) throw new AssertionError("not terminal after 120s");
+                for (TaskActivation t : engine.poll("w", queues, 32, null)) {
+                    engine.complete(t.taskId(), "w", resultFor(t));
+                }
+            }
+            assertEquals("COMPLETED", engine.instance(id).orElseThrow().status());
+            assertEquals(4L, innermostHit(engine.instance(id).orElseThrow().context()));
+        }
+    }
+
     /** Level {@code d} wraps level {@code d-1} in the construct its depth selects; 0 is the leaf. */
     private static GraphBuilder buildLevel(GraphBuilder b, int d) {
         if (d == 0) return b.then("leaf");

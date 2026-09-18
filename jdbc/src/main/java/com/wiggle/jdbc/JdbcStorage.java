@@ -238,6 +238,15 @@ public final class JdbcStorage implements Storage {
             ALTER TABLE wf_instance ALTER COLUMN id TYPE VARCHAR(128);
             ALTER TABLE wf_token    ALTER COLUMN instance_id TYPE VARCHAR(128);
             ALTER TABLE wf_comp_log ALTER COLUMN instance_id TYPE VARCHAR(128);
+            """),
+            // join_stack is one group id (a token id, plus "#width" for a dynamic fan-out) per
+            // enclosing fork/forEach, comma-separated -- so its length is proportional to NESTING
+            // DEPTH, and VARCHAR(1000) capped nesting at roughly 38 levels with a raw
+            // "value too long" from the driver. Nothing else bounds depth: the in-memory store
+            // holds a plain String, which is why only JDBC deployments hit it. TEXT, like the
+            // other unbounded columns (payload, context, error).
+            new Migration(10, "unbounded-join-stack", """
+            ALTER TABLE wf_token ALTER COLUMN join_stack TYPE TEXT;
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
