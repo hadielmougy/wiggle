@@ -9,6 +9,7 @@ import com.wiggle.core.*;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.engine.DefinitionRegistry;
+import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
@@ -125,6 +126,23 @@ class LocalSyncTest {
             // A different worker polling the same queue gets nothing -- the chain is owned by w1.
             assertTrue(engine.poll("w2", queues, 10, null).isEmpty(),
                     "the continuation must not be offered to another worker");
+        }
+    }
+
+    @Test @DisplayName("an empty AdvanceRun batch is rejected, not acked with a lease that was never written")
+    void emptyBatchIsRejected() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = linear(ExecutionMode.LOCAL_SYNC);
+            registry.register(bp.definition());
+            engine.start(bp.name(), bp.version(), Map.of(), null);
+            TaskActivation first = engine.poll("w1", bp.definition().queues(), 10, null).getFirst();
+
+            EngineException e = assertThrows(EngineException.class,
+                    () -> engine.advance(first.taskId(), "w1", List.of(), false));
+            assertEquals(400, e.statusCode());
         }
     }
 

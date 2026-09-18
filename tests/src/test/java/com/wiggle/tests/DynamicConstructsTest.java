@@ -14,11 +14,16 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.server.engine.DefinitionRegistry;
+import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.server.store.Storage;
 import com.wiggle.dist.WiggleStorageFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -224,6 +229,29 @@ class DynamicConstructsTest {
             assertEquals(List.of("ab", "cde", "f"), ctx.get("items"),
                     mode + " the input collection survives untouched in the shared context");
             assertFalse(ctx.containsKey("per-item"), mode + " the collected-results scratch key is stripped");
+        }
+    }
+
+    @Test @DisplayName("forEach: a fan-out wider than the drive depth cap expands in one drive")
+    void fanOutWiderThanDriveCap() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = FlowSpec.define("dyn-fan-wide", Map.class, FanSteps.class, (f, s) -> f
+                    .thenForEach("per-item", "items", String.class, b -> b.thenApply(s::upper))
+                    .combine(s::collect));
+            registry.register(bp.definition());
+            List<String> items = new ArrayList<>();
+            for (int i = 0; i < 12_000; i++) items.add("i" + i);
+
+            String id = engine.start(bp.name(), bp.version(), Map.of("items", items), null);
+
+            assertEquals("RUNNING", engine.instance(id).orElseThrow().status());
+            assertEquals(items.size() + 1, engine.tokens(id).size(),
+                    "one token per item beside the consumed fork token");
+            assertEquals(10, engine.poll("w", bp.definition().queues(), 10, null).size(),
+                    "the parked item tokens are claimable");
         }
     }
 

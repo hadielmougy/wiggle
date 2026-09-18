@@ -149,9 +149,6 @@ public final class WorkflowEngine {
 
     public DefinitionRegistry definitions() { return definitions; }
 
-    // Facade over the registry so callers (API, dashboard) don't reach through the engine
-    // into a collaborator's collaborator.
-
     /** Registers a definition (blob + normalised graph rows). */
     public WorkflowDefinition register(WorkflowDefinition def) { return definitions.register(def); }
 
@@ -498,6 +495,7 @@ public final class WorkflowEngine {
      * (or a boundary) it is driven normally, releasing the worker.
      */
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
+        if (steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
         return tx(tx -> {
             LockedTask locked = lockTask(tx, startTaskId);
             Instance inst = locked.inst();
@@ -1029,12 +1027,21 @@ public final class WorkflowEngine {
      * sibling (JOINED), or nothing at all (DONE at an END node).
      */
     private void drive(Tx tx, LazyGraph def, Instance inst, Deque<Token> work, long now) {
-        int guard = 0;
+        // Caps chain DEPTH, not fan-out breadth: every extra child a fork/forEach enqueues beyond
+        // the usual single continuation grows the budget by one, so any fan-out width advances
+        // fine while a runaway chain of server-side nodes still trips the cap.
+        long budget = 10_000;
+        long guard = 0;
         while (!work.isEmpty()) {
-            if (++guard > 10_000) throw new IllegalStateException("cycle detected in workflow " + def.key());
+            if (++guard > budget) {
+                throw new IllegalStateException("drive budget exceeded in workflow " + def.key()
+                        + ": " + guard + " advances without parking (runaway server-side node chain)");
+            }
             Token t = work.pop();
+            int before = work.size();
             Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
             if (!NodeBehaviours.of(s.node().kind()).advance(this, s)) return;
+            budget += Math.max(0, work.size() - before - 1);
         }
     }
 
