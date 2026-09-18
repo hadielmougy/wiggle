@@ -1,4 +1,8 @@
 dependencies {
+    // The state machine and its storage SPI. Split out so it can be embedded on its own
+    // (:engine has no transport and no external dependencies); this module adds the cluster,
+    // the gRPC surface and the process around it.
+    api(project(":engine"))
     // Leader election, shared with :coordinator. Neither knows about the other.
     api(project(":election"))
     // The placement rules, shared with :coordinator; neither depends on the other.

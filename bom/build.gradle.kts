@@ -24,6 +24,9 @@ dependencies {
         listOf(
             "wiggle-core", "wiggle-proto", "wiggle-client", "wiggle-server",
             "wiggle-jdbc", "wiggle-postgres", "wiggle-client-all",
+            // The embeddable state machine on its own, for an app that runs workflows in-process
+            // rather than against a server.
+            "wiggle-engine",
             // wiggle-server has an api dependency on it, so a consumer resolves it whether or
             // not they name it; the BOM should pin it like everything else it can drag in.
             "wiggle-election", "wiggle-placement",

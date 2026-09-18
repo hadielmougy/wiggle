@@ -1,6 +1,6 @@
-package com.wiggle.server.store;
+package com.wiggle.server;
 
-import com.wiggle.server.ServerConfig;
+import com.wiggle.server.store.Storage;
 
 /**
  * Builds the {@link Storage} a server node runs on from its configuration. The server core is
@@ -11,6 +11,10 @@ import com.wiggle.server.ServerConfig;
  *
  * <p>This replaces the old {@code ServiceLoader}-based {@code StorageProvider} SPI: selection is now
  * an explicit, compile-checked switch rather than classpath discovery.
+ *
+ * <p>It lives beside the server rather than with {@link Storage} because it is server <em>wiring</em>:
+ * it maps a {@link ServerConfig} to a store. The engine and its stores ({@code wiggle-engine}) carry
+ * no notion of server configuration, which is what lets them be embedded on their own.
  */
 @FunctionalInterface
 public interface StorageFactory {

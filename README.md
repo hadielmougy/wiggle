@@ -559,6 +559,7 @@ Suggestions and PRs welcome — open an issue.
 | 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
+| 🧩 **[Embedding the engine](docs/embedding-the-engine.md)** | `wiggle-engine` alone: in-process, in-memory, no dependencies |
 | 📽 **[Slide deck](https://hadielmougy.github.io/wiggle/presentation.html)** | the 5-minute tour |
 | 🐍 **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** · 🐹 **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** | idiomatic clients, same control plane |
 
@@ -568,6 +569,7 @@ Suggestions and PRs welcome — open an issue.
 implementation("sh.wiggle:wiggle-client:0.0.6")     // DSL + worker + client
 implementation("sh.wiggle:wiggle-server:0.0.6")     // only to embed the server
 implementation("sh.wiggle:wiggle-postgres:0.0.6")   // + your storage module
+implementation("sh.wiggle:wiggle-engine:0.0.6")     // or: the engine alone, in-process (no deps)
 ```
 
 Prefer the **BOM** so every wiggle module (and the shared gRPC/protobuf stack) stays version-aligned
