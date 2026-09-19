@@ -1,10 +1,10 @@
 package com.wiggle.server.store;
 
-import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.server.engine.DefaultLazyGraph;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Contract test for the {@link GraphStore} half of the store -- the immutable definition/graph
  * reference data -- exercised through {@link InMemoryStorage}. It documents the interface's
- * behaviour independently of the engine ({@link com.wiggle.server.engine.LazyGraph} tests the
+ * behaviour independently of the engine ({@link DefaultLazyGraph} tests the
  * lazy view; {@code JdbcGraphTest} the JDBC row normalisation).
  */
 class GraphStoreTest {

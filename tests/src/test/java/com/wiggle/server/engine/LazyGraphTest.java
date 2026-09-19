@@ -1,6 +1,5 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.store.InMemoryStorage;
@@ -42,7 +41,7 @@ class LazyGraphTest {
             storage.migrate();
             new DefinitionRegistry(storage).register(def);
             storage.inTxVoid(tx -> {
-                LazyGraph graph = new LazyGraph(tx, def.name(), def.version());
+                LazyGraph graph = new DefaultLazyGraph(tx, def.name(), def.version());
                 assertEquals("n0", graph.startNode());
                 // Walk the whole chain: past node 64 the earliest entries get evicted.
                 for (int i = 0; i < NODES; i++) {
@@ -63,10 +62,10 @@ class LazyGraphTest {
             storage.migrate();
             new DefinitionRegistry(storage).register(def);
             storage.inTxVoid(tx -> {
-                LazyGraph graph = new LazyGraph(tx, def.name(), def.version());
+                LazyGraph graph = new DefaultLazyGraph(tx, def.name(), def.version());
                 assertThrows(IllegalStateException.class, () -> graph.node("nope"));
 
-                LazyGraph missing = new LazyGraph(tx, "no-such-workflow", 1);
+                LazyGraph missing = new DefaultLazyGraph(tx, "no-such-workflow", 1);
                 assertThrows(IllegalArgumentException.class, missing::startNode);
             });
         }

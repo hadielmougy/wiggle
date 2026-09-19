@@ -91,6 +91,10 @@ public record WorkflowDefinition(String name, int version, String startNode,
         return fingerprint(name, startNode, nodes.values(), executionMode, checkpoints);
     }
 
+    public int numberOfNodes() {
+        return nodes.size();
+    }
+
     /**
      * A stable digest of the topology, ignoring the version field itself. Two definitions with the
      * same fingerprint are the same graph; the engine uses it to tell an idempotent re-registration
