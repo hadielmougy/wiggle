@@ -74,7 +74,7 @@ public final class WorkflowEngine {
         this.queries = new Queries(storage, pollers);
         this.defaultLeaseMillis = defaultLeaseMillis;
         this.transactions = new Transactions(storage, notifier);
-        this.tokens = new TokenLifecycle(definitions);
+        this.tokens = new TokenLifecycle(definitions, transactions::wake);
         this.instances = new InstanceLifecycle(definitions, tokens, idMinter, this::drive);
         this.dispatch = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules = new Schedules(transactions, instances);

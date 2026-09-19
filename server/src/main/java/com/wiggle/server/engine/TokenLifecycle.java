@@ -32,17 +32,16 @@ final class TokenLifecycle {
     private static final System.Logger LOG = System.getLogger(TokenLifecycle.class.getName());
 
     private final DefinitionRegistry definitions;
-    /** Queues that had a token parked READY during the in-flight transaction. */
-    private final ThreadLocal<Set<String>> readyQueues = new ThreadLocal<>();
+    private final QueueWake queueWake;
 
-    TokenLifecycle(DefinitionRegistry definitions) {
+    TokenLifecycle(DefinitionRegistry definitions, QueueWake queueWake) {
         this.definitions = definitions;
+        this.queueWake = queueWake;
     }
 
-    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op. */
+    /** Reports a queue as newly dispatchable; signalled once the transaction commits. */
     void wake(String queue) {
-        Set<String> ready = readyQueues.get();
-        if (ready != null && queue != null) ready.add(queue);
+        queueWake.ready(queue);
     }
 
     /** Parks a token for a worker to claim, then marks its queue for the post-commit wake. */
