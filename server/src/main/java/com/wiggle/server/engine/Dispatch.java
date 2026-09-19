@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Handing work to workers: the long poll's pacing around {@link TokenLifecycle#claim}. Nothing
+ * Handing work to workers: the long poll's pacing around {@link Tokens#claim}. Nothing
  * here decides a token's fate -- it decides only WHEN to go look for one, trading claims against
  * discovery latency (see docs/in-memory-dispatch.md).
  */
@@ -42,12 +42,12 @@ final class Dispatch {
     private final long dispatchLingerMillis = ServerEnv.envLong("WIGGLE_DISPATCH_LINGER_MILLIS", 5);
 
     private final Transactions transactions;
-    private final TokenLifecycle tokens;
+    private final Tokens tokens;
     private final DispatchNotifier notifier;
     private final PollerRegistry pollers;
     private final long defaultLeaseMillis;
 
-    Dispatch(Transactions transactions, TokenLifecycle tokens, DispatchNotifier notifier,
+    Dispatch(Transactions transactions, Tokens tokens, DispatchNotifier notifier,
              PollerRegistry pollers, long defaultLeaseMillis) {
         this.transactions = transactions;
         this.tokens = tokens;

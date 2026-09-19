@@ -28,8 +28,8 @@ import java.util.Set;
  * the compiled graph, in the spirit of a Petri net: a fork mints one token per branch,
  * a join consumes them, and the instance is terminal when no token is active.
  *
- * <p>The two state machines themselves live next door: {@link InstanceLifecycle} owns the
- * instance row, {@link TokenLifecycle} owns the token rows, and nothing else writes either.
+ * <p>The two state machines themselves live next door: {@link Instances} owns the
+ * instance row, {@link Tokens} owns the token rows, and nothing else writes either.
  * What remains here is the work of joining them -- the drive pump that advances tokens until
  * they park, the worker-report entry points that apply a result under the instance lock, and
  * the leader sweeps -- plus the public surface the gRPC and cluster layers call.
@@ -56,7 +56,7 @@ public final class WorkflowEngine {
     /** Wake-on-produce for long-polling workers (Layer 1; see docs/in-memory-dispatch.md). */
     private final DispatchNotifier notifier = new DispatchNotifier();
     private final Transactions transactions;
-    private final InstanceLifecycle instances;
+    private final Instances instances;
     private final Dispatch dispatch;
     private final Schedules schedules;
     private final long defaultLeaseMillis;
@@ -73,14 +73,14 @@ public final class WorkflowEngine {
         this.queries                = new Queries(storage, pollers);
         this.defaultLeaseMillis     = defaultLeaseMillis;
         this.transactions           = new Transactions(storage, notifier);
-        var tokens                  = new TokenLifecycle(definitions, transactions::wake);
-        this.instances              = new InstanceLifecycle(definitions, tokens, idMinter, this::drive);
+        var tokens                  = new Tokens(definitions, transactions::wake);
+        this.instances              = new Instances(definitions, tokens, idMinter, this::drive);
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules              = new Schedules(transactions, instances);
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
     }
 
-    InstanceLifecycle instances() { return instances; }
+    Instances instances() { return instances; }
 
     public DefinitionRegistry definitions() { return definitions; }
 
@@ -199,7 +199,7 @@ public final class WorkflowEngine {
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
-        long until = transactions.read(tx -> TokenLifecycle.extendLease(tx, taskId, leaseOwner, extraMillis));
+        long until = transactions.read(tx -> Tokens.extendLease(tx, taskId, leaseOwner, extraMillis));
         LOG.log(System.Logger.Level.DEBUG, () ->
                 "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
         return until;
@@ -213,17 +213,17 @@ public final class WorkflowEngine {
      */
     public void complete(String taskId, String leaseOwner, Object result) {
         transactions.inTxVoid(tx -> {
-            TokenLifecycle.LockedTask locked = TokenLifecycle.lock(tx, taskId);
+            Tokens.LockedTask locked = Tokens.lock(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
-            TokenLifecycle.requireLease(t, leaseOwner);
+            Tokens.requireLease(t, leaseOwner);
             long now = System.currentTimeMillis();
             Long compSeq = Sagas.seqOf(t);
             if (compSeq != null) {
                 instances.compensatorCompleted(tx, inst, t, compSeq, now);
                 return;
             }
-            InstanceLifecycle.requireRunning(inst);
+            Instances.requireRunning(inst);
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
@@ -237,7 +237,7 @@ public final class WorkflowEngine {
                 return;
             }
             TokenState.settle(tx, t, now);
-            InstanceLifecycle.touch(tx, inst, now);
+            Instances.touch(tx, inst, now);
             Token cont = TokenState.create(inst, next, t.joinStack, Scopes.stripCombineScratch(node, t.payload), now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
@@ -260,14 +260,14 @@ public final class WorkflowEngine {
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
         if (steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
         return transactions.inTx(tx -> {
-            TokenLifecycle.LockedTask locked = TokenLifecycle.lock(tx, startTaskId);
+            Tokens.LockedTask locked = Tokens.lock(tx, startTaskId);
             Instance inst = locked.inst();
             long now = System.currentTimeMillis();
             long lease = now + defaultLeaseMillis;
             if (!InstanceState.of(inst.status).running()) {
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
-            TokenLifecycle.requireLease(locked.token(), leaseOwner);
+            Tokens.requireLease(locked.token(), leaseOwner);
             LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
             return applyRun(tx, def, inst, locked.token(), leaseOwner, steps, finalHandback, now, lease);
         });
@@ -291,7 +291,7 @@ public final class WorkflowEngine {
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
             TokenState.settle(tx, current, now);
-            InstanceLifecycle.touch(tx, inst, now);
+            Instances.touch(tx, inst, now);
             Token cont = TokenState.create(inst, next, current.joinStack,
                     Scopes.stripCombineScratch(node, current.payload), now);
             Node nextNode = def.node(next);
@@ -337,7 +337,7 @@ public final class WorkflowEngine {
     public void signal(String instanceId, String name, Object payload) {
         transactions.inTxVoid(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-            InstanceLifecycle.requireRunning(inst);
+            Instances.requireRunning(inst);
             Token t = tx.tokensOf(instanceId).stream()
                     .filter(x -> x.status == TokenStatus.AWAITING && x.kind == NodeKind.SIGNAL)
                     .filter(x -> name.equals(x.activity))
@@ -349,7 +349,7 @@ public final class WorkflowEngine {
             Node node = def.node(t.nodeId);
             TokenPayload contPayload = Scopes.mergeIntoScope(inst, t.payload, payload);
             TokenState.settle(tx, t, now);
-            InstanceLifecycle.touch(tx, inst, now);
+            Instances.touch(tx, inst, now);
             Token cont = TokenState.create(inst, node.next(), t.joinStack, contPayload, now);
             tx.insertToken(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
@@ -458,10 +458,10 @@ public final class WorkflowEngine {
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
         transactions.inTxVoid(tx -> {
-            TokenLifecycle.LockedTask locked = TokenLifecycle.lock(tx, taskId);
+            Tokens.LockedTask locked = Tokens.lock(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
-            TokenLifecycle.requireLease(t, leaseOwner);
+            Tokens.requireLease(t, leaseOwner);
             // COMPENSATING instances still have live work in flight — their compensators. A
             // compensator's failure report must reach the retry-or-fail transition
             // (-> COMPENSATION_FAILED), not be dropped by the terminal-status guard.
@@ -515,7 +515,7 @@ public final class WorkflowEngine {
 
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
         long cutoff = System.currentTimeMillis() - retentionMillis;
-        int purged = transactions.read(tx -> InstanceLifecycle.purgeTerminalBefore(tx, cutoff, max));
+        int purged = transactions.read(tx -> Instances.purgeTerminalBefore(tx, cutoff, max));
         if (purged > 0) {
             LOG.log(System.Logger.Level.DEBUG, () -> "purgeTerminalInstancesOlderThan: removed " + purged
                     + " instance(s) updated before " + cutoff);

@@ -24,13 +24,13 @@ import java.util.List;
  * its parent. Failing is not always final: {@link Sagas} takes over when there is something to
  * undo.
  *
- * <p>This is the upper of the two lifecycles -- it drives {@link TokenLifecycle}, never the
+ * <p>This is the upper of the two lifecycles -- it drives {@link Tokens}, never the
  * reverse. Transaction boundaries are not its concern; every method here runs inside a
  * transaction its caller owns.
  */
-final class InstanceLifecycle {
+final class Instances {
 
-    private static final System.Logger LOG = System.getLogger(InstanceLifecycle.class.getName());
+    private static final System.Logger LOG = System.getLogger(Instances.class.getName());
 
     /** Advancing tokens over the graph until each parks -- {@link WorkflowEngine}'s drive loop,
      *  as the instance lifecycle needs it to continue a flow it has just resumed. */
@@ -39,13 +39,13 @@ final class InstanceLifecycle {
     }
 
     private final DefinitionRegistry definitions;
-    private final TokenLifecycle tokens;
+    private final Tokens tokens;
     private final InstanceIds idMinter;
     private final Pump pump;
     private final Sagas sagas;
 
-    InstanceLifecycle(DefinitionRegistry definitions, TokenLifecycle tokens,
-                      InstanceIds idMinter, Pump pump) {
+    Instances(DefinitionRegistry definitions, Tokens tokens,
+              InstanceIds idMinter, Pump pump) {
         this.definitions = definitions;
         this.tokens = tokens;
         this.idMinter = idMinter;
@@ -86,7 +86,7 @@ final class InstanceLifecycle {
             return List.of();
         }
         long now = System.currentTimeMillis();
-        TokenLifecycle.cancelAll(tx, inst.id, now);
+        Tokens.cancelAll(tx, inst.id, now);
         InstanceState.cancel(tx, inst, reason, now);
         notifyParent(tx, inst, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
@@ -102,7 +102,7 @@ final class InstanceLifecycle {
     /** Fails the instance, unless there is something to undo -- then the saga reverse pass
      *  takes it over instead, and the outcome is not known until that pass lands. */
     void fail(Tx tx, Instance inst, String error, long now) {
-        TokenLifecycle.cancelAll(tx, inst.id, now);
+        Tokens.cancelAll(tx, inst.id, now);
         if (sagas.begin(tx, inst, error, now)) return;
         InstanceState.fail(tx, inst, error, now);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed: " + error);

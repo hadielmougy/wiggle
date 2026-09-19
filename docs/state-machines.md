@@ -19,7 +19,7 @@ the two enums rather than written by hand; only the event names and guards are p
 
 What a transition MEANS for the rest of the engine — cancelling an instance's
 tokens, resuming a waiting parent, handing over to the saga reverse pass — stays in
-`InstanceLifecycle` and `TokenLifecycle`, which need the graph and the drive loop
+`Instances` and `Tokens`, which need the graph and the drive loop
 to do it.
 
 The parent does not recompute itself from its children. No code scans tokens to decide
@@ -31,7 +31,7 @@ because a claim has to be atomic with the `SKIP LOCKED` select that finds the to
 
 ## Instance states
 
-Owned by `InstanceLifecycle`.
+Owned by `Instances`.
 
 | State | | Meaning |
 |---|---|---|
@@ -60,7 +60,7 @@ Owned by `InstanceLifecycle`.
 
 ## Token states
 
-Owned by `TokenLifecycle`.
+Owned by `Tokens`.
 
 | State | | Meaning |
 |---|---|---|
@@ -108,7 +108,7 @@ Owned by `TokenLifecycle`.
 ## What raises UNRECOVERABLE_FAILURE
 
 The instance FSM's failure event is not only a token running out of retries.
-Every path below lands in `InstanceLifecycle.fail`:
+Every path below lands in `Instances.fail`:
 
 - a token exhausted its retry policy (reported, or through an expired lease)
 - a loop guard exceeded its doWhile budget
@@ -121,11 +121,13 @@ Every path below lands in `InstanceLifecycle.fail`:
 ## How the two are coupled
 
 - **Downward.** A token is only claimable while its instance is `RUNNING` — or
-  `COMPENSATING`, for a compensator. `TokenLifecycle` reads the instance status as a
+  `COMPENSATING`, for a compensator. `Tokens` reads the instance status as a
   dispatch guard, but never assigns one.
 - **Upward.** A token transition that means something for the instance reports it
-  rather than applying it: `TokenLifecycle.retryOrFail` returns `Retried` or
+  rather than applying it: `TokenState.reportFailure` returns `Retried` or
   `Exhausted`, and the caller decides whether that is the comp-log or the instance.
+  It is overridden on `RUNNING` alone — only a leased token can fail, and the base
+  refuses rather than relying on a check the caller remembered to write.
 - **Retries are internal to the token.** Only exhaustion crosses the boundary.
 - **Cancellation is structural, not a priority rule.** `cancel` takes the instance
   write lock and settles every active token; every other transition re-reads under

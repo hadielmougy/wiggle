@@ -22,7 +22,7 @@ import java.util.Set;
  *
  * <p>What a transition MEANS for the rest of the engine -- cancelling the instance's tokens,
  * resuming a waiting parent, handing over to the saga reverse pass -- stays in
- * {@link InstanceLifecycle}, which needs the graph and the drive loop to do it.
+ * {@link Instances}, which needs the graph and the drive loop to do it.
  */
 enum InstanceState {
 

@@ -9,16 +9,16 @@ final class NodeBehaviourFactory {
 
     private final Map<NodeKind, NodeBehaviour> nodeBehaviourMap = new HashMap<>();
 
-    NodeBehaviourFactory(InstanceLifecycle instanceLifecycle, TokenLifecycle tokenLifecycle) {
-        nodeBehaviourMap.put(NodeKind.TASK,         new NodeBehaviour.TaskNodeBehaviour(tokenLifecycle));
-        nodeBehaviourMap.put(NodeKind.PREDICATE,    new NodeBehaviour.PredicateNodeBehaviour(tokenLifecycle));
+    NodeBehaviourFactory(Instances instances, Tokens tokens) {
+        nodeBehaviourMap.put(NodeKind.TASK,         new NodeBehaviour.TaskNodeBehaviour(tokens));
+        nodeBehaviourMap.put(NodeKind.PREDICATE,    new NodeBehaviour.PredicateNodeBehaviour(tokens));
         nodeBehaviourMap.put(NodeKind.SLEEP,        new NodeBehaviour.SleepNodeBehaviour());
         nodeBehaviourMap.put(NodeKind.FORK,         new NodeBehaviour.ForkNodeBehaviour());
-        nodeBehaviourMap.put(NodeKind.DYN_FORK ,    new NodeBehaviour.DynForkNodeBehaviour(instanceLifecycle));
+        nodeBehaviourMap.put(NodeKind.DYN_FORK ,    new NodeBehaviour.DynForkNodeBehaviour(instances));
         nodeBehaviourMap.put(NodeKind.JOIN,         new NodeBehaviour.JoinNodeBehaviour());
         nodeBehaviourMap.put(NodeKind.SIGNAL,       new NodeBehaviour.SignalNodeBehaviour());
-        nodeBehaviourMap.put(NodeKind.SUB_WORKFLOW, new NodeBehaviour.SubflowNodeBehaviour(instanceLifecycle));
-        nodeBehaviourMap.put(NodeKind.END,          new NodeBehaviour.EndNodeBehaviour(instanceLifecycle));
+        nodeBehaviourMap.put(NodeKind.SUB_WORKFLOW, new NodeBehaviour.SubflowNodeBehaviour(instances));
+        nodeBehaviourMap.put(NodeKind.END,          new NodeBehaviour.EndNodeBehaviour(instances));
         requireEveryKindRegistered();
     }
 
