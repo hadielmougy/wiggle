@@ -10,8 +10,14 @@ import java.util.Set;
  * The engine's transaction scope: a storage transaction plus the wake-on-produce signal that must
  * fire after it commits. A queue marked by {@link #wake} during the transaction is signalled to
  * the {@link DispatchNotifier} once -- and only once -- the work is durable, so a woken poller
- * never claims against uncommitted state. Nesting is safe: an inner scope hands its queues to the
- * outermost, which signals after its own commit.
+ * never claims against uncommitted state.
+ *
+ * <p>Scopes do not nest, and {@link #inTx} refuses to open one inside another. A storage
+ * transaction is a borrowed connection, so a nested call would be a second connection running an
+ * independent transaction: it would commit on its own regardless of the outer one, it could not
+ * see the outer's uncommitted writes, and -- since the engine takes instance row locks -- it would
+ * block on a lock the outer holds and deadlock against itself. Failing loudly at the first nested
+ * call is the only useful behaviour available.
  */
 final class Transactions {
 
@@ -47,32 +53,29 @@ final class Transactions {
 
     /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue it marked. */
     <T> T inTx(TxBody<T> body) {
-        Set<String> outer = readyQueues.get();
+        if (readyQueues.get() != null) {
+            throw new IllegalStateException("nested transaction scope: this thread is already inside "
+                    + "inTx. A nested call would run on a second connection and deadlock against the "
+                    + "instance lock the outer transaction holds. Pass the open Tx down instead.");
+        }
         Set<String> mine = new HashSet<>();
         readyQueues.set(mine);
         T result;
         try {
             result = storage.inTx(body::run);
         } finally {
-            readyQueues.set(outer);
+            readyQueues.remove();
         }
-        if (outer != null) outer.addAll(mine);   // let the outermost scope signal, post its commit
-        else notifier.signal(mine);
+        notifier.signal(mine);   // post-commit: an exception above never reaches here
         return result;
     }
 
     /** {@link #inTx} for a body with no return value. */
     void inTxVoid(TxWork body) {
-        Set<String> outer = readyQueues.get();
-        Set<String> mine = new HashSet<>();
-        readyQueues.set(mine);
-        try {
-            storage.inTxVoid(body::run);
-        } finally {
-            readyQueues.set(outer);
-        }
-        if (outer != null) outer.addAll(mine);
-        else notifier.signal(mine);
+        inTx(tx -> {
+            body.run(tx);
+            return null;
+        });
     }
 
     /** A transaction with no wake-on-produce scope: reads, and claims that park nothing READY. */
