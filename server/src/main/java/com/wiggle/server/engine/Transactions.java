@@ -28,12 +28,6 @@ final class Transactions {
         this.notifier = notifier;
     }
 
-    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op. */
-    void wake(String queue) {
-        Set<String> ready = readyQueues.get();
-        if (ready != null && queue != null) ready.add(queue);
-    }
-
     /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue it marked. */
     <T> T inTx(Function<Tx, T> body) {
         Set<String> outer = readyQueues.get();

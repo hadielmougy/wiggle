@@ -74,7 +74,7 @@ public final class WorkflowEngine {
         this.queries = new Queries(storage, pollers);
         this.defaultLeaseMillis = defaultLeaseMillis;
         this.transactions = new Transactions(storage, notifier);
-        this.tokens = new TokenLifecycle(definitions, transactions);
+        this.tokens = new TokenLifecycle(definitions);
         this.instances = new InstanceLifecycle(definitions, tokens, idMinter, this::drive);
         this.dispatch = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules = new Schedules(transactions, instances);
@@ -485,15 +485,14 @@ public final class WorkflowEngine {
      */
     private void settleFailure(Tx tx, Instance inst, Token t, Node node,
                                String lastError, String failReason, boolean retryable, long now) {
-        TokenState.Outcome outcome =
-                TokenState.of(t.status).reportFailure(tx, t, node, lastError, failReason, retryable, now);
-        if (!(outcome instanceof TokenState.Outcome.Exhausted done)) return;
-        if (done.compSeq() != null) {
-            instances.compensatorExhausted(tx, inst, node, done.compSeq(), done.reason(), now);
+        TokenState.Outcome outcome = TokenState.of(t.status).reportFailure(tx, t, node, lastError, failReason, retryable, now);
+        if (!(outcome instanceof TokenState.Outcome.Exhausted(String reason, Long compSeq))) return;
+        if (compSeq != null) {
+            instances.compensatorExhausted(tx, inst, node, compSeq, reason, now);
             return;
         }
         if (InstanceState.of(inst.status).running()) {
-            instances.fail(tx, inst, node.name() + ": " + done.reason(), now);
+            instances.fail(tx, inst, node.name() + ": " + reason, now);
         }
     }
 

@@ -32,25 +32,25 @@ final class TokenLifecycle {
     private static final System.Logger LOG = System.getLogger(TokenLifecycle.class.getName());
 
     private final DefinitionRegistry definitions;
-    private final Transactions transactions;
+    /** Queues that had a token parked READY during the in-flight transaction. */
+    private final ThreadLocal<Set<String>> readyQueues = new ThreadLocal<>();
 
-    TokenLifecycle(DefinitionRegistry definitions, Transactions transactions) {
+    TokenLifecycle(DefinitionRegistry definitions) {
         this.definitions = definitions;
-        this.transactions = transactions;
+    }
+
+    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op. */
+    void wake(String queue) {
+        Set<String> ready = readyQueues.get();
+        if (ready != null && queue != null) ready.add(queue);
     }
 
     /** Parks a token for a worker to claim, then marks its queue for the post-commit wake. */
     void parkReady(Tx tx, Instance inst, Token t, Node node, long now) {
         TokenStatus before = TokenState.parkReady(tx, t, node, now);
-        transactions.wake(node.queue());
+        wake(node.queue());
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                 + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
-    }
-
-    /** Marks a queue for the post-commit wake, for a token inserted READY rather than parked
-     *  there -- the saga reverse pass mints its undo tasks that way. */
-    void wake(String queue) {
-        transactions.wake(queue);
     }
 
     /** Cancels every token of an instance that is still active. */
