@@ -39,7 +39,7 @@ class RecordContextTest {
     }
 
     private static FlowSpec flowSpec() {
-        return FlowSpec.define("record-shipment", Shipment.class, ShipmentSteps.class, (f, s) -> {
+        return FlowSpec.define("record-shipment", 1, Shipment.class, ShipmentSteps.class, (f, s) -> {
             var checked = f.thenApply(s::validate).thenFilter(s::hasItems);
             return Wiggle.allOf(checked.thenApply(s::label), checked.thenApply(s::invoice))
                     .combineWithContext(s::merge)

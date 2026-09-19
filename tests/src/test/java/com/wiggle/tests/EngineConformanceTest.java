@@ -16,9 +16,9 @@ class EngineConformanceTest {
         Scenarios.recordCodecRoundTrip();
     }
 
-    @Test @DisplayName("definition versions are content-addressed")
-    void definitionVersionIsContentAddressed() {
-        Scenarios.definitionVersionIsContentAddressed();
+    @Test @DisplayName("a definition's graph is fingerprinted")
+    void definitionGraphIsFingerprinted() {
+        Scenarios.definitionGraphIsFingerprinted();
     }
 
     @Test @DisplayName("the DSL rejects graphs that could not run")

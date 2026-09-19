@@ -29,7 +29,7 @@ public class WorkerMain {
     public static void main(String[] args) throws InterruptedException {
         DirectConnection conn = WiggleConnection.direct("127.0.0.1:18100");
         var client = conn.client();
-        FlowSpec spec = FlowSpec.define("test-flow",RetryPolicy.fixed(5, Duration.ofSeconds(1)),Order.class, OrderSteps.class, (f, s) -> {
+        FlowSpec spec = FlowSpec.define("test-flow", 1,RetryPolicy.fixed(5, Duration.ofSeconds(1)),Order.class, OrderSteps.class, (f, s) -> {
             var checked = f.apply(s::validate).thenFilter(s::inStock);
             var payment  = checked.thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
                     .thenApply(s::capture);

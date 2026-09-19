@@ -28,7 +28,7 @@ public final class ApprovalSnippet {
 
     static FlowSpec define() {
         // docs:begin topology
-        FlowSpec approval = FlowSpec.define("expense-approval", Expense.class, ExpenseSteps.class, (f, s) -> {
+        FlowSpec approval = FlowSpec.define("expense-approval", 1, Expense.class, ExpenseSteps.class, (f, s) -> {
             var waited = f.thenApply(s::submit)
                     .thenAwait("manager-approval", Duration.ofHours(48),
                             esc -> esc.thenApply(s::autoEscalate));   // runs only if the deadline passes

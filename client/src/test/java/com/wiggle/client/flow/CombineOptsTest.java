@@ -36,13 +36,13 @@ class CombineOptsTest {
 
     @Test @DisplayName("an allOf combine takes a retry policy and a queue, in either order")
     void allOfCombineTakesBoth() {
-        WorkflowDefinition d = FlowSpec.define("co-fork", Map.class, S.class, (f, s) ->
+        WorkflowDefinition d = FlowSpec.define("co-fork", 1, Map.class, S.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b))
                         .combine(s::merge, P, "merge-q")).definition();
         assertEquals("merge-q", named(d, "merge").queue());
         assertEquals(7, named(d, "merge").retry().maxAttempts());
 
-        WorkflowDefinition flipped = FlowSpec.define("co-fork-flipped", Map.class, S.class, (f, s) ->
+        WorkflowDefinition flipped = FlowSpec.define("co-fork-flipped", 1, Map.class, S.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b))
                         .combine(s::merge, "merge-q", P)).definition();
         assertEquals("merge-q", named(flipped, "merge").queue());
@@ -51,13 +51,13 @@ class CombineOptsTest {
 
     @Test @DisplayName("a forEach combine takes a retry policy and a queue, in either order")
     void forEachCombineTakesBoth() {
-        WorkflowDefinition d = FlowSpec.define("co-each", Map.class, S.class, (f, s) ->
+        WorkflowDefinition d = FlowSpec.define("co-each", 1, Map.class, S.class, (f, s) ->
                 f.thenForEach("items", Map.class, i -> i.thenApply(s::each))
                         .combine(s::collect, P, "collect-q")).definition();
         assertEquals("collect-q", named(d, "collect").queue());
         assertEquals(7, named(d, "collect").retry().maxAttempts());
 
-        WorkflowDefinition flipped = FlowSpec.define("co-each-flipped", Map.class, S.class, (f, s) ->
+        WorkflowDefinition flipped = FlowSpec.define("co-each-flipped", 1, Map.class, S.class, (f, s) ->
                 f.thenForEach("items", Map.class, i -> i.thenApply(s::each))
                         .combine(s::collect, "collect-q", P)).definition();
         assertEquals("collect-q", named(flipped, "collect").queue());
@@ -68,12 +68,12 @@ class CombineOptsTest {
     void loopConditionTakesQueueOnly() {
         RetryPolicy wfDefault = RetryPolicy.fixed(3, Duration.ofMillis(5));
 
-        WorkflowDefinition d = FlowSpec.define("co-loop", wfDefault, Map.class, S.class, (f, s) ->
+        WorkflowDefinition d = FlowSpec.define("co-loop", 1, wfDefault, Map.class, S.class, (f, s) ->
                 f.repeatWhile(s::more, b -> b.thenApply(s::drain), "loop-q")).definition();
         assertEquals("loop-q", named(d, "more").queue());
         assertEquals(3, named(d, "more").retry().maxAttempts(), "the condition falls back to the default");
 
-        WorkflowDefinition capped = FlowSpec.define("co-loop-capped", wfDefault, Map.class, S.class, (f, s) ->
+        WorkflowDefinition capped = FlowSpec.define("co-loop-capped", 1, wfDefault, Map.class, S.class, (f, s) ->
                 f.repeatWhile(s::more, 4, b -> b.thenApply(s::drain), "loop-q")).definition();
         assertEquals("loop-q", named(capped, "more").queue());
         assertEquals(3, named(capped, "more").retry().maxAttempts());

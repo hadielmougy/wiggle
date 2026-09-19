@@ -53,7 +53,7 @@ class ChooseTest {
 
     /** choose with a default; the "gold" and "premium" guards deliberately overlap to prove first-match. */
     private FlowSpec withDefault() {
-        return FlowSpec.define("choose-default", Map.class, DefaultSteps.class, (f, s) -> Wiggle.oneOf(
+        return FlowSpec.define("choose-default", 1, Map.class, DefaultSteps.class, (f, s) -> Wiggle.oneOf(
                         f.when(s::isGold).thenApply(s::gold),
                         f.when(s::isPremium).thenApply(s::premium),   // also true for "gold": must not win
                         f.otherwise().thenApply(s::plain))
@@ -72,7 +72,7 @@ class ChooseTest {
 
     /** choose without a default: an unmatched context skips straight to the continuation. */
     private FlowSpec withoutDefault() {
-        return FlowSpec.define("choose-skip", Map.class, SkipSteps.class, (f, s) ->
+        return FlowSpec.define("choose-skip", 1, Map.class, SkipSteps.class, (f, s) ->
                 Wiggle.oneOf(f.when(s::isA).thenApply(s::a)).thenApply(s::finalize));
     }
 

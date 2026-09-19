@@ -4,7 +4,7 @@ Two things version independently, and confusing them is the usual source of trou
 
 | | versioned by | changes when | who notices |
 |---|---|---|---|
-| **the topology** | the engine, as a content hash | you add, remove or rewire a node | the server: a new version appears beside the old one |
+| **the topology** | you, at `define(...)` | you add, remove or rewire a node | the server: it refuses a changed graph under a published version |
 | **the context** | nothing — it is your record | you add or drop a field | only the handler that decodes it |
 
 The engine versions the *graph*. It has no opinion about the shape of the data flowing through it,
@@ -13,41 +13,58 @@ separate job with a separate seam. Both are below.
 
 ---
 
-## 1. The workflow version is a content hash
+## 1. You declare the version; the engine holds it immutable
 
-There is no version counter to bump and no annotation to remember. The version **is** the hash of
-the compiled topology.
+The version is the second argument to `define(...)` — a positive integer you choose, so it stays
+readable in logs, in the console, and in `registerHandler(handlers, 7)`. What the engine supplies is
+the guarantee that goes with it: it fingerprints the compiled topology and **refuses to redefine a
+version whose graph has changed**.
 
 <!-- snippet: versioning/contract-v1,topology-v1 -->
 ```java
-interface OrderSteps {
+public interface OrderSteps {
     Order validate(Order o);
     Order charge(Order o);
 }
 
-FlowSpec v1 = FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+FlowSpec v1 = FlowSpec.define("orders", 1, Order.class, OrderSteps.class, (f, s) -> f
         .thenApply(s::validate)
         .thenApply(s::charge));
 ```
 
-Add a step and the hash changes, so the version does:
+Add a step and you publish it as a new version:
 
 <!-- snippet: versioning/topology-v2 -->
 ```java
-FlowSpec v2 = FlowSpec.define("orders", Order.class, OrderStepsV2.class, (f, s) -> f
+FlowSpec v2 = FlowSpec.define("orders", 2, Order.class, OrderStepsV2.class, (f, s) -> f
         .thenApply(s::validate)
-        .thenApply(s::fraudCheck)      // a new step -- so a new content hash, so a new version
+        .thenApply(s::fraudCheck)      // a new step -- so a new graph, so a new version number
         .thenApply(s::charge));
 ```
 
-Three consequences, all of which fall out of that one fact:
+Three consequences:
 
 - **Re-registering an identical graph is a no-op.** Deploy the author as often as you like; a
-  restart that registers the same flow changes nothing.
-- **A changed graph is a *new* version, beside the old one.** It redirects nothing and rewrites
-  nothing. Both remain registered, and both remain startable.
-- **You cannot accidentally edit a version.** There is no operation that mutates a registered
-  topology, because a different topology is a different hash.
+  restart that registers the same flow changes nothing, on any number of replicas.
+- **A changed graph under a *new* version sits beside the old one.** It redirects nothing and
+  rewrites nothing. Both remain registered, and both remain startable.
+- **A changed graph under an *existing* version is refused**, with `FAILED_PRECONDITION`:
+
+  ```
+  workflow 'orders:1' is already registered with a different graph;
+  publish it under a new version
+  ```
+
+  Forgetting to bump is therefore a loud error at deploy time, not a graph silently swapped
+  underneath the instances running on it.
+
+> **Local edit-run loops.** Bumping the version on every keystroke is noise while you are still
+> shaping a flow, so `client.register(spec, /* force */ true)` asks the server to replace the graph
+> in place. The server refuses unless it was started with `WIGGLE_ALLOW_GRAPH_REPLACE=true`, so a
+> `force` left in application code cannot rewrite a published graph in production.
+
+**"Latest" means the highest version**, not the most recently registered — so re-publishing an older
+version does not make it latest, and two replicas registering in different orders agree.
 
 ## 2. In-flight instances keep the version they started on
 
@@ -85,14 +102,12 @@ and `validate` in v2 are the same method.
 registered version and validates its handlers against that. A method whose step exists only in some
 *other* version is simply not bound — and a task for it fails with `no handler registered for
 activity 'workflow#step'`. So "serves every version" means every version whose steps appear in the
-graph it bound, which is why adding a step is safe (the new graph is a superset) and why the order
-you register in matters.
+graph it bound, which is why adding a step is safe (the new graph is a superset).
 
-One sharp edge worth knowing: *latest* is `ORDER BY registered_at DESC, version DESC`, and the
-version is a content hash. Register two versions inside the same millisecond and the tiebreak is the
-hash — an arbitrary number — so the "latest" graph can be the older topology. Registering one
-version per deploy makes this impossible; if a single process must register several, do not rely on
-which one a worker then considers latest. Scope the workers instead.
+*Latest* is the highest declared version, so which graph an unscoped worker binds is deterministic
+and independent of registration order. It is still a snapshot taken at `start()`: a worker that
+started before a newer version was published has bound the older graph, and steps only the newer one
+has are unbound on it until it restarts. Scope the workers when that matters.
 
 Narrow it when they should not be:
 
@@ -146,7 +161,7 @@ static class UpcastingHandlers implements OrderSteps {
 Because it is ordinary code, an upcast can do whatever it needs: default a field, rename one, split
 one into two, or branch on a marker you stamped into the data yourself. If you want to know *which*
 shape you are looking at, put a version field in the record and read it — the engine will not do it
-for you, and a field you control is more honest than one inferred from the graph's hash.
+for you, and a field you control is more honest than one inferred from the graph's version.
 
 **Deploy the upcast before the field.** The worker that decodes an old context must already know how
 to. That ordering is the whole discipline: readers first, then writers.
@@ -162,5 +177,6 @@ to. That ordering is the whole discipline: readers first, then writers.
 - **Adding a context field** → deploy an `@Decode` upcast first, then start writing the field.
 - **Removing a context field** → keep decoding it until no in-flight instance predates its removal.
 
-Everything on this page is asserted by `VersioningTest` in the project's own suite — the content
-hash, the no-op re-registration, the in-flight pin, and both worker scopings.
+Everything on this page is asserted by `VersioningTest` in the project's own suite — the
+fingerprint, the no-op re-registration, the refusal to redefine a published version, the gate on
+`force`, the in-flight pin, and both worker scopings.

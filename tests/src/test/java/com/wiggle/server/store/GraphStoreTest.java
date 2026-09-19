@@ -32,6 +32,10 @@ class GraphStoreTest {
      * versions of the same name hash differently.
      */
     private static WorkflowDefinition def(String name, boolean withTail) {
+        return def(name, 1, withTail);
+    }
+
+    private static WorkflowDefinition def(String name, int version, boolean withTail) {
         Map<String, Node> nodes = new LinkedHashMap<>();
         nodes.put("n1", Node.task("n1", "start", name + "#start", "q", null).withNext("n2"));
         nodes.put("n2", Node.predicate("n2", "gate", name + "#gate", "q", null).withNext("n3").withAltNext("end"));
@@ -40,14 +44,14 @@ class GraphStoreTest {
             nodes.put("n4", Node.task("n4", "tail", name + "#tail", "q", null).withNext("end"));
         }
         nodes.put("end", Node.end("end", true, null));
-        int version = WorkflowDefinition.contentVersion(name, "n1", nodes.values(), ExecutionMode.DEFAULT, Set.of());
         return new WorkflowDefinition(name, version, "n1", nodes, Set.of("q"));
     }
 
     /** Registers a definition the way the engine does: the blob plus the normalised graph rows. */
     private static void register(Storage storage, WorkflowDefinition d) {
         storage.inTxVoid(tx -> {
-            tx.putDefinition(d.name(), d.version(), Json.write(d.toJson()));
+            tx.putDefinition(d.name(), d.version(), Json.write(d.toJson()),
+                    d.fingerprint(), WorkflowDefinition.FINGERPRINT_ALGO);
             tx.putGraph(d);
         });
     }
@@ -74,20 +78,21 @@ class GraphStoreTest {
     }
 
     @Test
-    @DisplayName("latestVersion is the most recently registered version, and empty for an unknown name")
+    @DisplayName("latestVersion is the highest registered version, and empty for an unknown name")
     void latestVersion() {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
-            WorkflowDefinition v1 = def("orders", false);
-            WorkflowDefinition v2 = def("orders", true);   // different topology -> different hash
-            assertFalse(v1.version() == v2.version(), "the two versions must differ");
+            WorkflowDefinition v1 = def("orders", 1, false);
+            WorkflowDefinition v2 = def("orders", 2, true);
 
             register(storage, v1);
-            read(storage, g -> assertEquals(v1.version(), g.latestVersion("orders").orElseThrow()));
+            read(storage, g -> assertEquals(1, g.latestVersion("orders").orElseThrow()));
 
+            // Registered out of order: the newest is still the highest, not the last written.
             register(storage, v2);
-            read(storage, g -> assertEquals(v2.version(), g.latestVersion("orders").orElseThrow(),
-                    "latest tracks the most recently registered"));
+            register(storage, v1);
+            read(storage, g -> assertEquals(2, g.latestVersion("orders").orElseThrow(),
+                    "latest tracks the highest version"));
 
             read(storage, g -> assertTrue(g.latestVersion("unknown").isEmpty()));
         }
@@ -100,7 +105,7 @@ class GraphStoreTest {
             storage.migrate();
             register(storage, def("beta", false));
             register(storage, def("alpha", false));
-            register(storage, def("alpha", true));   // second version of alpha -> still one name
+            register(storage, def("alpha", 2, true));   // second version of alpha -> still one name
             read(storage, g -> assertEquals(List.of("alpha", "beta"), g.definitionNames()));
         }
     }
@@ -150,7 +155,7 @@ class GraphStoreTest {
             storage.migrate();
             WorkflowDefinition d = def("orders", false);
             register(storage, d);
-            register(storage, d);   // content hash is identical -> must not throw or corrupt
+            register(storage, d);   // the same graph again -> must not throw or corrupt
             read(storage, g -> {
                 assertEquals("n1", g.graphStartNode("orders", d.version()).orElseThrow());
                 assertEquals(List.of("orders"), g.definitionNames());

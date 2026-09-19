@@ -116,7 +116,9 @@ class NestingPayloadBench {
             long tokens = 0, peak = 0, stored = 0;
             for (String id : ids) {
                 for (Rows.Token t : engine.tokens(id)) {
-                    int len = t.payloadJson == null ? 0 : t.payloadJson.length();
+                    // the stored form is what costs: measure the encoded payload, not the object
+                    String encoded = com.wiggle.server.store.PayloadCodec.encode(t.payload);
+                    int len = encoded == null ? 0 : encoded.length();
                     tokens++;
                     stored += len;
                     peak = Math.max(peak, len);
@@ -208,7 +210,7 @@ class NestingPayloadBench {
     // ---------- topologies ----------
 
     private static FlowSpec build(String topology, int depth) {
-        GraphBuilder b = Workflow.define(topology + "-d" + depth + "-" + com.wiggle.core.Ids.next("wf"));
+        GraphBuilder b = Workflow.define(topology + "-d" + depth + "-" + com.wiggle.core.Ids.next("wf"), 1);
         return (topology.equals("spine") ? spine(b, depth) : mix(b, depth)).build();
     }
 

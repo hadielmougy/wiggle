@@ -60,7 +60,7 @@ class NestedScopesTest {
     }
 
     private static FlowSpec forkInForEach(ExecutionMode mode) {
-        return FlowSpec.define("fork-in-foreach", Map.class, ForkInForEachSteps.class, (f, s) -> f
+        return FlowSpec.define("fork-in-foreach", 1, Map.class, ForkInForEachSteps.class, (f, s) -> f
                 .execution(mode)
                 .thenForEach("per-item", "items", String.class, item ->
                         Wiggle.allOf(item.thenApply(s::up), item.thenApply(s::down))
@@ -107,7 +107,7 @@ class NestedScopesTest {
     }
 
     private static FlowSpec forEachInFork() {
-        return FlowSpec.define("foreach-in-fork", Map.class, ForEachInForkSteps.class, (f, s) -> {
+        return FlowSpec.define("foreach-in-fork", 1, Map.class, ForEachInForkSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             var wide = seeded.thenForEach("inner", "items", String.class, i -> i.thenApply(s::bump))
                     .combine(s::innerFold);
@@ -162,7 +162,7 @@ class NestedScopesTest {
     }
 
     private static FlowSpec forkInFork() {
-        return FlowSpec.define("fork-in-fork", Map.class, ForkInForkSteps.class, (f, s) -> {
+        return FlowSpec.define("fork-in-fork", 1, Map.class, ForkInForkSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             var armA = Wiggle.allOf(seeded.thenApply(s::a1), seeded.thenApply(s::a2)).combine(s::innerMerge);
             var armB = seeded.thenApply(s::b1);
@@ -204,7 +204,7 @@ class NestedScopesTest {
     }
 
     private static FlowSpec forEachInForEach() {
-        return FlowSpec.define("foreach-in-foreach", Map.class, ForEachInForEachSteps.class, (f, s) -> f
+        return FlowSpec.define("foreach-in-foreach", 1, Map.class, ForEachInForEachSteps.class, (f, s) -> f
                 .thenForEach("outer", "groups", Map.class, g ->
                         g.thenForEach("innerFe", "nums", Long.class, n -> n.thenApply(s::twice))
                                 .combine(s::innerSum))
@@ -247,7 +247,7 @@ class NestedScopesTest {
     }
 
     private static FlowSpec loopInForEach() {
-        return FlowSpec.define("loop-in-foreach", Map.class, LoopInForEachSteps.class, (f, s) -> f
+        return FlowSpec.define("loop-in-foreach", 1, Map.class, LoopInForEachSteps.class, (f, s) -> f
                 .thenForEach("seeds", Map.class, item ->
                         item.repeatWhile(s::more, b -> b.thenApply(s::inc)))
                 .combine(s::counts));

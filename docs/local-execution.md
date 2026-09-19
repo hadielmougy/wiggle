@@ -9,7 +9,7 @@ Status: **Phase 0–2 implemented + `.checkpoint()` + graceful-shutdown drain** 
 > (set `WIGGLE_EXECUTION_MODE`, `WIGGLE_JDBC_URL`, `WIGGLE_BENCH_*`).
 
 > **Implemented:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition (in the
-> content hash) with the `.execution(...)` DSL flag, the `AdvanceRun` wire RPC + `execution_mode`
+> fingerprint) with the `.execution(...)` DSL flag, the `AdvanceRun` wire RPC + `execution_mode`
 > on `TaskActivation`, `WorkflowEngine.advanceRun` (which already applies multi-step batches
 > atomically), and the worker's unified local loop: `LOCAL_SYNC` flushes every step, `LOCAL_ASYNC`
 > buffers up to `WorkerOptions.localBatchSize` (default 64) and flushes the run in one call. A
@@ -91,14 +91,14 @@ run now and I have lease budget."*
 
 <!-- snippet: local-execution/execution-mode -->
 ```java
-FlowSpec spec = FlowSpec.define("name", Ctx.class, Steps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("name", 1, Ctx.class, Steps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
         .thenApply(s::first)
         ...);
 ```
 
 - New field on `WorkflowDefinition`: `ExecutionMode executionMode` (default `DEFAULT`).
-- Serialized in `WorkflowDefinition.toJson()` **and included in `contentVersion()`**, so the mode
+- Serialized in `WorkflowDefinition.toJson()` **and included in the definition fingerprint**, so the mode
   is part of the immutable version hash — an in-flight instance can never switch modes under you,
   and changing the mode mints a new version like any other topology change.
 - `DEFAULT` is a stable, hashable sentinel meaning "defer to the server's configured default".
@@ -275,7 +275,7 @@ marker on the parked token; keep the default `SERVER` for anyone who needs step-
 
 ## 13. Versioning & backward compatibility
 
-- The mode is in `contentVersion()`, so adding/changing it mints a new version; running instances
+- The mode is part of the fingerprint, so changing it needs a new version; running instances
   keep their pinned mode.
 - **Old workers** (pre-feature) ignore `execution_mode` and use `CompleteTask` per step — they
   simply run any workflow in effective `SERVER` mode. A new worker that lacks the pinned version's
@@ -293,7 +293,7 @@ marker on the parked token; keep the default `SERVER` for anyone who needs step-
 3. **Phase 2 — `LOCAL_ASYNC`.** Add batching, cancellation-on-flush, chain-lease heartbeating, and
    the idempotency documentation. Ship behind the per-definition flag.
 4. **Phase 3 — knobs.** ~~per-step `checkpoint()`~~ (done: forces an async flush after a step,
-   committing it before the next; part of the content hash), plus still-to-do `maxSteps` /
+   committing it before the next; part of the fingerprint), plus still-to-do `maxSteps` /
    async flush cadence.
 
 ## 15. Testing plan

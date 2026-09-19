@@ -47,7 +47,7 @@ public final class OnboardingSnippet {
     static FlowSpec registerLine() {
         // docs:begin register-line
         // the author registers this without implementing a single step
-        FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class,
+        FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class,
                 // docs:elide         (f, s) -> { … });
                 // docs:skip
                 (f, s) -> f.thenApply(s::validate));
@@ -58,7 +58,7 @@ public final class OnboardingSnippet {
 
     static FlowSpec define() {
         // docs:begin topology
-        FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+        FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
             var payment  = validated.thenApply(s::authorise, RetryPolicy.exponential(5, ofMillis(100)))

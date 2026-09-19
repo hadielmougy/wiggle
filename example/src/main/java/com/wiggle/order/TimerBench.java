@@ -51,7 +51,7 @@ public final class TimerBench {
         boolean adaptive = Boolean.parseBoolean(env("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"));
 
         CountDownLatch done = new CountDownLatch(count);
-        FlowSpec bp = FlowSpec.define("bench-timer", Map.class, TimerSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("bench-timer", 1, Map.class, TimerSteps.class, (f, s) -> f
                 .thenApply(s::enter)
                 .thenSleep("hold", Duration.ofMillis(sleepMillis))
                 .thenAccept(s::exit));

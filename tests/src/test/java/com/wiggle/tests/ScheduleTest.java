@@ -30,7 +30,7 @@ class ScheduleTest {
     }
 
     private static FlowSpec probe() {
-        return FlowSpec.define("sched-probe", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("sched-probe", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")

@@ -21,7 +21,7 @@ public final class MicroservicesSnippet {
 
     static FlowSpec define() {
         // docs:begin topology
-        FlowSpec orders = FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+        FlowSpec orders = FlowSpec.define("orders", 1, Order.class, OrderSteps.class, (f, s) -> f
                 .thenApply(s::validate, "orders")                  // queue: orders service
                 .thenApply(s::charge, "payments")                  // queue: payments service
                 .thenApply(s::renderReceipt, "gpu")                // queue: the GPU pool

@@ -56,7 +56,7 @@ class LabelledRoutingTest {
     }
 
     private static FlowSpec workflow() {
-        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        return FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @Test @DisplayName("an instance resolves to the cell named in its id, not the one the ring owns")

@@ -52,7 +52,7 @@ public final class SagaLoadBench {
 
     /** reserve(compensable) -> enrich (replaces the context) -> boom (permanent failure). */
     static FlowSpec flowSpec() {
-        return FlowSpec.define("saga-load", Map.class, SagaSteps.class, (f, s) -> f
+        return FlowSpec.define("saga-load", 1, Map.class, SagaSteps.class, (f, s) -> f
                 .thenApplyCompensable(s::reserve)
                 .thenApplyCompensable(s::enrich)
                 .thenApply(s::boom));

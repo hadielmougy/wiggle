@@ -45,7 +45,7 @@ class RegisterHandlersTest {
 
     /** The authored topology: "authorise" sits on the "payments" queue, the rest on the default. */
     private FlowSpec authoredGraph() {
-        return FlowSpec.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("order-fulfilment", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)
                 .thenApply(s::authorise, "payments")

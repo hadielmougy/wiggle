@@ -130,7 +130,12 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         run(resp, () -> {
             com.wiggle.core.WorkflowDefinition def =
                     com.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(req.getDefinition()));
-            engine.register(def);
+            if (req.getForce() && !ServerConfig.allowGraphReplace()) {
+                throw EngineException.conflict("replacing the graph of '" + def.key()
+                        + "' was requested but this server does not allow it; set "
+                        + "WIGGLE_ALLOW_GRAPH_REPLACE=true (development only) or publish a new version");
+            }
+            engine.register(def, req.getForce());
             if (announced.add(def.key())) {
                 LOG.log(System.Logger.Level.INFO, () -> "registered workflow " + def.key()
                         + " (" + def.nodes().size() + " nodes, mode=" + def.executionMode() + ")");

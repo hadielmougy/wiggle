@@ -48,7 +48,7 @@ class TlsTest {
     private static Path serverKs, clientKs, trust;
 
     private static final FlowSpec BP =
-            FlowSpec.define("tls-wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+            FlowSpec.define("tls-wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
     @com.wiggle.client.worker.ForFlow("tls-wf")
     static final class WorkHandlers {

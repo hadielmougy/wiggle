@@ -18,6 +18,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -43,14 +44,85 @@ class VersioningTest {
         return Map.of("id", "A-1", "status", "NEW", "currency", "USD");
     }
 
-    @Test @DisplayName("the version is a hash of the topology: same graph, same version; changed graph, new one")
-    void versionIsTheContentHash() {
+    @Test @DisplayName("the version is declared; the fingerprint is what tracks the topology")
+    void versionIsDeclaredAndFingerprinted() {
         FlowSpec a = VersioningSnippet.v1();
         FlowSpec b = VersioningSnippet.v1();
-        assertEquals(a.version(), b.version(), "the same topology defined twice is the same version");
+        assertEquals(a.version(), b.version(), "the same definition declares the same version");
+        assertEquals(a.definition().fingerprint(), b.definition().fingerprint(),
+                "the same topology defined twice fingerprints the same");
 
-        assertNotEquals(a.version(), VersioningSnippet.v2().version(),
-                "adding a step changes the graph, so it changes the version");
+        FlowSpec v2 = VersioningSnippet.v2();
+        assertNotEquals(a.version(), v2.version(), "the author published the new graph as a new version");
+        assertNotEquals(a.definition().fingerprint(), v2.definition().fingerprint(),
+                "adding a step changes the graph, so it changes the fingerprint");
+    }
+
+    @Test @DisplayName("republishing a changed graph under a live version is refused, not silently applied")
+    void changedGraphUnderALiveVersionIsRefused() throws Exception {
+        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+
+            client.register(VersioningSnippet.v1());
+
+            // v2's topology published under v1's number: the graph instances are running would be
+            // swapped underneath them, so the server refuses it.
+            FlowSpec clash = FlowSpec.define("orders", 1, VersioningSnippet.Order.class,
+                    VersioningSnippet.OrderStepsV2.class, (f, s) -> f
+                            .thenApply(s::validate)
+                            .thenApply(s::fraudCheck)
+                            .thenApply(s::charge));
+            WiggleClient.WiggleApiException e =
+                    assertThrows(WiggleClient.WiggleApiException.class, () -> client.register(clash));
+            assertTrue(e.getMessage().contains("already registered with a different graph"), e.getMessage());
+
+            // the published graph is untouched: v1 still has two steps
+            assertEquals(VersioningSnippet.v1().definition().nodes().size(),
+                    client.getWorkflow("orders", 1).nodes().size());
+        }
+    }
+
+    @Test @DisplayName("with WIGGLE_ALLOW_GRAPH_REPLACE set, force replaces the published graph")
+    void forceReplacesWhenPermitted() throws Exception {
+        System.setProperty("wiggle.allowGraphReplace", "true");
+        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+
+            client.register(VersioningSnippet.v1());
+            assertEquals(VersioningSnippet.v1().definition().nodes().size(),
+                    client.getWorkflow("orders", 1).nodes().size());
+
+            FlowSpec replacement = FlowSpec.define("orders", 1, VersioningSnippet.Order.class,
+                    VersioningSnippet.OrderStepsV2.class, (f, s) -> f
+                            .thenApply(s::validate)
+                            .thenApply(s::fraudCheck)
+                            .thenApply(s::charge));
+            client.register(replacement, true);
+
+            assertEquals(replacement.definition().nodes().size(),
+                    client.getWorkflow("orders", 1).nodes().size(),
+                    "the graph rows were replaced, not appended to");
+        } finally {
+            System.clearProperty("wiggle.allowGraphReplace");
+        }
+    }
+
+    @Test @DisplayName("force is refused unless the server is configured to allow a replacement")
+    void forceNeedsServerConsent() throws Exception {
+        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+
+            client.register(VersioningSnippet.v1());
+            FlowSpec clash = FlowSpec.define("orders", 1, VersioningSnippet.Order.class,
+                    VersioningSnippet.OrderStepsV2.class, (f, s) -> f
+                            .thenApply(s::validate)
+                            .thenApply(s::fraudCheck)
+                            .thenApply(s::charge));
+
+            WiggleClient.WiggleApiException e = assertThrows(WiggleClient.WiggleApiException.class,
+                    () -> client.register(clash, true));
+            assertTrue(e.getMessage().contains("does not allow it"), e.getMessage());
+        }
     }
 
     @Test @DisplayName("registering an unchanged graph is a no-op; a changed one adds a version")
@@ -123,25 +195,25 @@ class VersioningTest {
 
     @Test @DisplayName("unscoped binding is against ONE graph: a step only the newer version has "
             + "is unbound if the worker bound the older one")
-    void unscopedBindingIsAgainstTheLatestGraphOnly() throws Exception {
+    void unscopedBindingIsAgainstOneGraphOnly() throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
-            // register them the other way round, so the LATEST graph is the one WITHOUT fraudCheck
-            FlowSpec v2 = VersioningSnippet.v2();
             FlowSpec v1 = VersioningSnippet.v1();
-            client.register(v2);
-            Thread.sleep(5);
+            FlowSpec v2 = VersioningSnippet.v2();
             client.register(v1);
 
-            String onV2 = client.start("orders", order(), v2.version(), "c2");
-
+            // The worker binds unscoped, so it validates against the only graph published so far --
+            // v1, which has no fraudCheck step -- while still claiming every version's work.
             try (Worker w = new Worker(client, "all-" + Ids.next("x"))
                     .registerHandler(new VersioningSnippet.V2Handlers()).start()) {
+
+                client.register(v2);
+                String onV2 = client.start("orders", order(), v2.version(), "c2");
+
                 InstanceView v = client.awaitCompletion(onV2, Duration.ofSeconds(30));
                 assertEquals("FAILED", v.status(),
-                        "the worker bound v1's graph, which has no fraudCheck step, so v2's "
-                        + "fraudCheck task had no handler: " + v);
+                        "the worker bound v1's graph, so v2's fraudCheck task had no handler: " + v);
                 assertTrue(String.valueOf(v.error()).contains("fraudCheck"), v.error());
             }
         }

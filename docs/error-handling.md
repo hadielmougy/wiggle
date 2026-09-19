@@ -19,7 +19,7 @@ failed, the engine catches it, and the step's retry policy decides what happens 
 
 <!-- snippet: errors/policies -->
 ```java
-return FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+return FlowSpec.define("orders", 1, Order.class, OrderSteps.class, (f, s) -> f
         // no policy: inherits the workflow default, which is retry forever
         .thenApply(s::validate)
         // a gate is not an error -- false ends the instance successfully

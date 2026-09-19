@@ -19,7 +19,7 @@ run the step logic. See `README.md` for the elevator pitch and `docs/local-execu
 execution-mode deep dive.
 
 Core properties: durable (survives restarts), exactly-once dispatch and at-least-once execution,
-pull-based workers (no inbound connectivity), content-addressed immutable definitions, and multi-node
+pull-based workers (no inbound connectivity), immutable published definitions, and multi-node
 clustering over a shared database.
 
 ---
@@ -184,7 +184,7 @@ interface OrderSteps {
         ...
 }
 
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
     var payment  = validated.thenApply(s::authorise, RetryPolicy.exponential(5, ofMillis(100)))
@@ -232,7 +232,7 @@ interface OrderSteps {
 }
 
 // the author registers this without implementing a single step
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class,
+FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class,
                 (f, s) -> { … });
 ```
 
@@ -416,7 +416,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 ### 6.4 Execution modes
 
 Set per workflow: `f.execution(ExecutionMode.LOCAL_SYNC)` in the `define` body. The mode
-is part of the definition's **content hash**, so an in-flight instance keeps the mode it started on.
+is part of the definition's **fingerprint**, so an in-flight instance keeps the mode it started on.
 
 | Mode | Behaviour | Crash blast radius | Use for |
 |---|---|---|---|

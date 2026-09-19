@@ -89,7 +89,7 @@ class SagaCompensationTest {
     @DisplayName("a failed instance compensates its completed steps in reverse order -> COMPENSATED")
     void reverseOrderSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = FlowSpec.define("saga", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("saga", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApplyCompensable(s::reserve)
                 .thenApplyCompensable(s::capture)
                 .thenApply(s::boom));
@@ -129,7 +129,7 @@ class SagaCompensationTest {
     @DisplayName("locally-chained (LOCAL_SYNC) compensable steps capture snapshots and compensate too")
     void localSyncSaga() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = FlowSpec.define("saga-local", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("saga-local", 1, Map.class, OneStep.class, (f, s) -> f
                 .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
                 .thenApplyCompensable(s::reserve)
                 .thenApplyCompensable(s::capture)
@@ -154,7 +154,7 @@ class SagaCompensationTest {
     @Test @Timeout(30)
     @DisplayName("no declared compensation -> plain FAILED, exactly as before")
     void undeclaredStillFails() throws Exception {
-        FlowSpec bp = FlowSpec.define("plain-fail", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("plain-fail", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::work)
                 .thenApply(s::boom));
         @ForFlow("plain-fail")
@@ -172,7 +172,7 @@ class SagaCompensationTest {
     @DisplayName("a compensator that fails permanently lands COMPENSATION_FAILED, loudly")
     void compensatorFailure() throws Exception {
         Recording rec = new Recording();
-        FlowSpec bp = FlowSpec.define("bad-undo", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("bad-undo", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApplyCompensable(s::reserve)
                 .thenApply(s::boom));
         @ForFlow("bad-undo")

@@ -42,9 +42,44 @@ class JdbcGraphTest {
         nodes.put("djn", Node.join("djn", "dyn-merge", 0).withNext("ok"));
         nodes.put("ok", Node.end("ok", true, "done"));
         nodes.put("bad", Node.end("bad", false, "nope"));
-        int version = WorkflowDefinition.contentVersion("sample", "t", nodes.values(),
-                com.wiggle.core.ExecutionMode.DEFAULT, java.util.Set.of());
-        return new WorkflowDefinition("sample", version, "t", nodes, java.util.Set.of("q"));
+        return new WorkflowDefinition("sample", 1, "t", nodes, java.util.Set.of("q"));
+    }
+
+    @Test @DisplayName("a combine row written in the legacy items_key encoding still reads back typed")
+    void legacyCombineRowStillDecodes() throws Exception {
+        String url = "jdbc:h2:mem:legacy-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (Storage storage = new JdbcStorage(url, "sa", "", 4, new H2Dialect())) {
+            storage.migrate();
+            // Exactly what a pre-combine-columns database holds: the shape as JSON in items_key,
+            // and nothing in the two columns that did not exist yet.
+            insertLegacyNode(url, "trip", 1, "merge", "[\"air\",\"hotel\"]");
+            insertLegacyNode(url, "trip", 1, "collect", "\"__forEach__items\"");
+
+            storage.inTxVoid(tx -> {
+                Node fork = tx.graphNode("trip", 1, "merge").orElseThrow();
+                assertEquals(List.of("air", "hotel"), fork.armNames(), "arm names decoded from items_key");
+                assertNull(fork.collectKey());
+                assertTrue(fork.isCombine());
+
+                Node each = tx.graphNode("trip", 1, "collect").orElseThrow();
+                assertEquals("__forEach__items", each.collectKey(), "collect key decoded from items_key");
+                assertTrue(each.armNames().isEmpty());
+                assertTrue(each.isCombine());
+            });
+        }
+    }
+
+    /** Writes a wf_graph_node row the way the pre-migration-13 code did. */
+    private static void insertLegacyNode(String url, String wf, int version, String id, String itemsKey)
+            throws Exception {
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection(url, "sa", "");
+             java.sql.PreparedStatement p = c.prepareStatement(
+                     "INSERT INTO wf_graph_node (workflow,version,node_id,kind,name,activity,queue," +
+                     "sleep_millis,expected,success,is_start,items_key) VALUES (?,?,?,'TASK',?,?,'q',0,0,0,0,?)")) {
+            p.setString(1, wf); p.setInt(2, version); p.setString(3, id);
+            p.setString(4, id); p.setString(5, wf + "#" + id); p.setString(6, itemsKey);
+            p.executeUpdate();
+        }
     }
 
     @Test @DisplayName("a definition round-trips through the normalised JDBC graph tables")
@@ -87,7 +122,7 @@ class JdbcGraphTest {
                         "compensable flag survives the column round-trip");
             });
 
-            // Re-registering the same content hash is an idempotent no-op.
+            // Re-registering the same graph at the same version is an idempotent no-op.
             assertDoesNotThrow(() -> storage.inTxVoid(tx -> tx.putGraph(def)));
         }
     }
@@ -106,8 +141,8 @@ class JdbcGraphTest {
                     e.nodeId = "n" + i;
                     e.activity = "act" + i;
                     e.queue = "q";
-                    e.inputJson = "{\"in\":" + i + "}";
-                    e.resultJson = "{\"out\":" + i + "}";
+                    e.input = com.wiggle.core.Doc.parse("{\"in\":" + i + "}");
+                    e.result = com.wiggle.core.Doc.parse("{\"out\":" + i + "}");
                     tx.appendCompensation(e);
                 }
             });
@@ -115,8 +150,8 @@ class JdbcGraphTest {
                 var log = tx.compensationLog("wfi_x");
                 assertEquals(3, log.size());
                 assertEquals(List.of(1L, 2L, 3L), log.stream().map(e -> e.seq).toList(), "seq-ordered");
-                assertEquals("{\"in\":2}", log.get(1).inputJson);
-                assertEquals("{\"out\":2}", log.get(1).resultJson);
+                assertEquals(java.util.Map.of("in", 2L), log.get(1).input.raw());
+                assertEquals(java.util.Map.of("out", 2L), log.get(1).result.raw());
                 assertFalse(log.get(2).compensated);
                 tx.markCompensated("wfi_x", 3);
             });

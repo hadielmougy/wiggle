@@ -7,12 +7,12 @@ import java.util.List;
 /**
  * Entry point to the flow API: a workflow written as a chain of method references
  * to its handler methods, compiled to the same {@link FlowSpec} that
- * {@link com.wiggle.client.flow.Workflow Workflow.define(...)} produces.
+ * {@link com.wiggle.client.flow.Workflow Workflow.define(..., 1)} produces.
  *
  * <pre>{@code
  * OrderHandlers h = new OrderHandlers();
  *
- * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = FlowSpec.define("order-fulfilment", 1, Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge);

@@ -16,7 +16,7 @@ package com.wiggle.client.worker;
  *     Payment                             confirm(Payment p);
  * }
  *
- * FlowSpec orders = FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+ * FlowSpec orders = FlowSpec.define("orders", 1, Order.class, OrderSteps.class, (f, s) -> f
  *         .thenApplyCompensable(s::authorise)
  *         .thenApply(s::confirm));
  * }</pre>

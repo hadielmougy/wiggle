@@ -75,7 +75,7 @@ class TypedActivityTest {
 
     /** capturePayment declares its undo in its return type -- MixedHandlers supplies the factory. */
     private static WorkflowDefinition linear() {
-        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApplyCompensable(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenAccept(s::auditLog)).definition();
@@ -83,7 +83,7 @@ class TypedActivityTest {
 
     /** Same shape, nothing compensable — for handler classes whose activities carry no undo. */
     private static WorkflowDefinition linearPlain() {
-        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenAccept(s::auditLog)).definition();
@@ -147,7 +147,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("each snapshot decodes into its own type: input as A, result as B")
     void compensatorSeesEachSnapshotAsItsOwnType() throws Exception {
-        WorkflowDefinition def = FlowSpec.define("typed-undo", Ord.class, TypedUndoSteps.class,
+        WorkflowDefinition def = FlowSpec.define("typed-undo", 1, Ord.class, TypedUndoSteps.class,
                 (f, s) -> f.thenApplyCompensable(s::charge)).definition();
 
         TypedUndoH h = new TypedUndoH();
@@ -224,7 +224,7 @@ class TypedActivityTest {
 
     @Test @DisplayName("plain methods + factories + @ForFlow run a workflow to COMPLETED")
     void endToEnd() throws Exception {
-        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApplyCompensable(s::capturePayment)
                 .thenFilter(s::inStock)
                 .thenApply(s::summarise)

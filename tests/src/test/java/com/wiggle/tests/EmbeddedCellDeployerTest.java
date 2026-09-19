@@ -40,7 +40,7 @@ class EmbeddedCellDeployerTest {
 
             // the recorded endpoint is a live cell: register + start, and the id is epoch-aware for "shop"
             try (WiggleClient client = new WiggleClient(ns.endpoint())) {
-                client.register(FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a)));
+                client.register(FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a)));
                 String id = client.start("wf", Map.of());
                 assertEquals("shop", IdCodec.parse(id)
                         .orElseThrow(() -> new AssertionError("expected an epoch-aware id, got " + id))
@@ -51,7 +51,7 @@ class EmbeddedCellDeployerTest {
             deployer.teardown("shop");
             try (WiggleClient dead = new WiggleClient(ns.endpoint())) {
                 assertThrows(RuntimeException.class,
-                        () -> dead.register(FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a))),
+                        () -> dead.register(FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a))),
                         "a torn-down cell should not answer");
             }
         }

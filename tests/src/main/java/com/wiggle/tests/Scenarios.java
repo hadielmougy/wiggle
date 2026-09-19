@@ -144,7 +144,7 @@ public final class Scenarios {
 
     /** A linear pipeline runs its steps in order and the context accumulates. */
     public static void sequentialPipeline() throws Exception {
-        FlowSpec bp = FlowSpec.define("seq", Map.class, SeqSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("seq", 1, Map.class, SeqSteps.class, (f, s) -> f
                 .thenApply(s::one).thenApply(s::two).thenApply(s::three));
 
         withServer((server, client) -> {
@@ -169,7 +169,7 @@ public final class Scenarios {
     /** A false gate ends the instance successfully and skips everything downstream. */
     public static void gateShortCircuits() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("gated", Map.class, GatedSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("gated", 1, Map.class, GatedSteps.class, (f, s) -> f
                 .thenApply(s::seed).thenFilter(s::gate).thenApply(s::never));
 
         withServer((server, client) -> {
@@ -196,7 +196,7 @@ public final class Scenarios {
 
     /** Parallel branches merge field-by-field instead of clobbering each other. */
     public static void forkMergesDisjointWrites() throws Exception {
-        FlowSpec bp = FlowSpec.define("fork-merge", Map.class, ForkMergeSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("fork-merge", 1, Map.class, ForkMergeSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             return Wiggle.allOf(seeded.thenApply(s::slowLeft), seeded.thenApply(s::fastRight))
                     .combineWithContext(s::merge).thenApply(s::after);
@@ -233,7 +233,7 @@ public final class Scenarios {
     /** The step after a fork runs exactly once, no matter how many branches there were. */
     public static void joinRunsContinuationOnce() throws Exception {
         AtomicInteger afterCount = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("join-once", Map.class, JoinOnceSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("join-once", 1, Map.class, JoinOnceSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
                         .combineWithContext(s::merge).thenApply(s::after));
 
@@ -268,7 +268,7 @@ public final class Scenarios {
 
     /** Forks nest: the join stack pops back to the right barrier. */
     public static void nestedForks() throws Exception {
-        FlowSpec bp = FlowSpec.define("nested", Map.class, NestedSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("nested", 1, Map.class, NestedSteps.class, (f, s) -> {
             var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
                     .combineWithContext(s::innerMerge)
                     .thenApply(s::innerDone);
@@ -310,7 +310,7 @@ public final class Scenarios {
 
     /** A gate inside a branch short-circuits that branch only; siblings still join. */
     public static void gateInsideBranchDoesNotStrandSiblings() throws Exception {
-        FlowSpec bp = FlowSpec.define("branch-gate", Map.class, BranchGateSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("branch-gate", 1, Map.class, BranchGateSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenFilter(s::gate).thenApply(s::skipped), f.thenApply(s::ran))
                         .combineWithContext(s::merge).thenApply(s::after));
 
@@ -342,7 +342,7 @@ public final class Scenarios {
     /** A transient failure is retried according to the step's policy. */
     public static void retriesTransientFailures() throws Exception {
         Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
-        FlowSpec bp = FlowSpec.define("retry", Map.class, FlakySteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("retry", 1, Map.class, FlakySteps.class, (f, s) ->
                 f.thenApply(s::flaky, RetryPolicy.fixed(5, Duration.ofMillis(50))));
 
         withServer((server, client) -> {
@@ -367,7 +367,7 @@ public final class Scenarios {
 
     /** Retries stop at the policy limit and the instance fails with the last error. */
     public static void exhaustedRetriesFailInstance() throws Exception {
-        FlowSpec bp = FlowSpec.define("retry-exhausted", Map.class, ExhaustedSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("retry-exhausted", 1, Map.class, ExhaustedSteps.class, (f, s) ->
                 f.thenApply(s::alwaysFails, RetryPolicy.fixed(2, Duration.ofMillis(20))));
 
         withServer((server, client) -> {
@@ -389,7 +389,7 @@ public final class Scenarios {
     /** PermanentActivityException skips retries entirely. */
     public static void permanentFailureSkipsRetries() throws Exception {
         AtomicInteger calls = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("permanent", Map.class, FatalSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("permanent", 1, Map.class, FatalSteps.class, (f, s) ->
                 f.thenApply(s::fatal, RetryPolicy.fixed(5, Duration.ofMillis(20))));
 
         withServer((server, client) -> {
@@ -413,7 +413,7 @@ public final class Scenarios {
 
     /** A sleep is a server-side timer: the instance waits without occupying a worker. */
     public static void sleepDefersWithoutHoldingAWorker() throws Exception {
-        FlowSpec bp = FlowSpec.define("sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("sleeper", 1, Map.class, SleeperSteps.class, (f, s) -> f
                 .thenApply(s::before).thenSleep(Duration.ofMillis(600)).thenApply(s::after));
 
         withServer((server, client) -> {
@@ -442,7 +442,7 @@ public final class Scenarios {
      * reclaims the expired lease and the task becomes dispatchable again.
      */
     public static void expiredLeaseIsReclaimed() throws Exception {
-        FlowSpec bp = FlowSpec.define("orphan", Map.class, WorkStep.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("orphan", 1, Map.class, WorkStep.class, (f, s) ->
                 f.thenApply(s::work, RetryPolicy.fixed(5, Duration.ofMillis(20))));
 
         withServer((server, client) -> {
@@ -473,7 +473,7 @@ public final class Scenarios {
 
     /** A task may only be completed by the worker holding its lease. */
     public static void staleLeaseIsRejected() throws Exception {
-        FlowSpec bp = FlowSpec.define("lease-guard", Map.class, WorkStep.class, (f, s) -> f.thenApply(s::work));
+        FlowSpec bp = FlowSpec.define("lease-guard", 1, Map.class, WorkStep.class, (f, s) -> f.thenApply(s::work));
 
         withServer((server, client) -> {
             client.register(bp);
@@ -493,7 +493,7 @@ public final class Scenarios {
 
     /** Cancelling an instance stops it and abandons its in-flight work. */
     public static void cancelStopsAnInstance() throws Exception {
-        FlowSpec bp = FlowSpec.define("cancellable", Map.class, SlowStep.class, (f, s) -> f.thenApply(s::slow));
+        FlowSpec bp = FlowSpec.define("cancellable", 1, Map.class, SlowStep.class, (f, s) -> f.thenApply(s::slow));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new CancellableH())) {
@@ -523,7 +523,7 @@ public final class Scenarios {
      */
     public static void heartbeatKeepsLongTaskAlive() throws Exception {
         AtomicInteger invocations = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("heartbeat", Map.class, HeartbeatSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("heartbeat", 1, Map.class, HeartbeatSteps.class, (f, s) ->
                 f.thenApply(s::longRunning));
 
         withServer((server, client) -> {
@@ -555,14 +555,16 @@ public final class Scenarios {
     }
 
     /** The same DSL compiles to the same version; a changed topology gets a new one. */
-    public static void definitionVersionIsContentAddressed() {
-        FlowSpec a = FlowSpec.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
-        FlowSpec b = FlowSpec.define("versioned", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
-        FlowSpec c = FlowSpec.define("versioned", Map.class, SeqSteps.class, (f, s) ->
+    public static void definitionGraphIsFingerprinted() {
+        FlowSpec a = FlowSpec.define("versioned", 1, Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec b = FlowSpec.define("versioned", 1, Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one));
+        FlowSpec c = FlowSpec.define("versioned", 1, Map.class, SeqSteps.class, (f, s) ->
                 f.thenApply(s::one).thenApply(s::two));
 
-        Check.equal(a.version(), b.version(), "identical topologies share a version");
-        Check.isTrue(a.version() != c.version(), "a changed topology gets a new version");
+        Check.equal(a.definition().fingerprint(), b.definition().fingerprint(),
+                "identical topologies fingerprint the same");
+        Check.isTrue(!a.definition().fingerprint().equals(c.definition().fingerprint()),
+                "a changed topology fingerprints differently");
         Check.isTrue(a.version() > 0, "versions are positive");
     }
 
@@ -570,7 +572,7 @@ public final class Scenarios {
     public static void dslRejectsInvalidGraphs() {
         boolean duplicateRejected = false;
         try {
-            FlowSpec.define("dup", Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one).thenApply(s::one));
+            FlowSpec.define("dup", 1, Map.class, SeqSteps.class, (f, s) -> f.thenApply(s::one).thenApply(s::one));
         } catch (IllegalArgumentException e) {
             duplicateRejected = true;
         }
@@ -578,7 +580,7 @@ public final class Scenarios {
 
         boolean emptyRejected = false;
         try {
-            FlowSpec.define("empty", Map.class, SeqSteps.class, (f, s) -> f);
+            FlowSpec.define("empty", 1, Map.class, SeqSteps.class, (f, s) -> f);
         } catch (IllegalStateException e) {
             emptyRejected = true;
         }
@@ -616,7 +618,7 @@ public final class Scenarios {
     /** Two workers on one server share the work rather than duplicating it. */
     public static void workDistributesAcrossWorkers() throws Exception {
         AtomicInteger total = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("distributed", Map.class, WorkStep.class, (f, s) -> f.thenApply(s::work));
+        FlowSpec bp = FlowSpec.define("distributed", 1, Map.class, WorkStep.class, (f, s) -> f.thenApply(s::work));
 
         withServer((server, client) -> {
             DistributedH handlers = new DistributedH(total);
@@ -667,7 +669,7 @@ public final class Scenarios {
     private static List<Case> all() {
         return List.of(
                 new Case("recordCodecRoundTrip", Scenarios::recordCodecRoundTrip),
-                new Case("definitionVersionIsContentAddressed", Scenarios::definitionVersionIsContentAddressed),
+                new Case("definitionGraphIsFingerprinted", Scenarios::definitionGraphIsFingerprinted),
                 new Case("dslRejectsInvalidGraphs", Scenarios::dslRejectsInvalidGraphs),
                 new Case("sequentialPipeline", Scenarios::sequentialPipeline),
                 new Case("gateShortCircuits", Scenarios::gateShortCircuits),

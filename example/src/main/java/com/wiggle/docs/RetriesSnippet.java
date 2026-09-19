@@ -36,7 +36,7 @@ public final class RetriesSnippet {
     }
 
     static FlowSpec retried() {
-        return FlowSpec.define("retried", Order.class, OrderSteps.class, (f, s) -> f
+        return FlowSpec.define("retried", 1, Order.class, OrderSteps.class, (f, s) -> f
                 .thenApply(s::validate)
                 // docs:begin retry-line
                 .thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)))
@@ -45,7 +45,7 @@ public final class RetriesSnippet {
     }
 
     static FlowSpec gated() {
-        return FlowSpec.define("gated", Order.class, OrderSteps.class, (f, s) -> f
+        return FlowSpec.define("gated", 1, Order.class, OrderSteps.class, (f, s) -> f
                 // docs:begin gate-chain
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)    // false ⇒ the instance ENDS CLEANLY — not an error, no alarm
@@ -56,7 +56,7 @@ public final class RetriesSnippet {
 
     static FlowSpec settlement() {
         // docs:begin poll-loop
-        FlowSpec settling = FlowSpec.define("await-settlement", Ctx.class, SettlementSteps.class, (f, s) -> f
+        FlowSpec settling = FlowSpec.define("await-settlement", 1, Ctx.class, SettlementSteps.class, (f, s) -> f
                 .repeatWhile(s::stillPending, b -> b
                         .thenFilter(s::notCancelled)       // false short-circuits OUT of the loop entirely
                         .thenApply(s::poll)

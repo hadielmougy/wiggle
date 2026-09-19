@@ -43,7 +43,7 @@ class NamespaceWorkerTest {
     }
 
     private static FlowSpec workflow() {
-        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        return FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @com.wiggle.client.worker.ForFlow("wf")

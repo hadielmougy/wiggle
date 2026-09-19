@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -42,7 +43,7 @@ class CompensationDeclarationTest {
     @Test
     @DisplayName("a CompensableActivity factory marks the node; an ordinary step does not")
     void theDeclarationDecides() {
-        WorkflowDefinition def = FlowSpec.define("undo-decl", Order.class, Steps.class, (f, s) -> f
+        WorkflowDefinition def = FlowSpec.define("undo-decl", 1, Order.class, Steps.class, (f, s) -> f
                 .thenApplyCompensable(s::authorise)
                 .thenApply(s::confirm)).definition();
 
@@ -62,7 +63,7 @@ class CompensationDeclarationTest {
         // authorise consumes Order and produces Payment, so the flow continues as Payment -- which is
         // what lets `confirm(Payment)` follow it. If the activity were pinned to one type this would
         // not compile, which is the point of the test.
-        WorkflowDefinition def = FlowSpec.define("undo-types", Order.class, Steps.class, (f, s) -> f
+        WorkflowDefinition def = FlowSpec.define("undo-types", 1, Order.class, Steps.class, (f, s) -> f
                 .thenApplyCompensable(s::authorise)
                 .thenApply(s::confirm)).definition();
 
@@ -72,17 +73,16 @@ class CompensationDeclarationTest {
     }
 
     @Test
-    @DisplayName("the flag rides the content hash, so declaring an undo is a new version")
-    void theFlagIsPartOfTheVersion() {
-        int withUndo = FlowSpec.define("undo-ver", Order.class, Steps.class,
-                (f, s) -> f.thenApplyCompensable(s::authorise)).version();
-        int plain = FlowSpec.define("undo-ver", Payment.class, Steps.class,
-                (f, s) -> f.thenApply(s::confirm)).version();
+    @DisplayName("the flag rides the fingerprint, so declaring an undo is a different graph")
+    void theFlagIsPartOfTheFingerprint() {
+        String withUndo = FlowSpec.define("undo-ver", 1, Order.class, Steps.class,
+                (f, s) -> f.thenApplyCompensable(s::authorise)).definition().fingerprint();
+        String plain = FlowSpec.define("undo-ver", 1, Payment.class, Steps.class,
+                (f, s) -> f.thenApply(s::confirm)).definition().fingerprint();
 
-        // A definition's version is a hash over the whole topology, and the undo is part of it -- so
-        // adding one to a live workflow publishes a new version rather than changing what running
-        // instances do.
-        assertTrue(withUndo != plain, "an undo is part of the topology, so part of its identity");
+        // The undo is part of the topology, so the server sees adding one to an already-published
+        // version as a changed graph and refuses it -- it has to go out as a new version.
+        assertNotEquals(withUndo, plain, "an undo is part of the topology, so part of its identity");
     }
 
     /** Named for the shape it declares; nothing here runs, the worker supplies the code. */

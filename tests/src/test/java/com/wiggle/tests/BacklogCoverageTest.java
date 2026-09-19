@@ -87,7 +87,7 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, QUEUES_WF);
-            FlowSpec spec = FlowSpec.define(QUEUES_WF, Map.class, OneStep.class, (f, s) -> f
+            FlowSpec spec = FlowSpec.define(QUEUES_WF, 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served, QUEUES_WF + "-served")
                 .thenApply(s::orphan, QUEUES_WF + "-orphan"));
             client.register(spec);
@@ -125,8 +125,8 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, VERSION_WF);
-            FlowSpec v1 = FlowSpec.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
-            FlowSpec v2 = FlowSpec.define(VERSION_WF, Map.class, OneStep.class, (f, s) -> f
+            FlowSpec v1 = FlowSpec.define(VERSION_WF, 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
+            FlowSpec v2 = FlowSpec.define(VERSION_WF, 2, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served)
                 .thenApply(s::extra));
             client.register(v1);
@@ -171,8 +171,8 @@ class BacklogCoverageTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, UNSCOPED_WF);
-            FlowSpec v1 = FlowSpec.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
-            FlowSpec v2 = FlowSpec.define(UNSCOPED_WF, Map.class, OneStep.class, (f, s) -> f
+            FlowSpec v1 = FlowSpec.define(UNSCOPED_WF, 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::served));
+            FlowSpec v2 = FlowSpec.define(UNSCOPED_WF, 2, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served)
                 .thenApply(s::extra));
             client.register(v1);

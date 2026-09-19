@@ -5,15 +5,19 @@ import java.security.MessageDigest;
 import java.util.*;
 
 /**
- * An immutable, compiled workflow graph. The {@code version} is a content hash, so
- * registering the same topology twice is idempotent and running instances always
- * keep executing the exact graph they started on.
+ * An immutable, compiled workflow graph. The {@code version} is declared by the author and is
+ * positive; a published version is immutable, which the engine enforces by comparing
+ * {@link #fingerprint()} on re-registration. Running instances always keep executing the exact
+ * graph they started on.
  */
 public record WorkflowDefinition(String name, int version, String startNode,
                                  Map<String, Node> nodes, Set<String> queues, ExecutionMode executionMode,
                                  Set<String> checkpoints) {
 
     public WorkflowDefinition {
+        if (version <= 0) {
+            throw new IllegalArgumentException("workflow '" + name + "' needs a positive version, got " + version);
+        }
         executionMode = executionMode == null ? ExecutionMode.DEFAULT : executionMode;
     }
 
@@ -78,8 +82,24 @@ public record WorkflowDefinition(String name, int version, String startNode,
                 Json.reqStr(m, "startNode"), nodes, queues, mode, checkpoints);
     }
 
-    /** Stable positive hash over the topology, ignoring the version field itself. */
-    public static int contentVersion(String name, String startNode, Collection<Node> nodes,
+    /** The current fingerprint algorithm, stored beside a fingerprint so a later change to the
+     *  topology's serialised shape cannot be mistaken for a changed graph. */
+    public static final String FINGERPRINT_ALGO = "sha256-canonical-v1";
+
+    /** This definition's {@link #fingerprint(String, String, Collection, ExecutionMode, Set) fingerprint}. */
+    public String fingerprint() {
+        return fingerprint(name, startNode, nodes.values(), executionMode, checkpoints);
+    }
+
+    /**
+     * A stable digest of the topology, ignoring the version field itself. Two definitions with the
+     * same fingerprint are the same graph; the engine uses it to tell an idempotent re-registration
+     * from an attempt to redefine a version that instances are already running on.
+     *
+     * <p>It is not the version. The version is declared by the author, so it stays readable and
+     * ordered; this only answers "is this the same graph as the one already stored".
+     */
+    public static String fingerprint(String name, String startNode, Collection<Node> nodes,
                                      ExecutionMode executionMode, Set<String> checkpoints) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
@@ -96,8 +116,8 @@ public record WorkflowDefinition(String name, int version, String startNode,
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
-        int v = ((digest[0] & 0x7f) << 24) | ((digest[1] & 0xff) << 16)
-                | ((digest[2] & 0xff) << 8) | (digest[3] & 0xff);
-        return v == 0 ? 1 : v;
+        StringBuilder hex = new StringBuilder(64);
+        for (byte b : digest) hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
+        return hex.toString();
     }
 }

@@ -19,6 +19,7 @@ import java.util.Set;
 final class Pipeline {
 
     private final String name;
+    private final int version;
     private final RetryPolicy defaultRetry;
 
     private final Map<String, Node> nodes = new LinkedHashMap<>();
@@ -31,9 +32,13 @@ final class Pipeline {
     private ExecutionMode executionMode = ExecutionMode.DEFAULT;
     private int counter;
 
-    Pipeline(String name, RetryPolicy defaultRetry) {
+    Pipeline(String name, int version, RetryPolicy defaultRetry) {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("workflow name is required");
+        if (version <= 0) {
+            throw new IllegalArgumentException("workflow '" + name + "' needs a positive version, got " + version);
+        }
         this.name = name;
+        this.version = version;
         this.defaultRetry = defaultRetry == null ? RetryPolicy.forever() : defaultRetry;
         this.defaultQueue = name;
     }
@@ -73,13 +78,12 @@ final class Pipeline {
 
     /**
      * The mandatory merge node after a fork's join. It is a task node bound by name like any other,
-     * but it carries the fork's arm names (a JSON array) on its {@code itemsKey} -- a field that
-     * round-trips through every store -- so the engine can stage each isolated branch's result under
-     * its name for the combine handler, and strip those scratch keys afterward.
+     * but it carries the fork's arm names, so the engine can stage each isolated branch's result
+     * under its name for the combine handler, and strip those scratch keys afterward.
      */
     String addCombine(String name, List<String> branchNames, RetryPolicy retry, String queue) {
         String id = addTask(name, retry, queue);
-        nodes.put(id, nodes.get(id).withItemsKey(Json.write(List.copyOf(branchNames))));
+        nodes.put(id, nodes.get(id).withArmNames(branchNames));
         return id;
     }
 
@@ -98,7 +102,7 @@ final class Pipeline {
 
     /**
      * The mandatory merge node after a forEach's join. Like a fork's combine it is a task bound by
-     * name, but its {@code itemsKey} is a JSON STRING (not an array): the scratch key the engine
+     * name, but it carries a {@code collectKey} instead of arm names: the scratch key the engine
      * stages the collected item results under — a list ordered by item index, or a map keyed like
      * the input when the items came from a map.
      *
@@ -109,7 +113,7 @@ final class Pipeline {
      */
     String addForEachCombine(String name, String scratchKey, RetryPolicy retry, String queue) {
         String id = addTask(name, retry, queue);
-        nodes.put(id, nodes.get(id).withItemsKey(Json.write(forEachScratch(scratchKey))));
+        nodes.put(id, nodes.get(id).withCollectKey(forEachScratch(scratchKey)));
         return id;
     }
 
@@ -183,13 +187,12 @@ final class Pipeline {
     }
 
     /**
-     * Assembles the accumulated nodes into a validated, content-addressed {@link FlowSpec}. The
+     * Assembles the accumulated nodes into a validated {@link FlowSpec} at the declared version. The
      * caller ({@link GraphBuilder#build()}) has already appended the terminal end node and wired
      * every open edge to it.
      */
     FlowSpec build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
-        int version = WorkflowDefinition.contentVersion(name, startNode, nodes.values(), executionMode, checkpoints);
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
         validate(def);

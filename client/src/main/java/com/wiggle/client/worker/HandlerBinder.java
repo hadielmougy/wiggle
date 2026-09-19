@@ -345,9 +345,9 @@ final class HandlerBinder {
                 contextAt < 0 ? null : params[contextAt].getType());
     }
 
-    /** A combine node carries its fork arm names (a JSON array) on its itemsKey; a plain task does not. */
+    /** A combine node carries arm names (fork) or a collect key (forEach); a plain task has neither. */
     private static boolean isCombine(Node node) {
-        return node.kind() == NodeKind.TASK && node.itemsKey() != null;
+        return node.isCombine();
     }
 
     /**
@@ -387,18 +387,18 @@ final class HandlerBinder {
     }
 
     private static List<String> armNames(Node node) {
-        return Json.asArray(Json.parse(node.itemsKey())).stream().map(String::valueOf).toList();
+        return node.armNames();
     }
 
     /**
      * A combine method; its return is the COMPLETE post-join context — the engine replaces the
      * context with it (nothing from before the join survives unless the handler returned it, and
-     * staged scratch keys are stripped). Two flavors, told apart by the node's itemsKey:
+     * staged scratch keys are stripped). Two flavors, told apart by which field the node carries:
      * <ul>
-     *   <li><b>fork</b> (itemsKey = arm-name array): each parameter gets, in order, that
+     *   <li><b>fork</b> (armNames): each parameter gets, in order, that
      *       branch's final context decoded to its type; an optional {@link Context @Context}
      *       parameter gets the pre-fork context.</li>
-     *   <li><b>forEach</b> (itemsKey = a scratch-key string): one collection parameter receives
+     *   <li><b>forEach</b> (collectKey): one collection parameter receives
      *       every item's final context — a {@code List} (ordered by item index) or {@code Set} for
      *       a list input, or a {@code Map} keyed like the input for a map input — with elements
      *       decoded to the collection's element type; an optional {@link Context @Context}
@@ -407,8 +407,9 @@ final class HandlerBinder {
      */
     private static ActivityHandler combineHandler(Node node, Method m, Object target, Object decoderOwner,
                                                   Map<Class<?>, Method> decoders) {
-        Object parsedKey = Json.parse(node.itemsKey());
-        if (parsedKey instanceof String scratch) return forEachCombineHandler(node, m, target, decoderOwner, decoders, scratch);
+        if (node.collectKey() != null) {
+            return forEachCombineHandler(node, m, target, decoderOwner, decoders, node.collectKey());
+        }
         List<String> arms = armNames(node);
         java.lang.reflect.Parameter[] params = m.getParameters();
         String[] sources = combineSources(node, m, params, arms);

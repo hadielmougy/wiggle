@@ -61,22 +61,23 @@ class CheckpointTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Test @DisplayName("checkpoint is recorded, changes the content hash, and must follow a step")
+    @Test @DisplayName("checkpoint is recorded, changes the fingerprint, and must follow a step")
     void plumbing() {
-        FlowSpec plain = FlowSpec.define("cp", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec plain = FlowSpec.define("cp", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenApply(s::b));
-        FlowSpec checked = FlowSpec.define("cp", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec checked = FlowSpec.define("cp", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::a)
                 .checkpoint()
                 .thenApply(s::b));
 
         assertTrue(plain.definition().checkpoints().isEmpty(), "no checkpoints by default");
         assertEquals(1, checked.definition().checkpoints().size(), "one checkpoint recorded");
-        assertNotEquals(plain.version(), checked.version(), "checkpoint is part of the content hash");
+        assertNotEquals(plain.definition().fingerprint(), checked.definition().fingerprint(),
+                "checkpoint is part of the fingerprint");
 
         assertThrows(IllegalStateException.class,
-                () -> FlowSpec.define("bad", Map.class, OneStep.class, (f, s) -> f.checkpoint()),
+                () -> FlowSpec.define("bad", 1, Map.class, OneStep.class, (f, s) -> f.checkpoint()),
                 "checkpoint() must follow a step");
     }
 
@@ -85,7 +86,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = FlowSpec.define("cp-flush", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("cp-flush", 1, Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .thenApply(s::a)
                 .checkpoint()
@@ -120,7 +121,7 @@ class CheckpointTest {
         CountDownLatch bRunning = new CountDownLatch(1);
         CountDownLatch releaseB = new CountDownLatch(1);
 
-        FlowSpec bp = FlowSpec.define("cp-nobuf", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("cp-nobuf", 1, Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_ASYNC)
                 .thenApply(s::a)   // no checkpoint
                 .thenApply(s::b)

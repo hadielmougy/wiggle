@@ -13,28 +13,28 @@ import java.util.Map;
 /**
  * The code in {@code docs/versioning.md}. See {@link SagaSnippet} for why these live as source.
  *
- * <p>Two axes get confused constantly, so the fixture keeps them apart: the workflow's version is a
- * hash of its <em>topology</em>, while the context is a record whose shape evolves separately and is
- * not versioned by the engine at all. {@code VersioningTest} runs both.
+ * <p>Two axes get confused constantly, so the fixture keeps them apart: the workflow's version is
+ * declared against its <em>topology</em>, while the context is a record whose shape evolves
+ * separately and is not versioned by the engine at all. {@code VersioningTest} runs both.
  */
 public final class VersioningSnippet {
 
     public record Order(String id, String status, String currency) {}
 
     // docs:begin contract-v1
-    interface OrderSteps {
+    public interface OrderSteps {
         Order validate(Order o);
         Order charge(Order o);
     }
     // docs:end contract-v1
 
-    interface OrderStepsV2 extends OrderSteps {
+    public interface OrderStepsV2 extends OrderSteps {
         Order fraudCheck(Order o);
     }
 
     public static FlowSpec v1() {
         // docs:begin topology-v1
-        FlowSpec v1 = FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+        FlowSpec v1 = FlowSpec.define("orders", 1, Order.class, OrderSteps.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenApply(s::charge));
         // docs:end topology-v1
@@ -43,9 +43,9 @@ public final class VersioningSnippet {
 
     public static FlowSpec v2() {
         // docs:begin topology-v2
-        FlowSpec v2 = FlowSpec.define("orders", Order.class, OrderStepsV2.class, (f, s) -> f
+        FlowSpec v2 = FlowSpec.define("orders", 2, Order.class, OrderStepsV2.class, (f, s) -> f
                 .thenApply(s::validate)
-                .thenApply(s::fraudCheck)      // a new step -- so a new content hash, so a new version
+                .thenApply(s::fraudCheck)      // a new step -- so a new graph, so a new version number
                 .thenApply(s::charge));
         // docs:end topology-v2
         return v2;

@@ -152,7 +152,7 @@ class RowsTest {
         void defaults() {
             Instance i = new Instance();
             assertEquals(InstanceStatus.RUNNING, i.status);
-            assertEquals("{}", i.contextJson);
+            assertEquals(com.wiggle.core.Doc.EMPTY, i.context);
         }
 
         @Test
@@ -162,14 +162,14 @@ class RowsTest {
             i.id = "i1";
             i.workflow = "wf";
             i.version = 7;
-            i.contextJson = "{\"a\":1}";
+            i.context = com.wiggle.core.Doc.parse("{\"a\":1}");
 
             Instance c = i.clone();
             assertNotSame(i, c);
             assertEquals("i1", c.id);
             assertEquals("wf", c.workflow);
             assertEquals(7, c.version);
-            assertEquals("{\"a\":1}", c.contextJson);
+            assertEquals(com.wiggle.core.Doc.parse("{\"a\":1}"), c.context);
 
             c.id = "i2";
             c.status = InstanceStatus.COMPLETED;
@@ -218,7 +218,7 @@ class RowsTest {
         @Test
         @DisplayName("a fresh schedule has an empty context")
         void defaults() {
-            assertEquals("{}", new Schedule().contextJson);
+            assertEquals(com.wiggle.core.Doc.EMPTY, new Schedule().context);
         }
 
         @Test

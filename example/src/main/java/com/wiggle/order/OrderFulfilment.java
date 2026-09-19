@@ -23,8 +23,9 @@ public final class OrderFulfilment {
 
     /**
      * Execution mode for benchmarking, from {@code WIGGLE_EXECUTION_MODE} (default SERVER). Set it
-     * identically on the worker and submitter JVMs so they compile the same version (the mode is
-     * part of the content hash).
+     * identically on the worker and submitter JVMs: the mode is part of the topology, so two JVMs
+     * disagreeing about it publish different graphs under the same version and the second is
+     * refused.
      */
     private static ExecutionMode mode() {
         String v = System.getenv("WIGGLE_EXECUTION_MODE");
@@ -32,7 +33,7 @@ public final class OrderFulfilment {
     }
 
     public static FlowSpec flowSpec() {
-        return FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+        return FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> {
             var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
                     .thenApply(s::validate)
                     .thenFilter(s::inStock);

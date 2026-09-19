@@ -35,7 +35,7 @@ class HousekeeperTest {
 
     /** A one-sleep workflow whose timer parks the instance until the housekeeper fires it. */
     private static FlowSpec sleeper(long millis) {
-        return FlowSpec.define("hk-sleeper", Map.class, SleeperSteps.class, (f, s) -> f
+        return FlowSpec.define("hk-sleeper", 1, Map.class, SleeperSteps.class, (f, s) -> f
                 .thenSleep("nap", Duration.ofMillis(millis))
                 .thenApply(s::after));
     }

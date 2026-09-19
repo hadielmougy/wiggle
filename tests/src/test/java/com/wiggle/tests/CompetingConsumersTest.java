@@ -46,7 +46,7 @@ class CompetingConsumersTest {
 
     /** A single-step workflow whose one step both workers will serve. */
     private static FlowSpec oneStep() {
-        return FlowSpec.define("competing", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("competing", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     /**

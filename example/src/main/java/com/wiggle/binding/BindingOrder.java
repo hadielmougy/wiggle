@@ -48,7 +48,7 @@ public final class BindingOrder {
      * inert stand-in that only names steps.
      */
     public static FlowSpec flowSpec() {
-        return FlowSpec.define(NAME, Map.class, Steps.class, (f, s) -> f
+        return FlowSpec.define(NAME, 1, Map.class, Steps.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)
                 .thenApply(s::charge, PAYMENTS_QUEUE)

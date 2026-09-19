@@ -32,6 +32,17 @@ public final class InMemoryStorage implements Storage {
         return t.status == TokenStatus.READY && (t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE);
     }
 
+    /**
+     * Stores a token the way a database does: its payload encoded, so this store and a JDBC one
+     * agree on what survives a round trip (a JSON number comes back a Long either way) and the
+     * codec is exercised by every test that runs in memory.
+     */
+    private static Token encoded(Token t) {
+        Token copy = t.clone();
+        copy.payload = PayloadCodec.decode(PayloadCodec.encode(t.payload));
+        return copy;
+    }
+
     /** Registers the STORED copy in both indexes. Call with the object that lives in {@link #tokens}. */
     private void indexToken(Token stored) {
         tokensByInstance.computeIfAbsent(stored.instanceId, k -> new TreeMap<>()).put(stored.id, stored);
@@ -48,7 +59,10 @@ public final class InMemoryStorage implements Storage {
         readyTasks.remove(stored);
     }
     private final Map<String, String> definitions = new ConcurrentHashMap<>();
-    private final Map<String, Integer> latest = new ConcurrentHashMap<>();
+    /** "name:version" -> the fingerprint of the graph registered there. */
+    private final Map<String, GraphStore.StoredFingerprint> fingerprints = new ConcurrentHashMap<>();
+    /** Every version registered per name; the latest is the highest. */
+    private final Map<String, NavigableSet<Integer>> versions = new ConcurrentHashMap<>();
     // Normalised graph rows, keyed by "name:version": one node id -> node, plus the entry node.
     private final Map<String, Map<String, Node>> graphNodes = new ConcurrentHashMap<>();
     private final Map<String, String> graphStart = new ConcurrentHashMap<>();
@@ -74,19 +88,43 @@ public final class InMemoryStorage implements Storage {
 
     private final class MemTx implements Tx {
 
-        @Override public void putDefinition(String name, int version, String json) {
+        @Override public void putDefinition(String name, int version, String json,
+                                            String fingerprint, String fingerprintAlgo) {
+            if (definitions.containsKey(name + ":" + version)) return;
+            write(name, version, json, fingerprint, fingerprintAlgo);
+        }
+
+        @Override public void replaceDefinition(String name, int version, String json,
+                                                String fingerprint, String fingerprintAlgo) {
+            write(name, version, json, fingerprint, fingerprintAlgo);
+        }
+
+        private void write(String name, int version, String json, String fingerprint, String fingerprintAlgo) {
             definitions.put(name + ":" + version, json);
-            latest.put(name, version);
+            fingerprints.put(name + ":" + version, new GraphStore.StoredFingerprint(fingerprint, fingerprintAlgo));
+            versions.computeIfAbsent(name, k -> new TreeSet<>()).add(version);
         }
 
         @Override public Optional<String> definition(String name, int version) {
             return Optional.ofNullable(definitions.get(name + ":" + version));
         }
 
+        @Override public Optional<GraphStore.StoredFingerprint> definitionFingerprint(String name, int version) {
+            if (!definitions.containsKey(name + ":" + version)) return Optional.empty();
+            return Optional.of(fingerprints.getOrDefault(name + ":" + version,
+                    new GraphStore.StoredFingerprint(null, null)));
+        }
+
         @Override public void putGraph(WorkflowDefinition def) {
             String key = def.name() + ":" + def.version();
             graphNodes.put(key, Map.copyOf(def.nodes()));
             graphStart.put(key, def.startNode());
+        }
+
+        @Override public void deleteGraph(String workflow, int version) {
+            String key = workflow + ":" + version;
+            graphNodes.remove(key);
+            graphStart.remove(key);
         }
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
@@ -99,11 +137,12 @@ public final class InMemoryStorage implements Storage {
         }
 
         @Override public Optional<Integer> latestVersion(String name) {
-            return Optional.ofNullable(latest.get(name));
+            NavigableSet<Integer> vs = versions.get(name);
+            return vs == null || vs.isEmpty() ? Optional.empty() : Optional.of(vs.last());
         }
 
         @Override public List<String> definitionNames() {
-            return new ArrayList<>(new TreeSet<>(latest.keySet()));
+            return new ArrayList<>(new TreeSet<>(versions.keySet()));
         }
 
         @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }
@@ -144,7 +183,7 @@ public final class InMemoryStorage implements Storage {
         }
 
         @Override public void insertToken(Token t) {
-            Token stored = t.clone();
+            Token stored = encoded(t);
             tokens.put(stored.id, stored);
             indexToken(stored);
         }
@@ -165,7 +204,7 @@ public final class InMemoryStorage implements Storage {
         @Override public void updateToken(Token t) {
             Token old = tokens.get(t.id);
             if (old != null) unindexToken(old);
-            Token stored = t.clone();
+            Token stored = encoded(t);
             tokens.put(stored.id, stored);
             indexToken(stored);
         }

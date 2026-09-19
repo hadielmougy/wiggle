@@ -39,7 +39,7 @@ class CellLabelledIdTest {
     }
 
     private static FlowSpec spec() {
-        return FlowSpec.define("labelled", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("labelled", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private String startOn(ServerConfig config) throws Exception {

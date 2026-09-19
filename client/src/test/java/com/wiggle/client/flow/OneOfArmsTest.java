@@ -33,7 +33,7 @@ class OneOfArmsTest {
     @Test @DisplayName("otherwise() alone is rejected: no guard for it to be the alternative to")
     void otherwiseNeedsAGuardedArm() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
-                FlowSpec.define("oo-lone-otherwise", Map.class, S.class, (f, s) ->
+                FlowSpec.define("oo-lone-otherwise", 1, Map.class, S.class, (f, s) ->
                         Wiggle.oneOf(f.otherwise().thenApply(s::plain))));
         assertTrue(e.getMessage().contains("at least one when(...) arm"), e.getMessage());
     }
@@ -41,7 +41,7 @@ class OneOfArmsTest {
     @Test @DisplayName("otherwise() before a guarded arm is rejected: that arm could never run")
     void otherwiseMustBeLast() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
-                FlowSpec.define("oo-otherwise-first", Map.class, S.class, (f, s) ->
+                FlowSpec.define("oo-otherwise-first", 1, Map.class, S.class, (f, s) ->
                         Wiggle.oneOf(f.otherwise().thenApply(s::plain),
                                      f.when(s::vip).thenApply(s::premium))));
         assertTrue(e.getMessage().contains("must be the last arm"), e.getMessage());
@@ -50,7 +50,7 @@ class OneOfArmsTest {
     @Test @DisplayName("otherwise() in the middle is rejected too, not just in first position")
     void otherwiseInTheMiddle() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
-                FlowSpec.define("oo-otherwise-middle", Map.class, S.class, (f, s) ->
+                FlowSpec.define("oo-otherwise-middle", 1, Map.class, S.class, (f, s) ->
                         Wiggle.oneOf(f.when(s::vip).thenApply(s::premium),
                                      f.otherwise().thenApply(s::plain),
                                      f.when(s::gold).thenApply(s::standard))));
@@ -61,7 +61,7 @@ class OneOfArmsTest {
     @Test @DisplayName("two otherwise() arms are rejected -- the same rule, since only one can be last")
     void onlyOneOtherwise() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
-                FlowSpec.define("oo-two-otherwise", Map.class, S.class, (f, s) ->
+                FlowSpec.define("oo-two-otherwise", 1, Map.class, S.class, (f, s) ->
                         Wiggle.oneOf(f.otherwise().thenApply(s::plain),
                                      f.otherwise().thenApply(s::standard))));
         assertTrue(e.getMessage().contains("only be one"), e.getMessage());
@@ -70,7 +70,7 @@ class OneOfArmsTest {
     @Test @DisplayName("guards with a trailing otherwise() is the ordinary shape")
     void guardsThenOtherwiseIsFine() {
         assertDoesNotThrow(() ->
-                FlowSpec.define("oo-ok", Map.class, S.class, (f, s) ->
+                FlowSpec.define("oo-ok", 1, Map.class, S.class, (f, s) ->
                         Wiggle.oneOf(f.when(s::vip).thenApply(s::premium),
                                      f.when(s::gold).thenApply(s::standard),
                                      f.otherwise().thenApply(s::plain))));
@@ -79,7 +79,7 @@ class OneOfArmsTest {
     @Test @DisplayName("a guarded arm needs no otherwise(): unmatched simply falls past the choice")
     void otherwiseIsOptional() {
         assertDoesNotThrow(() ->
-                FlowSpec.define("oo-no-default", Map.class, S.class, (f, s) ->
+                FlowSpec.define("oo-no-default", 1, Map.class, S.class, (f, s) ->
                         Wiggle.oneOf(f.when(s::vip).thenApply(s::premium))));
     }
 }

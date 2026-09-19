@@ -76,7 +76,7 @@ class ErrorHandlingTest {
     }
 
     private static FlowSpec oneStep(String name, RetryPolicy retry) {
-        return FlowSpec.define(name, Map.class, Steps.class, (f, s) ->
+        return FlowSpec.define(name, 1, Map.class, Steps.class, (f, s) ->
                 retry == null ? f.thenApply(s::work) : f.thenApply(s::work, retry));
     }
 
@@ -136,7 +136,7 @@ class ErrorHandlingTest {
             @Override public boolean gate(Map<String, Object> c) { return false; }
             @Override public Map<String, Object> after(Map<String, Object> c) { return Map.of("reached", "after"); }
         }
-        FlowSpec spec = FlowSpec.define("gated", Map.class, GateSteps.class, (f, s) -> f
+        FlowSpec spec = FlowSpec.define("gated", 1, Map.class, GateSteps.class, (f, s) -> f
                 .thenApply(s::before).thenFilter(s::gate).thenApply(s::after));
 
         InstanceView v = run(spec, new H(), Map.of());
@@ -155,7 +155,7 @@ class ErrorHandlingTest {
             @Override public Map<String, Object> park(Map<String, Object> c) { return c; }
         }
         // a server-side timer holds the instance open without holding a worker
-        FlowSpec spec = FlowSpec.define("cancelme", Map.class, Slow.class, (f, s) ->
+        FlowSpec spec = FlowSpec.define("cancelme", 1, Map.class, Slow.class, (f, s) ->
                 f.thenSleep("hold", Duration.ofSeconds(20)).thenApply(s::park));
 
         try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();

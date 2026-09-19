@@ -30,7 +30,7 @@ class ConsoleWebTest {
     }
 
     private static FlowSpec wf() {
-        return FlowSpec.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("wf", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config() {
@@ -131,7 +131,7 @@ class ConsoleWebTest {
             WiggleClient c = conn.client();
             // no worker is ever started here, so this token is dispatchable and unclaimable -- which is
             // exactly the state the rest of the console cannot show: the instance reads RUNNING.
-            FlowSpec stranded = FlowSpec.define("stranded", Map.class, Steps.class,
+            FlowSpec stranded = FlowSpec.define("stranded", 1, Map.class, Steps.class,
                     (f, s) -> f.thenApply(s::work, "nobody-polls-this"));
             c.register(stranded);
             String id = c.start(stranded, Map.of());

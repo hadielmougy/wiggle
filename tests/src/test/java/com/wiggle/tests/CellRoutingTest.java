@@ -42,7 +42,7 @@ class CellRoutingTest {
     }
 
     private static FlowSpec workflow() {
-        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        return FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
     }
 
     @Test @DisplayName("resolver routes start + operate-by-id to the coordinator-resolved cell")

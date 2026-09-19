@@ -28,7 +28,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("branch writes are isolated: no implicit merge, combine owns what lands")
     void branchesAreIsolatedAndCombineDecides() throws Exception {
-        FlowSpec bp = FlowSpec.define("isolation", Map.class, IsolationSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("isolation", 1, Map.class, IsolationSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             // Both arms write the SAME key to different values, and each also asserts it cannot see
             // the base being overwritten by its sibling (isolation).
@@ -54,7 +54,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a branch that combine ignores contributes nothing to the context")
     void ignoredBranchLeavesNoTrace() throws Exception {
-        FlowSpec bp = FlowSpec.define("ignore-arm", Map.class, IgnoreArmSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("ignore-arm", 1, Map.class, IgnoreArmSteps.class, (f, s) ->
                 // Only "k" is folded back; "d"'s writes are discarded with its isolated context.
                 Wiggle.allOf(f.thenApply(s::k), f.thenApply(s::d))
                         .combine(s::pick)
@@ -68,7 +68,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine's return REPLACES the context: keys it omits do not survive the join")
     void combineReturnReplacesContext() throws Exception {
-        FlowSpec bp = FlowSpec.define("replace-check", Map.class, ReplaceSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("replace-check", 1, Map.class, ReplaceSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             return Wiggle.allOf(seeded.thenApply(s::a1), seeded.thenApply(s::b1)).combine(s::pickOnly);
         });
@@ -82,7 +82,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("a combine with no handler fails the instance — there is no implicit union fold")
     void combineWithoutHandlerFails() throws Exception {
-        FlowSpec bp = FlowSpec.define("no-combine-handler", Map.class, NoCombineSteps.class, (f, s) ->
+        FlowSpec bp = FlowSpec.define("no-combine-handler", 1, Map.class, NoCombineSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::x1), f.thenApply(s::y1)).combine(s::missing));
 
         InstanceView v = runToTerminal(bp, new NoCombineH(), new LinkedHashMap<>());
@@ -264,7 +264,7 @@ class ForkIsolationTest {
 
     @Test @DisplayName("an arm named like a context key does not eat it -- arms stage under reserved keys")
     void armNameDoesNotCollideWithAContextKey() throws Exception {
-        FlowSpec bp = FlowSpec.define("arm-key-clash", Map.class, ClashSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("arm-key-clash", 1, Map.class, ClashSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             return Wiggle.allOf(seeded.thenApply(s::payment), seeded.thenApply(s::shipping))
                     .combineWithContext(s::settle);

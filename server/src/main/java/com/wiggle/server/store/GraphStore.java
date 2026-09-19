@@ -7,14 +7,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Persistence for workflow definitions and their compiled graphs -- the engine's immutable,
- * content-addressed <em>reference data</em>, as distinct from the mutable runtime state served by
- * {@link Tx} (instances, tokens, leases, schedules, cluster nodes).
+ * Persistence for workflow definitions and their compiled graphs -- the engine's immutable
+ * <em>reference data</em>, as distinct from the mutable runtime state served by {@link Tx}
+ * (instances, tokens, leases, schedules, cluster nodes).
  *
- * <p>Because a version is a content hash, every write here is effectively write-once and
- * idempotent, and a read never has to be transactionally consistent with a runtime mutation -- the
- * graph for a given {@code (name, version)} never changes. Two representations are stored per
- * registration:
+ * <p>A published {@code (name, version)} is write-once: the registry refuses to redefine one whose
+ * stored fingerprint differs, so a read never has to be transactionally consistent with a runtime
+ * mutation -- the graph for a given {@code (name, version)} never changes under a running instance.
+ * Two representations are stored per registration:
  * <ul>
  *   <li>the submitted definition as a JSON <b>blob</b> ({@link #putDefinition}) -- the source of
  *       truth for audit/describe, loaded whole only on cold admin paths;</li>
@@ -31,11 +31,26 @@ public interface GraphStore {
 
     // -- definition blob: source of truth for audit / describe --
 
-    void putDefinition(String name, int version, String json);
+    /** Writes the blob for a version that does not exist yet. Idempotent: an existing row is left
+     *  alone, so two nodes registering the same new version cannot collide. */
+    void putDefinition(String name, int version, String json, String fingerprint, String fingerprintAlgo);
+
+    /** Overwrites the blob of an existing version. Only reached once
+     *  {@link com.wiggle.server.engine.DefinitionRegistry} has allowed the replacement, under the
+     *  row lock {@link #definitionFingerprint} took. */
+    void replaceDefinition(String name, int version, String json, String fingerprint, String fingerprintAlgo);
 
     Optional<String> definition(String name, int version);
 
-    /** Most recently registered version for a name. */
+    /** The stored fingerprint and the algorithm that produced it, or empty if this version is new. */
+    Optional<StoredFingerprint> definitionFingerprint(String name, int version);
+
+    /** What the store remembers about a registered version's graph identity. A null {@code value}
+     *  is a row written before fingerprints existed: unknown, not mismatched. */
+    record StoredFingerprint(String value, String algo) {}
+
+    /** Highest registered version for a name. Versions are author-declared and ordered, so the
+     *  newest is the largest -- not the most recently written. */
     Optional<Integer> latestVersion(String name);
 
     List<String> definitionNames();
@@ -44,10 +59,13 @@ public interface GraphStore {
 
     /**
      * Normalises a definition's graph into per-node and per-edge rows so the runtime can
-     * fetch a single node's neighbourhood without materialising the whole graph. Idempotent:
-     * the version is a content hash, so re-registering the same graph is a no-op.
+     * fetch a single node's neighbourhood without materialising the whole graph. Idempotent for an
+     * unchanged graph; {@link #deleteGraph} first when replacing one.
      */
     void putGraph(WorkflowDefinition def);
+
+    /** Drops a version's normalised rows, for the forced replacement of a registered graph. */
+    void deleteGraph(String workflow, int version);
 
     /** One node plus its outgoing edges, reconstructed from the normalised rows. */
     Optional<Node> graphNode(String workflow, int version, String nodeId);

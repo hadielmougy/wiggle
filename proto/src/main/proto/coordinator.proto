@@ -223,7 +223,7 @@ message OpenEpochRequest {
 message RegisterWorkflowRequest {
     string namespace = 1;
     string name = 2;
-    bytes definition = 3;          // compiled graph JSON; content-hash => same version on every cell
+    bytes definition = 3;          // compiled graph JSON; its declared version is used on every cell
 }
 
 message RegisterWorkflowResponse {

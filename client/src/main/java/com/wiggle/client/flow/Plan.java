@@ -277,9 +277,9 @@ final class Plan {
 
 
     /** Walks the recorded tree once, appending each step to a real builder. */
-    static FlowSpec compile(String workflow, RetryPolicy defaultRetry, Step root) {
+    static FlowSpec compile(String workflow, int version, RetryPolicy defaultRetry, Step root) {
         GraphBuilder builder = defaultRetry == null
-                ? Workflow.define(workflow) : Workflow.define(workflow, defaultRetry);
+                ? Workflow.define(workflow, version) : Workflow.define(workflow, version, defaultRetry);
         return walk(root, builder, "workflow '" + workflow + "'").build();
     }
 

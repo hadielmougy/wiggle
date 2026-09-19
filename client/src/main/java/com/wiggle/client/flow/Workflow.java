@@ -12,7 +12,7 @@ import com.wiggle.core.RetryPolicy;
  *
  * <pre>{@code
  * // topology
- * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> …)
+ * FlowSpec order = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> …)
  *         .step("validate").gate("in-stock")
  *         .fork(Branch.of("payment",  s -> s.step("charge")),
  *               Branch.of("shipping", s -> s.step("reserve").sleep(Duration.ofSeconds(2)).step("label")))
@@ -33,11 +33,11 @@ final class Workflow {
 
     private Workflow() {}
 
-    static GraphBuilder define(String name) {
-        return define(name, RetryPolicy.exponential(3, java.time.Duration.ofMillis(500)));
+    static GraphBuilder define(String name, int version) {
+        return define(name, version, RetryPolicy.exponential(3, java.time.Duration.ofMillis(500)));
     }
 
-    static GraphBuilder define(String name, RetryPolicy defaultRetry) {
-        return GraphBuilder.root(new Pipeline(name, defaultRetry));
+    static GraphBuilder define(String name, int version, RetryPolicy defaultRetry) {
+        return GraphBuilder.root(new Pipeline(name, version, defaultRetry));
     }
 }

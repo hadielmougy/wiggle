@@ -38,7 +38,7 @@ class CoordinatorFanoutTest {
     }
 
     private static byte[] definitionJson() {
-        FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
+        FlowSpec bp = FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         return Json.write(bp.definition().toJson()).getBytes(StandardCharsets.UTF_8);
     }
 
@@ -61,7 +61,7 @@ class CoordinatorFanoutTest {
             assertEquals(2, r.getCellsSeeded(), "fanned out to both cells");
             assertTrue(r.getVersion() > 0);
 
-            // both cells now hold the workflow, at the same content-hash version
+            // both cells now hold the workflow, at the version it declares
             assertEquals(r.getVersion(), a.engine().latestDefinition("wf").orElseThrow().version());
             assertEquals(r.getVersion(), b.engine().latestDefinition("wf").orElseThrow().version());
 
@@ -88,7 +88,7 @@ class CoordinatorFanoutTest {
 
             RegisterWorkflowResponse again = coord.doRegisterWorkflow("orders", "wf", definitionJson());
             assertEquals(0, again.getCellsSeeded(), "unchanged definition -> fan-out skipped");
-            assertEquals(first.getVersion(), again.getVersion(), "same content-hash version returned");
+            assertEquals(first.getVersion(), again.getVersion(), "same declared version returned");
         }
     }
 

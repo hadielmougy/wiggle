@@ -56,7 +56,7 @@ class WorkerPacingTest {
     }
 
     private static FlowSpec chain() {
-        return FlowSpec.define("pacing", Map.class, PacingSteps.class, (f, s) -> f
+        return FlowSpec.define("pacing", 1, Map.class, PacingSteps.class, (f, s) -> f
                 .thenApply(s::hop1).thenApply(s::hop2).thenApply(s::hop3).thenApply(s::hop4)
                 .thenApply(s::hop5).thenApply(s::hop6).thenApply(s::hop7).thenApply(s::hop8)
                 .thenApply(s::hop9).thenApply(s::hop10));
