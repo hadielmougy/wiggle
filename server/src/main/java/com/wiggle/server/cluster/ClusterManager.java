@@ -1,6 +1,7 @@
 package com.wiggle.server.cluster;
 
 import com.wiggle.core.Ids;
+import com.wiggle.election.ElectionRule;
 import com.wiggle.election.ElectionStore;
 import com.wiggle.election.LeaderElection;
 import com.wiggle.election.Member;
@@ -8,7 +9,6 @@ import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.server.store.Storage;
 
 import java.util.List;
-import java.util.function.Function;
 
 /**
  * Cell membership and leader election over the engine's node table.
@@ -58,13 +58,13 @@ public final class ClusterManager implements AutoCloseable {
     private final class NodeTableStore implements ElectionStore {
 
         @Override
-        public List<Member> step(Member me, long pruneBefore, Function<List<Member>, String> elect) {
+        public List<Member> step(Member me, long pruneBefore, ElectionRule elect) {
             self.lastHeartbeat = me.lastHeartbeat();
             return storage.inTx(tx -> {
                 tx.upsertNode(self);
                 tx.deleteNodesOlderThan(pruneBefore);
                 List<Member> roster = tx.nodes().stream().map(ClusterManager::member).toList();
-                String leaderId = elect.apply(roster);
+                String leaderId = elect.leaderOf(roster);
                 tx.setLeader(self.id, self.id.equals(leaderId));
                 return roster;
             });

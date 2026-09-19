@@ -6,13 +6,13 @@ import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
 import com.wiggle.server.cluster.QueueLagMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
+import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.grpc.GrpcApi;
 import com.wiggle.server.http.HealthServer;
 import com.wiggle.server.store.Storage;
 
 import java.io.IOException;
-import java.util.function.Supplier;
 
 /**
  * The cell subsystems of a {@link WiggleServer}. Everything a node runs <em>beyond</em> the shared
@@ -77,11 +77,11 @@ final class ServerBundle {
      * <p>The cell label is stamped whenever {@code WIGGLE_CELL_ID} is set, including on a cell with
      * no coordinator -- it is what still routes when there is no ring to consult.
      */
-    private static Supplier<String> idMinter(String ns, String cellId, LivePlacement placement) {
+    private static InstanceIds idMinter(String ns, String cellId, LivePlacement placement) {
         if (ns == null || ns.isBlank()) {
             return () -> Ids.next("wfi");
         }
         LivePlacement live = placement == null ? new LivePlacement() : placement;
-        return live.minter(ns, cellId, Ids::token);
+        return live.minter(ns, cellId, Ids::token)::get;   // :placement speaks Supplier; adapt here
     }
 }

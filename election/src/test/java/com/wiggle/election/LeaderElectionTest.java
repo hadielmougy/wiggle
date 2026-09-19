@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -118,12 +117,12 @@ class LeaderElectionTest {
         volatile boolean fail;
 
         @Override
-        public synchronized List<Member> step(Member self, long pruneBefore, Function<List<Member>, String> elect) {
+        public synchronized List<Member> step(Member self, long pruneBefore, ElectionRule elect) {
             if (fail) throw new IllegalStateException("store is down");
             rows.put(self.id(), self);
             rows.values().removeIf(m -> m.lastHeartbeat() < pruneBefore);
             List<Member> roster = new ArrayList<>(rows.values());
-            elect.apply(roster);
+            elect.leaderOf(roster);
             return roster;
         }
 

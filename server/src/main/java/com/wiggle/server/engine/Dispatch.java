@@ -6,7 +6,6 @@ import com.wiggle.core.WorkflowVersion;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.BooleanSupplier;
 
 /**
  * Handing work to workers: the long poll's pacing around {@link TokenLifecycle#claim}. Nothing
@@ -65,10 +64,10 @@ final class Dispatch {
      * down, and the freshly-produced token should go to a live worker instead.
      */
     List<TaskActivation> poll(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
-                              int max, Long leaseMillis, long deadline, BooleanSupplier cancelled) {
+                              int max, Long leaseMillis, long deadline, Cancellation cancelled) {
         pollers.seen(workerId, queues, versions, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
-        if (cancelled.getAsBoolean()) return List.of();
+        if (cancelled.cancelled()) return List.of();
         Map<String, Long> since = notifier.snapshot(queues);
         List<TaskActivation> tasks = claimNow(workerId, queues, versions, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
@@ -77,7 +76,7 @@ final class Dispatch {
             long remaining = deadline - System.currentTimeMillis();
             boolean signaled = notifier.awaitChange(queues, since, Math.min(fallbackWait, remaining));
             if (signaled && max > 1) lingerForBatch(deadline);
-            if (cancelled.getAsBoolean()) return List.of();   // worker gone -- leave the work for a live one
+            if (cancelled.cancelled()) return List.of();   // worker gone -- leave the work for a live one
             since = notifier.snapshot(queues);
             tasks = claimNow(workerId, queues, versions, max, lease);
             if (adaptiveFallbackPoll) {

@@ -5,6 +5,7 @@ import com.wiggle.server.coord.CoordDefinition;
 import com.wiggle.server.coord.CoordNamespace;
 import com.wiggle.server.coord.CoordNode;
 import com.wiggle.server.coord.CoordPolicy;
+import com.wiggle.election.ElectionRule;
 import com.wiggle.election.ElectionStore;
 import com.wiggle.election.Member;
 import com.wiggle.server.coord.CoordinatorStore;
@@ -23,7 +24,6 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.function.Function;
 import java.util.Map;
 import java.util.Optional;
 
@@ -378,7 +378,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
         return new ElectionStore() {
 
             @Override
-            public List<Member> step(Member self, long pruneBefore, Function<List<Member>, String> elect) {
+            public List<Member> step(Member self, long pruneBefore, ElectionRule elect) {
                 try (Connection c = ds.getConnection()) {
                     boolean auto = c.getAutoCommit();
                     c.setAutoCommit(false);
@@ -390,7 +390,7 @@ public final class JdbcCoordinatorStore implements CoordinatorStore {
                             ps.executeUpdate();
                         }
                         List<Member> roster = readMembers(c);
-                        String leader = elect.apply(roster);
+                        String leader = elect.leaderOf(roster);
                         try (PreparedStatement ps = c.prepareStatement(
                                 "UPDATE coord_member SET leader = ? WHERE id = ?")) {
                             ps.setInt(1, self.id().equals(leader) ? 1 : 0);

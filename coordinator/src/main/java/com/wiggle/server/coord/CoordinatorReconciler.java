@@ -7,7 +7,6 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
 
 /**
  * Leader-only coordinator reconciliation. Like {@code Housekeeper}, only the leader runs the
@@ -26,7 +25,7 @@ public final class CoordinatorReconciler implements AutoCloseable {
 
     private final CoordinatorStore store;
     private final LiveCensus census;
-    private final BooleanSupplier isLeader;
+    private final Leadership isLeader;
     private final long intervalMillis;
     private final long nodeDeadMillis;
     private final ScheduledExecutorService scheduler =
@@ -36,7 +35,7 @@ public final class CoordinatorReconciler implements AutoCloseable {
                 return t;
             });
 
-    public CoordinatorReconciler(CoordinatorStore store, LiveCensus census, BooleanSupplier isLeader,
+    public CoordinatorReconciler(CoordinatorStore store, LiveCensus census, Leadership isLeader,
                                  long intervalMillis, long nodeDeadMillis) {
         this.store = store;
         this.census = census;
@@ -52,7 +51,7 @@ public final class CoordinatorReconciler implements AutoCloseable {
 
     /** Package-visible so tests can drive a tick deterministically. */
     void tick() {
-        if (!isLeader.getAsBoolean()) {
+        if (!isLeader.held()) {
             LOG.log(System.Logger.Level.DEBUG, "coord reconcile: skipped, not leader");
             return;
         }

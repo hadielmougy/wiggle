@@ -12,7 +12,6 @@ import com.wiggle.server.store.Tx;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
-import java.util.function.Supplier;
 
 /**
  * The instance's state machine: every write to an instance's status, error and termination reason
@@ -41,12 +40,12 @@ final class InstanceLifecycle {
 
     private final DefinitionRegistry definitions;
     private final TokenLifecycle tokens;
-    private final Supplier<String> idMinter;
+    private final InstanceIds idMinter;
     private final Pump pump;
     private final Sagas sagas;
 
     InstanceLifecycle(DefinitionRegistry definitions, TokenLifecycle tokens,
-                      Supplier<String> idMinter, Pump pump) {
+                      InstanceIds idMinter, Pump pump) {
         this.definitions = definitions;
         this.tokens = tokens;
         this.idMinter = idMinter;
@@ -64,7 +63,7 @@ final class InstanceLifecycle {
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         LazyGraph def = definitions.graph(tx, workflow, v);
         long now = System.currentTimeMillis();
-        Instance inst = InstanceState.mint(tx, idMinter.get(), def.name(), def.version(),
+        Instance inst = InstanceState.mint(tx, idMinter.next(), def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
         Token t = TokenState.mint(inst, def.startNode(), "", null, now);
         tx.insertToken(t);
