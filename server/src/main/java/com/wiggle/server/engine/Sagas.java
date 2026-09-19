@@ -78,7 +78,7 @@ final class Sagas {
         instances.compensating(tx, inst, error, now);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed (" + error
                 + ") -> compensating");
-        mintNext(tx, inst, now);
+        createNext(tx, inst, now);
         return true;
     }
 
@@ -90,7 +90,7 @@ final class Sagas {
         TokenState.settle(tx, t, now);
         tx.markCompensated(inst.id, seq);
         InstanceLifecycle.touch(tx, inst, now);
-        mintNext(tx, inst, now);
+        createNext(tx, inst, now);
     }
 
     /** A compensator itself is out of retries: the one thing worse than a stuck saga is a stuck
@@ -106,7 +106,7 @@ final class Sagas {
     /** Mints the reverse pass's next token: the newest uncompensated entry, dispatched to the
      *  step's own queue under activity "<activity>#compensate" -- a real leased task, executed by
      *  a worker through the normal claim path. No entry left -> the pass is done: COMPENSATED. */
-    private void mintNext(Tx tx, Instance inst, long now) {
+    private void createNext(Tx tx, Instance inst, long now) {
         List<Rows.CompLog> log = tx.compensationLog(inst.id);
         Rows.CompLog next = null;
         for (int i = log.size() - 1; i >= 0; i--) {
@@ -121,7 +121,7 @@ final class Sagas {
         TokenPayload payload = TokenPayload.EMPTY.withStaged(Map.of(
                 "input", next.input.raw(),
                 "result", next.result.raw()));
-        Token t = TokenState.mint(inst, next.nodeId, "", payload, now);
+        Token t = TokenState.create(inst, next.nodeId, "", payload, now);
         t.compSeq = next.seq;
         t.activity = next.activity + "#compensate";
         t.queue = next.queue;

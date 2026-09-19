@@ -68,7 +68,7 @@ final class Scopes {
      * only the engine's reserved keys removed defensively; any other return drops top-level nulls.
      * A null return leaves the context untouched.
      */
-    static void applyStepResult(Instance inst, Token t, Node node, Object result) {
+    static void applyStepResult(Instance inst, Token t, Object result) {
         if (result == null) return;
         Doc cleaned = Doc.of(result).withoutNulls();
         if (t.payload.top() == null) {

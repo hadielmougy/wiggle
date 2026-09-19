@@ -15,19 +15,6 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
-/**
- * A token's state: what it is, what it may become, and how it gets there. One constant per
- * {@link TokenStatus}, matched by name -- the same shape {@link NodeBehaviours} uses for node
- * kinds.
- *
- * <p>Every write to a token's status happens in this file and nowhere else, so reading one
- * constant tells you what that state is (active, claimable, lease-holding) and every move it
- * permits, while the transitions below are the only ways to make one. {@link #move} refuses a
- * move no state declares, so an impossible token is rejected rather than persisted.
- *
- * <p>The one transition not policed here is {@code READY -> RUNNING}: a claim has to be atomic
- * with the {@code SKIP LOCKED} select that finds the token, so the store performs it.
- */
 enum TokenState {
 
     /** Dispatchable to a worker. A retry waits here too, behind {@code availableAt}. */
@@ -194,7 +181,7 @@ enum TokenState {
     }
 
     /** A fresh READY token for {@code inst} at {@code nodeId}. Not yet inserted. */
-    static Token mint(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
+    static Token create(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
         Token t = new Token();
         t.payload = payload == null ? TokenPayload.EMPTY : payload;
         t.id = Ids.next("tok");

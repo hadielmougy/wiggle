@@ -126,8 +126,8 @@ enum InstanceState {
 
     /** A new instance, born RUNNING. {@code parentTokenId} links a sub-workflow to the token
      *  awaiting it; null for a top-level start. */
-    static Instance mint(Tx tx, String id, String workflow, int version, Object context,
-                         String correlationId, String parentTokenId, long now) {
+    static Instance create(Tx tx, String id, String workflow, int version, Object context,
+                           String correlationId, String parentTokenId, long now) {
         Instance inst = new Instance();
         inst.id = id;
         inst.workflow = workflow;

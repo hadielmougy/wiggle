@@ -63,9 +63,9 @@ final class InstanceLifecycle {
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         LazyGraph def = definitions.graph(tx, workflow, v);
         long now = System.currentTimeMillis();
-        Instance inst = InstanceState.mint(tx, idMinter.next(), def.name(), def.version(),
+        Instance inst = InstanceState.create(tx, idMinter.next(), def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
-        Token t = TokenState.mint(inst, def.startNode(), "", null, now);
+        Token t = TokenState.create(inst, def.startNode(), "", null, now);
         tx.insertToken(t);
         LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
@@ -160,7 +160,7 @@ final class InstanceLifecycle {
         TokenPayload contPayload = Scopes.mergeIntoScope(parent, t.payload, child.context.raw());
         TokenState.settle(tx, t, now);
         touch(tx, parent, now);
-        Token cont = TokenState.mint(parent, node.next(), t.joinStack, contPayload, now);
+        Token cont = TokenState.create(parent, node.next(), t.joinStack, contPayload, now);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "sub-workflow " + child.id + " completed -> resuming parent "
                 + parent.id + " at " + node.next());
