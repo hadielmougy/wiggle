@@ -1,23 +1,32 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.Ids;
+import com.wiggle.core.Node;
+import com.wiggle.core.NodeKind;
+import com.wiggle.core.RetryPolicy;
+import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.server.store.TokenPayload;
+import com.wiggle.server.store.Tx;
 
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 /**
- * What a token in each state is and may become. One constant per {@link TokenStatus}, matched by
- * name -- the same shape {@link NodeBehaviours} uses for node kinds.
+ * A token's state: what it is, what it may become, and how it gets there. One constant per
+ * {@link TokenStatus}, matched by name -- the same shape {@link NodeBehaviours} uses for node
+ * kinds.
  *
- * <p>Reading one constant tells you everything about that state: whether it counts as active,
- * whether a worker may claim it, whether it holds a lease, and every state it may move to.
- * {@link TokenLifecycle} routes all its writes through {@link #moveTo}, so an illegal move throws
- * here instead of quietly corrupting an instance.
+ * <p>Every write to a token's status happens in this file and nowhere else, so reading one
+ * constant tells you what that state is (active, claimable, lease-holding) and every move it
+ * permits, while the transitions below are the only ways to make one. {@link #move} refuses a
+ * move no state declares, so an impossible token is rejected rather than persisted.
  *
- * <p>The one transition this class does not police is {@code READY -> RUNNING}: a claim has to be
- * atomic with the {@code SKIP LOCKED} select that finds the token, so the store performs it.
+ * <p>The one transition not policed here is {@code READY -> RUNNING}: a claim has to be atomic
+ * with the {@code SKIP LOCKED} select that finds the token, so the store performs it.
  */
 enum TokenState {
 
@@ -32,10 +41,41 @@ enum TokenState {
             TokenStatus.CANCELLED) {
         @Override boolean holdsLease() { return true; }
 
+        @Override void releaseLease(Token t) {
+            t.leaseOwner = null;
+            t.leaseExpiresAt = 0;
+        }
+
+        @Override void renewLease(Token t, long until) {
+            t.leaseExpiresAt = until;
+        }
+
         @Override void requireLeasedBy(Token t, String leaseOwner) {
             if (leaseOwner != null && !leaseOwner.equals(t.leaseOwner)) {
                 throw EngineException.conflict("lease for task " + t.id + " is held by " + t.leaseOwner);
             }
+        }
+
+        @Override Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
+                                        String failReason, boolean retryable, long now) {
+            RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
+            t.attempt++;
+            t.lastError = lastError;
+            releaseLease(t);
+            if (retryable && t.attempt < policy.maxAttempts()) {
+                t.availableAt = now + policy.backoffMillis(t.attempt);
+                move(tx, t, TokenStatus.READY, now);
+                long backoffMs = t.availableAt - now;
+                LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance "
+                        + t.instanceId + " failed (" + lastError + "), retrying attempt " + t.attempt
+                        + "/" + policy.maxAttempts() + " in " + backoffMs + "ms");
+                return new Outcome.Retried();
+            }
+            move(tx, t, TokenStatus.FAILED, now);
+            LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance "
+                    + t.instanceId + " exhausted retries (attempt " + t.attempt + "/"
+                    + policy.maxAttempts() + ", retryable=" + retryable + ") -> failing instance");
+            return new Outcome.Exhausted(failReason, Sagas.seqOf(t));
         }
     },
 
@@ -56,6 +96,8 @@ enum TokenState {
 
     /** Abandoned because the instance stopped running. */
     CANCELLED(Liveness.SETTLED);
+
+    private static final System.Logger LOG = System.getLogger(TokenState.class.getName());
 
     private enum Liveness { ACTIVE, SETTLED }
 
@@ -95,8 +137,39 @@ enum TokenState {
         return successors;
     }
 
+    /** Drops the lease, for the one state that has one to drop. A no-op everywhere else, which is
+     *  what lets every settling transition below be written the same way. */
+    void releaseLease(Token t) {
+    }
+
+    /** Extends the lease, for the one state that has one to extend. */
+    void renewLease(Token t, long until) {
+        throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
+    }
+
     /** Rejects a report against a token this worker does not hold. Only RUNNING accepts one. */
     void requireLeasedBy(Token t, String leaseOwner) {
+        throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
+    }
+
+    /** What a failed token means beyond the token itself. */
+    sealed interface Outcome {
+        /** Rescheduled for another attempt; the instance is untouched. */
+        record Retried() implements Outcome {}
+
+        /** Out of retries: the token is FAILED. {@code compSeq} is non-null when it was a
+         *  compensator, which the caller settles against the comp-log rather than the flow. */
+        record Exhausted(String reason, Long compSeq) implements Outcome {}
+    }
+
+    /**
+     * The retry-or-fail transition, reported by a worker or forced by an expired lease: bumps the
+     * attempt, releases the lease, then either reschedules per the node's policy or fails the
+     * token. What an exhausted token means for its instance is the caller's call. Only a leased
+     * token can fail; anywhere else this is a conflict.
+     */
+    Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
+                          String failReason, boolean retryable, long now) {
         throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
     }
 
@@ -111,5 +184,120 @@ enum TokenState {
                     + "; " + name() + " may only become " + successors);
         }
         return target;
+    }
+
+    /** The one place a token's status is written. */
+    private static void move(Tx tx, Token t, TokenStatus target, long now) {
+        t.status = of(t.status).moveTo(target);
+        t.updatedAt = now;
+        tx.updateToken(t);
+    }
+
+    /** A fresh READY token for {@code inst} at {@code nodeId}. Not yet inserted. */
+    static Token mint(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
+        Token t = new Token();
+        t.payload = payload == null ? TokenPayload.EMPTY : payload;
+        t.id = Ids.next("tok");
+        t.instanceId = inst.id;
+        t.workflow = inst.workflow;
+        t.version = inst.version;
+        t.nodeId = nodeId;
+        t.kind = NodeKind.TASK;
+        t.status = TokenStatus.READY;
+        t.attempt = 0;
+        t.availableAt = now;
+        t.joinStack = joinStack == null ? "" : joinStack;
+        t.createdAt = now;
+        t.updatedAt = now;
+        return t;
+    }
+
+    /** Inserts a continuation already leased to the worker that reported its predecessor, so a
+     *  local run keeps the chain instead of returning it to {@link Dispatch#poll}. */
+    static void mintLeased(Tx tx, Token cont, Node nextNode, String leaseOwner, long lease, long now) {
+        cont.status = TokenStatus.RUNNING;
+        cont.kind = nextNode.kind();
+        cont.activity = nextNode.activity();
+        cont.queue = nextNode.queue();
+        cont.leaseOwner = leaseOwner;
+        cont.leaseExpiresAt = lease;
+        cont.availableAt = now;
+        cont.updatedAt = now;
+        tx.insertToken(cont);
+    }
+
+    /** Parks a token for a worker to claim. The caller wakes the queue once the transaction commits. */
+    static TokenStatus parkReady(Tx tx, Token t, Node node, long now) {
+        TokenStatus before = t.status;
+        t.kind = node.kind();
+        t.activity = node.activity();
+        t.queue = node.queue();
+        t.availableAt = now;
+        move(tx, t, TokenStatus.READY, now);
+        return before;
+    }
+
+    /** Parks a token on the clock until {@code availableAt}. */
+    static TokenStatus parkWaiting(Tx tx, Token t, long availableAt, long now) {
+        TokenStatus before = t.status;
+        t.kind = NodeKind.SLEEP;
+        t.availableAt = availableAt;
+        move(tx, t, TokenStatus.WAITING, now);
+        return before;
+    }
+
+    /** Parks a token on an external actor: a signal, or a child instance. A positive
+     *  {@code deadline} is the (optional) time the leader sweeps it at. */
+    static TokenStatus parkAwaiting(Tx tx, Token t, NodeKind kind, String activity, long deadline, long now) {
+        TokenStatus before = t.status;
+        t.kind = kind;
+        t.activity = activity;
+        t.availableAt = deadline;
+        move(tx, t, TokenStatus.AWAITING, now);
+        return before;
+    }
+
+    /** Parks a token at a join barrier, waiting on its siblings. */
+    static TokenStatus parkJoined(Tx tx, Token t, long now) {
+        TokenStatus before = t.status;
+        t.kind = NodeKind.JOIN;
+        move(tx, t, TokenStatus.JOINED, now);
+        return before;
+    }
+
+    /** Consumes a token: a completed step, a fired timer, a delivered signal, a satisfied barrier.
+     *  Any lease it held goes with it. */
+    static TokenStatus settle(Tx tx, Token t, long now) {
+        TokenStatus before = t.status;
+        of(before).releaseLease(t);
+        move(tx, t, TokenStatus.DONE, now);
+        return before;
+    }
+
+    /** {@link #settle} for the whole of a satisfied barrier. */
+    static void settleAll(Tx tx, List<Token> tokens, long now) {
+        for (Token t : tokens) settle(tx, t, now);
+    }
+
+    /** Consumes a token at a node that spends it outright -- a fork that has spawned its branches,
+     *  or an END that has run out of flow -- recording the kind it ended at. */
+    static TokenStatus spend(Tx tx, Token t, NodeKind kind, long now) {
+        t.kind = kind;
+        return settle(tx, t, now);
+    }
+
+    /** Fails a parked token outright, with no retry: the thing it was waiting on can no longer
+     *  arrive. A sub-workflow that ended badly leaves its parent's token this way. */
+    static void failParked(Tx tx, Token t, long now) {
+        of(t.status).releaseLease(t);
+        move(tx, t, TokenStatus.FAILED, now);
+    }
+
+    /** Abandons a token because its instance stopped running. */
+    static TokenStatus cancel(Tx tx, Token t, long now) {
+        TokenStatus before = t.status;
+        of(before).releaseLease(t);
+        move(tx, t, TokenStatus.CANCELLED, now);
+        return before;
     }
 }

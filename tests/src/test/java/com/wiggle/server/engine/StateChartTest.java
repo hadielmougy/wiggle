@@ -107,6 +107,41 @@ class StateChartTest {
     }
 
     @Test
+    @DisplayName("only a leased token answers the lease and failure operations")
+    void leaseOperationsBelongToRunningAlone() {
+        Token t = new Token();
+        t.id = "tok_1";
+        for (TokenState s : TokenState.values()) {
+            t.status = TokenStatus.valueOf(s.name());
+            if (s == TokenState.RUNNING) continue;
+            assertThrows(EngineException.class, () -> s.renewLease(t, 1),
+                    s + " must not extend a lease it does not hold");
+            assertThrows(EngineException.class, () -> s.requireLeasedBy(t, "w1"),
+                    s + " must not accept a report against a lease it does not hold");
+            assertThrows(EngineException.class,
+                    () -> s.reportFailure(null, t, null, "e", "e", true, 0),
+                    s + " must not accept a failure report");
+        }
+    }
+
+    @Test
+    @DisplayName("releasing a lease is a no-op for every state that cannot hold one")
+    void onlyRunningReleasesALease() {
+        for (TokenState s : TokenState.values()) {
+            Token t = new Token();
+            t.leaseOwner = "w1";
+            t.leaseExpiresAt = 99;
+            s.releaseLease(t);
+            if (s.holdsLease()) {
+                assertEquals(null, t.leaseOwner, s + " should have dropped the lease");
+                assertEquals(0, t.leaseExpiresAt);
+            } else {
+                assertEquals("w1", t.leaseOwner, s + " has no lease to drop and should not touch one");
+            }
+        }
+    }
+
+    @Test
     @DisplayName("an illegal transition is refused rather than persisted")
     void illegalTransitionsThrow() {
         assertThrows(IllegalStateException.class, () -> TokenState.DONE.moveTo(TokenStatus.READY),

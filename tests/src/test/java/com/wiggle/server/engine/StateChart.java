@@ -170,10 +170,17 @@ final class StateChart {
 
                 Each state is a constant on `InstanceState` or `TokenState`, and that constant owns
                 the state's own rules: whether it is still live, whether a worker may claim it,
-                whether it holds a lease, and which states it may move to. `InstanceLifecycle` and
-                `TokenLifecycle` funnel every status write through `moveTo`, so a move no state
-                permits throws instead of being persisted. The tables below are read off those two
-                enums rather than written by hand — only the event names and guards are prose.
+                whether it holds a lease, which states it may move to, and how it gets there. Every
+                write to either status happens inside those two files, so a move no state permits
+                throws instead of being persisted, and operations that only one state can answer —
+                renewing a lease, reporting a failure — are refused everywhere else by the type
+                rather than by a check someone remembered to write. The tables below are read off
+                the two enums rather than written by hand; only the event names and guards are prose.
+
+                What a transition MEANS for the rest of the engine — cancelling an instance's
+                tokens, resuming a waiting parent, handing over to the saga reverse pass — stays in
+                `InstanceLifecycle` and `TokenLifecycle`, which need the graph and the drive loop
+                to do it.
 
                 The parent does not recompute itself from its children. No code scans tokens to decide
                 an instance is finished; a token *arriving* at a node fires the parent transition, and

@@ -237,13 +237,13 @@ public final class WorkflowEngine {
             if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
             String overrun = behaviour.overrunAfter(this, t, node, result);
             if (overrun != null) {
-                TokenLifecycle.settle(tx, t, now);
+                TokenState.settle(tx, t, now);
                 instances.fail(tx, inst, overrun, now);
                 return;
             }
-            TokenLifecycle.settle(tx, t, now);
+            TokenState.settle(tx, t, now);
             InstanceLifecycle.touch(tx, inst, now);
-            Token cont = TokenLifecycle.mint(inst, next, t.joinStack,
+            Token cont = TokenState.mint(inst, next, t.joinStack,
                     Scopes.stripCombineScratch(node, t.payload), now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
@@ -292,13 +292,13 @@ public final class WorkflowEngine {
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
             String overrun = behaviour.overrunReported(this, current, node, step);
             if (overrun != null) {
-                TokenLifecycle.settle(tx, current, now);
+                TokenState.settle(tx, current, now);
                 instances.fail(tx, inst, overrun, now);
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
-            TokenLifecycle.settle(tx, current, now);
+            TokenState.settle(tx, current, now);
             InstanceLifecycle.touch(tx, inst, now);
-            Token cont = TokenLifecycle.mint(inst, next, current.joinStack,
+            Token cont = TokenState.mint(inst, next, current.joinStack,
                     Scopes.stripCombineScratch(node, current.payload), now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
@@ -306,7 +306,7 @@ public final class WorkflowEngine {
                 handBack(tx, def, inst, cont, nextNode, now);
                 return new AdvanceOutcome(inst.status.name(), lease, null);
             }
-            TokenLifecycle.leaseBack(tx, cont, nextNode, leaseOwner, lease, now);
+            TokenState.mintLeased(tx, cont, nextNode, leaseOwner, lease, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
                     + " chaining locally " + node.name() + " -> " + next);
             current = cont;
@@ -354,9 +354,9 @@ public final class WorkflowEngine {
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
             TokenPayload contPayload = Scopes.mergeIntoScope(inst, t.payload, payload);
-            TokenLifecycle.settle(tx, t, now);
+            TokenState.settle(tx, t, now);
             InstanceLifecycle.touch(tx, inst, now);
-            Token cont = TokenLifecycle.mint(inst, node.next(), t.joinStack, contPayload, now);
+            Token cont = TokenState.mint(inst, node.next(), t.joinStack, contPayload, now);
             tx.insertToken(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
                     + inst.id + " -> " + node.next());
@@ -404,8 +404,8 @@ public final class WorkflowEngine {
         long ts = System.currentTimeMillis();
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
-        TokenLifecycle.discard(tx, t, ts);
-        Token cont = TokenLifecycle.mint(inst, node.next(), t.joinStack, t.payload, ts);
+        TokenState.settle(tx, t, ts);
+        Token cont = TokenState.mint(inst, node.next(), t.joinStack, t.payload, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
@@ -428,14 +428,14 @@ public final class WorkflowEngine {
         if (t.availableAt <= 0 || t.availableAt > ts) return;   // deadline cleared or moved
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
-        TokenLifecycle.discard(tx, t, ts);
+        TokenState.settle(tx, t, ts);
         if (node.altNext() == null) {
             LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                     + " of instance " + inst.id + " missed its deadline, no escalation -> failing instance");
             instances.fail(tx, inst, "signal '" + node.name() + "' timed out", ts);
             return;
         }
-        Token cont = TokenLifecycle.mint(inst, node.altNext(), t.joinStack, t.payload, ts);
+        Token cont = TokenState.mint(inst, node.altNext(), t.joinStack, t.payload, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
@@ -478,14 +478,16 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Hands a token failure to {@link TokenLifecycle#retryOrFail} and applies what its verdict means
+     * Hands a token failure to its own state ({@link TokenState#reportFailure}) and applies what
+     * the verdict means
      * for the instance: nothing while retries remain, the comp-log for an exhausted compensator, and
      * otherwise the instance itself (as {@code node.name() + ": " + failReason}).
      */
     private void settleFailure(Tx tx, Instance inst, Token t, Node node,
                                String lastError, String failReason, boolean retryable, long now) {
-        TokenLifecycle.Outcome outcome = tokens.retryOrFail(tx, inst, t, node, lastError, failReason, retryable, now);
-        if (!(outcome instanceof TokenLifecycle.Outcome.Exhausted done)) return;
+        TokenState.Outcome outcome =
+                TokenState.of(t.status).reportFailure(tx, t, node, lastError, failReason, retryable, now);
+        if (!(outcome instanceof TokenState.Outcome.Exhausted done)) return;
         if (done.compSeq() != null) {
             instances.compensatorExhausted(tx, inst, node, done.compSeq(), done.reason(), now);
             return;

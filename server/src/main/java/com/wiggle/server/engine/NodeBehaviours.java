@@ -71,8 +71,7 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); long now = s.now();
-            TokenStatus before = TokenLifecycle.parkWaiting(tx, t, NodeKind.SLEEP,
-                    now + node.sleepMillis(), now);
+            TokenStatus before = TokenState.parkWaiting(tx, t, now + node.sleepMillis(), now);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
                     + " (" + node.sleepMillis() + "ms)");
@@ -87,7 +86,7 @@ enum NodeBehaviours {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); long now = s.now();
             // node.name() is the signal's name, matched by signal()
-            TokenStatus before = TokenLifecycle.parkAwaiting(tx, t, NodeKind.SIGNAL, node.name(),
+            TokenStatus before = TokenState.parkAwaiting(tx, t, NodeKind.SIGNAL, node.name(),
                     node.sleepMillis() > 0 ? now + node.sleepMillis() : 0, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (SIGNAL) " + before + " -> AWAITING, deadline="
@@ -104,7 +103,7 @@ enum NodeBehaviours {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); long now = s.now();
             // node.activity() is the child workflow's name
-            TokenStatus before = TokenLifecycle.parkAwaiting(tx, t, NodeKind.SUB_WORKFLOW,
+            TokenStatus before = TokenState.parkAwaiting(tx, t, NodeKind.SUB_WORKFLOW,
                     node.activity(), 0, now);
             String childId;
             try {
@@ -124,7 +123,7 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-            TokenStatus before = TokenLifecycle.spend(tx, t, NodeKind.FORK, now);
+            TokenStatus before = TokenState.spend(tx, t, NodeKind.FORK, now);
             String group = t.id;   // unique per fork execution; the join finds the fork token by it
             String childStack = t.pushJoinStack(group);
             List<String> starts = node.branches();
@@ -133,7 +132,7 @@ enum NodeBehaviours {
                 // Each branch gets its own scope frame whose view starts as a copy of the fork's
                 // current view, so its writes stay isolated from its siblings and the enclosing
                 // scope until the combine.
-                Token child = TokenLifecycle.mint(inst, starts.get(i), childStack,
+                Token child = TokenState.mint(inst, starts.get(i), childStack,
                         t.payload.push(TokenPayload.FrameKind.ARM, i, null, parentView), now);
                 tx.insertToken(child);
                 work.push(child);
@@ -169,7 +168,7 @@ enum NodeBehaviours {
             } else {
                 elements = items == null ? List.of() : (List<?>) items;
             }
-            TokenStatus before = TokenLifecycle.spend(tx, t, NodeKind.DYN_FORK, now);
+            TokenStatus before = TokenState.spend(tx, t, NodeKind.DYN_FORK, now);
             if (elements.isEmpty()) {
                 // Nothing to fan out over: continue past the paired join AND its combine (there is
                 // nothing to collect, so the combine is skipped and the context is untouched).
@@ -177,7 +176,7 @@ enum NodeBehaviours {
                 Node join = def.node(node.next());
                 Node after = def.node(join.next());
                 String next = Scopes.isCombineNode(after) ? after.next() : join.next();
-                Token cont = TokenLifecycle.mint(inst, next, t.joinStack, t.payload, now);
+                Token cont = TokenState.mint(inst, next, t.joinStack, t.payload, now);
                 tx.insertToken(cont);
                 work.push(cont);
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -190,7 +189,7 @@ enum NodeBehaviours {
             String branchStart = node.branches().getFirst();
             for (int i = 0; i < elements.size(); i++) {
                 String key = mapKeys == null ? null : mapKeys.get(i);
-                Token child = TokenLifecycle.mint(inst, branchStart, childStack,
+                Token child = TokenState.mint(inst, branchStart, childStack,
                         t.payload.push(TokenPayload.FrameKind.ITEM, i, key, Doc.of(elements.get(i))), now);
                 tx.insertToken(child);
                 work.push(child);
@@ -209,7 +208,7 @@ enum NodeBehaviours {
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
             String group = t.currentJoinGroup();
             int expected = expectedAt(node, group);
-            TokenStatus before = TokenLifecycle.parkJoined(tx, t, now);
+            TokenStatus before = TokenState.parkJoined(tx, t, now);
             List<Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
             if (atBarrier.size() < expected) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -217,11 +216,11 @@ enum NodeBehaviours {
                         + " (" + atBarrier.size() + "/" + expected + ")");
                 return true;
             }
-            TokenLifecycle.consumeBarrier(tx, atBarrier, now);
+            TokenState.settleAll(tx, atBarrier, now);
             // Restore the payload the branches started from, so nesting scopes correctly, then (for a
             // combine fork) stage each isolated branch's result under its arm name for the aggregator.
             TokenPayload contPayload = combinePayload(def, node, atBarrier, forkPayload(tx, group));
-            Token cont = TokenLifecycle.mint(inst, node.next(), t.popJoinStack(), contPayload, now);
+            Token cont = TokenState.mint(inst, node.next(), t.popJoinStack(), contPayload, now);
             tx.insertToken(cont);
             work.push(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -235,7 +234,7 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-            TokenStatus before = TokenLifecycle.spend(tx, t, NodeKind.END, now);
+            TokenStatus before = TokenState.spend(tx, t, NodeKind.END, now);
             if (!node.success()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                         + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");

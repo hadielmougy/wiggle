@@ -3,17 +3,26 @@ package com.wiggle.server.engine;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.InstanceStatus;
 
+import com.wiggle.core.Doc;
+import com.wiggle.server.store.Tx;
+
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * What an instance in each state is and may become. One constant per {@link InstanceStatus},
- * matched by name -- the parent half of the pair {@link TokenState} completes.
+ * An instance's state: what it is, what it may become, and how it gets there. One constant per
+ * {@link InstanceStatus}, matched by name -- the parent half of the pair {@link TokenState}
+ * completes.
  *
- * <p>Reading one constant tells you whether the instance is still live, whether a caller may
- * cancel it, which of its tokens are dispatchable, and every state it may move to.
- * {@link InstanceLifecycle} routes all its writes through {@link #moveTo}.
+ * <p>Every write to an instance's status happens in this file and nowhere else. Reading one
+ * constant tells you whether the instance is still live, whether a caller may cancel it, which
+ * of its tokens are dispatchable, and every state it may move to; the transitions below are the
+ * only ways to make one, and {@link #move} refuses any a state does not declare.
+ *
+ * <p>What a transition MEANS for the rest of the engine -- cancelling the instance's tokens,
+ * resuming a waiting parent, handing over to the saga reverse pass -- stays in
+ * {@link InstanceLifecycle}, which needs the graph and the drive loop to do it.
  */
 enum InstanceState {
 
@@ -106,5 +115,65 @@ enum InstanceState {
                     + "; " + name() + " may only become " + successors);
         }
         return target;
+    }
+
+    /** The one place an instance's status is written. */
+    private static void move(Tx tx, Instance inst, InstanceStatus target, long now) {
+        inst.status = of(inst.status).moveTo(target);
+        inst.updatedAt = now;
+        tx.updateInstance(inst);
+    }
+
+    /** A new instance, born RUNNING. {@code parentTokenId} links a sub-workflow to the token
+     *  awaiting it; null for a top-level start. */
+    static Instance mint(Tx tx, String id, String workflow, int version, Object context,
+                         String correlationId, String parentTokenId, long now) {
+        Instance inst = new Instance();
+        inst.id = id;
+        inst.workflow = workflow;
+        inst.version = version;
+        inst.correlationId = correlationId;
+        inst.parentTokenId = parentTokenId;
+        inst.status = InstanceStatus.RUNNING;
+        inst.context = Doc.of(context);
+        inst.createdAt = now;
+        inst.updatedAt = now;
+        tx.insertInstance(inst);
+        return inst;
+    }
+
+    /** Ran out of flow at a successful END with no token left anywhere. */
+    static void complete(Tx tx, Instance inst, String reason, long now) {
+        inst.terminationReason = reason;
+        move(tx, inst, InstanceStatus.COMPLETED, now);
+    }
+
+    /** Something unrecoverable, with nothing recorded to undo. */
+    static void fail(Tx tx, Instance inst, String error, long now) {
+        inst.error = error;
+        move(tx, inst, InstanceStatus.FAILED, now);
+    }
+
+    /** Cancelled by a caller. */
+    static void cancel(Tx tx, Instance inst, String reason, long now) {
+        inst.terminationReason = reason;
+        move(tx, inst, InstanceStatus.CANCELLED, now);
+    }
+
+    /** Handed to the saga reverse pass; the original failure is kept as the error. */
+    static void compensating(Tx tx, Instance inst, String error, long now) {
+        inst.error = error;
+        move(tx, inst, InstanceStatus.COMPENSATING, now);
+    }
+
+    /** The reverse pass undid every recorded step. */
+    static void compensated(Tx tx, Instance inst, long now) {
+        move(tx, inst, InstanceStatus.COMPENSATED, now);
+    }
+
+    /** The reverse pass could not finish; the undo failure is appended to the original one. */
+    static void compensationFailed(Tx tx, Instance inst, String error, long now) {
+        inst.error = (inst.error == null ? "" : inst.error + "; ") + error;
+        move(tx, inst, InstanceStatus.COMPENSATION_FAILED, now);
     }
 }
