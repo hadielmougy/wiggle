@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,20 +53,42 @@ class WakeOnProduceTest {
         }
     }
 
+    /**
+     * A storage transaction is a borrowed connection, so a nested one is an independent transaction
+     * on a second connection: it commits regardless of the outer, cannot see the outer's uncommitted
+     * writes, and blocks on the instance row lock the outer already holds -- a deadlock against
+     * itself. Nothing in the engine nests today; this keeps it that way by failing at the call
+     * rather than hanging at the lock.
+     */
     @Test
-    @DisplayName("a queue marked inside a nested transaction is signalled by the outermost commit")
-    void nestedScopesSignalOnce() {
+    @DisplayName("opening a transaction inside a transaction is refused, not silently nested")
+    void nestedScopesAreRefused() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            Transactions transactions = new Transactions(storage, new DispatchNotifier());
+
+            IllegalStateException nested = assertThrows(IllegalStateException.class,
+                    () -> transactions.inTxVoid(outer -> transactions.inTxVoid(inner -> { })));
+            assertTrue(nested.getMessage().contains("nested transaction scope"), nested.getMessage());
+        }
+    }
+
+    @Test
+    @DisplayName("a refused nested scope leaves the thread able to open a fresh one")
+    void aFailedScopeUnwindsCleanly() {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             DispatchNotifier notifier = new DispatchNotifier();
             Transactions transactions = new Transactions(storage, notifier);
 
-            Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
-            transactions.inTxVoid(outer -> transactions.inTxVoid(inner -> transactions.wake(QUEUE)));
-            Map<String, Long> after = notifier.snapshot(Set.of(QUEUE));
+            assertThrows(IllegalStateException.class,
+                    () -> transactions.inTxVoid(outer -> transactions.inTxVoid(inner -> { })));
 
-            assertTrue(after.getOrDefault(QUEUE, 0L) > before.getOrDefault(QUEUE, 0L),
-                    "an inner scope's queue must reach the outermost commit's signal");
+            Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
+            transactions.inTxVoid(tx -> transactions.wake(QUEUE));
+            assertTrue(notifier.snapshot(Set.of(QUEUE)).getOrDefault(QUEUE, 0L)
+                            > before.getOrDefault(QUEUE, 0L),
+                    "the failed scope must not have left this thread's state stuck");
         }
     }
 }
