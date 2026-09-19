@@ -1,7 +1,6 @@
 package com.wiggle.election;
 
 import java.util.List;
-import java.util.function.Function;
 
 /**
  * The durable roster an election runs on. Implemented once per side -- over the cell's node table,
@@ -20,15 +19,15 @@ public interface ElectionStore {
      *   <li>delete rows whose {@code lastHeartbeat} is older than {@code pruneBefore} -- long-dead
      *       processes, not merely late ones, so the table does not grow without bound;</li>
      *   <li>read the roster;</li>
-     *   <li>call {@code elect} with it and persist the verdict it returns (the winning id, or null
-     *       when the roster has no live member) however this backend surfaces it;</li>
+     *   <li>call {@code elect} with it and persist the verdict it returns, however this backend
+     *       surfaces it;</li>
      *   <li>return the roster that {@code elect} was given.</li>
      * </ol>
      *
      * <p>Persisting the verdict is for readers -- a dashboard, an operator -- not for the election:
      * nothing reads it back to decide anything, so a backend with nowhere to put it may drop it.
      */
-    List<Member> step(Member self, long pruneBefore, Function<List<Member>, String> elect);
+    List<Member> step(Member self, long pruneBefore, ElectionRule elect);
 
     /**
      * Backdate {@code self}'s heartbeat to zero and clear any leader flag, so peers re-elect at once

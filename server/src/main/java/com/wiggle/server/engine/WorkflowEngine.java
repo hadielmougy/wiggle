@@ -69,12 +69,12 @@ public final class WorkflowEngine {
     /** {@code idMinter} produces new instance ids: legacy {@code wfi_...} by default, or epoch-aware
      *  ids ({@link com.wiggle.core.IdCodec}) when the cell is placed under a coordinator. */
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis,
-                          java.util.function.Supplier<String> idMinter) {
+                          InstanceIds idMinter) {
         this.definitions = definitions;
         this.queries = new Queries(storage, pollers);
         this.defaultLeaseMillis = defaultLeaseMillis;
         this.transactions = new Transactions(storage, notifier);
-        this.tokens = new TokenLifecycle(definitions);
+        this.tokens = new TokenLifecycle(definitions, transactions::wake);
         this.instances = new InstanceLifecycle(definitions, tokens, idMinter, this::drive);
         this.dispatch = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules = new Schedules(transactions, instances);
@@ -187,18 +187,18 @@ public final class WorkflowEngine {
     }
 
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline) {
-        return poll(workerId, queues, max, leaseMillis, deadline, () -> false);
+        return poll(workerId, queues, max, leaseMillis, deadline, Cancellation.never());
     }
 
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis, long deadline,
-                                     java.util.function.BooleanSupplier cancelled) {
+                                     Cancellation cancelled) {
         return poll(workerId, queues, null, max, leaseMillis, deadline, cancelled);
     }
 
     /** Long-polls for work; see {@link Dispatch#poll}. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, Set<WorkflowVersion> versions, int max,
                                      Long leaseMillis, long deadline,
-                                     java.util.function.BooleanSupplier cancelled) {
+                                     Cancellation cancelled) {
         return dispatch.poll(workerId, queues, versions, max, leaseMillis, deadline, cancelled);
     }
 

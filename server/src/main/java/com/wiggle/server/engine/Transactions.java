@@ -5,8 +5,6 @@ import com.wiggle.server.store.Tx;
 
 import java.util.HashSet;
 import java.util.Set;
-import java.util.function.Consumer;
-import java.util.function.Function;
 
 /**
  * The engine's transaction scope: a storage transaction plus the wake-on-produce signal that must
@@ -16,6 +14,18 @@ import java.util.function.Function;
  * outermost, which signals after its own commit.
  */
 final class Transactions {
+
+    /** A transaction body that produces a value. */
+    @FunctionalInterface
+    interface TxBody<T> {
+        T run(Tx tx);
+    }
+
+    /** A transaction body that produces nothing. */
+    @FunctionalInterface
+    interface TxWork {
+        void run(Tx tx);
+    }
 
     private final Storage storage;
     private final DispatchNotifier notifier;
@@ -28,14 +38,21 @@ final class Transactions {
         this.notifier = notifier;
     }
 
+    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op.
+     *  Handed to producers as a {@link QueueWake}. */
+    void wake(String queue) {
+        Set<String> ready = readyQueues.get();
+        if (ready != null && queue != null) ready.add(queue);
+    }
+
     /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue it marked. */
-    <T> T inTx(Function<Tx, T> body) {
+    <T> T inTx(TxBody<T> body) {
         Set<String> outer = readyQueues.get();
         Set<String> mine = new HashSet<>();
         readyQueues.set(mine);
         T result;
         try {
-            result = storage.inTx(body);
+            result = storage.inTx(body::run);
         } finally {
             readyQueues.set(outer);
         }
@@ -45,12 +62,12 @@ final class Transactions {
     }
 
     /** {@link #inTx} for a body with no return value. */
-    void inTxVoid(Consumer<Tx> body) {
+    void inTxVoid(TxWork body) {
         Set<String> outer = readyQueues.get();
         Set<String> mine = new HashSet<>();
         readyQueues.set(mine);
         try {
-            storage.inTxVoid(body);
+            storage.inTxVoid(body::run);
         } finally {
             readyQueues.set(outer);
         }
@@ -59,12 +76,12 @@ final class Transactions {
     }
 
     /** A transaction with no wake-on-produce scope: reads, and claims that park nothing READY. */
-    <T> T read(Function<Tx, T> body) {
-        return storage.inTx(body);
+    <T> T read(TxBody<T> body) {
+        return storage.inTx(body::run);
     }
 
     /** {@link #read} for a body with no return value. */
-    void readVoid(Consumer<Tx> body) {
-        storage.inTxVoid(body);
+    void readVoid(TxWork body) {
+        storage.inTxVoid(body::run);
     }
 }
