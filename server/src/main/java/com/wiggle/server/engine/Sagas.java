@@ -25,10 +25,10 @@ final class Sagas {
 
     private static final System.Logger LOG = System.getLogger(Sagas.class.getName());
 
-    private final InstanceLifecycle instances;
-    private final TokenLifecycle tokens;
+    private final Instances instances;
+    private final Tokens tokens;
 
-    Sagas(InstanceLifecycle instances, TokenLifecycle tokens) {
+    Sagas(Instances instances, Tokens tokens) {
         this.instances = instances;
         this.tokens = tokens;
     }
@@ -89,7 +89,7 @@ final class Sagas {
         }
         TokenState.settle(tx, t, now);
         tx.markCompensated(inst.id, seq);
-        InstanceLifecycle.touch(tx, inst, now);
+        Instances.touch(tx, inst, now);
         createNext(tx, inst, now);
     }
 

@@ -18,9 +18,9 @@ final class Schedules {
     private static final System.Logger LOG = System.getLogger(Schedules.class.getName());
 
     private final Transactions transactions;
-    private final InstanceLifecycle instances;
+    private final Instances instances;
 
-    Schedules(Transactions transactions, InstanceLifecycle instances) {
+    Schedules(Transactions transactions, Instances instances) {
         this.transactions = transactions;
         this.instances = instances;
     }

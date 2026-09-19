@@ -36,15 +36,15 @@ abstract class NodeBehaviour {
 
     static final class TaskNodeBehaviour extends NodeBehaviour {
 
-        private final TokenLifecycle tokenLifecycle;
+        private final Tokens tokens;
 
-        TaskNodeBehaviour(TokenLifecycle tokenLifecycle) {
-            this.tokenLifecycle = tokenLifecycle;
+        TaskNodeBehaviour(Tokens tokens) {
+            this.tokens = tokens;
         }
 
 
         @Override boolean advance(Step s) {
-            tokenLifecycle.parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
+            tokens.parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
             return true;
         }
 
@@ -62,14 +62,14 @@ abstract class NodeBehaviour {
 
     static final class PredicateNodeBehaviour extends NodeBehaviour {
 
-        private final TokenLifecycle tokenLifecycle;
+        private final Tokens tokens;
 
-        PredicateNodeBehaviour(TokenLifecycle tokenLifecycle) {
-            this.tokenLifecycle = tokenLifecycle;
+        PredicateNodeBehaviour(Tokens tokens) {
+            this.tokens = tokens;
         }
 
         @Override boolean advance(Step s) {
-            tokenLifecycle.parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
+            tokens.parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
             return true;
         }
 
@@ -153,9 +153,9 @@ abstract class NodeBehaviour {
 
     static final class DynForkNodeBehaviour extends NodeBehaviour {
 
-        private final InstanceLifecycle instances;
+        private final Instances instances;
 
-        DynForkNodeBehaviour(InstanceLifecycle instances) {
+        DynForkNodeBehaviour(Instances instances) {
             this.instances = instances;
         }
 
@@ -325,9 +325,9 @@ abstract class NodeBehaviour {
 
     static final class SubflowNodeBehaviour extends NodeBehaviour {
 
-        private final InstanceLifecycle instances;
+        private final Instances instances;
 
-        SubflowNodeBehaviour(InstanceLifecycle instances) {
+        SubflowNodeBehaviour(Instances instances) {
             this.instances = instances;
         }
 
@@ -353,9 +353,9 @@ abstract class NodeBehaviour {
 
     static final class EndNodeBehaviour extends NodeBehaviour {
 
-        private final InstanceLifecycle instances;
+        private final Instances instances;
 
-        EndNodeBehaviour(InstanceLifecycle instances) {
+        EndNodeBehaviour(Instances instances) {
             this.instances = instances;
         }
 
@@ -370,7 +370,7 @@ abstract class NodeBehaviour {
                 instances.fail(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
                 return false;
             }
-            boolean anyActive = TokenLifecycle.anyActive(tx, inst.id);
+            boolean anyActive = Tokens.anyActive(tx, inst.id);
             if (anyActive || !work.isEmpty()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                         + node.name() + " (END) " + before + " -> DONE, other tokens still active");

@@ -24,17 +24,17 @@ import java.util.Set;
  * (a worker, a clock, an external actor, a sibling), claimed under a lease, and settled. It may
  * read an instance's status as a dispatch guard, but it never assigns one: a token transition
  * whose meaning reaches the instance reports an {@link Outcome} for the caller to act on. That
- * is what keeps this the lower of the two lifecycles -- {@link InstanceLifecycle} depends on it,
+ * is what keeps this the lower of the two lifecycles -- {@link Instances} depends on it,
  * never the reverse.
  */
-final class TokenLifecycle {
+final class Tokens {
 
-    private static final System.Logger LOG = System.getLogger(TokenLifecycle.class.getName());
+    private static final System.Logger LOG = System.getLogger(Tokens.class.getName());
 
     private final DefinitionRegistry definitions;
     private final QueueWake queueWake;
 
-    TokenLifecycle(DefinitionRegistry definitions, QueueWake queueWake) {
+    Tokens(DefinitionRegistry definitions, QueueWake queueWake) {
         this.definitions = definitions;
         this.queueWake = queueWake;
     }

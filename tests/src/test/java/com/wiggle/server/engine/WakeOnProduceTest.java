@@ -34,7 +34,7 @@ class WakeOnProduceTest {
             storage.migrate();
             DispatchNotifier notifier = new DispatchNotifier();
             Transactions transactions = new Transactions(storage, notifier);
-            TokenLifecycle tokens = new TokenLifecycle(new DefinitionRegistry(storage), transactions::wake);
+            Tokens tokens = new Tokens(new DefinitionRegistry(storage), transactions::wake);
             Node node = Node.task("one", "one", "one", QUEUE, null);
 
             Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));

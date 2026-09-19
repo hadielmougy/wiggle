@@ -63,7 +63,7 @@ final class StateChart {
     }
 
     static Chart instances() {
-        return new Chart("Instance", "InstanceLifecycle", instanceStates(),
+        return new Chart("Instance", "Instances", instanceStates(),
         List.of(
                 new Transition("(none)", "START", "RUNNING",
                         "the workflow version resolves", "start"),
@@ -88,7 +88,7 @@ final class StateChart {
     }
 
     static Chart tokens() {
-        return new Chart("Token", "TokenLifecycle", tokenStates(),
+        return new Chart("Token", "Tokens", tokenStates(),
         List.of(
                 new Transition("(none)", "MINT", "READY",
                         "a continuation, a fork branch, or the start node", null),
@@ -143,7 +143,7 @@ final class StateChart {
     }
 
     /** The sources of the instance FSM's UNRECOVERABLE_FAILURE event, each a call to
-     *  {@code InstanceLifecycle.fail}. Checked for count, not for wording. */
+     *  {@code Instances.fail}. Checked for count, not for wording. */
     static List<String> failureSources() {
         return List.of(
                 "a token exhausted its retry policy (reported, or through an expired lease)",
@@ -179,7 +179,7 @@ final class StateChart {
 
                 What a transition MEANS for the rest of the engine — cancelling an instance's
                 tokens, resuming a waiting parent, handing over to the saga reverse pass — stays in
-                `InstanceLifecycle` and `TokenLifecycle`, which need the graph and the drive loop
+                `Instances` and `Tokens`, which need the graph and the drive loop
                 to do it.
 
                 The parent does not recompute itself from its children. No code scans tokens to decide
@@ -208,18 +208,20 @@ final class StateChart {
         }
         md.append("\n## What raises UNRECOVERABLE_FAILURE\n\n")
                 .append("The instance FSM's failure event is not only a token running out of retries.\n")
-                .append("Every path below lands in `InstanceLifecycle.fail`:\n\n");
+                .append("Every path below lands in `Instances.fail`:\n\n");
         for (String s : failureSources()) md.append("- ").append(s).append("\n");
         md.append("""
 
                 ## How the two are coupled
 
                 - **Downward.** A token is only claimable while its instance is `RUNNING` — or
-                  `COMPENSATING`, for a compensator. `TokenLifecycle` reads the instance status as a
+                  `COMPENSATING`, for a compensator. `Tokens` reads the instance status as a
                   dispatch guard, but never assigns one.
                 - **Upward.** A token transition that means something for the instance reports it
-                  rather than applying it: `TokenLifecycle.retryOrFail` returns `Retried` or
+                  rather than applying it: `TokenState.reportFailure` returns `Retried` or
                   `Exhausted`, and the caller decides whether that is the comp-log or the instance.
+                  It is overridden on `RUNNING` alone — only a leased token can fail, and the base
+                  refuses rather than relying on a check the caller remembered to write.
                 - **Retries are internal to the token.** Only exhaustion crosses the boundary.
                 - **Cancellation is structural, not a priority rule.** `cancel` takes the instance
                   write lock and settles every active token; every other transition re-reads under
