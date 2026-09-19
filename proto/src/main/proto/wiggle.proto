@@ -279,7 +279,11 @@ message AdvanceRunRequest {
 }
 
 message AdvanceRunResult {
+    // Any InstanceStatus, not just the terminal four: a concurrent failure can leave the
+    // instance COMPENSATING between a worker's local steps. Clients treat anything but
+    // RUNNING as "stop here". See docs/state-machines.md.
     string instance_status = 1;            // RUNNING | COMPLETED | FAILED | CANCELLED
+                                           // | COMPENSATING | COMPENSATED | COMPENSATION_FAILED
     int64 lease_expires_at = 2;            // renewed lease covering continued local execution
     string next_task_id = 3;              // token to reference for the next local step (blank if handed back)
 }

@@ -25,10 +25,12 @@ final class Sagas {
 
     private static final System.Logger LOG = System.getLogger(Sagas.class.getName());
 
-    private final WorkflowEngine engine;
+    private final InstanceLifecycle instances;
+    private final TokenLifecycle tokens;
 
-    Sagas(WorkflowEngine engine) {
-        this.engine = engine;
+    Sagas(InstanceLifecycle instances, TokenLifecycle tokens) {
+        this.instances = instances;
+        this.tokens = tokens;
     }
 
     /** The comp-log seq a compensation token settles, or null for a forward token. */
@@ -59,7 +61,7 @@ final class Sagas {
         e.activity = node.activity();
         e.queue = node.queue();
         e.input = input;
-        e.result = WorkflowEngine.dispatchContext(inst, t);   // post-apply: as the step left it
+        e.result = Scopes.dispatchContext(inst, t);   // post-apply: as the step left it
         tx.appendCompensation(e);
     }
 
@@ -73,10 +75,7 @@ final class Sagas {
     boolean begin(Tx tx, Instance inst, String error, long now) {
         boolean hasUndo = tx.compensationLog(inst.id).stream().anyMatch(e -> !e.compensated);
         if (!hasUndo) return false;
-        inst.status = InstanceStatus.COMPENSATING;
-        inst.error = error;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        instances.compensating(tx, inst, error, now);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed (" + error
                 + ") -> compensating");
         mintNext(tx, inst, now);
@@ -88,9 +87,9 @@ final class Sagas {
         if (inst.status != InstanceStatus.COMPENSATING) {
             throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
         }
-        WorkflowEngine.settleToken(tx, t, now);
+        TokenState.settle(tx, t, now);
         tx.markCompensated(inst.id, seq);
-        WorkflowEngine.touchInstance(tx, inst, now);
+        InstanceLifecycle.touch(tx, inst, now);
         mintNext(tx, inst, now);
     }
 
@@ -98,14 +97,10 @@ final class Sagas {
      *  saga reported as success -- refuse to pretend and demand a human. */
     void compensatorExhausted(Tx tx, Instance inst, Node node, long seq, String failReason, long now) {
         if (inst.status != InstanceStatus.COMPENSATING) return;
-        inst.status = InstanceStatus.COMPENSATION_FAILED;
-        inst.error = (inst.error == null ? "" : inst.error + "; ")
-                + "compensator '" + node.name() + "' (undo seq " + seq + ") failed: " + failReason;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
         LOG.log(System.Logger.Level.WARNING, () -> "instance " + inst.id
                 + " COMPENSATION_FAILED at undo seq " + seq + ": " + failReason);
-        engine.notifyParent(tx, inst, now);
+        instances.compensationFailed(tx, inst,
+                "compensator '" + node.name() + "' (undo seq " + seq + ") failed: " + failReason, now);
     }
 
     /** Mints the reverse pass's next token: the newest uncompensated entry, dispatched to the
@@ -118,23 +113,20 @@ final class Sagas {
             if (!log.get(i).compensated) { next = log.get(i); break; }
         }
         if (next == null) {
-            inst.status = InstanceStatus.COMPENSATED;
-            inst.updatedAt = now;
-            tx.updateInstance(inst);
             LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id
                     + " compensated cleanly (" + log.size() + " undo(s))");
-            engine.notifyParent(tx, inst, now);
+            instances.compensated(tx, inst, now);
             return;
         }
         TokenPayload payload = TokenPayload.EMPTY.withStaged(Map.of(
                 "input", next.input.raw(),
                 "result", next.result.raw()));
-        Token t = WorkflowEngine.newToken(inst, next.nodeId, "", payload, now);
+        Token t = TokenState.mint(inst, next.nodeId, "", payload, now);
         t.compSeq = next.seq;
         t.activity = next.activity + "#compensate";
         t.queue = next.queue;
         tx.insertToken(t);
-        engine.wakeQueue(t.queue);   // wake-on-produce, post-commit
+        tokens.wake(t.queue);   // wake-on-produce, post-commit
         Rows.CompLog fNext = next;
         LOG.log(System.Logger.Level.DEBUG, () -> "compensation: instance " + inst.id
                 + " dispatching undo seq " + fNext.seq + " (" + fNext.activity + ")");

@@ -5,7 +5,6 @@ import com.wiggle.core.GraphTraversal;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.ScratchKeys;
-import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
@@ -31,14 +30,14 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) { return parkReady(e, s); }
 
         @Override String route(Instance inst, Token t, Node node, Object result) {
-            WorkflowEngine.applyStepResult(inst, t, node, result);
+            Scopes.applyStepResult(inst, t, node, result);
             LOG.log(System.Logger.Level.DEBUG, () -> "complete: task " + node.name()
                     + " of instance " + inst.id + " done -> " + node.next());
             return node.next();
         }
 
         @Override String routeReported(Instance inst, Token t, Node node, WorkflowEngine.StepInput step) {
-            WorkflowEngine.applyStepResult(inst, t, node, step.merge());
+            Scopes.applyStepResult(inst, t, node, step.merge());
             return node.next();
         }
     },
@@ -72,12 +71,7 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); long now = s.now();
-            TokenStatus before = t.status;
-            t.status = TokenStatus.WAITING;
-            t.kind = NodeKind.SLEEP;
-            t.availableAt = now + node.sleepMillis();
-            t.updatedAt = now;
-            tx.updateToken(t);
+            TokenStatus before = TokenState.parkWaiting(tx, t, now + node.sleepMillis(), now);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
                     + " (" + node.sleepMillis() + "ms)");
@@ -91,13 +85,9 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); long now = s.now();
-            TokenStatus before = t.status;
-            t.status = TokenStatus.AWAITING;
-            t.kind = NodeKind.SIGNAL;
-            t.activity = node.name();     // the signal's name, matched by signal()
-            t.availableAt = node.sleepMillis() > 0 ? now + node.sleepMillis() : 0;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            // node.name() is the signal's name, matched by signal()
+            TokenStatus before = TokenState.parkAwaiting(tx, t, NodeKind.SIGNAL, node.name(),
+                    node.sleepMillis() > 0 ? now + node.sleepMillis() : 0, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (SIGNAL) " + before + " -> AWAITING, deadline="
                     + (t.availableAt > 0 ? t.availableAt : "none"));
@@ -112,19 +102,15 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); long now = s.now();
-            TokenStatus before = t.status;
-            t.status = TokenStatus.AWAITING;
-            t.kind = NodeKind.SUB_WORKFLOW;
-            t.activity = node.activity();   // the child workflow's name
-            t.availableAt = 0;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            // node.activity() is the child workflow's name
+            TokenStatus before = TokenState.parkAwaiting(tx, t, NodeKind.SUB_WORKFLOW,
+                    node.activity(), 0, now);
             String childId;
             try {
-                childId = e.startInTx(tx, node.activity(), null,
-                        WorkflowEngine.dispatchContext(inst, t), "sub:" + t.id, t.id);
+                childId = e.instances().start(tx, node.activity(), null,
+                        Scopes.dispatchContext(inst, t), "sub:" + t.id, t.id);
             } catch (EngineException ex) {
-                e.failInstance(tx, inst, "sub-workflow '" + node.activity() + "': " + ex.getMessage(), now);
+                e.instances().fail(tx, inst, "sub-workflow '" + node.activity() + "': " + ex.getMessage(), now);
                 return false;
             }
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -137,20 +123,16 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-            TokenStatus before = t.status;
-            t.status = TokenStatus.DONE;
-            t.kind = NodeKind.FORK;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            TokenStatus before = TokenState.spend(tx, t, NodeKind.FORK, now);
             String group = t.id;   // unique per fork execution; the join finds the fork token by it
             String childStack = t.pushJoinStack(group);
             List<String> starts = node.branches();
-            Doc parentView = WorkflowEngine.currentView(inst, t);
+            Doc parentView = Scopes.currentView(inst, t);
             for (int i = 0; i < starts.size(); i++) {
                 // Each branch gets its own scope frame whose view starts as a copy of the fork's
                 // current view, so its writes stay isolated from its siblings and the enclosing
                 // scope until the combine.
-                Token child = WorkflowEngine.newToken(inst, starts.get(i), childStack,
+                Token child = TokenState.mint(inst, starts.get(i), childStack,
                         t.payload.push(TokenPayload.FrameKind.ARM, i, null, parentView), now);
                 tx.insertToken(child);
                 work.push(child);
@@ -170,9 +152,9 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-            Object items = WorkflowEngine.currentView(inst, t).get(node.itemsKey());
+            Object items = Scopes.currentView(inst, t).get(node.itemsKey());
             if (items != null && !(items instanceof List) && !(items instanceof Map)) {
-                e.failInstance(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
+                e.instances().fail(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
                         + "' holds " + items.getClass().getSimpleName() + ", not a list or map", now);
                 return false;
             }
@@ -186,19 +168,15 @@ enum NodeBehaviours {
             } else {
                 elements = items == null ? List.of() : (List<?>) items;
             }
-            TokenStatus before = t.status;
-            t.status = TokenStatus.DONE;
-            t.kind = NodeKind.DYN_FORK;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            TokenStatus before = TokenState.spend(tx, t, NodeKind.DYN_FORK, now);
             if (elements.isEmpty()) {
                 // Nothing to fan out over: continue past the paired join AND its combine (there is
                 // nothing to collect, so the combine is skipped and the context is untouched).
-                LazyGraph def = e.def(tx, inst);
+                LazyGraph def = s.def();
                 Node join = def.node(node.next());
                 Node after = def.node(join.next());
-                String next = WorkflowEngine.isCombineNode(after) ? after.next() : join.next();
-                Token cont = WorkflowEngine.newToken(inst, next, t.joinStack, t.payload, now);
+                String next = Scopes.isCombineNode(after) ? after.next() : join.next();
+                Token cont = TokenState.mint(inst, next, t.joinStack, t.payload, now);
                 tx.insertToken(cont);
                 work.push(cont);
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -211,7 +189,7 @@ enum NodeBehaviours {
             String branchStart = node.branches().getFirst();
             for (int i = 0; i < elements.size(); i++) {
                 String key = mapKeys == null ? null : mapKeys.get(i);
-                Token child = WorkflowEngine.newToken(inst, branchStart, childStack,
+                Token child = TokenState.mint(inst, branchStart, childStack,
                         t.payload.push(TokenPayload.FrameKind.ITEM, i, key, Doc.of(elements.get(i))), now);
                 tx.insertToken(child);
                 work.push(child);
@@ -230,11 +208,7 @@ enum NodeBehaviours {
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
             String group = t.currentJoinGroup();
             int expected = expectedAt(node, group);
-            TokenStatus before = t.status;
-            t.status = TokenStatus.JOINED;
-            t.kind = NodeKind.JOIN;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            TokenStatus before = TokenState.parkJoined(tx, t, now);
             List<Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
             if (atBarrier.size() < expected) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -242,11 +216,11 @@ enum NodeBehaviours {
                         + " (" + atBarrier.size() + "/" + expected + ")");
                 return true;
             }
-            consumeBarrier(tx, atBarrier, now);
+            TokenState.settleAll(tx, atBarrier, now);
             // Restore the payload the branches started from, so nesting scopes correctly, then (for a
             // combine fork) stage each isolated branch's result under its arm name for the aggregator.
             TokenPayload contPayload = combinePayload(def, node, atBarrier, forkPayload(tx, group));
-            Token cont = WorkflowEngine.newToken(inst, node.next(), t.popJoinStack(), contPayload, now);
+            Token cont = TokenState.mint(inst, node.next(), t.popJoinStack(), contPayload, now);
             tx.insertToken(cont);
             work.push(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
@@ -260,31 +234,23 @@ enum NodeBehaviours {
         @Override boolean advance(WorkflowEngine e, Step s) {
             Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
             Node node = s.node(); Deque<Token> work = s.work(); long now = s.now();
-            TokenStatus before = t.status;
-            t.status = TokenStatus.DONE;
-            t.kind = NodeKind.END;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            TokenStatus before = TokenState.spend(tx, t, NodeKind.END, now);
             if (!node.success()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                         + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
-                e.failInstance(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
+                e.instances().fail(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
                 return false;
             }
-            boolean anyActive = tx.tokensOf(inst.id).stream().anyMatch(Token::isActive);
+            boolean anyActive = TokenLifecycle.anyActive(tx, inst.id);
             if (anyActive || !work.isEmpty()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                         + node.name() + " (END) " + before + " -> DONE, other tokens still active");
                 return true;
             }
-            inst.status = Rows.InstanceStatus.COMPLETED;
-            inst.terminationReason = node.reason();
-            inst.updatedAt = now;
-            tx.updateInstance(inst);
             LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                     + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
                     + (node.reason() != null ? " (" + node.reason() + ")" : ""));
-            e.notifyParent(tx, inst, now);
+            e.instances().complete(tx, inst, node.reason(), now);
             return true;
         }
     };
@@ -319,19 +285,7 @@ enum NodeBehaviours {
     }
 
     private static boolean parkReady(WorkflowEngine e, Step s) {
-        Tx tx = s.tx(); Instance inst = s.inst(); Token t = s.token();
-        Node node = s.node(); long now = s.now();
-        TokenStatus before = t.status;
-        t.status = TokenStatus.READY;
-        t.kind = node.kind();
-        t.activity = node.activity();
-        t.queue = node.queue();
-        t.availableAt = now;
-        t.updatedAt = now;
-        tx.updateToken(t);
-        e.wakeQueue(node.queue());   // signalled post-commit by tx()/txVoid()
-        LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
+        e.tokens().parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
         return true;
     }
 
@@ -383,16 +337,6 @@ enum NodeBehaviours {
                 .toList();
     }
 
-    /** Consumes the barrier: these tokens have served their purpose, and leaving them parked
-     *  would keep the instance looking active forever. */
-    private static void consumeBarrier(Tx tx, List<Token> atBarrier, long now) {
-        for (Token parked : atBarrier) {
-            parked.status = TokenStatus.DONE;
-            parked.updatedAt = now;
-            tx.updateToken(parked);
-        }
-    }
-
     /**
      * The continuation payload after a join: the fork token's own payload restored (which pops the
      * children's scope frame), with the branches' final views staged for the mandatory combine. A
@@ -403,7 +347,7 @@ enum NodeBehaviours {
     private static TokenPayload combinePayload(LazyGraph def, Node joinNode, List<Token> atBarrier,
                                                TokenPayload basePayload) {
         Node agg = def.node(joinNode.next());
-        if (!WorkflowEngine.isCombineNode(agg)) return basePayload;
+        if (!Scopes.isCombineNode(agg)) return basePayload;
         Map<String, Object> staged = new LinkedHashMap<>();
         String collectKey = agg.collectKey();
         if (collectKey == null) {
