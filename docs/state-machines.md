@@ -6,13 +6,21 @@
 
 The engine is one instance state machine with many concurrent token state machines
 beneath it. The instance owns the question "is this workflow still going"; each token
-owns one unit of execution moving over the graph. `InstanceLifecycle` is the only code
-that assigns an instance status, `TokenLifecycle` the only code that assigns a token
-status, and the split is checked by `StateChartTest`.
+owns one unit of execution moving over the graph.
+
+Each state is a constant on `InstanceState` or `TokenState`, and that constant owns
+the state's own rules: whether it is still live, whether a worker may claim it,
+whether it holds a lease, and which states it may move to. `InstanceLifecycle` and
+`TokenLifecycle` funnel every status write through `moveTo`, so a move no state
+permits throws instead of being persisted. The tables below are read off those two
+enums rather than written by hand — only the event names and guards are prose.
 
 The parent does not recompute itself from its children. No code scans tokens to decide
 an instance is finished; a token *arriving* at a node fires the parent transition, and
 the aggregate only appears as a guard on it.
+
+One transition is not policed here: `READY -> RUNNING` is performed by the store,
+because a claim has to be atomic with the `SKIP LOCKED` select that finds the token.
 
 ## Instance states
 

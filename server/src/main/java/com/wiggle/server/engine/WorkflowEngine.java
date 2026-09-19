@@ -10,7 +10,6 @@ import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 import com.wiggle.server.store.Storage;
@@ -271,7 +270,7 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             long now = System.currentTimeMillis();
             long lease = now + defaultLeaseMillis;
-            if (inst.status != InstanceStatus.RUNNING) {
+            if (!InstanceState.of(inst.status).running()) {
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
             TokenLifecycle.requireLease(locked.token(), leaseOwner);
@@ -399,7 +398,7 @@ public final class WorkflowEngine {
 
     private void fireTimer(Tx tx, Token timer) {
         Instance inst = tx.lockInstance(timer.instanceId).orElse(null);
-        if (inst == null || inst.status != InstanceStatus.RUNNING) return;
+        if (inst == null || !InstanceState.of(inst.status).running()) return;
         Token t = tx.findToken(timer.id).orElse(null);
         if (t == null || t.status != TokenStatus.WAITING) return;
         long ts = System.currentTimeMillis();
@@ -422,7 +421,7 @@ public final class WorkflowEngine {
 
     private void escalateOrFailSignal(Tx tx, Token task) {
         Instance inst = tx.lockInstance(task.instanceId).orElse(null);
-        if (inst == null || inst.status != InstanceStatus.RUNNING) return;
+        if (inst == null || !InstanceState.of(inst.status).running()) return;
         Token t = tx.findToken(task.id).orElse(null);
         if (t == null || t.status != TokenStatus.AWAITING) return;
         long ts = System.currentTimeMillis();
@@ -472,7 +471,7 @@ public final class WorkflowEngine {
             // COMPENSATING instances still have live work in flight — their compensators. A
             // compensator's failure report must reach the retry-or-fail transition
             // (-> COMPENSATION_FAILED), not be dropped by the terminal-status guard.
-            if (inst.status != InstanceStatus.RUNNING && inst.status != InstanceStatus.COMPENSATING) return;
+            if (!InstanceState.of(inst.status).live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
         });
@@ -491,7 +490,7 @@ public final class WorkflowEngine {
             instances.compensatorExhausted(tx, inst, node, done.compSeq(), done.reason(), now);
             return;
         }
-        if (inst.status == InstanceStatus.RUNNING) {
+        if (InstanceState.of(inst.status).running()) {
             instances.fail(tx, inst, node.name() + ": " + done.reason(), now);
         }
     }

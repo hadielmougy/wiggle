@@ -1,41 +1,69 @@
 package com.wiggle.server.engine;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 /**
- * The engine's two state machines, declared once: an instance FSM with many concurrent token FSMs
- * beneath it. {@link StateChartTest} holds this declaration to the code -- the state sets against
- * the enums, the classifications against {@code Token.isActive()} and {@code InstanceView.isTerminal()},
- * the entry points against {@link WorkflowEngine}'s public methods -- and to the generated
- * {@code docs/state-machines.md}.
+ * The engine's two state machines rendered as documentation: an instance FSM with many concurrent
+ * token FSMs beneath it.
  *
- * <p>Events and guards are the one part no compiler can derive, so they are written here and
- * checked by everything around them. A transition whose {@code entryPoint} is null is internal:
- * it happens inside a drive pass, not because a caller asked for it.
+ * <p>The states and the legal edges between them are NOT written here -- they are read straight
+ * off {@link TokenState} and {@link InstanceState}, which the engine itself enforces. What is
+ * written here is the part no compiler can derive: the name of the event that causes each move,
+ * and the guard that decides between two moves with the same event. {@link StateChartTest} holds
+ * those to the enums in both directions, so a charted edge that the code forbids, or a legal edge
+ * nothing documents, fails the build.
+ *
+ * <p>A transition whose {@code entryPoint} is null is internal: it happens inside a drive pass,
+ * not because a caller asked for it.
  */
 final class StateChart {
 
     private StateChart() {}
 
-    /** {@code kind} is {@code live} or {@code terminal} for instances, {@code active} or
-     *  {@code settled} for tokens -- the classifications the test checks against the code. */
+    /** {@code kind} is read from the state enum, never written here. */
     record State(String name, String kind, String note) {}
 
     record Transition(String from, String event, String to, String guard, String entryPoint) {}
 
     record Chart(String title, String owner, List<State> states, List<Transition> transitions) {}
 
+    /** Prose only: the name and the classification come from {@link InstanceState}. */
+    private static final Map<String, String> INSTANCE_NOTES = Map.of(
+            "RUNNING", "Born here, with one token at the start node.",
+            "COMPENSATING", "The saga reverse pass owns it; undo tasks are still being dispatched.",
+            "COMPLETED", "A token reached a successful END and nothing was left running.",
+            "FAILED", "Something unrecoverable, with nothing recorded to undo.",
+            "CANCELLED", "Cancelled by a caller. Never compensates.",
+            "COMPENSATED", "The reverse pass undid every recorded step.",
+            "COMPENSATION_FAILED", "A compensator ran out of retries. Stuck, and deliberately loud.");
+
+    /** Prose only: the name and the classification come from {@link TokenState}. */
+    private static final Map<String, String> TOKEN_NOTES = Map.of(
+            "READY", "Dispatchable. A retry waits here too, behind availableAt.",
+            "RUNNING", "Leased. Implies a non-null leaseOwner and an expiry.",
+            "WAITING", "Parked on the clock until availableAt.",
+            "AWAITING", "Parked on an external actor: a signal, or a child instance.",
+            "JOINED", "Parked at a join barrier, waiting on its siblings.",
+            "DONE", "Consumed. Covers a completed step, a spent fork, and a satisfied barrier.",
+            "FAILED", "Out of retries, or waiting on something that can no longer arrive.",
+            "CANCELLED", "Abandoned because the instance stopped running.");
+
+    static List<State> instanceStates() {
+        return Arrays.stream(InstanceState.values())
+                .map(s -> new State(s.name(), s.live() ? "live" : "terminal", INSTANCE_NOTES.get(s.name())))
+                .toList();
+    }
+
+    static List<State> tokenStates() {
+        return Arrays.stream(TokenState.values())
+                .map(s -> new State(s.name(), s.active() ? "active" : "settled", TOKEN_NOTES.get(s.name())))
+                .toList();
+    }
+
     static Chart instances() {
-        return new Chart("Instance", "InstanceLifecycle", List.of(
-                new State("RUNNING", "live", "Born here, with one token at the start node."),
-                new State("COMPENSATING", "live",
-                        "The saga reverse pass owns it; undo tasks are still being dispatched."),
-                new State("COMPLETED", "terminal", "A token reached a successful END and nothing was left running."),
-                new State("FAILED", "terminal", "Something unrecoverable, with nothing recorded to undo."),
-                new State("CANCELLED", "terminal", "Cancelled by a caller. Never compensates."),
-                new State("COMPENSATED", "terminal", "The reverse pass undid every recorded step."),
-                new State("COMPENSATION_FAILED", "terminal",
-                        "A compensator ran out of retries. Stuck, and deliberately loud.")),
+        return new Chart("Instance", "InstanceLifecycle", instanceStates(),
         List.of(
                 new Transition("(none)", "START", "RUNNING",
                         "the workflow version resolves", "start"),
@@ -60,15 +88,7 @@ final class StateChart {
     }
 
     static Chart tokens() {
-        return new Chart("Token", "TokenLifecycle", List.of(
-                new State("READY", "active", "Dispatchable. A retry waits here too, behind availableAt."),
-                new State("RUNNING", "active", "Leased. Implies a non-null leaseOwner and an expiry."),
-                new State("WAITING", "active", "Parked on the clock until availableAt."),
-                new State("AWAITING", "active", "Parked on an external actor: a signal, or a child instance."),
-                new State("JOINED", "active", "Parked at a join barrier, waiting on its siblings."),
-                new State("DONE", "settled", "Consumed. Covers a completed step, a spent fork, and a satisfied barrier."),
-                new State("FAILED", "settled", "Out of retries, or waiting on something that can no longer arrive."),
-                new State("CANCELLED", "settled", "Abandoned because the instance stopped running.")),
+        return new Chart("Token", "TokenLifecycle", tokenStates(),
         List.of(
                 new Transition("(none)", "MINT", "READY",
                         "a continuation, a fork branch, or the start node", null),
@@ -146,13 +166,21 @@ final class StateChart {
 
                 The engine is one instance state machine with many concurrent token state machines
                 beneath it. The instance owns the question "is this workflow still going"; each token
-                owns one unit of execution moving over the graph. `InstanceLifecycle` is the only code
-                that assigns an instance status, `TokenLifecycle` the only code that assigns a token
-                status, and the split is checked by `StateChartTest`.
+                owns one unit of execution moving over the graph.
+
+                Each state is a constant on `InstanceState` or `TokenState`, and that constant owns
+                the state's own rules: whether it is still live, whether a worker may claim it,
+                whether it holds a lease, and which states it may move to. `InstanceLifecycle` and
+                `TokenLifecycle` funnel every status write through `moveTo`, so a move no state
+                permits throws instead of being persisted. The tables below are read off those two
+                enums rather than written by hand — only the event names and guards are prose.
 
                 The parent does not recompute itself from its children. No code scans tokens to decide
                 an instance is finished; a token *arriving* at a node fires the parent transition, and
                 the aggregate only appears as a guard on it.
+
+                One transition is not policed here: `READY -> RUNNING` is performed by the store,
+                because a claim has to be atomic with the `SKIP LOCKED` select that finds the token.
                 """);
         for (Chart c : List.of(instances(), tokens())) {
             md.append("\n## ").append(c.title()).append(" states\n\n");

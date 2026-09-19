@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -40,31 +41,113 @@ class StateChartTest {
     }
 
     @Test
-    @DisplayName("the token chart lists exactly the TokenStatus constants")
-    void tokenStatesMatchTheEnum() {
-        assertEquals(names(TokenStatus.values()), charted(StateChart.tokens()),
-                "TokenStatus and the token chart have drifted apart");
+    @DisplayName("there is one TokenState per persisted TokenStatus, and one InstanceState per InstanceStatus")
+    void everyPersistedStatusHasAState() {
+        assertEquals(names(TokenStatus.values()),
+                Arrays.stream(TokenState.values()).map(Enum::name)
+                        .collect(Collectors.toCollection(LinkedHashSet::new)),
+                "TokenStatus and TokenState have drifted apart");
+        assertEquals(names(InstanceStatus.values()),
+                Arrays.stream(InstanceState.values()).map(Enum::name)
+                        .collect(Collectors.toCollection(LinkedHashSet::new)),
+                "InstanceStatus and InstanceState have drifted apart");
     }
 
     @Test
-    @DisplayName("the instance chart lists exactly the InstanceStatus constants")
-    void instanceStatesMatchTheEnum() {
-        assertEquals(names(InstanceStatus.values()), charted(StateChart.instances()),
-                "InstanceStatus and the instance chart have drifted apart");
+    @DisplayName("every charted transition is one the state enum actually permits")
+    void chartedTransitionsAreLegal() {
+        for (StateChart.Transition t : StateChart.tokens().transitions()) {
+            if (t.from().equals("(none)")) continue;
+            TokenState from = TokenState.valueOf(t.from());
+            assertTrue(t.from().equals(t.to()) || from.successors().contains(TokenStatus.valueOf(t.to())),
+                    "the chart documents " + t.from() + " -" + t.event() + "-> " + t.to()
+                            + ", but TokenState." + from + " only permits " + from.successors());
+        }
+        for (StateChart.Transition t : StateChart.instances().transitions()) {
+            if (t.from().equals("(none)")) continue;
+            InstanceState from = InstanceState.valueOf(t.from());
+            assertTrue(t.from().equals(t.to()) || from.successors().contains(InstanceStatus.valueOf(t.to())),
+                    "the chart documents " + t.from() + " -" + t.event() + "-> " + t.to()
+                            + ", but InstanceState." + from + " only permits " + from.successors());
+        }
     }
 
     @Test
-    @DisplayName("the chart's active token states are exactly the ones Token.isActive() accepts")
+    @DisplayName("every transition the state enums permit is documented by at least one event")
+    void legalTransitionsAreCharted() {
+        for (TokenState from : TokenState.values()) {
+            for (TokenStatus to : from.successors()) {
+                assertTrue(StateChart.tokens().transitions().stream()
+                                .anyMatch(t -> t.from().equals(from.name()) && t.to().equals(to.name())),
+                        "TokenState permits " + from + " -> " + to + ", but no charted event causes it");
+            }
+        }
+        for (InstanceState from : InstanceState.values()) {
+            for (InstanceStatus to : from.successors()) {
+                assertTrue(StateChart.instances().transitions().stream()
+                                .anyMatch(t -> t.from().equals(from.name()) && t.to().equals(to.name())),
+                        "InstanceState permits " + from + " -> " + to + ", but no charted event causes it");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("a settled token state and a terminal instance state declare no way out")
+    void settledStatesDeclareNoSuccessors() {
+        for (TokenState s : TokenState.values()) {
+            if (s.active()) continue;
+            assertTrue(s.successors().isEmpty(),
+                    "TokenState." + s + " is settled but declares successors " + s.successors());
+        }
+        for (InstanceState s : InstanceState.values()) {
+            if (s.live()) continue;
+            assertTrue(s.successors().isEmpty(),
+                    "InstanceState." + s + " is terminal but declares successors " + s.successors());
+        }
+    }
+
+    @Test
+    @DisplayName("an illegal transition is refused rather than persisted")
+    void illegalTransitionsThrow() {
+        assertThrows(IllegalStateException.class, () -> TokenState.DONE.moveTo(TokenStatus.READY),
+                "a settled token must not come back to life");
+        assertThrows(IllegalStateException.class, () -> TokenState.WAITING.moveTo(TokenStatus.RUNNING),
+                "a sleeping token must be woken before it can be leased");
+        assertThrows(IllegalStateException.class,
+                () -> InstanceState.COMPLETED.moveTo(InstanceStatus.RUNNING),
+                "a terminal instance must not restart");
+        assertThrows(IllegalStateException.class,
+                () -> InstanceState.COMPENSATING.moveTo(InstanceStatus.COMPLETED),
+                "a compensating instance must not report success");
+    }
+
+    @Test
+    @DisplayName("TokenState.active() and the row's own isActive() agree")
     void activeClassificationMatchesIsActive() {
-        Set<String> fromCode = Arrays.stream(TokenStatus.values())
+        Set<String> fromRow = Arrays.stream(TokenStatus.values())
                 .filter(s -> { Token t = new Token(); t.status = s; return t.isActive(); })
                 .map(Enum::name).collect(Collectors.toCollection(LinkedHashSet::new));
-        assertEquals(fromCode, kind(StateChart.tokens(), "active"),
-                "Token.isActive() and the chart's active states disagree");
+        assertEquals(fromRow, kind(StateChart.tokens(), "active"),
+                "Token.isActive() and TokenState.active() disagree");
     }
 
     @Test
-    @DisplayName("the chart's terminal instance states are exactly the ones InstanceView.isTerminal() accepts")
+    @DisplayName("only READY is claimable, and only RUNNING holds a lease")
+    void dispatchClassificationsAreSingular() {
+        assertEquals(Set.of(TokenState.READY), Arrays.stream(TokenState.values())
+                .filter(TokenState::claimable).collect(Collectors.toSet()));
+        assertEquals(Set.of(TokenState.RUNNING), Arrays.stream(TokenState.values())
+                .filter(TokenState::holdsLease).collect(Collectors.toSet()));
+        assertEquals(Set.of(InstanceState.RUNNING), Arrays.stream(InstanceState.values())
+                .filter(s -> s.dispatches(false)).collect(Collectors.toSet()),
+                "only a RUNNING instance dispatches forward work");
+        assertEquals(Set.of(InstanceState.COMPENSATING), Arrays.stream(InstanceState.values())
+                .filter(s -> s.dispatches(true)).collect(Collectors.toSet()),
+                "only a COMPENSATING instance dispatches the reverse pass");
+    }
+
+    @Test
+    @DisplayName("InstanceState.live() and InstanceView.isTerminal() agree")
     void terminalClassificationMatchesInstanceView() {
         Set<String> fromCode = Arrays.stream(InstanceStatus.values())
                 .filter(s -> view(s).isTerminal())

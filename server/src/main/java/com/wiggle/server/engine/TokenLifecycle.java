@@ -9,7 +9,6 @@ import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
@@ -62,25 +61,31 @@ final class TokenLifecycle {
         return t;
     }
 
-    /** Marks a token consumed and releases its lease. */
-    static void settle(Tx tx, Token t, long now) {
-        t.status = TokenStatus.DONE;
-        t.leaseOwner = null;
-        t.leaseExpiresAt = 0;
+    /**
+     * The one place a token's status is written. {@link TokenState} decides whether the move is
+     * legal; an illegal one throws rather than being persisted.
+     */
+    private static void move(Tx tx, Token t, TokenStatus target, long now) {
+        t.status = TokenState.of(t.status).moveTo(target);
         t.updatedAt = now;
         tx.updateToken(t);
+    }
+
+    /** Marks a token consumed and releases its lease. */
+    static void settle(Tx tx, Token t, long now) {
+        t.leaseOwner = null;
+        t.leaseExpiresAt = 0;
+        move(tx, t, TokenStatus.DONE, now);
     }
 
     /** Parks a token for a worker to claim, and marks its queue for the post-commit wake. */
     void parkReady(Tx tx, Instance inst, Token t, Node node, long now) {
         TokenStatus before = t.status;
-        t.status = TokenStatus.READY;
         t.kind = node.kind();
         t.activity = node.activity();
         t.queue = node.queue();
         t.availableAt = now;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.READY, now);
         transactions.wake(node.queue());
         LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
                 + node.name() + " (" + node.kind() + ") " + before + " -> READY, queue=" + node.queue());
@@ -95,11 +100,9 @@ final class TokenLifecycle {
     /** Parks a token on the clock until {@code availableAt}. */
     static TokenStatus parkWaiting(Tx tx, Token t, NodeKind kind, long availableAt, long now) {
         TokenStatus before = t.status;
-        t.status = TokenStatus.WAITING;
         t.kind = kind;
         t.availableAt = availableAt;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.WAITING, now);
         return before;
     }
 
@@ -107,22 +110,18 @@ final class TokenLifecycle {
      *  {@code deadline} is the (optional) time the leader sweeps it at. */
     static TokenStatus parkAwaiting(Tx tx, Token t, NodeKind kind, String activity, long deadline, long now) {
         TokenStatus before = t.status;
-        t.status = TokenStatus.AWAITING;
         t.kind = kind;
         t.activity = activity;
         t.availableAt = deadline;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.AWAITING, now);
         return before;
     }
 
     /** Parks a token at a join barrier, waiting on its siblings. */
     static TokenStatus parkJoined(Tx tx, Token t, long now) {
         TokenStatus before = t.status;
-        t.status = TokenStatus.JOINED;
         t.kind = NodeKind.JOIN;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.JOINED, now);
         return before;
     }
 
@@ -130,10 +129,8 @@ final class TokenLifecycle {
      *  or an END that has run out of flow. Returns the status it held, for the caller's log line. */
     static TokenStatus spend(Tx tx, Token t, NodeKind kind, long now) {
         TokenStatus before = t.status;
-        t.status = TokenStatus.DONE;
         t.kind = kind;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.DONE, now);
         return before;
     }
 
@@ -141,9 +138,7 @@ final class TokenLifecycle {
      *  parked would keep the instance looking active forever. */
     static void consumeBarrier(Tx tx, List<Token> atBarrier, long now) {
         for (Token parked : atBarrier) {
-            parked.status = TokenStatus.DONE;
-            parked.updatedAt = now;
-            tx.updateToken(parked);
+            move(tx, parked, TokenStatus.DONE, now);
         }
     }
 
@@ -164,21 +159,17 @@ final class TokenLifecycle {
     /** Fails a parked token outright, with no retry: the thing it was waiting on can no longer
      *  arrive. A sub-workflow that ended badly leaves its parent's token this way. */
     static void failParked(Tx tx, Token t, long now) {
-        t.status = TokenStatus.FAILED;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.FAILED, now);
     }
 
     /** Cancels every token of an instance that is still active. */
     static void cancelAll(Tx tx, String instanceId, long now) {
         for (Token t : tx.tokensOf(instanceId)) {
-            if (!t.isActive() || t.id == null) continue;
+            if (!TokenState.of(t.status).active() || t.id == null) continue;
             TokenStatus before = t.status;
-            t.status = TokenStatus.CANCELLED;
             t.leaseOwner = null;
             t.leaseExpiresAt = 0;
-            t.updatedAt = now;
-            tx.updateToken(t);
+            move(tx, t, TokenStatus.CANCELLED, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "cancelActiveTokens: " + instanceId + " token " + t.id
                     + " at " + t.nodeId + " " + before + " -> CANCELLED");
         }
@@ -186,7 +177,7 @@ final class TokenLifecycle {
 
     /** Whether any token of the instance is still active -- what decides an END node completes it. */
     static boolean anyActive(Tx tx, String instanceId) {
-        return tx.tokensOf(instanceId).stream().anyMatch(Token::isActive);
+        return tx.tokensOf(instanceId).stream().anyMatch(t -> TokenState.of(t.status).active());
     }
 
     /** A task's token re-read under its instance's write lock. */
@@ -201,12 +192,7 @@ final class TokenLifecycle {
     }
 
     static void requireLease(Token t, String leaseOwner) {
-        if (t.status != TokenStatus.RUNNING) {
-            throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
-        }
-        if (leaseOwner != null && !leaseOwner.equals(t.leaseOwner)) {
-            throw EngineException.conflict("lease for task " + t.id + " is held by " + t.leaseOwner);
-        }
+        TokenState.of(t.status).requireLeasedBy(t, leaseOwner);
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -233,7 +219,7 @@ final class TokenLifecycle {
     private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
         Instance inst = tx.findInstance(t.instanceId).orElse(null);
         boolean comp = Sagas.isCompensation(t);
-        if (inst == null || inst.status != (comp ? InstanceStatus.COMPENSATING : InstanceStatus.RUNNING)) {
+        if (inst == null || !InstanceState.of(inst.status).dispatches(comp)) {
             return Optional.empty();
         }
         if (comp) return Optional.of(Sagas.activation(inst, t, workerId, until));
@@ -291,17 +277,15 @@ final class TokenLifecycle {
         t.leaseExpiresAt = 0;
         t.updatedAt = now;
         if (retryable && t.attempt < policy.maxAttempts()) {
-            t.status = TokenStatus.READY;
             t.availableAt = now + policy.backoffMillis(t.attempt);
-            tx.updateToken(t);
+            move(tx, t, TokenStatus.READY, now);
             long backoffMs = t.availableAt - now;
             LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
                     + " failed (" + lastError + "), retrying attempt " + t.attempt
                     + "/" + policy.maxAttempts() + " in " + backoffMs + "ms");
             return new Outcome.Retried();
         }
-        t.status = TokenStatus.FAILED;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.FAILED, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "fail: " + node.name() + " of instance " + inst.id
                 + " exhausted retries (attempt " + t.attempt + "/" + policy.maxAttempts()
                 + ", retryable=" + retryable + ") -> failing instance");
@@ -311,8 +295,6 @@ final class TokenLifecycle {
     /** Marks a parked token consumed ahead of minting its continuation. Used by the leader sweeps,
      *  where the token is WAITING or AWAITING and so holds no lease to release. */
     static void discard(Tx tx, Token t, long now) {
-        t.status = TokenStatus.DONE;
-        t.updatedAt = now;
-        tx.updateToken(t);
+        move(tx, t, TokenStatus.DONE, now);
     }
 }

@@ -91,23 +91,31 @@ final class InstanceLifecycle {
     }
 
     /**
+     * The one place an instance's status is written. {@link InstanceState} decides whether the
+     * move is legal; an illegal one throws rather than being persisted.
+     */
+    private static void move(Tx tx, Instance inst, InstanceStatus target, long now) {
+        inst.status = InstanceState.of(inst.status).moveTo(target);
+        inst.updatedAt = now;
+        tx.updateInstance(inst);
+    }
+
+    /**
      * Cancels one instance and returns its children, for the caller to cancel in their own
      * transactions -- cascading in-transaction would take the parent lock before the child's.
      * An instance that is no longer RUNNING is left alone, and has no children to report.
      */
     List<String> cancel(Tx tx, String instanceId, String reason) {
         Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-        if (inst.status != InstanceStatus.RUNNING) {
+        if (!InstanceState.of(inst.status).cancellable()) {
             LOG.log(System.Logger.Level.DEBUG, () ->
                     "cancel: instance " + instanceId + " ignored, already " + inst.status);
             return List.of();
         }
         long now = System.currentTimeMillis();
         TokenLifecycle.cancelAll(tx, inst.id, now);
-        inst.status = InstanceStatus.CANCELLED;
         inst.terminationReason = reason;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        move(tx, inst, InstanceStatus.CANCELLED, now);
         notifyParent(tx, inst, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
         return tx.childInstanceIds(instanceId);
@@ -115,10 +123,8 @@ final class InstanceLifecycle {
 
     /** The instance ran out of flow at a successful END node with no token left anywhere. */
     void complete(Tx tx, Instance inst, String reason, long now) {
-        inst.status = InstanceStatus.COMPLETED;
         inst.terminationReason = reason;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        move(tx, inst, InstanceStatus.COMPLETED, now);
         notifyParent(tx, inst, now);
     }
 
@@ -127,10 +133,8 @@ final class InstanceLifecycle {
     void fail(Tx tx, Instance inst, String error, long now) {
         TokenLifecycle.cancelAll(tx, inst.id, now);
         if (sagas.begin(tx, inst, error, now)) return;
-        inst.status = InstanceStatus.FAILED;
         inst.error = error;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        move(tx, inst, InstanceStatus.FAILED, now);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed: " + error);
         notifyParent(tx, inst, now);
     }
@@ -138,26 +142,20 @@ final class InstanceLifecycle {
     /** The saga reverse pass has taken the instance over; its outcome is not known until the
      *  pass lands {@link #compensated} or {@link #compensationFailed}. */
     void compensating(Tx tx, Instance inst, String error, long now) {
-        inst.status = InstanceStatus.COMPENSATING;
         inst.error = error;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        move(tx, inst, InstanceStatus.COMPENSATING, now);
     }
 
     /** The reverse pass undid everything it had recorded. */
     void compensated(Tx tx, Instance inst, long now) {
-        inst.status = InstanceStatus.COMPENSATED;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        move(tx, inst, InstanceStatus.COMPENSATED, now);
         notifyParent(tx, inst, now);
     }
 
     /** The reverse pass could not finish: the instance is stuck and needs a human. */
     void compensationFailed(Tx tx, Instance inst, String error, long now) {
-        inst.status = InstanceStatus.COMPENSATION_FAILED;
         inst.error = (inst.error == null ? "" : inst.error + "; ") + error;
-        inst.updatedAt = now;
-        tx.updateInstance(inst);
+        move(tx, inst, InstanceStatus.COMPENSATION_FAILED, now);
         notifyParent(tx, inst, now);
     }
 
@@ -167,9 +165,7 @@ final class InstanceLifecycle {
     }
 
     static void requireRunning(Instance inst) {
-        if (inst.status != InstanceStatus.RUNNING) {
-            throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
-        }
+        InstanceState.of(inst.status).requireRunning(inst);
     }
 
     /**
@@ -182,7 +178,7 @@ final class InstanceLifecycle {
         Token probe = tx.findToken(child.parentTokenId).orElse(null);
         if (probe == null) return;
         Instance parent = tx.lockInstance(probe.instanceId).orElse(null);
-        if (parent == null || parent.status != InstanceStatus.RUNNING) return;
+        if (parent == null || !InstanceState.of(parent.status).running()) return;
         Token t = tx.findToken(child.parentTokenId).orElse(null);   // re-read under the lock
         if (t == null || t.status != TokenStatus.AWAITING || t.kind != NodeKind.SUB_WORKFLOW) return;
         LazyGraph def = definitions.graph(tx, parent.workflow, parent.version);
