@@ -149,7 +149,7 @@ public final class Benchmark {
         if (steps < 1 || steps > MAX_STEPS) {
             throw new IllegalArgumentException("WIGGLE_BENCH_STEPS must be 1.." + MAX_STEPS + ", got " + steps);
         }
-        return FlowSpec.define(name, Map.class, BenchSteps.class, (f, s) -> {
+        return FlowSpec.define(name, 1, Map.class, BenchSteps.class, (f, s) -> {
             List<FlowFn<Map, Map>> hops = hops(s);
             WiggleFlow<Map> chain = f.execution(mode);
             for (int i = 0; i < steps - 1; i++) {

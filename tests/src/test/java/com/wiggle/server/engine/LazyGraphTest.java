@@ -32,9 +32,7 @@ class LazyGraphTest {
             nodes.put("n" + i, Node.task("n" + i, "step-" + i, "act-" + i, "q", null).withNext(next));
         }
         nodes.put("end", Node.end("end", true, null));
-        int version = WorkflowDefinition.contentVersion("lazy", "n0", nodes.values(),
-                ExecutionMode.DEFAULT, Set.of());
-        return new WorkflowDefinition("lazy", version, "n0", nodes, Set.of("q"));
+        return new WorkflowDefinition("lazy", 1, "n0", nodes, Set.of("q"));
     }
 
     @Test @DisplayName("a graph larger than the LRU stays correct through eviction and re-access")

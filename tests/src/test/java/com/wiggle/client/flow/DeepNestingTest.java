@@ -42,7 +42,7 @@ class DeepNestingTest {
 
     @Test @DisplayName("100 levels of interleaved fork / forEach / doWhile complete, threading one counter through all of them")
     void hundredLevelsInterleaved() {
-        FlowSpec bp = buildLevel(Workflow.define("deep-100"), DEPTH).build();
+        FlowSpec bp = buildLevel(Workflow.define("deep-100", 1), DEPTH).build();
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
@@ -80,7 +80,7 @@ class DeepNestingTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            FlowSpec bp = buildLevel(Workflow.define("deep-jdbc"), DEPTH).build();
+            FlowSpec bp = buildLevel(Workflow.define("deep-jdbc", 1), DEPTH).build();
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();
 

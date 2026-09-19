@@ -74,6 +74,9 @@ message ClusterView {
 
 message WorkflowDefinition {
     google.protobuf.Struct definition = 1;
+    // RegisterWorkflow only: replace an already-registered (name, version) whose graph differs,
+    // instead of failing. The server refuses unless it is configured to allow it.
+    bool force = 2;
 }
 
 message WorkflowNames {

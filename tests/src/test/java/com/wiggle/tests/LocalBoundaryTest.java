@@ -72,7 +72,7 @@ class LocalBoundaryTest {
     void forkHandsBack() throws Exception {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
-            FlowSpec bp = FlowSpec.define("lb-fork", Map.class, ForkSteps.class, (f, s) -> {
+            FlowSpec bp = FlowSpec.define("lb-fork", 1, Map.class, ForkSteps.class, (f, s) -> {
                 var prepped = f.execution(mode).thenApply(s::seed).thenApply(s::prep);
                 var left = prepped.thenApply(s::l1).thenApply(s::l2);
                 var right = prepped.thenApply(s::r1);
@@ -101,7 +101,7 @@ class LocalBoundaryTest {
     @Test @DisplayName("a false gate mid-chain ends the instance as gated (LOCAL_SYNC)")
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("lb-gate", Map.class, OneStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("lb-gate", 1, Map.class, OneStep.class, (f, s) -> f
                 .execution(ExecutionMode.LOCAL_SYNC)
                 .thenApply(s::seed)
                 .thenFilter(s::keep)
@@ -165,7 +165,7 @@ class LocalBoundaryTest {
 
     private static FlowSpec queueSplitFlowSpec(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return FlowSpec.define("lb-queues", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("lb-queues", 1, Map.class, OneStep.class, (f, s) -> f
                 .execution(mode)
                 .thenApply(s::a)
                 .thenApply(s::b)

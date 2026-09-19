@@ -56,13 +56,13 @@ class VersionScopedWorkerTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    /** v1 and v2 of one workflow: same step name, different topology, so different content hashes. */
+    /** v1 and v2 of one workflow: same step name, different topology, published as 1 and 2. */
     private static FlowSpec v1() {
-        return FlowSpec.define("vs-order", Map.class, OneStep.class, (f, s) -> f.thenApply(s::handle));
+        return FlowSpec.define("vs-order", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::handle));
     }
 
     private static FlowSpec v2() {
-        return FlowSpec.define("vs-order", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("vs-order", 2, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::handle)
                 .thenApply(s::extra));
     }

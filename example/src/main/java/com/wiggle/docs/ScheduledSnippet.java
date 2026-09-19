@@ -21,7 +21,7 @@ public final class ScheduledSnippet {
 
     static void schedule(WiggleClient client) {
         // docs:begin topology
-        FlowSpec report = FlowSpec.define("nightly-report", Report.class, ReportSteps.class, (f, s) -> f
+        FlowSpec report = FlowSpec.define("nightly-report", 1, Report.class, ReportSteps.class, (f, s) -> f
                 .thenApply(s::gather)
                 .thenApply(s::render)
                 .thenAccept(s::distribute));

@@ -1,13 +1,12 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
-import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
-import com.wiggle.core.ScratchKeys;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.store.Rows;
@@ -16,6 +15,7 @@ import com.wiggle.server.store.Rows.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 import com.wiggle.server.store.Storage;
+import com.wiggle.server.store.TokenPayload;
 import com.wiggle.server.store.Tx;
 import java.util.*;
 
@@ -56,10 +56,6 @@ public final class WorkflowEngine {
      *  workers and the database and grows the instance's token rows without limit — so every
      *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
     final long loopMaxIterations = envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
-
-    /** Token-payload bookkeeping: per-loop-guard true-evaluation counts ({nodeId: n}), carried
-     *  along the token chain and stripped from every dispatched context. */
-    static final String LOOP_COUNTS = "__loops__";
 
 
     /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
@@ -152,6 +148,12 @@ public final class WorkflowEngine {
     /** Registers a definition (blob + normalised graph rows). */
     public WorkflowDefinition register(WorkflowDefinition def) { return definitions.register(def); }
 
+    /** {@link #register(WorkflowDefinition)}, optionally replacing an already-published version's
+     *  graph. See {@link DefinitionRegistry#register(WorkflowDefinition, boolean)}. */
+    public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
+        return definitions.register(def, force);
+    }
+
     /** All registered workflow names. */
     public List<String> workflowNames() { return definitions.names(); }
 
@@ -210,7 +212,7 @@ public final class WorkflowEngine {
         inst.correlationId = correlationId;
         inst.parentTokenId = parentTokenId;
         inst.status = InstanceStatus.RUNNING;
-        inst.contextJson = Json.write(context == null ? Map.of() : context);
+        inst.context = Doc.of(context);
         inst.createdAt = now;
         inst.updatedAt = now;
         tx.insertInstance(inst);
@@ -377,28 +379,27 @@ public final class WorkflowEngine {
         if (comp) return Optional.of(Sagas.activation(inst, t, workerId, until));
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
-        Object base = null;
+        Doc base = null;
         long itemIndex = 0;
         String itemMapKey = null;
-        if (t.payloadJson != null) {
-            List<Map<String, Object>> frames = Scopes.frames(Scopes.payload(t.payloadJson));
-            int at = Scopes.innermostItem(frames);
-            if (at >= 0) {
-                Map<String, Object> item = frames.get(at);
-                itemIndex = ((Number) item.get(Scopes.IDX)).longValue();
-                itemMapKey = item.get(Scopes.MAP_KEY) == null ? null : String.valueOf(item.get(Scopes.MAP_KEY));
-                base = at > 0 ? frames.get(at - 1).get(Scopes.VIEW) : Json.parse(inst.contextJson);
-            }
-            // A scoped combine's dispatched context is its staged inputs (over the scope view when
-            // that view is an object); the pre-fork scope view itself travels as the base, so the
-            // worker can hand it to @Context/Step.base() even when the view is a scalar.
-            if (isCombineNode(node) && !frames.isEmpty()) {
-                base = frames.getLast().get(Scopes.VIEW);
-            }
+        TokenPayload payload = t.payload;
+        int at = payload.innermostItem();
+        if (at >= 0) {
+            TokenPayload.Frame item = payload.scopes().get(at);
+            itemIndex = item.idx();
+            itemMapKey = item.mapKey();
+            base = Scopes.baseOf(inst, payload, at);
         }
+        // A scoped combine's dispatched context is its staged inputs (over the scope view when
+        // that view is an object); the pre-fork scope view itself travels as the base, so the
+        // worker can hand it to @Context/Step.base() even when the view is a scalar.
+        if (isCombineNode(node) && payload.top() != null) {
+            base = payload.top().view();
+        }
+        // An activation crosses the wire, so it carries plain trees: Doc stops here.
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t),
-                base, itemIndex, itemMapKey, mode));
+                node.activity(), node.kind(), t.attempt + 1, until, workerId, dispatchContext(inst, t).raw(),
+                base == null ? null : base.raw(), itemIndex, itemMapKey, mode));
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -455,7 +456,7 @@ public final class WorkflowEngine {
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
             NodeBehaviours behaviour = NodeBehaviours.of(node.kind());
-            Object compInput = node.compensable() ? dispatchContext(inst, t) : null;
+            Doc compInput = node.compensable() ? dispatchContext(inst, t) : null;
             String next = behaviour.route(inst, t, node, result);
             if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
             String overrun = behaviour.overrunAfter(this, t, node, result);
@@ -466,7 +467,7 @@ public final class WorkflowEngine {
             }
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, next, t.joinStack, stripCombineScratch(node, t.payloadJson), now);
+            Token cont = newToken(inst, next, t.joinStack, stripCombineScratch(node, t.payload), now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
@@ -528,7 +529,7 @@ public final class WorkflowEngine {
             Node node = def.node(current.nodeId);
             requireReportedNode(node, step, current);
             NodeBehaviours behaviour = NodeBehaviours.of(node.kind());
-            Object compInput = node.compensable() ? dispatchContext(inst, current) : null;
+            Doc compInput = node.compensable() ? dispatchContext(inst, current) : null;
             String next = behaviour.routeReported(inst, current, node, step);
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
             String overrun = behaviour.overrunReported(this, current, node, step);
@@ -539,7 +540,7 @@ public final class WorkflowEngine {
             }
             settleToken(tx, current, now);
             touchInstance(tx, inst, now);
-            Token cont = newToken(inst, next, current.joinStack, stripCombineScratch(node, current.payloadJson), now);
+            Token cont = newToken(inst, next, current.joinStack, stripCombineScratch(node, current.payload), now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
             if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
@@ -607,7 +608,7 @@ public final class WorkflowEngine {
             long now = System.currentTimeMillis();
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-            String contPayload = mergeIntoScope(inst, t.payloadJson, payload);
+            TokenPayload contPayload = mergeIntoScope(inst, t.payload, payload);
             settleToken(tx, t, now);
             touchInstance(tx, inst, now);
             Token cont = newToken(inst, node.next(), t.joinStack, contPayload, now);
@@ -661,7 +662,7 @@ public final class WorkflowEngine {
         t.status = TokenStatus.DONE;
         t.updatedAt = ts;
         tx.updateToken(t);
-        Token cont = newToken(inst, node.next(), t.joinStack, t.payloadJson, ts);
+        Token cont = newToken(inst, node.next(), t.joinStack, t.payload, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
@@ -693,7 +694,7 @@ public final class WorkflowEngine {
             failInstance(tx, inst, "signal '" + node.name() + "' timed out", ts);
             return;
         }
-        Token cont = newToken(inst, node.altNext(), t.joinStack, t.payloadJson, ts);
+        Token cont = newToken(inst, node.altNext(), t.joinStack, t.payload, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
@@ -808,7 +809,7 @@ public final class WorkflowEngine {
             java.util.Optional<Rows.Schedule> existing = tx.scheduleByWorkflow(workflow);
             s.id = existing.map(e -> e.id).orElseGet(() -> Ids.next("sched"));
             s.workflow = workflow;
-            s.contextJson = Json.write(context == null ? Map.of() : context);
+            s.context = Doc.of(context);
             s.createdAt = existing.map(e -> e.createdAt).orElseGet(System::currentTimeMillis);
             tx.putSchedule(s);
             boolean replaced = existing.isPresent();
@@ -848,7 +849,7 @@ public final class WorkflowEngine {
     private boolean fireSchedule(Rows.Schedule sched, long now) {
         return tx(tx -> {
             if (!tx.claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
-            String id = startInTx(tx, sched.workflow, null, Json.parse(sched.contextJson),
+            String id = startInTx(tx, sched.workflow, null, sched.context.raw(),
                     "schedule:" + sched.id, null);
             LOG.log(System.Logger.Level.DEBUG, () -> "schedule " + sched.id + " fired -> instance " + id);
             return true;
@@ -880,36 +881,25 @@ public final class WorkflowEngine {
         }
     }
 
-    /** A fork combine's itemsKey is a JSON ARRAY of arm names; a forEach combine's is a JSON STRING
-     *  naming the scratch key its collected results are staged under. */
+    /** The scratch key a forEach combine's collected results are staged under, or null for a fork
+     *  combine (which stages by arm name instead). */
     static String forEachScratchKey(Node combineNode) {
-        Object parsed = Json.parse(combineNode.itemsKey());
-        return parsed instanceof String s ? s : null;
+        return combineNode.collectKey();
     }
 
-    /** A combine aggregator carries its arm names (a JSON array) on the node's itemsKey -- a field
-     *  that round-trips through every store, unlike a TASK node's edge-derived branches (see
-     *  {@code Pipeline.addAggregator}). */
     static boolean isCombineNode(Node node) {
-        return node != null && node.kind() == NodeKind.TASK && node.itemsKey() != null;
+        return node != null && node.isCombine();
     }
 
     /** The branch (arm) names a combine node keys its inputs by, in fork order. */
     static List<String> armNames(Node combineNode) {
-        return Json.asArray(Json.parse(combineNode.itemsKey())).stream().map(String::valueOf).toList();
+        return combineNode.armNames();
     }
 
-    /** Once a combine node has run, its scratch keys have served their purpose: drop them (arm
-     *  names for a fork, the collected-results key for a forEach) from the continuation payload so
-     *  they never leak downstream. A no-op for any other node. */
-    private static String stripCombineScratch(Node node, String payloadJson) {
-        if (!isCombineNode(node) || payloadJson == null) return payloadJson;
-        Map<String, Object> overlay = Json.parseObject(payloadJson);
-        String scratch = forEachScratchKey(node);
-        boolean changed = scratch != null
-                ? overlay.remove(scratch) != null
-                : overlay.keySet().removeAll(armNames(node).stream().map(ScratchKeys::arm).toList());
-        return changed ? Json.write(overlay) : payloadJson;
+    /** Once a combine node has run, the inputs staged for it have served their purpose: drop them
+     *  so they never leak downstream. A no-op for any other node. */
+    private static TokenPayload stripCombineScratch(Node node, TokenPayload payload) {
+        return isCombineNode(node) ? payload.withoutStaged() : payload;
     }
 
     /**
@@ -923,32 +913,12 @@ public final class WorkflowEngine {
      */
     static void applyStepResult(Instance inst, Token t, Node node, Object result) {
         if (result == null) return;
-        Object cleaned = isCombineNode(node) ? stripReserved(result) : dropNulls(result);
-        Map<String, Object> payload = t.payloadJson == null ? null : Json.parseObject(t.payloadJson);
-        List<Map<String, Object>> frames = payload == null ? List.of() : Scopes.frames(payload);
-        if (frames.isEmpty()) {
-            inst.contextJson = Json.write(cleaned);
+        Doc cleaned = Doc.of(result).withoutNulls();
+        if (t.payload.top() == null) {
+            inst.context = cleaned;
             return;
         }
-        frames.getLast().put(Scopes.VIEW, cleaned);
-        t.payloadJson = Json.write(payload);
-    }
-
-    /** A top-level null value means "this key is absent" — never persist literal JSON nulls. */
-    private static Object dropNulls(Object result) {
-        if (!(result instanceof Map<?, ?> m)) return result;
-        Map<String, Object> out = new LinkedHashMap<>();
-        m.forEach((k, v) -> { if (v != null) out.put(String.valueOf(k), v); });
-        return out;
-    }
-
-    private static Object stripReserved(Object result) {
-        if (!(result instanceof Map<?, ?> m)) return result;
-        Map<String, Object> out = new LinkedHashMap<>();
-        m.forEach((k, v) -> out.put(String.valueOf(k), v));
-        out.remove(Scopes.SCOPES);
-        out.remove(LOOP_COUNTS);
-        return out;
+        t.payload = t.payload.withTopView(cleaned);
     }
 
     /**
@@ -958,29 +928,14 @@ public final class WorkflowEngine {
      * A map merges key-by-key (a null value deletes its key); any other value replaces the view
      * wholesale. Returns the continuation's payload.
      */
-    private static String mergeIntoScope(Instance inst, String payloadJson, Object result) {
-        if (result == null) return payloadJson;
-        Map<String, Object> payload = payloadJson == null ? null : Json.parseObject(payloadJson);
-        List<Map<String, Object>> frames = payload == null ? List.of() : Scopes.frames(payload);
-        if (frames.isEmpty()) {
-            inst.contextJson = Json.write(merged(Json.parse(inst.contextJson), result));
-            return payloadJson;
+    private static TokenPayload mergeIntoScope(Instance inst, TokenPayload payload, Object result) {
+        if (result == null) return payload;
+        TokenPayload.Frame top = payload.top();
+        if (top == null) {
+            inst.context = inst.context.merge(result);
+            return payload;
         }
-        Map<String, Object> top = frames.getLast();
-        top.put(Scopes.VIEW, merged(top.get(Scopes.VIEW), result));
-        return Json.write(payload);
-    }
-
-    private static Object merged(Object target, Object result) {
-        if (!(result instanceof Map)) return result;
-        Map<String, Object> out = target instanceof Map
-                ? new LinkedHashMap<>(Json.asObject(target)) : new LinkedHashMap<>();
-        for (Map.Entry<?, ?> e : ((Map<?, ?>) result).entrySet()) {
-            String key = String.valueOf(e.getKey());
-            if (e.getValue() == null) out.remove(key);
-            else out.put(key, e.getValue());
-        }
-        return out;
+        return payload.withTopView(top.view().merge(result));
     }
 
     /**
@@ -1030,7 +985,7 @@ public final class WorkflowEngine {
                     + (child.error == null ? "" : ": " + child.error), now);
             return;
         }
-        String contPayload = mergeIntoScope(parent, t.payloadJson, Json.parse(child.contextJson));
+        TokenPayload contPayload = mergeIntoScope(parent, t.payload, child.context.raw());
         settleToken(tx, t, now);
         touchInstance(tx, parent, now);
         Token cont = newToken(parent, node.next(), t.joinStack, contPayload, now);
@@ -1047,22 +1002,14 @@ public final class WorkflowEngine {
     /** The context a worker sees: the token's current scope view, with any staged combine inputs
      *  overlaid. A non-object view with staged inputs dispatches the staged inputs alone — the
      *  view then rides on the activation's base context instead. */
-    static Object dispatchContext(Instance inst, Token t) {
-        if (t.payloadJson == null) return Json.parse(inst.contextJson);
-        Map<String, Object> payload = Json.parseObject(t.payloadJson);
-        Object view = Scopes.view(inst, payload);
-        Map<String, Object> staged = Scopes.staged(payload);
-        if (staged.isEmpty()) return view;
-        if (!(view instanceof Map)) return staged;
-        Map<String, Object> ctx = new LinkedHashMap<>(Json.asObject(view));
-        ctx.putAll(staged);
-        return ctx;
+    static Doc dispatchContext(Instance inst, Token t) {
+        return Scopes.view(inst, t.payload).plusAll(t.payload.staged());
     }
 
     /** The token's complete current context: its top scope frame's view, or the shared instance
      *  context outside any scope. */
-    static Object currentView(Instance inst, Token t) {
-        return Scopes.view(inst, Scopes.payload(t.payloadJson));
+    static Doc currentView(Instance inst, Token t) {
+        return Scopes.view(inst, t.payload);
     }
 
     void failInstance(Tx tx, Instance inst, String error, long now) {
@@ -1090,9 +1037,9 @@ public final class WorkflowEngine {
         }
     }
 
-    static Token newToken(Instance inst, String nodeId, String joinStack, String payload, long now) {
+    static Token newToken(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
         Token t = new Token();
-        t.payloadJson = payload;
+        t.payload = payload == null ? TokenPayload.EMPTY : payload;
         t.id = Ids.next("tok");
         t.instanceId = inst.id;
         t.workflow = inst.workflow;

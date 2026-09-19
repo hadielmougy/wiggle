@@ -56,7 +56,7 @@ changes half way through.
 
 <!-- snippet: cookbook/linear-gate -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-linear-gate", Signup.class, LinearGateSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-linear-gate", 1, Signup.class, LinearGateSteps.class, (f, s) -> f
         .thenApply(s::normalise)
         // classify returns a different record, so the context type changes here; every
         // step after it must consume Classified, and the compiler holds that
@@ -76,7 +76,7 @@ An exclusive branch whose arm itself fans out.
 
 <!-- snippet: cookbook/choose-fork -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-choose-fork", Purchase.class, ChooseForkSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-choose-fork", 1, Purchase.class, ChooseForkSteps.class, (f, s) -> {
     // the large arm fans out: a fan-out inside a choice arm is just a fan-out whose
     // common point is the guard
     var large = f.when(s::isLarge);
@@ -110,7 +110,7 @@ Dynamic fan-out with mixed worker pools. The element *is* each branch's context.
 
 <!-- snippet: cookbook/foreach-queues -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-foreach-queues", Basket.class, ForEachSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-foreach-queues", 1, Basket.class, ForEachSteps.class, (f, s) -> f
         .defaultQueue("cpu")
         .thenForEach(Basket::items, item -> item
                 .thenApply(s::price)
@@ -140,7 +140,7 @@ Poll-until-ready, with an inner gate short-circuiting a cancelled job.
 
 <!-- snippet: cookbook/poll-until-ready -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-poll-until-ready", Job.class, PollSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-poll-until-ready", 1, Job.class, PollSteps.class, (f, s) -> f
         // the body runs once, then the condition is evaluated -- do-while, not while-do
         .repeatWhile(s::stillPending, b -> b
                 // a gate short-circuits to the loop's exit, not just the body: a
@@ -160,7 +160,7 @@ Wait for a signal, and branch on how the wait resolved.
 
 <!-- snippet: cookbook/approval-escalation -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-approval-escalation", Expense.class, ApprovalSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-approval-escalation", 1, Expense.class, ApprovalSteps.class, (f, s) -> {
     var waited = f
             .thenApply(s::submit)
             // no worker is held while it waits; if nobody signals in time the
@@ -185,7 +185,7 @@ Compose a registered child workflow into a bigger one.
 
 <!-- snippet: cookbook/parent -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-parent", Signup.class, ParentSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-parent", 1, Signup.class, ParentSteps.class, (f, s) -> {
     var checked = f
             // runs tcb-linear-gate as a child; its final context merges back here, which
             // is why this continues as Classified
@@ -209,7 +209,7 @@ Batched local execution with an explicit flush.
 
 <!-- snippet: cookbook/batched-loop -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-batched-loop", Batch.class, BatchedSteps.class, (f, s) -> f
+FlowSpec spec = FlowSpec.define("tcb-batched-loop", 1, Batch.class, BatchedSteps.class, (f, s) -> f
         .execution(ExecutionMode.LOCAL_ASYNC)
         .repeatWhile(s::moreBatches, b -> b
                 .thenApply(s::processBatch)
@@ -229,7 +229,7 @@ escalation, a checkpointed loop.
 
 <!-- snippet: cookbook/kitchen-sink -->
 ```java
-FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", Basket.class, KitchenSinkSteps.class, (f, s) -> {
+FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", 1, Basket.class, KitchenSinkSteps.class, (f, s) -> {
     var ready = f
             .defaultQueue("default")
             .execution(ExecutionMode.LOCAL_SYNC)

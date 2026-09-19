@@ -3,7 +3,7 @@ package com.wiggle.client.flow;
 import java.lang.reflect.Proxy;
 
 /**
- * The stand-in a spec names its steps through. {@link Wiggle#define(String, Class, Class,
+ * The stand-in a spec names its steps through. {@link FlowSpec#define(String, int, Class, Class,
  * java.util.function.BiFunction)} hands one to the definition body, and every {@code thenApply(s::...)}
  * there references a method of the <em>interface</em>: a spec records the step's name, and a worker
  * supplies the code by matching it to a method on its {@code @ForFlow} object.

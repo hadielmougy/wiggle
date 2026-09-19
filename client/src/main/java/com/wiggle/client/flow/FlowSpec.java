@@ -25,14 +25,16 @@ public record FlowSpec(WorkflowDefinition definition) {
     /**
      * Defines a workflow whose first step takes {@code input}.
      *
-     * @param name  the workflow name, as registered with the server
-     * @param input the context type the workflow starts from -- it anchors the chain's typing and is
-     *              not otherwise used; the graph carries no context type
-     * @param body  the chain, run once, here
+     * @param name    the workflow name, as registered with the server
+     * @param version the version to publish this topology as. Declared, not derived: a published
+     *                version is immutable, so a changed graph needs a new number
+     * @param input   the context type the workflow starts from -- it anchors the chain's typing and is
+     *                not otherwise used; the graph carries no context type
+     * @param body    the chain, run once, here
      */
-    public static <T> FlowSpec define(String name, Class<T> input,
+    public static <T> FlowSpec define(String name, int version, Class<T> input,
                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
-        return define(name, RetryPolicy.forever(), input, body);
+        return define(name, version, RetryPolicy.forever(), input, body);
     }
 
     /**
@@ -46,7 +48,7 @@ public record FlowSpec(WorkflowDefinition definition) {
      *     Payment charge(Order o);
      * }
      *
-     * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> f
+     * FlowSpec order = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> f
      *         .thenApply(s::validate)
      *         .thenFilter(s::inStock));
      * }</pre>
@@ -62,25 +64,25 @@ public record FlowSpec(WorkflowDefinition definition) {
      * drift. It is not required: binding is by name, as it always was, so a handler that merely
      * happens to match still works.
      */
-    public static <T, H> FlowSpec define(String name, Class<T> input, Class<H> contract,
+    public static <T, H> FlowSpec define(String name, int version, Class<T> input, Class<H> contract,
                                          BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
-        return define(name, RetryPolicy.forever(), input, contract, body);
+        return define(name, version, RetryPolicy.forever(), input, contract, body);
     }
 
-    /** {@link #define(String, Class, Class, BiFunction)} with an explicit default retry policy. */
-    public static <T, H> FlowSpec define(String name, RetryPolicy defaultRetry, Class<T> input,
+    /** {@link #define(String, int, Class, Class, BiFunction)} with an explicit default retry policy. */
+    public static <T, H> FlowSpec define(String name, int version, RetryPolicy defaultRetry, Class<T> input,
                                          Class<H> contract,
                                          BiFunction<WiggleFlow<T>, H, WiggleFlow<?>> body) {
         if (body == null) throw new IllegalArgumentException("workflow '" + name + "' has no body");
         H steps = Steps.of(contract);
-        return define(name, defaultRetry, input, f -> body.apply(f, steps));
+        return define(name, version, defaultRetry, input, f -> body.apply(f, steps));
     }
 
     /**
-     * {@link #define(String, Class, Function)} with an explicit default retry policy for every step
+     * {@link #define(String, int, Class, Function)} with an explicit default retry policy for every step
      * that does not name its own.
      */
-    public static <T> FlowSpec define(String name, RetryPolicy defaultRetry, Class<T> input,
+    public static <T> FlowSpec define(String name, int version, RetryPolicy defaultRetry, Class<T> input,
                                       Function<WiggleFlow<T>, WiggleFlow<?>> body) {
         if (body == null) throw new IllegalArgumentException("workflow '" + name + "' has no body");
         Plan.Step root = Plan.root();
@@ -89,6 +91,6 @@ public record FlowSpec(WorkflowDefinition definition) {
             throw new IllegalStateException(
                     "the body of workflow '" + name + "' returned null; it must return the handle it ends on");
         }
-        return Plan.compile(name, defaultRetry, root);
+        return Plan.compile(name, version, defaultRetry, root);
     }
 }

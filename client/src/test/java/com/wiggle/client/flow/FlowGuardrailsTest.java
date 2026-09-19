@@ -25,7 +25,7 @@ class FlowGuardrailsTest {
         // branches run on isolated copies of the context, so there is no meaning to a split that
         // never rejoins -- the engine would have two successors and no barrier
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
-            FlowSpec.define("dangling", Order.class, f -> {
+            FlowSpec.define("dangling", 1, Order.class, f -> {
                 var validated = f.thenApply(h::validate);
                 validated.thenApply(h::vipPath);                  // one continuation...
                 return validated.thenApply(h::standardPath);      // ...and a second, never combined
@@ -42,7 +42,7 @@ class FlowGuardrailsTest {
     @Test
     void aFanOutWithNoCombineIsRejected() {
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> {
-            FlowSpec.define("no-combine", Order.class, f -> {
+            FlowSpec.define("no-combine", 1, Order.class, f -> {
                 var payment = f.thenApply(h::charge);
                 var shipping = f.thenApply(h::label);
                 Wiggle.allOf(payment, shipping);       // stage dropped on the floor
@@ -57,10 +57,10 @@ class FlowGuardrailsTest {
     void armsMustFanOutFromOneCommonPoint() {
         // a future belonging to another definition has no junction with this one
         WiggleFlow<?>[] alien = new WiggleFlow<?>[1];
-        FlowSpec.define("other-flow", Order.class, g -> alien[0] = g.thenApply(h::label));
+        FlowSpec.define("other-flow", 1, Order.class, g -> alien[0] = g.thenApply(h::label));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
-            FlowSpec.define("two-flows", Order.class, f -> {
+            FlowSpec.define("two-flows", 1, Order.class, f -> {
                 var payment = f.thenApply(h::charge);
                 return Wiggle.allOf(payment, alien[0]).combine("merge", Order.class);
             });
@@ -74,7 +74,7 @@ class FlowGuardrailsTest {
         // step names are unique, so derived arm names are too -- except a sleep name, which need
         // not be, and is the one way two arms can end up sharing one
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> {
-            FlowSpec.define("same-name", Order.class, f -> {
+            FlowSpec.define("same-name", 1, Order.class, f -> {
                 var a = f.thenApply(h::charge).thenSleep("wait", java.time.Duration.ofSeconds(1));
                 var b = f.thenApply(h::label).thenSleep("wait", java.time.Duration.ofSeconds(1));
                 return Wiggle.allOf(a, b).combine("merge", Order.class);
@@ -88,21 +88,21 @@ class FlowGuardrailsTest {
     @Test
     void anArmIsNamedPastTheStepsThatAddNoNode() {
         // checkpoint() adds no node of its own, so the arm is still "charge", not nameless
-        var flow = FlowSpec.define("past-markers", Order.class, f -> {
+        var flow = FlowSpec.define("past-markers", 1, Order.class, f -> {
             var a = f.thenApply(h::charge).checkpoint();
             var b = f.thenApply(h::label);
             return Wiggle.allOf(a, b).combine("merge", Order.class);
         });
 
         assertTrue(flow.definition().nodes().values().stream()
-                        .anyMatch(n -> "[\"charge\",\"label\"]".equals(n.itemsKey())),
+                        .anyMatch(n -> java.util.List.of("charge", "label").equals(n.armNames())),
                 "the combine carries the arms' derived names");
     }
 
     @Test
     void aBodyThatReturnsNullIsRejectedWithTheReason() {
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
-                FlowSpec.define("null-body", Order.class, f -> null));
+                FlowSpec.define("null-body", 1, Order.class, f -> null));
 
         assertTrue(ex.getMessage().contains("must return the handle it ends on"), ex.getMessage());
     }
@@ -112,7 +112,7 @@ class FlowGuardrailsTest {
         // node names address the graph, so they must be unique -- two references to one method are two
         // nodes with one name. The fix is a second handler method (renamed, or @Handles-renamed).
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
-                FlowSpec.define("dup", Order.class, f -> f
+                FlowSpec.define("dup", 1, Order.class, f -> f
                         .thenApply(h::validate)
                         .thenApply(h::validate)));
 
@@ -126,7 +126,7 @@ class FlowGuardrailsTest {
         // Each iteration must reference a different handler, since one method binds one node (above).
         java.util.List<FlowFn<Order, Order>> steps = java.util.List.of(h::validate, h::vipPath, h::standardPath);
 
-        var flow = FlowSpec.define("unrolled", Order.class, f -> {
+        var flow = FlowSpec.define("unrolled", 1, Order.class, f -> {
             WiggleFlow<Order> chain = f.thenApply(h::drain);
             for (FlowFn<Order, Order> step : steps) {
                 chain = chain.thenApply(step);

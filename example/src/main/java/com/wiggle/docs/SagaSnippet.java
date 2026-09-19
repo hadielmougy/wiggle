@@ -32,7 +32,7 @@ public final class SagaSnippet {
 
     static FlowSpec define() {
         // docs:begin topology
-        FlowSpec booking = FlowSpec.define("booking", Booking.class, BookingSteps.class, (f, s) -> f
+        FlowSpec booking = FlowSpec.define("booking", 1, Booking.class, BookingSteps.class, (f, s) -> f
                 .thenApplyCompensable(s::reserveStock)
                 .thenApplyCompensable(s::chargeCard)
                 .thenApply(s::bookCourier));

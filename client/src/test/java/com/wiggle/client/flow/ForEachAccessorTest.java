@@ -43,7 +43,7 @@ class ForEachAccessorTest {
 
     @Test @DisplayName("a list accessor gives both the key and the element type")
     void listAccessor() {
-        WorkflowDefinition d = FlowSpec.define("fa-list", Basket.class, S.class, (f, s) ->
+        WorkflowDefinition d = FlowSpec.define("fa-list", 1, Basket.class, S.class, (f, s) ->
                 f.thenForEach(Basket::items, item -> item.thenApply(s::price))
                         .combine(s::collect)).definition();
         assertEquals("items", keyOf(d, "items"));
@@ -52,7 +52,7 @@ class ForEachAccessorTest {
 
     @Test @DisplayName("a map accessor fans out over the values")
     void mapAccessor() {
-        WorkflowDefinition d = FlowSpec.define("fa-map", Basket.class, S.class, (f, s) ->
+        WorkflowDefinition d = FlowSpec.define("fa-map", 1, Basket.class, S.class, (f, s) ->
                 f.thenForEach(Basket::itemsBySku, item -> item.thenApply(s::price))
                         .combine(s::collect)).definition();
         assertEquals("itemsBySku", keyOf(d, "itemsBySku"));
@@ -60,7 +60,7 @@ class ForEachAccessorTest {
 
     @Test @DisplayName("an array accessor works the same -- a JSON array either way")
     void arrayAccessor() {
-        WorkflowDefinition d = FlowSpec.define("fa-array", Basket.class, S.class, (f, s) ->
+        WorkflowDefinition d = FlowSpec.define("fa-array", 1, Basket.class, S.class, (f, s) ->
                 f.thenForEach(Basket::spares, item -> item.thenApply(s::price))
                         .combine(s::collect)).definition();
         assertEquals("spares", keyOf(d, "spares"));
@@ -68,7 +68,7 @@ class ForEachAccessorTest {
 
     @Test @DisplayName("the explicit-name form still fans the same collection twice")
     void sameCollectionTwice() {
-        WorkflowDefinition d = FlowSpec.define("fa-twice", Basket.class, S.class, (f, s) -> {
+        WorkflowDefinition d = FlowSpec.define("fa-twice", 1, Basket.class, S.class, (f, s) -> {
             var once = f.thenForEach("first-pass", Basket::items, i -> i.thenApply(s::price))
                     .combine(s::collect);
             return once.thenForEach("second-pass", Basket::items, i -> i.thenApply(s::reprice))

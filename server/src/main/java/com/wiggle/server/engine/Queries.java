@@ -1,7 +1,6 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.InstanceView;
-import com.wiggle.core.Json;
 import com.wiggle.placement.IdCodec;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
@@ -84,6 +83,6 @@ final class Queries {
 
     private static InstanceView view(Instance i) {
         return new InstanceView(i.id, i.workflow, i.version, i.status.name(), i.terminationReason,
-                i.error, Json.parse(i.contextJson), i.createdAt, i.updatedAt);
+                i.error, i.context.raw(), i.createdAt, i.updatedAt);
     }
 }

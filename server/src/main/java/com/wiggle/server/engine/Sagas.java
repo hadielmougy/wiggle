@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
-import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.TaskActivation;
@@ -9,6 +9,7 @@ import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
+import com.wiggle.server.store.TokenPayload;
 import com.wiggle.server.store.Tx;
 
 import java.util.List;
@@ -24,10 +25,6 @@ final class Sagas {
 
     private static final System.Logger LOG = System.getLogger(Sagas.class.getName());
 
-    /** Marks a token as a COMPENSATION token (the reverse pass): its payload carries the comp-log
-     *  seq it settles plus the input/result snapshots the compensator receives. */
-    static final String COMP_SEQ = "__comp_seq__";
-
     private final WorkflowEngine engine;
 
     Sagas(WorkflowEngine engine) {
@@ -36,36 +33,33 @@ final class Sagas {
 
     /** The comp-log seq a compensation token settles, or null for a forward token. */
     static Long seqOf(Token t) {
-        if (t.payloadJson == null || !t.payloadJson.contains(COMP_SEQ)) return null;
-        Object v = Json.parseObject(t.payloadJson).get(COMP_SEQ);
-        return v == null ? null : ((Number) v).longValue();
+        return t.compSeq;
     }
 
     static boolean isCompensation(Token t) {
-        return seqOf(t) != null;
+        return t.compSeq != null;
     }
 
-    /** A compensation task's activation: the context is the {input, result} snapshot pair; the
-     *  worker's compensator wrapper splits it. Always SERVER mode -- the reverse pass never chains. */
+    /** A compensation task's activation: the context is the {input, result} snapshot pair the
+     *  reverse pass staged for it; the worker's compensator wrapper splits it. Always SERVER mode --
+     *  the reverse pass never chains. */
     static TaskActivation activation(Instance inst, Token t, String workerId, long until) {
-        Map<String, Object> payload = Json.parseObject(t.payloadJson);
-        payload.remove(COMP_SEQ);
         return new TaskActivation(t.id, inst.id, inst.workflow, inst.version,
                 t.nodeId, t.activity, t.activity, NodeKind.TASK, t.attempt + 1, until, workerId,
-                payload, null, 0, null, ExecutionMode.SERVER);
+                t.payload.staged(), null, 0, null, ExecutionMode.SERVER);
     }
 
     /** Appends this compensable step's completion to the comp-log: both snapshots, captured
      *  atomically with the completion itself. Result = the context as the step left it. */
-    static void capture(Tx tx, Instance inst, Token t, Node node, Object input, long now) {
+    static void capture(Tx tx, Instance inst, Token t, Node node, Doc input, long now) {
         Rows.CompLog e = new Rows.CompLog();
         e.instanceId = inst.id;
         e.seq = tx.compensationLog(inst.id).size() + 1L;
         e.nodeId = node.id();
         e.activity = node.activity();
         e.queue = node.queue();
-        e.inputJson = Json.write(input);
-        e.resultJson = Json.write(WorkflowEngine.dispatchContext(inst, t));   // post-apply: as the step left it
+        e.input = input;
+        e.result = WorkflowEngine.dispatchContext(inst, t);   // post-apply: as the step left it
         tx.appendCompensation(e);
     }
 
@@ -132,11 +126,11 @@ final class Sagas {
             engine.notifyParent(tx, inst, now);
             return;
         }
-        String payload = Json.write(Map.of(
-                COMP_SEQ, next.seq,
-                "input", Json.parse(next.inputJson),
-                "result", Json.parse(next.resultJson)));
+        TokenPayload payload = TokenPayload.EMPTY.withStaged(Map.of(
+                "input", next.input.raw(),
+                "result", next.result.raw()));
         Token t = WorkflowEngine.newToken(inst, next.nodeId, "", payload, now);
+        t.compSeq = next.seq;
         t.activity = next.activity + "#compensate";
         t.queue = next.queue;
         tx.insertToken(t);

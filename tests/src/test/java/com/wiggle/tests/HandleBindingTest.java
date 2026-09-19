@@ -51,7 +51,7 @@ class HandleBindingTest {
 
     /** The authored topology: two of its steps sit on the default queue, "authorise" on "payments". */
     private FlowSpec authoredGraph() {
-        return FlowSpec.define("order-fulfilment", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("order-fulfilment", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenFilter(s::inStock)
                 .thenApply(s::authorise, "payments")
@@ -157,7 +157,7 @@ class HandleBindingTest {
     @DisplayName("typed handlers bound by name (record codec) run an instance to completion")
     void typedHandlersBinding() throws Exception {
         withServer((client, server) -> {
-            client.register(FlowSpec.define("typed-wf", Map.class, OneStep.class, (f, s) -> f
+            client.register(FlowSpec.define("typed-wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::check)
                 .thenFilter(s::available)
                 .thenAccept(s::done)));

@@ -79,7 +79,7 @@ class FlowApiTest {
 
     /** The workflow, written as a chain of references to {@code flow}'s own methods. */
     private static FlowSpec flowSpec() {
-        return FlowSpec.define("flow-order", Order.class, OrderFlowSteps.class, (f, s) -> {
+        return FlowSpec.define("flow-order", 1, Order.class, OrderFlowSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
             var payment = validated.thenApply(s::charge);
@@ -136,7 +136,7 @@ class FlowApiTest {
     void positionalCombineBindsArmsInForkOrder() throws Exception {
         PositionalOrderFlow flow = new PositionalOrderFlow();
 
-        FlowSpec bp = FlowSpec.define("positional-order", Order.class, PositionalSteps.class, (f, s) -> {
+        FlowSpec bp = FlowSpec.define("positional-order", 1, Order.class, PositionalSteps.class, (f, s) -> {
             var validated = f.thenApply(s::validate);
             var payment = validated.thenApply(s::charge);
             var shipping = validated.thenApply(s::label);

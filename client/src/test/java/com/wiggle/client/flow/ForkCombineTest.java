@@ -29,7 +29,7 @@ class ForkCombineTest {
     }
 
     private static FlowSpec tripFlowSpec() {
-        return FlowSpec.define("trip", Map.class, TripSteps.class, (f, s) -> {
+        return FlowSpec.define("trip", 1, Map.class, TripSteps.class, (f, s) -> {
             var prepped = f.thenApply(s::prep);
             // continuing `prepped` twice is the fan-out; each arm runs on its own isolated copy
             var air = prepped.thenApply(s::bookAir);
@@ -74,10 +74,11 @@ class ForkCombineTest {
     @Test
     void combineNodeCarriesArmNamesForTheEngineToKeyBranchResults() {
         WorkflowDefinition def = tripFlowSpec().definition();
-        // The arm names ride on the combine node's itemsKey (a store-portable field) as a JSON array,
-        // in fork order, so the engine can stage each isolated branch's result under its name. The arm
-        // names are the step names, which in this API are the referenced methods' own names.
-        assertEquals("[\"bookAir\",\"bookHotel\"]", named(def, "merge").itemsKey());
+        // The arm names ride on the combine node in fork order, so the engine can stage each
+        // isolated branch's result under its name. The arm names are the step names, which in this
+        // API are the referenced methods' own names.
+        assertEquals(java.util.List.of("bookAir", "bookHotel"), named(def, "merge").armNames());
+        assertTrue(named(def, "merge").isCombine());
     }
 
     @Test
@@ -86,7 +87,7 @@ class ForkCombineTest {
         // are combines -- so what is reachable is dropping the stage on the floor, which leaves the
         // fan-out unjoined.
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
-                FlowSpec.define("t", Map.class, TripSteps.class, (f, s) -> {
+                FlowSpec.define("t", 1, Map.class, TripSteps.class, (f, s) -> {
                     var prepped = f.thenApply(s::prep);
                     Wiggle.allOf(prepped.thenApply(s::bookAir), prepped.thenApply(s::bookHotel));
                     return prepped;
@@ -98,7 +99,7 @@ class ForkCombineTest {
     @Test
     void combineTwiceThrows() {
         assertThrows(IllegalStateException.class, () ->
-                FlowSpec.define("t", Map.class, TripSteps.class, (f, s) -> {
+                FlowSpec.define("t", 1, Map.class, TripSteps.class, (f, s) -> {
                     var prepped = f.thenApply(s::prep);
                     var stage = Wiggle.allOf(prepped.thenApply(s::bookAir), prepped.thenApply(s::bookHotel));
                     stage.combine(s::merge);

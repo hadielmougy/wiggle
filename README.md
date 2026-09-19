@@ -29,7 +29,7 @@ interface OrderSteps {                                  // the steps, as a contr
     ...
 }
 
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate).thenFilter(s::inStock);
 
     var payment  = validated.thenApply(s::authorise).thenApply(s::capture);
@@ -82,7 +82,7 @@ inspected, traced and versioned like any other row in your database.
 - 💾 **Durable, honestly** — every instance is DB-backed. Exactly-once dispatch, at-least-once
   execution, lease-based recovery when a worker dies mid-step.
 - 🧭 **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals,
-  timers, sub-flows, `repeatWhile`, `thenForEach` — a compiled graph, versioned by content hash.
+  timers, sub-flows, `repeatWhile`, `thenForEach` — a compiled graph, published at a version you declare.
   **No workflow-code determinism to get wrong**, because the workflow *is* data, not replayed code.
 - 🔌 **Pull-based & polyglot** — workers long-poll over gRPC: no inbound connectivity, no broker,
   backpressure built in. Idiomatic **Java, Go, and Python** workers interoperate on one server —
@@ -222,7 +222,7 @@ class GreetHandlers implements GreetSteps {
 //    once and compiled to a graph; the code that runs each step is bound by name on the worker.
 interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
 
-FlowSpec greet = FlowSpec.define("greet", Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
+FlowSpec greet = FlowSpec.define("greet", 1, Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
 // 3. Embedded server + worker + one instance.
 try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
@@ -244,7 +244,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 A real one — parallel branches, a guard, a retry policy, a server-side timer:
 
 ```java
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> {
+FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> {
     var validated = f.thenApply(s::validate)
             .thenFilter(s::inStock);         // false ⇒ the instance ends cleanly, not an error
 
@@ -279,7 +279,7 @@ public interface OrderSteps {                     // declared here, implemented 
 }
 
 // the author registers the topology without implementing a single step
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, OrderSteps.class, (f, s) -> { … });
+FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> { … });
 ```
 
 That is what lets one workflow be served by workers in Java, Go and Python without any of them
@@ -356,7 +356,7 @@ And the parts long-running processes actually need are first-class:
 
 ```java
 // Human / external input — the instance parks (no worker held), a deadline can escalate:
-FlowSpec.define("expense", Expense.class, ExpenseSteps.class, (f, s) -> f
+FlowSpec.define("expense", 1, Expense.class, ExpenseSteps.class, (f, s) -> f
         .thenApply(s::submit)
         .thenAwait("manager-approval", Duration.ofHours(48), b -> b.thenApply(s::autoEscalate))
         .thenApply(s::payOut));
@@ -397,8 +397,10 @@ class per recipe where the other is a topology file plus a handlers file.
   is on the compiled graph. Crash-safe by construction; the console renders it live.
 - **Leases, not locks** — a claimed step carries a lease; if the worker dies, the lease expires
   and the step is redelivered. At-least-once execution, exactly-once dispatch.
-- **Content-hash versioning** — a definition's version *is* the hash of its graph. Re-registering
-  an identical graph is a no-op; in-flight instances keep the version they started on.
+- **Declared, immutable versions** — you publish a topology at a version you choose
+  (`define("orders", 2, …)`). Re-registering the same graph is a no-op; re-registering a *changed*
+  one under a published version is refused, so a forgotten bump is a deploy-time error rather than a
+  graph swapped under running instances. In-flight instances keep the version they started on.
 - **Queues route steps** — each step can name a queue (`step("render", "gpu")`); worker pools
   subscribe to queues, so one flow's steps spread across many services with no broker.
 - **Local step chaining** — `LOCAL_SYNC` / `LOCAL_ASYNC` execution modes let a worker run
@@ -512,6 +514,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_NAMESPACE` | *(unset)* | opt-in placement namespace; unset for an ordinary server |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint (the UI moved to the console) |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
+| `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | *(unset)* | keystore ⇒ TLS on; **unset = plaintext** |
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |

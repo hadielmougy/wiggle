@@ -56,7 +56,7 @@ class PostgresClaimTest {
 
     /** A unique workflow (and so a unique queue) per run keeps this isolated from other rows. */
     private static FlowSpec uniqueWorkflow() {
-        return FlowSpec.define("pg-claim-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("pg-claim-" + Ids.next("wf"), 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     @Test @DisplayName("the SKIP LOCKED claim leases tokens with owner and expiry")

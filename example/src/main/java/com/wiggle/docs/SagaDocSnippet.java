@@ -34,7 +34,7 @@ public final class SagaDocSnippet {
 
     static FlowSpec define() {
         // docs:begin topology
-        FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, FullOrderSteps.class, (f, s) -> f
+        FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, FullOrderSteps.class, (f, s) -> f
                 .thenApply(s::validate)
                 .thenApplyCompensable(s::authorise)
                 .thenApplyCompensable(s::capture)

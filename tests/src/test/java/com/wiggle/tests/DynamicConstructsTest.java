@@ -116,7 +116,7 @@ class DynamicConstructsTest {
 
 
     private static FlowSpec counterLoop(ExecutionMode mode) {
-        return FlowSpec.define("dyn-loop", Map.class, LoopSteps.class, (f, s) -> f
+        return FlowSpec.define("dyn-loop", 1, Map.class, LoopSteps.class, (f, s) -> f
                 .execution(mode)
                 .thenApply(s::init)
                 .repeatWhile(s::more, b -> b.thenApply(s::work))
@@ -153,7 +153,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile runs its body at least once")
     void loopRunsAtLeastOnce() throws Exception {
         AtomicInteger bodyRuns = new AtomicInteger();
-        FlowSpec bp = FlowSpec.define("dyn-loop-once", Map.class, LoopOnceSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("dyn-loop-once", 1, Map.class, LoopOnceSteps.class, (f, s) -> f
                 .repeatWhile(s::neverAgain, b -> b.thenApply(s::work))
                 .thenApply(s::after));
         InstanceView v = run(bp, new LoopOnceH(bodyRuns), Map.of(), null);
@@ -177,7 +177,7 @@ class DynamicConstructsTest {
 
     /** Two-step body: the item value evolves scalar -> map, proving the value threads the body. */
     private static FlowSpec fanOut(ExecutionMode mode) {
-        return FlowSpec.define("dyn-fan", Map.class, FanSteps.class, (f, s) -> f
+        return FlowSpec.define("dyn-fan", 1, Map.class, FanSteps.class, (f, s) -> f
                 .execution(mode)
                 .thenForEach("per-item", "items", String.class, b -> b
                         .thenApply(s::upper)
@@ -238,7 +238,7 @@ class DynamicConstructsTest {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            FlowSpec bp = FlowSpec.define("dyn-fan-wide", Map.class, FanSteps.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("dyn-fan-wide", 1, Map.class, FanSteps.class, (f, s) -> f
                     .thenForEach("per-item", "items", String.class, b -> b.thenApply(s::upper))
                     .combine(s::collect));
             registry.register(bp.definition());
@@ -257,7 +257,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("default-name shorthand: forEach(itemsKey, body) names the node after the collection")
     void shorthandDefaultsNameToItemsKey() {
-        FlowSpec bp = FlowSpec.define("dyn-fan-short", Map.class, FanSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("dyn-fan-short", 1, Map.class, FanSteps.class, (f, s) -> f
                 .thenForEach("items", String.class, b -> b.thenApply(s::upper))
                 .combine(s::collect));
         Node dyn = bp.definition().nodes().values().stream()
@@ -269,7 +269,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("a map input fans out per entry; the combine receives a map keyed like the input")
     void mapInputCollectsAsMap() throws Exception {
-        FlowSpec bp = FlowSpec.define("dyn-fan-map", Map.class, MapFanSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("dyn-fan-map", 1, Map.class, MapFanSteps.class, (f, s) -> f
                 .thenForEach("per-entry", "prices", Long.class, b -> b.thenApply(s::tag))
                 .combine(s::collect)
                 .thenApply(s::after));
@@ -300,7 +300,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("scalar items flow scalar-to-scalar; a Set combine parameter deduplicates")
     void setParamDeduplicates() throws Exception {
-        FlowSpec bp = FlowSpec.define("dyn-fan-set", Map.class, SetFanSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("dyn-fan-set", 1, Map.class, SetFanSteps.class, (f, s) -> f
                 .thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
                 .combine(s::collect));
         InstanceView v = run(bp, new SetFanH(), Map.of("items", List.of("x", "x", "y")), null);
@@ -370,7 +370,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("forEach(Cart::items, …): the component name IS the persisted key, end to end")
     void accessorKeyResolvesAgainstRealJson() throws Exception {
-        FlowSpec bp = FlowSpec.define("dyn-fan-typed", Cart.class, CartSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("dyn-fan-typed", 1, Cart.class, CartSteps.class, (f, s) -> f
                 .thenForEach(Cart::items, b -> b.thenApply(s::upper))
                 .combine(s::collect));
 
@@ -389,13 +389,13 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("the results are staged under a reserved key, not the fan-out node's own name")
     void scratchKeyIsReserved() {
-        FlowSpec bp = FlowSpec.define("dyn-scratch", Map.class, FanSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("dyn-scratch", 1, Map.class, FanSteps.class, (f, s) -> f
                 .thenForEach("items", String.class, b -> b.thenApply(s::upper))
                 .combine(s::collect));
         Node combine = bp.definition().nodes().values().stream()
                 .filter(n -> "collect".equals(n.name()))
                 .findFirst().orElseThrow(() -> new AssertionError("no combine node"));
-        assertEquals("\"__forEach__items\"", combine.itemsKey(),
+        assertEquals("__forEach__items", combine.collectKey(),
                 "a bare 'items' would collide with the collection it fanned over");
     }
 

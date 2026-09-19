@@ -22,7 +22,7 @@ Set<String> queues, ExecutionMode executionMode, Set<String> checkpoints)`.
 
 - `nodes` — keyed by node id.
 - `queues` — the set of queues worker-dispatched nodes poll.
-- `version` — content hash (see §3.7); deterministic from the graph, not caller-supplied.
+- `version` — caller-supplied and positive; the graph's fingerprint (see §3.7) is what holds a published version immutable.
 
 ## 2. Graph model (`Node`)
 

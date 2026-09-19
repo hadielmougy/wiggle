@@ -29,7 +29,7 @@ same shape the handler implements, so the two cannot drift.
 
 <!-- snippet: saga-doc/topology -->
 ```java
-FlowSpec orders = FlowSpec.define("order-fulfilment", Order.class, FullOrderSteps.class, (f, s) -> f
+FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, FullOrderSteps.class, (f, s) -> f
         .thenApply(s::validate)
         .thenApplyCompensable(s::authorise)
         .thenApplyCompensable(s::capture)
@@ -99,7 +99,7 @@ Compensators are **at-least-once**, like every handler; they must be idempotent.
 **The topology stays the contract; the class provides the implementation.** A step is compensated
 on failure only if the workflow declares it (a `CompensableActivity` factory — the declaration is the marker, since the
 activity carries the code), because the *engine* must know compensability at completion time (to
-snapshot) and the declaration must fold into the content-hash version and show on the console. At
+snapshot) and the declaration must fold into the definition fingerprint and show on the console. At
 bind time the pairing is verified **both ways**, failing fast:
 
 - step declared compensable, bound activity is not `Compensable` → bind error;
@@ -122,7 +122,7 @@ record Compensation(String activity, String queue, RetryPolicy retry)
 The compensator is **metadata on the forward node, not a node in the forward graph**. It has no
 `next`/`altNext` edges — it never participates in forward routing, so the forward topology and its
 validation (`Pipeline.validate`, `Pipeline.java:189`) are untouched. It rides along in the content
-hash (`WorkflowDefinition.contentVersion`), so adding/removing a compensator is a new version, and
+fingerprint (`WorkflowDefinition.fingerprint`), so adding/removing a compensator needs a new version, and
 in-flight instances keep the version they started on — versioning is free here too.
 
 This keeps the invariant that **the graph is data**: the compensator is a declared fact attached to
@@ -251,7 +251,7 @@ may treat a child's `COMPENSATION_FAILED` as its own compensation failure — co
 | Area | File(s) | Change |
 |---|---|---|
 | DSL | `client/.../dsl/WorkflowBuilder.java`, `Pipeline.java` | `compensate(...)` overloads attaching a `Compensation` to the just-added TASK node |
-| Graph model | `core/.../Node.java`, `NodeDraft.java` | nullable `Compensation` field; JSON round-trip; folds into `contentVersion` |
+| Graph model | `core/.../Node.java`, `NodeDraft.java` | nullable `Compensation` field; JSON round-trip; folds into `fingerprint` |
 | Comp-log store | `server/.../store/Tx.java`, `InMemoryStorage.java`, `jdbc/…` | a bounded `comp_log` (append on compensatable completion, read/mark in the phase) |
 | Capture | `WorkflowEngine.applyStepResult` (`:881`) | on a compensatable step's completion, append a comp-log entry with the returned-context snapshot |
 | Phase | `WorkflowEngine.failInstance` (`:1366`) + new `driveCompensation` | branch into `COMPENSATING`; mint/settle compensator tokens over the existing dispatch path; derive the cursor; land `COMPENSATED`/`COMPENSATION_FAILED` |

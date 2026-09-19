@@ -3,6 +3,8 @@ package com.wiggle.jdbc;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import com.wiggle.core.*;
+import com.wiggle.core.Doc;
+import com.wiggle.server.store.PayloadCodec;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
 import com.wiggle.server.store.Storage;
@@ -247,6 +249,31 @@ public final class JdbcStorage implements Storage {
             // other unbounded columns (payload, context, error).
             new Migration(10, "unbounded-join-stack", """
             ALTER TABLE wf_token ALTER COLUMN join_stack TYPE TEXT;
+            """),
+            // Versions became author-declared rather than a content hash of the topology, so
+            // (name, version) no longer implies one graph on its own. The fingerprint is what
+            // holds a published version immutable: re-registering it with a different graph is
+            // refused. Nullable -- a row written before this migration has no fingerprint and is
+            // treated as unknown, not as a mismatch.
+            new Migration(11, "definition-fingerprint", """
+            ALTER TABLE wf_definition ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(64);
+            ALTER TABLE wf_definition ADD COLUMN IF NOT EXISTS fingerprint_algo VARCHAR(32);
+            """),
+            // Which comp-log entry a compensation token settles. It used to ride inside the token's
+            // payload JSON under a reserved key, so telling a compensation token from a forward one
+            // meant a substring scan of that JSON on the completion path. Nullable and additive:
+            // a token written before this migration has no seq, which is what a forward token has.
+            new Migration(12, "compensation-seq-column", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS comp_seq BIGINT;
+            """),
+            // A combine node's shape used to ride inside items_key as JSON -- an array of arm names
+            // for a fork, a quoted string for a forEach -- so the engine re-parsed it, and told the
+            // two apart by which JSON type came back. Own columns instead; items_key goes back to
+            // meaning only what a forEach fan-out reads. Nullable: a graph written before this keeps
+            // its items_key, which the reader still decodes.
+            new Migration(13, "combine-columns", """
+            ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS arm_names TEXT;
+            ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS collect_key VARCHAR(200);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -495,30 +522,52 @@ public final class JdbcStorage implements Storage {
             return out;
         }
 
-        @Override public void putDefinition(String name, int version, String json) {
-            // The version is a content hash of the topology, so an existing (name,version) row
-            // is byte-for-byte identical and re-registration is a genuine no-op. insertIgnore makes
-            // that idempotent atomically -- unlike a DELETE-then-INSERT, it leaves no window in which
-            // two nodes registering the same graph collide on the primary key. The isDuplicateKey
-            // catch below covers a backend whose ignore is not inline.
+        @Override public void putDefinition(String name, int version, String json,
+                                            String fingerprint, String fingerprintAlgo) {
+            // insertIgnore rather than DELETE-then-INSERT: it leaves no window in which two nodes
+            // registering the same new version collide on the primary key. The isDuplicateKey catch
+            // covers a backend whose ignore is not inline.
             try (PreparedStatement ins = ps(dialect.insertIgnore("INSERT INTO wf_definition " +
-                    "(name,version,body,registered_at) VALUES (?,?,?,?)"))) {
+                    "(name,version,body,registered_at,fingerprint,fingerprint_algo) VALUES (?,?,?,?,?,?)"))) {
                 ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
                 ins.setLong(4, System.currentTimeMillis());
+                ins.setString(5, fingerprint); ins.setString(6, fingerprintAlgo);
                 ins.executeUpdate();
             } catch (SQLException e) {
                 if (!dialect.isDuplicateKey(e)) throw wrap(e);
             }
         }
 
+        @Override public void replaceDefinition(String name, int version, String json,
+                                                String fingerprint, String fingerprintAlgo) {
+            try (PreparedStatement p = ps("UPDATE wf_definition SET body=?, registered_at=?, " +
+                    "fingerprint=?, fingerprint_algo=? WHERE name=? AND version=?")) {
+                p.setString(1, json); p.setLong(2, System.currentTimeMillis());
+                p.setString(3, fingerprint); p.setString(4, fingerprintAlgo);
+                p.setString(5, name); p.setInt(6, version);
+                p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public Optional<StoredFingerprint> definitionFingerprint(String name, int version) {
+            try (PreparedStatement p = ps(
+                    "SELECT fingerprint, fingerprint_algo FROM wf_definition WHERE name=? AND version=? FOR UPDATE")) {
+                p.setString(1, name); p.setInt(2, version);
+                try (ResultSet rs = p.executeQuery()) {
+                    return rs.next()
+                            ? Optional.of(new StoredFingerprint(rs.getString(1), rs.getString(2)))
+                            : Optional.empty();
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
         @Override public void putGraph(WorkflowDefinition def) {
-            // The (name,version) blob insert already ignored conflicts for idempotency; guard the
-            // graph rows the same way so a re-registration of the same content hash is a clean no-op
-            // even if two nodes race.
+            // The registry deletes these rows before a replacement, so anything still here is the
+            // same graph: a no-op, even when two nodes register it at once.
             if (graphExists(def.name(), def.version())) return;
             try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
                     "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key,loop_budget,compensable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+                    "items_key,item_key,loop_budget,compensable,arm_names,collect_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
                  PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
                     "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)"))) {
                 for (Node n : def.nodes().values()) {
@@ -530,6 +579,8 @@ public final class JdbcStorage implements Storage {
                     node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
                     node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
                     node.setString(14, n.itemsKey()); node.setString(15, n.itemKey()); node.setInt(16, n.loopBudget());
+                    node.setString(18, n.armNames().isEmpty() ? null : Json.write(n.armNames()));
+                    node.setString(19, n.collectKey());
                     node.setInt(17, n.compensable() ? 1 : 0);
                     node.addBatch();
                     for (Edge e : edgesOf(n)) {
@@ -552,9 +603,23 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        @Override public void deleteGraph(String workflow, int version) {
+            deleteGraphRows("DELETE FROM wf_graph_edge WHERE workflow=? AND version=?", workflow, version);
+            deleteGraphRows("DELETE FROM wf_graph_node WHERE workflow=? AND version=?", workflow, version);
+        }
+
+        private void deleteGraphRows(String sql, String workflow, int version) {
+            try (PreparedStatement p = ps(sql)) {
+                p.setString(1, workflow);
+                p.setInt(2, version);
+                p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
             try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason," +
-                    "items_key,item_key,loop_budget,compensable FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
+                    "items_key,item_key,loop_budget,compensable,arm_names,collect_key " +
+                    "FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
                 try (ResultSet rs = p.executeQuery()) {
                     if (!rs.next()) return Optional.empty();
@@ -570,16 +635,36 @@ public final class JdbcStorage implements Storage {
                     String itemKey = rs.getString(11);
                     int loopBudget = rs.getInt(12);   // NULL -> 0 (not a loop)
                     boolean compensable = rs.getInt(13) != 0;
+                    Combine combine = Combine.of(kind, itemsKey, rs.getString(14), rs.getString(15));
                     return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
-                            retry, sleep, expected, success, reason, itemsKey, itemKey, loopBudget, compensable));
+                            retry, sleep, expected, success, reason, combine.itemsKey(), itemKey,
+                            loopBudget, compensable, combine));
                 }
             } catch (SQLException e) { throw wrap(e); }
+        }
+
+        /**
+         * A combine node's shape as stored. Rows written before {@code combine-columns} carry it as
+         * JSON in {@code items_key}; this is the one place that still decodes that form.
+         */
+        private record Combine(List<String> armNames, String collectKey, String itemsKey) {
+            static Combine of(NodeKind kind, String itemsKey, String armNamesJson, String collectKey) {
+                if (armNamesJson != null) {
+                    return new Combine(Json.asArray(Json.parse(armNamesJson)).stream()
+                            .map(String::valueOf).toList(), collectKey, itemsKey);
+                }
+                if (collectKey != null) return new Combine(List.of(), collectKey, itemsKey);
+                if (kind != NodeKind.TASK || itemsKey == null) return new Combine(List.of(), null, itemsKey);
+                Object legacy = Json.parse(itemsKey);
+                if (legacy instanceof String s) return new Combine(List.of(), s, null);
+                return new Combine(Json.asArray(legacy).stream().map(String::valueOf).toList(), null, null);
+            }
         }
 
         /** Reads a node's outgoing edges and folds them back into the node's typed next/altNext/branches. */
         private Node assemble(String workflow, int version, String id, NodeKind kind, String name, String activity,
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
-                              String itemsKey, String itemKey, int loopBudget, boolean compensable) {
+                              String itemsKey, String itemKey, int loopBudget, boolean compensable, Combine combine) {
             EdgeTargets targets = new EdgeTargets(kind);
             try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
                     "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
@@ -589,7 +674,8 @@ public final class JdbcStorage implements Storage {
                 }
             } catch (SQLException e) { throw wrap(e); }
             Node n = new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
-                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget, false);
+                    List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget, false,
+                    combine.armNames(), combine.collectKey());
             return compensable ? n.withCompensable() : n;
         }
 
@@ -639,10 +725,12 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Integer> latestVersion(String name) {
             try (PreparedStatement p = ps(
-                    "SELECT version FROM wf_definition WHERE name=? ORDER BY registered_at DESC, version DESC")) {
+                    "SELECT MAX(version) FROM wf_definition WHERE name=?")) {
                 p.setString(1, name);
                 try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(rs.getInt(1)) : Optional.empty();
+                    if (!rs.next()) return Optional.empty();
+                    int v = rs.getInt(1);
+                    return rs.wasNull() ? Optional.empty() : Optional.of(v);
                 }
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -662,7 +750,7 @@ public final class JdbcStorage implements Storage {
                     "parent_token_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")) {
                 p.setString(1, i.id); p.setString(2, i.workflow); p.setInt(3, i.version);
                 p.setString(4, i.correlationId); p.setString(5, i.status.name());
-                p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.contextJson);
+                p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.context.json());
                 p.setLong(9, i.createdAt); p.setLong(10, i.updatedAt); p.setLong(11, i.revision);
                 p.setString(12, i.parentTokenId);
                 p.executeUpdate();
@@ -689,7 +777,7 @@ public final class JdbcStorage implements Storage {
             try (PreparedStatement p = ps("UPDATE wf_instance SET status=?,term_reason=?,error=?,context=?," +
                     "updated_at=?,revision=revision+1 WHERE id=?")) {
                 p.setString(1, i.status.name()); p.setString(2, i.terminationReason); p.setString(3, i.error);
-                p.setString(4, i.contextJson); p.setLong(5, i.updatedAt); p.setString(6, i.id);
+                p.setString(4, i.context.json()); p.setLong(5, i.updatedAt); p.setString(6, i.id);
                 p.executeUpdate();
                 i.revision++;
             } catch (SQLException e) { throw wrap(e); }
@@ -736,13 +824,13 @@ public final class JdbcStorage implements Storage {
         @Override public void insertToken(Token t) {
             try (PreparedStatement p = ps("INSERT INTO wf_token (id,instance_id,workflow,version,node_id,kind,status," +
                     "activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,last_error,created_at,updated_at," +
-                    "payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+                    "payload,comp_seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
                 bindToken(p, t);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /** Binds parameters 1..18 in wf_token insert column order. */
+        /** Binds parameters 1..19 in wf_token insert column order. */
         private void bindToken(PreparedStatement p, Token t) throws SQLException {
             p.setString(1, t.id);
             p.setString(2, t.instanceId);
@@ -761,7 +849,13 @@ public final class JdbcStorage implements Storage {
             p.setString(15, t.lastError);
             p.setLong(16, t.createdAt);
             p.setLong(17, t.updatedAt);
-            p.setString(18, t.payloadJson);
+            p.setString(18, PayloadCodec.encode(t.payload));
+            setNullableLong(p, 19, t.compSeq);
+        }
+
+        private static void setNullableLong(PreparedStatement p, int idx, Long v) throws SQLException {
+            if (v == null) p.setNull(idx, java.sql.Types.BIGINT);
+            else p.setLong(idx, v);
         }
 
         @Override public Optional<Token> findToken(String id) {
@@ -787,12 +881,13 @@ public final class JdbcStorage implements Storage {
         @Override public void updateToken(Token t) {
             try (PreparedStatement p = ps("UPDATE wf_token SET node_id=?,kind=?,status=?,activity=?,queue=?," +
                     "attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?,last_error=?,updated_at=?," +
-                    "payload=? WHERE id=?")) {
+                    "payload=?,comp_seq=? WHERE id=?")) {
                 p.setString(1, t.nodeId); p.setString(2, t.kind.name()); p.setString(3, t.status.name());
                 p.setString(4, t.activity); p.setString(5, t.queue); p.setInt(6, t.attempt);
                 p.setLong(7, t.availableAt); p.setString(8, t.leaseOwner); p.setLong(9, t.leaseExpiresAt);
                 p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
-                p.setLong(12, t.updatedAt); p.setString(13, t.payloadJson); p.setString(14, t.id);
+                p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
+                setNullableLong(p, 14, t.compSeq); p.setString(15, t.id);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -958,7 +1053,7 @@ public final class JdbcStorage implements Storage {
             // The seven bound parameters are identical across dialects; only the SQL text differs.
             try (PreparedStatement p = ps(dialect.scheduleUpsert())) {
                 p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
-                p.setString(4, s.cron); p.setString(5, s.contextJson);
+                p.setString(4, s.cron); p.setString(5, s.context.json());
                 p.setLong(6, s.nextFireAt); p.setLong(7, s.createdAt);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
@@ -1014,7 +1109,7 @@ public final class JdbcStorage implements Storage {
             s.workflow = rs.getString("workflow");
             s.intervalMillis = rs.getLong("interval_millis");
             s.cron = rs.getString("cron");
-            s.contextJson = rs.getString("context");
+            s.context = Doc.parse(rs.getString("context"));
             s.nextFireAt = rs.getLong("next_fire_at");
             s.createdAt = rs.getLong("created_at");
             return s;
@@ -1147,7 +1242,7 @@ public final class JdbcStorage implements Storage {
                     + "VALUES (?,?,?,?,?,?,?,?)")) {
                 p.setString(1, e.instanceId); p.setLong(2, e.seq); p.setString(3, e.nodeId);
                 p.setString(4, e.activity); p.setString(5, e.queue);
-                p.setString(6, e.inputJson); p.setString(7, e.resultJson);
+                p.setString(6, e.input == null ? null : e.input.json()); p.setString(7, e.result == null ? null : e.result.json());
                 p.setInt(8, e.compensated ? 1 : 0);
                 p.executeUpdate();
             } catch (SQLException ex) { throw wrap(ex); }
@@ -1163,8 +1258,8 @@ public final class JdbcStorage implements Storage {
                         Rows.CompLog e = new Rows.CompLog();
                         e.instanceId = instanceId;
                         e.seq = rs.getLong(1); e.nodeId = rs.getString(2); e.activity = rs.getString(3);
-                        e.queue = rs.getString(4); e.inputJson = rs.getString(5);
-                        e.resultJson = rs.getString(6); e.compensated = rs.getInt(7) != 0;
+                        e.queue = rs.getString(4); e.input = Doc.parse(rs.getString(5));
+                        e.result = Doc.parse(rs.getString(6)); e.compensated = rs.getInt(7) != 0;
                         out.add(e);
                     }
                 }
@@ -1188,7 +1283,7 @@ public final class JdbcStorage implements Storage {
             i.status = InstanceStatus.valueOf(rs.getString("status"));
             i.terminationReason = rs.getString("term_reason");
             i.error = rs.getString("error");
-            i.contextJson = rs.getString("context");
+            i.context = Doc.parse(rs.getString("context"));
             i.parentTokenId = rs.getString("parent_token_id");
             i.createdAt = rs.getLong("created_at");
             i.updatedAt = rs.getLong("updated_at");
@@ -1216,7 +1311,9 @@ public final class JdbcStorage implements Storage {
             String joinStack = rs.getString("join_stack");
             t.joinStack = joinStack == null ? "" : joinStack;
             t.lastError = rs.getString("last_error");
-            t.payloadJson = rs.getString("payload");
+            t.payload = PayloadCodec.decode(rs.getString("payload"));
+            long compSeq = rs.getLong("comp_seq");
+            t.compSeq = rs.wasNull() ? null : compSeq;
             t.createdAt = rs.getLong("created_at");
             t.updatedAt = rs.getLong("updated_at");
             return t;

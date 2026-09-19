@@ -86,8 +86,9 @@ store_postgres() {
     STARTED+=("$name")
     wait_until "postgres" 90 docker exec "$name" pg_isready -U wiggle -d wiggle || { record postgres FAIL "$t0"; docker rm -f "$name" >/dev/null 2>&1; return; }
     export WIGGLE_TEST_PG_URL="jdbc:postgresql://localhost:55432/wiggle" WIGGLE_TEST_PG_USER=wiggle WIGGLE_TEST_PG_PASSWORD=wiggle
-    log "postgres: running com.wiggle.postgres.PostgresClaimTest"
-    if run_tests postgres com.wiggle.postgres.PostgresClaimTest; then record postgres PASS "$t0"; else record postgres FAIL "$t0"; fi
+    log "postgres: running com.wiggle.postgres.*"
+    if run_tests postgres com.wiggle.postgres.PostgresClaimTest com.wiggle.postgres.PostgresRegistrationTest
+    then record postgres PASS "$t0"; else record postgres FAIL "$t0"; fi
     docker rm -f "$name" >/dev/null 2>&1
 }
 

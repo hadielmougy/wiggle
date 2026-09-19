@@ -62,8 +62,23 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public void register(FlowSpec flowSpec) {
+        register(flowSpec, false);
+    }
+
+    /**
+     * Publishes a topology at the version it declares. Re-registering the same graph is a no-op;
+     * re-registering a <em>changed</em> graph under a version that already exists fails, because
+     * instances running on that version would otherwise have it swapped underneath them.
+     *
+     * <p>{@code force} asks the server to replace it anyway -- for a local edit-run loop where
+     * bumping the version every time is noise. The server refuses unless it is started with
+     * {@code WIGGLE_ALLOW_GRAPH_REPLACE=true}, so a {@code force} left in application code cannot
+     * rewrite a graph in production.
+     */
+    public void register(FlowSpec flowSpec, boolean force) {
         call(() -> stub.registerWorkflow(WorkflowDefinition.newBuilder()
                 .setDefinition(ProtoJson.toStruct(flowSpec.definition().toJson()))
+                .setForce(force)
                 .build()));
     }
 

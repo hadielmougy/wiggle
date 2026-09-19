@@ -1,5 +1,6 @@
 package com.wiggle.server.store;
 
+import com.wiggle.core.Doc;
 import com.wiggle.core.NodeKind;
 
 /** Mutable storage rows. Deliberately dumb structs -- all invariants live in the engine. */
@@ -28,7 +29,7 @@ public final class Rows {
         public InstanceStatus status = InstanceStatus.RUNNING;
         public String terminationReason;
         public String error;
-        public String contextJson = "{}";
+        public Doc context = Doc.EMPTY;
         /** When this instance is a sub-workflow: the parent's waiting token; null otherwise. */
         public String parentTokenId;
         public long createdAt;
@@ -58,11 +59,15 @@ public final class Rows {
         /** Comma separated stack of enclosing fork groups; last element is innermost. */
         public String joinStack = "";
         /**
-         * Branch-scoped JSON overlaid on the instance context when this token is dispatched --
-         * how a dynamic-fork child carries its item. Inherited along the branch, restored from
-         * the fork token after a join; null outside dynamic branches.
+         * The engine's bookkeeping for this token: the nesting stack (each frame carrying that
+         * branch's private view of the context), loop counts, and any inputs staged for a combine.
+         * Never null -- {@link TokenPayload#EMPTY} outside every scope. Stores encode it through
+         * {@link PayloadCodec}; nothing above the store sees its serialised form.
          */
-        public String payloadJson;
+        public TokenPayload payload = TokenPayload.EMPTY;
+        /** Set on a compensation token: the comp-log entry its undo settles. Null on forward work,
+         *  which is what tells the two apart. */
+        public Long compSeq;
         public String lastError;
         public long createdAt;
         public long updatedAt;
@@ -116,7 +121,7 @@ public final class Rows {
         public String workflow;
         public long intervalMillis;
         public String cron;
-        public String contextJson = "{}";
+        public Doc context = Doc.EMPTY;
         public long nextFireAt;
         public long createdAt;
 
@@ -126,16 +131,16 @@ public final class Rows {
     }
 
     /** One compensable step's completion record: the reverse pass runs these newest-first.
-     *  {@code inputJson}/{@code resultJson} are the step's snapshots (as received / as left),
-     *  captured atomically with the completion — see docs/saga-compensation.md §4. */
+     *  {@code input}/{@code result} are the step's snapshots (as received / as left), captured
+     *  atomically with the completion — see docs/saga-compensation.md §4. */
     public static class CompLog implements Cloneable {
         public String instanceId;
         public long seq;
         public String nodeId;
         public String activity;
         public String queue;
-        public String inputJson;
-        public String resultJson;
+        public Doc input;
+        public Doc result;
         public boolean compensated;
 
         @Override public CompLog clone() {

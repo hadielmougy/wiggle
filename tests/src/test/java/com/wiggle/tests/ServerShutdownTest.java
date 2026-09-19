@@ -48,7 +48,7 @@ class ServerShutdownTest {
     @Test
     @DisplayName("closing a server whose worker is parked in a long poll still frees the port")
     void closeTerminatesEvenWithAnInFlightLongPoll() throws Exception {
-        FlowSpec spec = FlowSpec.define("shutdown-" + Ids.next("wf"), Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        FlowSpec spec = FlowSpec.define("shutdown-" + Ids.next("wf"), 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
         WiggleServer server = new WiggleServer(config()).start();
         int port = server.port();

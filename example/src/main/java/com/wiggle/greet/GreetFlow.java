@@ -18,7 +18,7 @@ public final class GreetFlow {
     private GreetFlow() { }
 
     public static FlowSpec flowSpec() {
-        return FlowSpec.define("greet", Map.class, GreetSteps.class, (f, s) -> f
+        return FlowSpec.define("greet", 1, Map.class, GreetSteps.class, (f, s) -> f
                 .thenApply(s::hello)
                 .thenApply(s::world));
     }

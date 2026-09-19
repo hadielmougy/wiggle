@@ -102,7 +102,7 @@ class HandlerBinderTest {
 
 
     private static WorkflowDefinition linear() {
-        return FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+        return FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::work)
                 .thenFilter(s::ok)
                 .thenAccept(s::log)).definition();
@@ -166,7 +166,7 @@ class HandlerBinderTest {
 
     @Test @DisplayName("bind reports unserved steps and applies queue defaulting")
     void unservedAndQueues() {
-        WorkflowDefinition def = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+        WorkflowDefinition def = FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::served, "special-queue")
                 .thenApply(s::someoneElses)).definition();
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new SubsetH()), def);
@@ -216,7 +216,7 @@ class HandlerBinderTest {
 
 
     private static WorkflowDefinition forked() {
-        return FlowSpec.define("wf", Map.class, ForkSteps.class, (f, s) ->
+        return FlowSpec.define("wf", 1, Map.class, ForkSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1)).combine(s::merge)).definition();
     }
 
@@ -330,7 +330,7 @@ class HandlerBinderTest {
     }
 
     private static WorkflowDefinition eachGraph() {
-        return FlowSpec.define("wf", Map.class, EachSteps.class, (f, s) ->
+        return FlowSpec.define("wf", 1, Map.class, EachSteps.class, (f, s) ->
                 f.thenForEach("per-item", "items", String.class, b -> b.thenApply(s::norm))
                         .combine(s::collect)).definition();
     }

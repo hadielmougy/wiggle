@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -43,7 +44,7 @@ class PipelineTest {
     }
 
     private static Pipeline pipeline() {
-        return new Pipeline("wf", null);
+        return new Pipeline("wf", 1, null);
     }
 
     /** Builds a valid two-node graph: one task wired to a terminal end. */
@@ -145,7 +146,7 @@ class PipelineTest {
     class Combine {
 
         @Test
-        @DisplayName("a combine is a task node that carries its fork arm names on itemsKey")
+        @DisplayName("a combine is a task node that carries its fork arm names")
         void combineCarriesArmNames() {
             Pipeline p = pipeline();
             String fork = p.addFork();
@@ -162,8 +163,9 @@ class PipelineTest {
             WorkflowDefinition def = p.build().definition();
 
             assertEquals(NodeKind.TASK, def.node(merge).kind());
-            assertEquals("[\"air\",\"hotel\"]", def.node(merge).itemsKey(),
-                    "the arm names ride on the combine node as a JSON array, in fork order");
+            assertEquals(java.util.List.of("air", "hotel"), def.node(merge).armNames(),
+                    "the arm names ride on the combine node, in fork order");
+            assertNull(def.node(merge).itemsKey(), "itemsKey is the forEach fan-out's key, not a combine's");
         }
     }
 
@@ -362,19 +364,19 @@ class PipelineTest {
         }
 
         @Test
-        @DisplayName("a different step name yields a different version")
+        @DisplayName("a different step name yields a different fingerprint")
         void sensitiveToShape() {
-            assertNotEquals(linearTaskGraph(pipeline(), "a").version(),
-                    linearTaskGraph(pipeline(), "b").version());
+            assertNotEquals(linearTaskGraph(pipeline(), "a").fingerprint(),
+                    linearTaskGraph(pipeline(), "b").fingerprint());
         }
 
         @Test
-        @DisplayName("the execution mode is part of the content hash")
+        @DisplayName("the execution mode is part of the fingerprint")
         void sensitiveToExecutionMode() {
             Pipeline async = pipeline();
             async.executionMode(ExecutionMode.LOCAL_ASYNC);
-            assertNotEquals(linearTaskGraph(pipeline(), "a").version(),
-                    linearTaskGraph(async, "a").version());
+            assertNotEquals(linearTaskGraph(pipeline(), "a").fingerprint(),
+                    linearTaskGraph(async, "a").fingerprint());
         }
     }
 
@@ -382,7 +384,7 @@ class PipelineTest {
     @DisplayName("a null retry policy falls back to the workflow default")
     void retryDefaulting() {
         RetryPolicy custom = RetryPolicy.exponential(7, Duration.ofMillis(250));
-        Pipeline p = new Pipeline("wf", custom);
+        Pipeline p = new Pipeline("wf", 1, custom);
         String a = p.addTask("a", null, null);            // inherits the default
         String b = p.addTask("b", RetryPolicy.none(), null);   // explicit override
         p.startAt(a);
@@ -408,7 +410,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, queue) honours the queue and declares a PREDICATE (bound by name)")
         void gateNameOnlyQueue() {
-            FlowSpec bp = FlowSpec.define("wf", Map.class, GateThenRun.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("wf", 1, Map.class, GateThenRun.class, (f, s) -> f
                 .thenFilter(s::check, "gpu")
                 .thenApply(s::run));
             WorkflowDefinition def = bp.definition();
@@ -421,7 +423,7 @@ class PipelineTest {
         @Test
         @DisplayName("gate(name, retry, queue) honours both the retry policy and the queue")
         void gateNameOnlyRetryAndQueue() {
-            FlowSpec bp = FlowSpec.define("wf", Map.class, GateThenRun.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("wf", 1, Map.class, GateThenRun.class, (f, s) -> f
                     .thenFilter(s::check, RetryPolicy.exponential(7, Duration.ofMillis(50)), "gpu")
                     .thenApply(s::run));
             Node gate = byActivity(bp.definition(), "wf#check");
@@ -432,7 +434,7 @@ class PipelineTest {
         @Test
         @DisplayName("step(name, queue) / effect(name) route correctly")
         void stepAndEffectNameOnly() {
-            FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f
+            FlowSpec bp = FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::ingest, "gpu")
                 .thenAccept(s::notify));
             WorkflowDefinition def = bp.definition();
@@ -446,7 +448,7 @@ class PipelineTest {
         void nameOnlyDeclaresTopologyOnly() {
             // The DSL declares topology only; the worker binds the handler by name. The flowSpec
             // therefore carries just the graph -- there is no baked step logic to collide with.
-            FlowSpec bp = FlowSpec.define("wf", Map.class, OneStep.class, (f, s) -> f.thenApply(s::check));
+            FlowSpec bp = FlowSpec.define("wf", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::check));
             assertEquals(NodeKind.TASK, byActivity(bp.definition(), "wf#check").kind());
         }
     }

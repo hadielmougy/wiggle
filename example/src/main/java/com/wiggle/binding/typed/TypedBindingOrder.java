@@ -24,7 +24,7 @@ public final class TypedBindingOrder {
     }
 
     public static FlowSpec flowSpec() {
-        return FlowSpec.define(NAME, Purchase.class, Steps.class, (f, s) -> f
+        return FlowSpec.define(NAME, 1, Purchase.class, Steps.class, (f, s) -> f
                 .thenApply(s::validate)                              // implemented by name, elsewhere
                 .thenFilter(s::inStock)                              // predicate node; a worker supplies it
                 .thenApply(s::charge, PAYMENTS_QUEUE)                // routed to the payments queue

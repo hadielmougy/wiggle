@@ -50,7 +50,7 @@ step after it. Unset ⇒ the queue is the **workflow name**.
 
 <!-- snippet: queues/topology -->
 ```java
-FlowSpec orders = FlowSpec.define("orders", Order.class, OrderSteps.class, (f, s) -> f
+FlowSpec orders = FlowSpec.define("orders", 1, Order.class, OrderSteps.class, (f, s) -> f
         .thenApply(s::validate)                    // queue "orders" (the default)
         .thenApply(s::charge, "payments")          // queue "payments"
         .thenApply(s::renderReceipt, "gpu")        // queue "gpu"

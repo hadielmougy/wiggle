@@ -1,7 +1,7 @@
 package com.wiggle.core;
 
 /**
- * How a workflow's steps are driven. Part of the compiled definition (and its content hash),
+ * How a workflow's steps are driven. Part of the compiled definition (and its fingerprint),
  * so an instance keeps the mode it started on.
  */
 public enum ExecutionMode {

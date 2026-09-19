@@ -68,7 +68,7 @@ class QueueLagMonitorTest {
 
     private WorkflowDefinition registerLagWorkflow(WorkflowEngine engine) {
         // never claimed: no worker ever polls in this test
-        FlowSpec bp = FlowSpec.define("lag-probe", Map.class, ProbeSteps.class, (f, s) -> f.thenApply(s::work));
+        FlowSpec bp = FlowSpec.define("lag-probe", 1, Map.class, ProbeSteps.class, (f, s) -> f.thenApply(s::work));
         return engine.definitions().register(bp.definition());
     }
 

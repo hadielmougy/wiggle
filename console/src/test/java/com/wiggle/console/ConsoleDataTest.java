@@ -39,7 +39,7 @@ class ConsoleDataTest {
     }
 
     private static FlowSpec wf() {
-        return FlowSpec.define("wf", Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("wf", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config() {

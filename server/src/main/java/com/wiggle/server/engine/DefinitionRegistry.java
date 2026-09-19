@@ -17,8 +17,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * the engine reads one node at a time. The hot path never materialises a whole graph, so no
  * full-graph cache lives here -- that in-memory copy was exactly the pressure we shed. The
  * blob-loading {@code latest}/{@code lookup} paths remain for admin/describe calls only.
+ *
+ * <p>Versions are declared by the author, not derived, so this is where a published version is
+ * held immutable: {@link #register} compares the submitted graph's fingerprint against the stored
+ * one and refuses to redefine a version whose graph has changed. Instances already running on that
+ * version would otherwise have the graph swapped underneath them mid-flight, one node at a time.
  */
 public final class DefinitionRegistry {
+
+    private static final System.Logger LOG = System.getLogger(DefinitionRegistry.class.getName());
 
     private final Storage storage;
     // A definition's execution mode is a single immutable enum per version -- cheap to cache,
@@ -29,9 +36,44 @@ public final class DefinitionRegistry {
         this.storage = storage;
     }
 
+    /** {@link #register(WorkflowDefinition, boolean)} without forcing. */
     public WorkflowDefinition register(WorkflowDefinition def) {
+        return register(def, false);
+    }
+
+    /**
+     * Publishes a definition. An unregistered version is written; a re-registration of the same
+     * graph is a no-op. A re-registration whose graph differs is a conflict (409) unless
+     * {@code force} is set, which replaces the stored graph -- a development affordance the server
+     * only honours when it is configured to (see {@code WIGGLE_ALLOW_GRAPH_REPLACE}); the gRPC
+     * layer rejects an unpermitted force before reaching here.
+     *
+     * <p>A stored fingerprint from a different algorithm is treated as unknown rather than as a
+     * mismatch, and is upgraded in place: a change to how the topology is serialised must not read
+     * as a change to the graph.
+     */
+    public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
+        String fingerprint = def.fingerprint();
         storage.inTxVoid(tx -> {
-            tx.putDefinition(def.name(), def.version(), Json.write(def.toJson()));
+            GraphStore.StoredFingerprint stored = tx.definitionFingerprint(def.name(), def.version()).orElse(null);
+            boolean comparable = stored != null && stored.value() != null
+                    && WorkflowDefinition.FINGERPRINT_ALGO.equals(stored.algo());
+            if (comparable && stored.value().equals(fingerprint)) return;   // same graph: nothing to do
+            if (comparable && !force) {
+                throw EngineException.conflict("workflow '" + def.key() + "' is already registered with a "
+                        + "different graph; publish it under a new version");
+            }
+            if (stored != null) {
+                LOG.log(System.Logger.Level.WARNING, () -> "replacing the registered graph of '" + def.key()
+                        + "'" + (comparable ? " (forced)" : " (no comparable fingerprint stored)")
+                        + "; instances already running on this version will see the new graph");
+                tx.deleteGraph(def.name(), def.version());
+                tx.replaceDefinition(def.name(), def.version(), Json.write(def.toJson()),
+                        fingerprint, WorkflowDefinition.FINGERPRINT_ALGO);
+            } else {
+                tx.putDefinition(def.name(), def.version(), Json.write(def.toJson()),
+                        fingerprint, WorkflowDefinition.FINGERPRINT_ALGO);
+            }
             tx.putGraph(def);
         });
         modeCache.put(def.key(), def.executionMode());

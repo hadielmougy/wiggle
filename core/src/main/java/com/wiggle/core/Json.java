@@ -257,7 +257,7 @@ public final class Json {
         return v instanceof Boolean b ? b : def;
     }
 
-    /** Deterministic serialisation: object keys sorted. Used for content-hash versioning. */
+    /** Deterministic serialisation: object keys sorted. Used for definition fingerprinting. */
     public static String canonical(Object v) {
         return write(sort(v));
     }

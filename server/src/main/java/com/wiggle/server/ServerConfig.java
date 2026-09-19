@@ -178,6 +178,16 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return jdbcUrl == null || jdbcUrl.isBlank();
     }
 
+    /**
+     * Whether this node honours a forced re-registration -- replacing the graph of an already
+     * published {@code (name, version)} instead of rejecting it. A development affordance:
+     * instances already running on that version have their graph swapped underneath them, one node
+     * at a time, so it is off unless {@code WIGGLE_ALLOW_GRAPH_REPLACE=true}.
+     */
+    public static boolean allowGraphReplace() {
+        return boolProp("wiggle.allowGraphReplace", "WIGGLE_ALLOW_GRAPH_REPLACE", false);
+    }
+
     private static String defaultNodeName() {
         try {
             return java.net.InetAddress.getLocalHost().getHostName();

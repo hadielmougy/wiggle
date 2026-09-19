@@ -34,7 +34,7 @@ class FindByCorrelationTest {
     }
 
     private static FlowSpec wf() {
-        return FlowSpec.define("corr", Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+        return FlowSpec.define("corr", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     private static ServerConfig config(String jdbcUrl) {

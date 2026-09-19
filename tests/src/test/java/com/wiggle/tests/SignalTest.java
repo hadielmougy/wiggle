@@ -89,7 +89,7 @@ class SignalTest {
 
     @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
     void signalOverGrpc() throws Exception {
-        FlowSpec bp = FlowSpec.define("sig-approve", Map.class, AfterStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("sig-approve", 1, Map.class, AfterStep.class, (f, s) -> f
                 .thenAwait("approval")
                 .thenApply(s::after));
 
@@ -117,7 +117,7 @@ class SignalTest {
 
     @Test @DisplayName("signalling an instance that is not waiting for that name is a 409")
     void wrongSignalConflicts() throws Exception {
-        FlowSpec bp = FlowSpec.define("sig-wrong", Map.class, AfterStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("sig-wrong", 1, Map.class, AfterStep.class, (f, s) -> f
                 .thenAwait("expected")
                 .thenApply(s::after));
         try (WiggleServer server = new WiggleServer(config(0)).start();
@@ -137,7 +137,7 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline runs the escalation branch, then rejoins the flow")
     void deadlineEscalates() throws Exception {
-        FlowSpec bp = FlowSpec.define("sig-escalate", Map.class, EscalateSteps.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("sig-escalate", 1, Map.class, EscalateSteps.class, (f, s) -> f
                 .thenAwait("approval", Duration.ofMillis(250), b -> b.thenApply(s::escalate))
                 .thenApply(s::after));
 
@@ -158,7 +158,7 @@ class SignalTest {
 
     @Test @DisplayName("a missed deadline with no escalation fails the instance")
     void deadlineFails() throws Exception {
-        FlowSpec bp = FlowSpec.define("sig-timeout", Map.class, AfterStep.class, (f, s) -> f
+        FlowSpec bp = FlowSpec.define("sig-timeout", 1, Map.class, AfterStep.class, (f, s) -> f
                 .thenAwait("approval", Duration.ofMillis(250))
                 .thenApply(s::after));
 

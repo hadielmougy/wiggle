@@ -22,7 +22,7 @@ import java.util.function.UnaryOperator;
  * node name with the method.
  *
  * <pre>{@code
- * FlowSpec order = FlowSpec.define("order-fulfilment", Order.class, f -> {
+ * FlowSpec order = FlowSpec.define("order-fulfilment", 1, Order.class, f -> {
  *     var validated = f.thenApply(h::validate).thenFilter(h::inStock);
  *
  *     var payment  = validated.thenApply(h::charge);
@@ -107,7 +107,7 @@ public final class WiggleFlow<T> {
      *
      * <p>Every step kind below takes an optional {@link RetryPolicy} and an optional queue, in either
      * order, so any combination reads the way you want to write it. A step with no policy inherits the
-     * workflow default given to {@link FlowSpec#define(String, RetryPolicy, Class, Function)}; a step
+     * workflow default given to {@link FlowSpec#define(String, int, RetryPolicy, Class, Function)}; a step
      * with no queue uses the workflow's {@link #defaultQueue}.
      */
     public <R> WiggleFlow<R> thenApply(FlowFn<T, R> step) {

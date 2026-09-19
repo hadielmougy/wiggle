@@ -12,7 +12,43 @@ import java.util.Map;
 public record Node(String id, NodeKind kind, String name, String activity, String queue,
                    RetryPolicy retry, long sleepMillis, String next, String altNext,
                    List<String> branches, int expected, boolean success, String reason,
-                   String itemsKey, String itemKey, int loopBudget, boolean compensable) {
+                   String itemsKey, String itemKey, int loopBudget, boolean compensable,
+                   List<String> armNames, String collectKey) {
+    // itemsKey/itemKey are the DYN_FORK fan-out's context keys. armNames/collectKey mark a combine.
+
+    public Node {
+        branches = branches == null ? List.of() : List.copyOf(branches);
+        armNames = armNames == null ? List.of() : List.copyOf(armNames);
+    }
+
+    /** Back-compat canonical shape: a node that is neither kind of combine. */
+    public Node(String id, NodeKind kind, String name, String activity, String queue,
+                RetryPolicy retry, long sleepMillis, String next, String altNext,
+                List<String> branches, int expected, boolean success, String reason,
+                String itemsKey, String itemKey, int loopBudget, boolean compensable) {
+        this(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected,
+                success, reason, itemsKey, itemKey, loopBudget, compensable, List.of(), null);
+    }
+
+    /**
+     * Whether this task node is the mandatory merge after a join. A fork's combine carries
+     * {@link #armNames}; a forEach's carries {@link #collectKey}.
+     */
+    public boolean isCombine() {
+        return kind == NodeKind.TASK && (!armNames.isEmpty() || collectKey != null);
+    }
+
+    /** The arm names a fork combine keys its staged inputs by, in fork order. */
+    public Node withArmNames(List<String> names) {
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches,
+                expected, success, reason, itemsKey, itemKey, loopBudget, compensable, names, collectKey);
+    }
+
+    /** The scratch key a forEach combine's collected item results are staged under. */
+    public Node withCollectKey(String key) {
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches,
+                expected, success, reason, itemsKey, itemKey, loopBudget, compensable, armNames, key);
+    }
 
     public static Node task(String id, String name, String activity, String queue, RetryPolicy retry) {
         return new Node(id, NodeKind.TASK, name, activity, queue, retry, 0, null, null, List.of(), 0, false, null, null, null, 0, false);
@@ -63,40 +99,36 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
     }
 
     public Node withNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, n, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable, armNames, collectKey);
     }
 
     public Node withAltNext(String n) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, n, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable, armNames, collectKey);
     }
 
     public Node withQueue(String q) {
-        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+        return new Node(id, kind, name, activity, q, retry, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable, armNames, collectKey);
     }
 
     public Node withRetry(RetryPolicy r) {
-        return new Node(id, kind, name, activity, queue, r, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+        return new Node(id, kind, name, activity, queue, r, sleepMillis, next, altNext, branches, expected, success, reason, itemsKey, itemKey, loopBudget, compensable, armNames, collectKey);
     }
 
     public Node withBranches(List<String> b) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey, loopBudget, compensable);
+        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, List.copyOf(b), expected, success, reason, itemsKey, itemKey, loopBudget, compensable, armNames, collectKey);
     }
 
     /** Marks this step compensable: on instance failure its bound Compensable undo runs in the
      *  reverse pass, fed the input/result snapshots captured at completion. */
     public Node withCompensable() {
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext,
-                branches, expected, success, reason, itemsKey, itemKey, loopBudget, true);
+                branches, expected, success, reason, itemsKey, itemKey, loopBudget, true, armNames, collectKey);
     }
 
     /** doWhile guards only: max true-evaluations before the instance fails (-1 = engine default). */
     public Node withLoopBudget(int budget) {
         return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext,
-                branches, expected, success, reason, itemsKey, itemKey, budget, compensable);
-    }
-
-    public Node withItemsKey(String k) {
-        return new Node(id, kind, name, activity, queue, retry, sleepMillis, next, altNext, branches, expected, success, reason, k, itemKey, 0, false);
+                branches, expected, success, reason, itemsKey, itemKey, budget, compensable, armNames, collectKey);
     }
 
     public boolean isWorkerDispatched() {
@@ -120,6 +152,8 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         if (reason != null) m.put("reason", reason);
         if (itemsKey != null) m.put("itemsKey", itemsKey);
         if (itemKey != null) m.put("itemKey", itemKey);
+        if (!armNames.isEmpty()) m.put("armNames", armNames);
+        if (collectKey != null) m.put("collectKey", collectKey);
         if (loopBudget != 0) m.put("loopBudget", (long) loopBudget);
         if (compensable) m.put("compensable", true);
         return m;
@@ -129,9 +163,22 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
         Map<String, Object> m = Json.asObject(o);
         List<String> branches = new ArrayList<>();
         for (Object b : Json.asArray(m.get("branches"))) branches.add(String.valueOf(b));
+        NodeKind kind = NodeKind.valueOf(Json.reqStr(m, "kind"));
+        String itemsKey = Json.str(m, "itemsKey", null);
+        List<String> armNames = new ArrayList<>();
+        for (Object a : Json.asArray(m.get("armNames"))) armNames.add(String.valueOf(a));
+        String collectKey = Json.str(m, "collectKey", null);
+        if (kind == NodeKind.TASK && itemsKey != null && armNames.isEmpty() && collectKey == null) {
+            // A graph written before combines had typed fields: the task's itemsKey held either a
+            // JSON array of arm names or a JSON string naming the collect key. Decoded once, here.
+            Object legacy = Json.parse(itemsKey);
+            if (legacy instanceof String s) collectKey = s;
+            else for (Object a : Json.asArray(legacy)) armNames.add(String.valueOf(a));
+            itemsKey = null;
+        }
         return new Node(
                 Json.reqStr(m, "id"),
-                NodeKind.valueOf(Json.reqStr(m, "kind")),
+                kind,
                 Json.str(m, "name", null),
                 Json.str(m, "activity", null),
                 Json.str(m, "queue", null),
@@ -143,9 +190,11 @@ public record Node(String id, NodeKind kind, String name, String activity, Strin
                 (int) Json.num(m, "expected", 0),
                 Json.bool(m, "success", false),
                 Json.str(m, "reason", null),
-                Json.str(m, "itemsKey", null),
+                itemsKey,
                 Json.str(m, "itemKey", null),
                 (int) Json.num(m, "loopBudget", 0),
-                Json.bool(m, "compensable", false));
+                Json.bool(m, "compensable", false),
+                List.copyOf(armNames),
+                collectKey);
     }
 }
