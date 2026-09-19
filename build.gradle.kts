@@ -42,6 +42,10 @@ configure(subprojects.filter { it.name != "bom" }) {
         // The conformance suite starts real servers on ephemeral ports and waits on
         // timers, so it needs more headroom than a unit-test default.
         timeout.set(Duration.ofMinutes(10))
+        // Forwarded to the forked test JVM: StateChartTest rewrites docs/state-machines.md
+        // instead of asserting against it.
+        systemProperty("wiggle.statechart.write",
+                providers.systemProperty("wiggle.statechart.write").getOrElse("false"))
     }
 }
 
