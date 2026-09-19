@@ -56,11 +56,11 @@ public final class WorkflowEngine {
     /** Wake-on-produce for long-polling workers (Layer 1; see docs/in-memory-dispatch.md). */
     private final DispatchNotifier notifier = new DispatchNotifier();
     private final Transactions transactions;
-    private final TokenLifecycle tokens;
     private final InstanceLifecycle instances;
     private final Dispatch dispatch;
     private final Schedules schedules;
     private final long defaultLeaseMillis;
+    private final NodeBehaviourFactory nodeBehaviourFactory;
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
@@ -68,27 +68,22 @@ public final class WorkflowEngine {
 
     /** {@code idMinter} produces new instance ids: legacy {@code wfi_...} by default, or epoch-aware
      *  ids ({@link com.wiggle.core.IdCodec}) when the cell is placed under a coordinator. */
-    public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis,
-                          InstanceIds idMinter) {
-        this.definitions = definitions;
-        this.queries = new Queries(storage, pollers);
-        this.defaultLeaseMillis = defaultLeaseMillis;
-        this.transactions = new Transactions(storage, notifier);
-        this.tokens = new TokenLifecycle(definitions, transactions::wake);
-        this.instances = new InstanceLifecycle(definitions, tokens, idMinter, this::drive);
-        this.dispatch = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
-        this.schedules = new Schedules(transactions, instances);
+    public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis, InstanceIds idMinter) {
+        this.definitions            = definitions;
+        this.queries                = new Queries(storage, pollers);
+        this.defaultLeaseMillis     = defaultLeaseMillis;
+        this.transactions           = new Transactions(storage, notifier);
+        var tokens                  = new TokenLifecycle(definitions, transactions::wake);
+        this.instances              = new InstanceLifecycle(definitions, tokens, idMinter, this::drive);
+        this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
+        this.schedules              = new Schedules(transactions, instances);
+        this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
     }
 
-    /** The instance state machine, as the node behaviours and the saga pass reach it. */
     InstanceLifecycle instances() { return instances; }
-
-    /** The token state machine, as the node behaviours reach it. */
-    TokenLifecycle tokens() { return tokens; }
 
     public DefinitionRegistry definitions() { return definitions; }
 
-    /** Registers a definition (blob + normalised graph rows). */
     public WorkflowDefinition register(WorkflowDefinition def) { return definitions.register(def); }
 
     /** {@link #register(WorkflowDefinition)}, optionally replacing an already-published version's
@@ -224,15 +219,15 @@ public final class WorkflowEngine {
             TokenLifecycle.requireLease(t, leaseOwner);
             long now = System.currentTimeMillis();
             Long compSeq = Sagas.seqOf(t);
-            if (compSeq != null) {                          // the reverse pass: a compensator finished
+            if (compSeq != null) {
                 instances.compensatorCompleted(tx, inst, t, compSeq, now);
                 return;
             }
             InstanceLifecycle.requireRunning(inst);
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
-            NodeBehaviours behaviour = NodeBehaviours.of(node.kind());
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
+            NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
             String next = behaviour.route(inst, t, node, result);
             if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
             String overrun = behaviour.overrunAfter(this, t, node, result);
@@ -243,8 +238,7 @@ public final class WorkflowEngine {
             }
             TokenState.settle(tx, t, now);
             InstanceLifecycle.touch(tx, inst, now);
-            Token cont = TokenState.mint(inst, next, t.joinStack,
-                    Scopes.stripCombineScratch(node, t.payload), now);
+            Token cont = TokenState.create(inst, next, t.joinStack, Scopes.stripCombineScratch(node, t.payload), now);
             tx.insertToken(cont);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
@@ -286,7 +280,7 @@ public final class WorkflowEngine {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
             requireReportedNode(node, step, current);
-            NodeBehaviours behaviour = NodeBehaviours.of(node.kind());
+            NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
             String next = behaviour.routeReported(inst, current, node, step);
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
@@ -298,7 +292,7 @@ public final class WorkflowEngine {
             }
             TokenState.settle(tx, current, now);
             InstanceLifecycle.touch(tx, inst, now);
-            Token cont = TokenState.mint(inst, next, current.joinStack,
+            Token cont = TokenState.create(inst, next, current.joinStack,
                     Scopes.stripCombineScratch(node, current.payload), now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
@@ -356,7 +350,7 @@ public final class WorkflowEngine {
             TokenPayload contPayload = Scopes.mergeIntoScope(inst, t.payload, payload);
             TokenState.settle(tx, t, now);
             InstanceLifecycle.touch(tx, inst, now);
-            Token cont = TokenState.mint(inst, node.next(), t.joinStack, contPayload, now);
+            Token cont = TokenState.create(inst, node.next(), t.joinStack, contPayload, now);
             tx.insertToken(cont);
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
                     + inst.id + " -> " + node.next());
@@ -405,7 +399,7 @@ public final class WorkflowEngine {
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
         TokenState.settle(tx, t, ts);
-        Token cont = TokenState.mint(inst, node.next(), t.joinStack, t.payload, ts);
+        Token cont = TokenState.create(inst, node.next(), t.joinStack, t.payload, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
@@ -435,7 +429,7 @@ public final class WorkflowEngine {
             instances.fail(tx, inst, "signal '" + node.name() + "' timed out", ts);
             return;
         }
-        Token cont = TokenState.mint(inst, node.altNext(), t.joinStack, t.payload, ts);
+        Token cont = TokenState.create(inst, node.altNext(), t.joinStack, t.payload, ts);
         tx.insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
@@ -548,7 +542,7 @@ public final class WorkflowEngine {
             Token t = work.pop();
             int before = work.size();
             Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
-            if (!NodeBehaviours.of(s.node().kind()).advance(this, s)) return;
+            if (!nodeBehaviourFactory.getNodeBehaviour(s.node().kind()).advance(s)) return;
             budget += Math.max(0, work.size() - before - 1);
         }
     }

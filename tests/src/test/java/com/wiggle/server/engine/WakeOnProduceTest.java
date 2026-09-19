@@ -40,8 +40,8 @@ class WakeOnProduceTest {
             Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
             transactions.inTxVoid(tx -> {
                 long now = 1_000L;
-                Instance inst = InstanceState.mint(tx, "wfi_1", "w", 1, Map.of(), null, null, now);
-                Token t = TokenState.mint(inst, "one", "", null, now);
+                Instance inst = InstanceState.create(tx, "wfi_1", "w", 1, Map.of(), null, null, now);
+                Token t = TokenState.create(inst, "one", "", null, now);
                 tx.insertToken(t);
                 tokens.parkReady(tx, inst, t, node, now);
             });
