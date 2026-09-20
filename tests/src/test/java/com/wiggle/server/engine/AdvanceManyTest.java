@@ -330,6 +330,176 @@ class AdvanceManyTest {
         }
     }
 
+
+    /**
+     * A batch whose runs PARK -- non-final handback, continuation leased straight back -- ends
+     * with writes still in the buffer: no END node, so no read ever flushed them. This is the
+     * case the final flush exists for; the happy-path tests cannot see it because their END
+     * node's hasActiveTokens read flushes everything as a side effect.
+     */
+    @Test @DisplayName("a batch of parked runs lands through the final flush, in one transaction")
+    void parkedRunsLandThroughTheFinalFlush() {
+        CountingStorage storage = new CountingStorage(new JdbcStorage("jdbc:h2:mem:amp-"
+                + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 4, new H2Dialect()),
+                new AtomicLong());
+        try (storage) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = linear("am-park", ExecutionMode.LOCAL_ASYNC);
+            registry.register(bp.definition());
+            for (int i = 0; i < 3; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
+            List<TaskActivation> claimed = engine.poll("w1", bp.definition().queues(), 10, null);
+
+            long before = storage.transactions.get();
+            Map<String, RunResult> results = engine.advanceMany(claimed.stream()
+                    .map(t -> new Run(t.taskId(), "w1",
+                            List.of(new StepInput(t.nodeId(), Map.of("x", 1L), null)), false))
+                    .toList());
+            assertEquals(1, storage.transactions.get() - before, "one transaction, no replay");
+
+            for (TaskActivation t : claimed) {
+                RunResult r = results.get(t.taskId());
+                assertTrue(r.ok(), String.valueOf(r));
+                assertNotNull(r.outcome().nextTaskId(), "the continuation was leased back");
+                // The leased continuation is real only if its insert was flushed before commit.
+                String yNode = bp.definition().node(t.nodeId()).next();
+                AdvanceOutcome done = engine.advance(r.outcome().nextTaskId(), "w1",
+                        List.of(new StepInput(yNode, Map.of("x", 1L, "y", 2L), null)), true);
+                assertEquals("COMPLETED", done.instanceStatus());
+            }
+        }
+    }
+
+    /**
+     * Completing a sub-workflow child locks its parent chain mid-apply, outside validate's
+     * sorted lock set -- so children are refused to the single-run path, whose lock shape has
+     * no cycles.
+     */
+    @Test @DisplayName("a sub-workflow child is refused: its completion locks the parent outside the sorted set")
+    void subWorkflowChildIsRefused() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec child = linear("am-child", ExecutionMode.LOCAL_ASYNC);
+            FlowSpec parent = FlowSpec.define("am-parent", 1, Map.class, TwoSteps.class,
+                    (f, s) -> f.thenSubFlow("sub", "am-child", Map.class));
+            registry.register(child.definition());
+            registry.register(parent.definition());
+            String parentId = engine.start(parent.name(), parent.version(), Map.of(), null);
+
+            TaskActivation task = engine.poll("w1", child.definition().queues(), 10, null).getFirst();
+            Map<String, RunResult> results = engine.advanceMany(List.of(fullRun(child, task, "w1")));
+
+            RunResult refused = results.get(task.taskId());
+            assertEquals(409, refused.errorStatus());
+            assertTrue(refused.error().contains("sub-workflow"), refused.error());
+
+            AdvanceOutcome retry = engine.advance(task.taskId(), "w1", fullRun(child, task, "w1").steps(), true);
+            assertEquals("COMPLETED", retry.instanceStatus(), "the single-run path still takes it");
+            assertEquals("COMPLETED", engine.instance(parentId).orElseThrow().status(),
+                    "and the child's completion resumed the parent");
+        }
+    }
+
+    /**
+     * A replay that itself blows up -- the storage dies mid-loop -- must still report every run:
+     * earlier replays have already committed, and throwing would tell the caller nothing
+     * happened when some of it durably did.
+     */
+    @Test @DisplayName("a storage failure during replay is a per-run 500, not a lost result map")
+    void replayReportsEveryRunEvenWhenOneReplayBlowsUp() {
+        FailingStorage storage = new FailingStorage(new JdbcStorage("jdbc:h2:mem:amf-"
+                + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 4, new H2Dialect()));
+        try (storage) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = linear("am-outage", ExecutionMode.LOCAL_ASYNC);
+            registry.register(bp.definition());
+            for (int i = 0; i < 3; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
+            List<TaskActivation> claimed = engine.poll("w1", bp.definition().queues(), 10, null);
+            TaskActivation a = claimed.get(0);
+            TaskActivation b = claimed.get(1);
+            TaskActivation c = claimed.get(2);
+
+            // b breaks the batch mid-run; the storage then dies on c's replay: counting from
+            // here, batch=+1, a's replay=+2, b's replay=+3, c's replay=+4.
+            Run broken = new Run(b.taskId(), "w1", List.of(
+                    new StepInput(b.nodeId(), Map.of("x", 1L), null),
+                    new StepInput("no-such-node", Map.of(), null)), true);
+            storage.failOnTx.set(storage.seen.get() + 4);
+            Map<String, RunResult> results = engine.advanceMany(List.of(
+                    fullRun(bp, a, "w1"), broken, fullRun(bp, c, "w1")));
+
+            assertEquals(3, results.size(), "every run is answered");
+            assertEquals("COMPLETED", results.get(a.taskId()).outcome().instanceStatus());
+            assertEquals(409, results.get(b.taskId()).errorStatus());
+            RunResult dead = results.get(c.taskId());
+            assertEquals(500, dead.errorStatus());
+            assertTrue(dead.error().contains("simulated"), dead.error());
+
+            AdvanceOutcome retry = engine.advance(c.taskId(), "w1", fullRun(bp, c, "w1").steps(), true);
+            assertEquals("COMPLETED", retry.instanceStatus(), "the failed replay wrote nothing");
+        }
+    }
+
+    /**
+     * The JDBC executeBatch path, on H2: the apply loop's buffered writes must land through the
+     * bulk statements AND still be one transaction. A flush-ordering bug in {@code BufferedTx}
+     * does not corrupt anything -- the store's row-count check throws, the batch rolls back, and
+     * replay produces the same results one transaction per run -- so the result map cannot see
+     * it; the transaction count is the only witness.
+     */
+    @Test @DisplayName("on JDBC the batch lands through executeBatch: correct, and still one transaction")
+    void jdbcBatchIsOneTransaction() {
+        CountingStorage storage = new CountingStorage(new JdbcStorage("jdbc:h2:mem:amb-"
+                + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 4, new H2Dialect()),
+                new AtomicLong());
+        try (storage) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = linear("am-jdbc", ExecutionMode.LOCAL_ASYNC);
+            registry.register(bp.definition());
+            for (int i = 0; i < 3; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
+            List<TaskActivation> claimed = engine.poll("w1", bp.definition().queues(), 10, null);
+            assertEquals(3, claimed.size());
+
+            long before = storage.transactions.get();
+            Map<String, RunResult> results = engine.advanceMany(
+                    claimed.stream().map(t -> fullRun(bp, t, "w1")).toList());
+            assertEquals(1, storage.transactions.get() - before,
+                    "the whole batch is one transaction -- a replay here means a buffered write misfired");
+
+            for (TaskActivation t : claimed) {
+                assertEquals("COMPLETED", results.get(t.taskId()).outcome().instanceStatus());
+                Map<String, Object> ctx = Json.asObject(engine.instance(t.instanceId()).orElseThrow().context());
+                assertEquals(1L, ctx.get("x"));
+                assertEquals(2L, ctx.get("y"));
+            }
+        }
+    }
+
+
+    /** Dies with a RuntimeException on transaction number {@code failOnTx}, once. */
+    private record FailingStorage(Storage delegate, AtomicLong seen, AtomicLong failOnTx) implements Storage {
+
+        FailingStorage(Storage delegate) { this(delegate, new AtomicLong(), new AtomicLong(Long.MAX_VALUE)); }
+
+        @Override public void migrate() { delegate.migrate(); }
+
+        @Override public <R> R inTx(Function<Tx, R> work) {
+            if (seen.incrementAndGet() == failOnTx.get()) {
+                throw new IllegalStateException("simulated storage outage");
+            }
+            return delegate.inTx(work);
+        }
+
+        @Override public void close() { delegate.close(); }
+    }
+
     /** Counts transactions, so a test can tell "validate refused it" from "the batch replayed". */
     private record CountingStorage(Storage delegate, AtomicLong transactions) implements Storage {
 

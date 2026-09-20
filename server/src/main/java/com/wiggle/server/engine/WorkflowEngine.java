@@ -283,6 +283,10 @@ public final class WorkflowEngine {
      *
      * <p>Structural defects -- an empty batch, a run with no steps, the same task twice -- refuse
      * the whole call before the transaction opens: they are caller bugs, not instance state.
+     *
+     * <p>The rollback the replay path relies on is the storage's. On the in-memory backend a
+     * transaction cannot roll back, so a batch that throws mid-apply leaves its earlier writes
+     * standing -- exactly the property the single-run path already has there.
      */
     public Map<String, RunResult> advanceMany(List<Run> runs) {
         requireWellFormed(runs);
@@ -307,7 +311,11 @@ public final class WorkflowEngine {
         }
     }
 
-    /** The pathological path: one run per transaction, so the broken run fails alone. */
+    /**
+     * The pathological path: one run per transaction, so the broken run fails alone. Every run
+     * gets a result whatever happens -- earlier replays have already committed, so throwing out
+     * of this loop would tell the caller nothing happened when some of it durably did.
+     */
     private Map<String, RunResult> replaySingly(List<Run> runs) {
         Map<String, RunResult> results = new LinkedHashMap<>();
         for (Run run : runs) {
@@ -316,6 +324,8 @@ public final class WorkflowEngine {
                         advance(run.startTaskId(), run.leaseOwner(), run.steps(), run.finalHandback())));
             } catch (EngineException e) {
                 results.put(run.startTaskId(), RunResult.reject(e));
+            } catch (RuntimeException e) {
+                results.put(run.startTaskId(), new RunResult(null, 500, e.toString()));
             }
         }
         return results;

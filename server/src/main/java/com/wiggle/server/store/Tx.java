@@ -23,15 +23,31 @@ public interface Tx extends GraphStore {
     Optional<Instance> lockInstance(String id);
     Optional<Instance> findInstance(String id);
     void updateInstance(Instance instance);
+
+    /** {@code updateInstance} for a set of rows; same contract as {@link #insertTokens}. */
+    default void updateInstances(List<Instance> instances) {
+        for (Instance i : instances) updateInstance(i);
+    }
     List<Instance> listInstances(String workflow, InstanceStatus status, int limit);
     /** Instances started with {@code correlationId} (a business key), newest first. */
     List<Instance> findByCorrelation(String correlationId, int limit);
     int countInstances(InstanceStatus status);
 
     void insertToken(Token token);
+
+    /** {@code insertToken} for a set of rows. The default loops; a JDBC backend overrides it with
+     *  one {@code executeBatch}, which is where a cross-instance batch actually saves round-trips. */
+    default void insertTokens(List<Token> tokens) {
+        for (Token t : tokens) insertToken(t);
+    }
     Optional<Token> findToken(String id);
     List<Token> tokensOf(String instanceId);
     void updateToken(Token token);
+
+    /** {@code updateToken} for a set of rows; same contract as {@link #insertTokens}. */
+    default void updateTokens(List<Token> tokens) {
+        for (Token t : tokens) updateToken(t);
+    }
 
     List<String> joinStacksAt(String instanceId, String nodeId);
 

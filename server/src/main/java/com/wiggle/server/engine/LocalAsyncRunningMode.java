@@ -6,6 +6,7 @@ import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
+import com.wiggle.server.store.BufferedTx;
 import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
@@ -38,7 +39,9 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
      * Applies N independent single-instance runs under one transaction: validate, then apply.
      *
      * <p>Validate locks every instance in sorted id order -- two workers with overlapping batches
-     * take the same locks in the same order and cannot deadlock -- then checks, per run, everything
+     * take the same locks in the same order and cannot deadlock, which also needs every lock the
+     * apply phase will ever take to be in that sorted set: sub-workflow children are rejected
+     * below precisely because completing one locks its parent outside it -- then checks, per run, everything
      * the single-run path refuses before its first write: the task exists, the lease is held, the
      * token is not a compensator, the first step matches the token's node, the definition resolves
      * to LOCAL_ASYNC, and no earlier run in the batch owns the same instance. A compensator can
@@ -95,11 +98,18 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
             }
         }
 
+        // Apply runs on a write-buffering view: the settles and leased continuations of the whole
+        // batch reach the store as executeBatch groups instead of a round-trip apiece, and any
+        // read a step makes flushes first, so nothing behaves differently -- it just travels
+        // together. The flush before returning is what makes the buffered writes part of the
+        // commit at all.
+        BufferedTx buffered = BufferedTx.of(tx);
         for (Run run : survivors) {
             results.put(run.startTaskId(), RunResult.of(chainSteps(new AdvanceRunContext(
                     tasks.get(run.startTaskId()), run.leaseOwner(), run.steps(), run.finalHandback(),
-                    tx, ctx.loopMaxIterations(), ctx.leaseMillis()))));
+                    buffered, ctx.loopMaxIterations(), ctx.leaseMillis()))));
         }
+        buffered.flush();
         return results;
     }
 
@@ -113,12 +123,17 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
         }
         try {
             Tokens.requireLease(t, run.leaseOwner());
+            requireMatchingNode(t, run.steps().getFirst());
         } catch (EngineException e) {
             return RunResult.reject(e);
         }
-        if (!t.nodeId.equals(run.steps().getFirst().nodeId())) {
-            return RunResult.reject(EngineException.conflict("reported step "
-                    + run.steps().getFirst().nodeId() + " but token " + t.id + " is at " + t.nodeId));
+        // A sub-workflow child completing (or failing) locks its parent chain mid-apply --
+        // Instances.notifyParent -- which the sorted lock order above cannot cover: a second
+        // batch holding the parent and wanting this child would deadlock. Children take the
+        // single-run path, whose one-direct-lock-plus-ancestors shape has no cycles.
+        if (inst.parentTokenId != null) {
+            return RunResult.reject(EngineException.conflict("instance " + inst.id
+                    + " is a sub-workflow of another instance -- report this run singly"));
         }
         ExecutionMode mode = RunningMode.resolveMode(
                 definitions().executionMode(tx, inst.workflow, inst.version));
