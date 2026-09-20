@@ -1,26 +1,30 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.core.Ids;
-import com.wiggle.core.Node;
-import com.wiggle.core.NodeKind;
-import com.wiggle.core.RetryPolicy;
-import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
-import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
 
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.List;
 import java.util.Set;
 
+/**
+ * What a token in each state IS, and what it PERMITS. One constant per {@link TokenStatus},
+ * matched by name.
+ *
+ * <p>This type answers questions; it never performs a write. Nothing here takes a {@code Tx}, so
+ * a state cannot advance a token -- it can only say whether a move is legal ({@link #moveTo}),
+ * whether the token still counts as live ({@link #active}), and whether an operation that needs a
+ * lease is allowed at all. {@link Tokens} does the writing, and asks here first. That division is
+ * the whole boundary between the two: <em>state answers, lifecycle writes</em>.
+ *
+ * <p>Only {@code RUNNING} overrides anything, which is the honest shape of this machine: holding a
+ * lease is the one thing a state can do that the others cannot, so it is the one thing worth
+ * dispatching on.
+ */
 enum TokenState {
 
     READY(Liveness.ACTIVE, TokenStatus.RUNNING, TokenStatus.WAITING, TokenStatus.AWAITING,
-            TokenStatus.JOINED, TokenStatus.DONE, TokenStatus.CANCELLED) {
-        @Override boolean claimable() { return true; }
-    },
+            TokenStatus.JOINED, TokenStatus.DONE, TokenStatus.CANCELLED),
 
     RUNNING(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.READY, TokenStatus.FAILED,
             TokenStatus.CANCELLED) {
@@ -40,30 +44,14 @@ enum TokenState {
                 throw EngineException.conflict("lease for task " + t.id + " is held by " + t.leaseOwner);
             }
         }
-
-        @Override Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
-                                        String failReason, boolean retryable, long now) {
-            RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
-            t.attempt++;
-            t.lastError = lastError;
-            releaseLease(t);
-            if (retryable && t.attempt < policy.maxAttempts()) {
-                t.availableAt = now + policy.backoffMillis(t.attempt);
-                move(tx, t, TokenStatus.READY, now);
-                return new Outcome.Retried();
-            }
-            move(tx, t, TokenStatus.FAILED, now);
-            return new Outcome.Exhausted(failReason, Sagas.seqOf(t));
-        }
     },
+
     WAITING(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.CANCELLED),
     AWAITING(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.FAILED, TokenStatus.CANCELLED),
     JOINED(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.CANCELLED),
     DONE(Liveness.SETTLED),
     FAILED(Liveness.SETTLED),
     CANCELLED(Liveness.SETTLED);
-
-    private static final System.Logger LOG = System.getLogger(TokenState.class.getName());
 
     private enum Liveness { ACTIVE, SETTLED }
 
@@ -83,22 +71,24 @@ enum TokenState {
 
     static { for (TokenStatus s : TokenStatus.values()) of(s); }   // every status has a state, or fail at load
 
+    /** Still doing something, or waiting to: an instance with one of these has not finished. */
     boolean active() {
         return liveness == Liveness.ACTIVE;
     }
 
-    boolean claimable() {
-        return false;
-    }
-
+    /** Implies a non-null {@code leaseOwner} and an expiry. Only RUNNING. */
     boolean holdsLease() {
         return false;
     }
 
+    /** The states this one may become; empty for a settled state. Read by the chart that
+     *  generates {@code docs/state-machines.md}, so the diagram cannot drift from the machine. */
     Set<TokenStatus> successors() {
         return successors;
     }
 
+    /** Drops the lease, for the one state that has one to drop. A no-op everywhere else, which is
+     *  what lets every settling transition in {@link Tokens} be written the same way. */
     void releaseLease(Token t) {
     }
 
@@ -106,129 +96,22 @@ enum TokenState {
         throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
     }
 
+    /** Rejects an operation that needs this worker's lease. Only RUNNING accepts one; passing a
+     *  null owner asks the weaker question, "is this token leased at all". */
     void requireLeasedBy(Token t, String leaseOwner) {
         throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
     }
 
-    sealed interface Outcome {
-        record Retried() implements Outcome {}
-
-        record Exhausted(String reason, Long compSeq) implements Outcome {}
-    }
-
-    Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
-                          String failReason, boolean retryable, long now) {
-        throw EngineException.conflict("task " + t.id + " is " + t.status + ", not RUNNING");
-    }
-
+    /**
+     * {@code target}, if this state may become it -- otherwise a failure, so an impossible token is
+     * refused rather than persisted. Staying put is always allowed: an update that rewrites a
+     * token's node bookkeeping without changing its state is not a transition.
+     */
     TokenStatus moveTo(TokenStatus target) {
         if (target != TokenStatus.valueOf(name()) && !successors.contains(target)) {
             throw new IllegalStateException("illegal token transition " + name() + " -> " + target
                     + "; " + name() + " may only become " + successors);
         }
         return target;
-    }
-
-    private static void move(Tx tx, Token t, TokenStatus target, long now) {
-        t.status = of(t.status).moveTo(target);
-        t.updatedAt = now;
-        tx.updateToken(t);
-    }
-
-    static Token create(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
-        Token t = new Token();
-        t.payload = payload == null ? TokenPayload.EMPTY : payload;
-        t.id = Ids.next("tok");
-        t.instanceId = inst.id;
-        t.workflow = inst.workflow;
-        t.version = inst.version;
-        t.nodeId = nodeId;
-        t.kind = NodeKind.TASK;
-        t.status = TokenStatus.READY;
-        t.attempt = 0;
-        t.availableAt = now;
-        t.joinStack = joinStack == null ? "" : joinStack;
-        t.createdAt = now;
-        t.updatedAt = now;
-        return t;
-    }
-
-    /**
-     * The continuation of {@code t} at {@code nextNodeId}, inserted and ready to drive. It inherits
-     * {@code t}'s join stack, which is what keeps a token inside the fork group it was spawned in.
-     *
-     * <p>Use {@link #create} directly only where that is deliberately not what should happen: an
-     * instance's first token belongs to no group, a join's continuation pops the group it just
-     * satisfied, and a locally-chained run leases its continuation back rather than inserting it
-     * READY ({@link #createLeased}).
-     */
-    static Token continueAt(Tx tx, Instance inst, Token t, String nextNodeId, TokenPayload payload, long now) {
-        Token cont = create(inst, nextNodeId, t.joinStack, payload, now);
-        tx.insertToken(cont);
-        return cont;
-    }
-
-    static void createLeased(Tx tx, Token cont, Node nextNode, String leaseOwner, long lease, long now) {
-        cont.status = TokenStatus.RUNNING;
-        cont.kind = nextNode.kind();
-        cont.activity = nextNode.activity();
-        cont.queue = nextNode.queue();
-        cont.leaseOwner = leaseOwner;
-        cont.leaseExpiresAt = lease;
-        cont.availableAt = now;
-        cont.updatedAt = now;
-        tx.insertToken(cont);
-    }
-
-    static void markReady(Tx tx, Token t, Node node, long now) {
-        t.kind = node.kind();
-        t.activity = node.activity();
-        t.queue = node.queue();
-        t.availableAt = now;
-        move(tx, t, TokenStatus.READY, now);
-    }
-
-    static void markWaiting(Tx tx, Token t, long availableAt, long now) {
-        t.kind = NodeKind.SLEEP;
-        t.availableAt = availableAt;
-        move(tx, t, TokenStatus.WAITING, now);
-    }
-
-    static void markAwaiting(Tx tx, Token t, NodeKind kind, String activity, long deadline, long now) {
-        t.kind = kind;
-        t.activity = activity;
-        t.availableAt = deadline;
-        move(tx, t, TokenStatus.AWAITING, now);
-    }
-
-    static void markJoined(Tx tx, Token t, long now) {
-        t.kind = NodeKind.JOIN;
-        move(tx, t, TokenStatus.JOINED, now);
-    }
-
-    static void settle(Tx tx, Token t, long now) {
-        TokenStatus before = t.status;
-        of(before).releaseLease(t);
-        move(tx, t, TokenStatus.DONE, now);
-    }
-
-    static void settleAll(Tx tx, List<Token> tokens, long now) {
-        for (Token t : tokens) settle(tx, t, now);
-    }
-
-    static void spend(Tx tx, Token t, NodeKind kind, long now) {
-        t.kind = kind;
-        settle(tx, t, now);
-    }
-
-    static void failParked(Tx tx, Token t, long now) {
-        of(t.status).releaseLease(t);
-        move(tx, t, TokenStatus.FAILED, now);
-    }
-
-    static void cancel(Tx tx, Token t, long now) {
-        TokenStatus before = t.status;
-        of(before).releaseLease(t);
-        move(tx, t, TokenStatus.CANCELLED, now);
     }
 }

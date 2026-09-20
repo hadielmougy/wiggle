@@ -87,7 +87,7 @@ final class Sagas {
         if (inst.status != InstanceStatus.COMPENSATING) {
             throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
         }
-        TokenState.settle(tx, t, now);
+        Tokens.settle(tx, t, now);
         tx.markCompensated(inst.id, seq);
         Instances.touch(tx, inst, now);
         createNext(tx, inst, now);
@@ -121,7 +121,7 @@ final class Sagas {
         TokenPayload payload = TokenPayload.EMPTY.withStaged(Map.of(
                 "input", next.input.raw(),
                 "result", next.result.raw()));
-        Token t = TokenState.create(inst, next.nodeId, "", payload, now);
+        Token t = Tokens.create(inst, next.nodeId, "", payload, now);
         t.compSeq = next.seq;
         t.activity = next.activity + "#compensate";
         t.queue = next.queue;

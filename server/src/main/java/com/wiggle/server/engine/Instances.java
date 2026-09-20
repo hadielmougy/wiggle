@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.Doc;
+
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.server.store.Rows.Instance;
@@ -63,9 +65,9 @@ final class Instances {
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         LazyGraph def = definitions.graph(tx, workflow, v);
         long now = System.currentTimeMillis();
-        Instance inst = InstanceState.create(tx, idMinter.next(), def.name(), def.version(),
+        Instance inst = Instances.create(tx, idMinter.next(), def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
-        Token t = TokenState.create(inst, def.startNode(), "", null, now);
+        Token t = Tokens.create(inst, def.startNode(), "", null, now);
         tx.insertToken(t);
         LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
@@ -87,7 +89,8 @@ final class Instances {
         }
         long now = System.currentTimeMillis();
         Tokens.cancelAll(tx, inst.id, now);
-        InstanceState.cancel(tx, inst, reason, now);
+        inst.terminationReason = reason;
+        move(tx, inst, InstanceStatus.CANCELLED, now);
         notifyParent(tx, inst, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
         return tx.childInstanceIds(instanceId);
@@ -95,7 +98,8 @@ final class Instances {
 
     /** The instance ran out of flow at a successful END node with no token left anywhere. */
     void complete(Tx tx, Instance inst, String reason, long now) {
-        InstanceState.complete(tx, inst, reason, now);
+        inst.terminationReason = reason;
+        move(tx, inst, InstanceStatus.COMPLETED, now);
         notifyParent(tx, inst, now);
     }
 
@@ -104,7 +108,8 @@ final class Instances {
     void fail(Tx tx, Instance inst, String error, long now) {
         Tokens.cancelAll(tx, inst.id, now);
         if (sagas.begin(tx, inst, error, now)) return;
-        InstanceState.fail(tx, inst, error, now);
+        inst.error = error;
+        move(tx, inst, InstanceStatus.FAILED, now);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed: " + error);
         notifyParent(tx, inst, now);
     }
@@ -112,18 +117,20 @@ final class Instances {
     /** The saga reverse pass has taken the instance over; its outcome is not known until the
      *  pass lands {@link #compensated} or {@link #compensationFailed}. */
     void compensating(Tx tx, Instance inst, String error, long now) {
-        InstanceState.compensating(tx, inst, error, now);
+        inst.error = error;
+        move(tx, inst, InstanceStatus.COMPENSATING, now);
     }
 
     /** The reverse pass undid everything it had recorded. */
     void compensated(Tx tx, Instance inst, long now) {
-        InstanceState.compensated(tx, inst, now);
+        move(tx, inst, InstanceStatus.COMPENSATED, now);
         notifyParent(tx, inst, now);
     }
 
     /** The reverse pass could not finish: the instance is stuck and needs a human. */
     void compensationFailed(Tx tx, Instance inst, String error, long now) {
-        InstanceState.compensationFailed(tx, inst, error, now);
+        inst.error = (inst.error == null ? "" : inst.error + "; ") + error;
+        move(tx, inst, InstanceStatus.COMPENSATION_FAILED, now);
         notifyParent(tx, inst, now);
     }
 
@@ -152,15 +159,15 @@ final class Instances {
         LazyGraph def = definitions.graph(tx, parent.workflow, parent.version);
         Node node = def.node(t.nodeId);
         if (child.status != InstanceStatus.COMPLETED) {
-            TokenState.failParked(tx, t, now);
+            Tokens.failParked(tx, t, now);
             fail(tx, parent, "sub-workflow '" + node.activity() + "' " + child.status
                     + (child.error == null ? "" : ": " + child.error), now);
             return;
         }
         TokenPayload contPayload = Scopes.mergeIntoScope(parent, t.payload, child.context.raw());
-        TokenState.settle(tx, t, now);
+        Tokens.settle(tx, t, now);
         touch(tx, parent, now);
-        Token cont = TokenState.continueAt(tx, parent, t, node.next(), contPayload, now);
+        Token cont = Tokens.continueAt(tx, parent, t, node.next(), contPayload, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "sub-workflow " + child.id + " completed -> resuming parent "
                 + parent.id + " at " + node.next());
         pump.drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);
@@ -179,5 +186,30 @@ final class Instances {
     /** Drops terminal instances last touched before {@code cutoff}. */
     static int purgeTerminalBefore(Tx tx, long cutoff, int max) {
         return tx.deleteTerminalInstancesBefore(cutoff, max);
+    }
+
+    /** The one place an instance's status is written. */
+    private static void move(Tx tx, Instance inst, InstanceStatus target, long now) {
+        inst.status = InstanceState.of(inst.status).moveTo(target);
+        inst.updatedAt = now;
+        tx.updateInstance(inst);
+    }
+
+    /** A new instance, born RUNNING. {@code parentTokenId} links a sub-workflow to the token
+     *  awaiting it; null for a top-level start. */
+    static Instance create(Tx tx, String id, String workflow, int version, Object context,
+                           String correlationId, String parentTokenId, long now) {
+        Instance inst = new Instance();
+        inst.id = id;
+        inst.workflow = workflow;
+        inst.version = version;
+        inst.correlationId = correlationId;
+        inst.parentTokenId = parentTokenId;
+        inst.status = InstanceStatus.RUNNING;
+        inst.context = Doc.of(context);
+        inst.createdAt = now;
+        inst.updatedAt = now;
+        tx.insertInstance(inst);
+        return inst;
     }
 }

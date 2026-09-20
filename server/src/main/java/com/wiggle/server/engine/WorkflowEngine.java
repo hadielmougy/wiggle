@@ -228,13 +228,13 @@ public final class WorkflowEngine {
             if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
             String overrun = behaviour.overrunAfter(this, t, node, result);
             if (overrun != null) {
-                TokenState.settle(tx, t, now);
+                Tokens.settle(tx, t, now);
                 instances.fail(tx, inst, overrun, now);
                 return;
             }
-            TokenState.settle(tx, t, now);
+            Tokens.settle(tx, t, now);
             Instances.touch(tx, inst, now);
-            Token cont = TokenState.continueAt(tx, inst, t, next,
+            Token cont = Tokens.continueAt(tx, inst, t, next,
                     Scopes.stripCombineScratch(node, t.payload), now);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
@@ -282,13 +282,13 @@ public final class WorkflowEngine {
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
             String overrun = behaviour.overrunReported(this, current, node, step);
             if (overrun != null) {
-                TokenState.settle(tx, current, now);
+                Tokens.settle(tx, current, now);
                 instances.fail(tx, inst, overrun, now);
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
-            TokenState.settle(tx, current, now);
+            Tokens.settle(tx, current, now);
             Instances.touch(tx, inst, now);
-            Token cont = TokenState.create(inst, next, current.joinStack,
+            Token cont = Tokens.create(inst, next, current.joinStack,
                     Scopes.stripCombineScratch(node, current.payload), now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
@@ -296,7 +296,7 @@ public final class WorkflowEngine {
                 handBack(tx, def, inst, cont, nextNode, now);
                 return new AdvanceOutcome(inst.status.name(), lease, null);
             }
-            TokenState.createLeased(tx, cont, nextNode, leaseOwner, lease, now);
+            Tokens.createLeased(tx, cont, nextNode, leaseOwner, lease, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
                     + " chaining locally " + node.name() + " -> " + next);
             current = cont;
@@ -344,9 +344,9 @@ public final class WorkflowEngine {
             LazyGraph def = definitions.graph(tx, t.workflow, t.version);
             Node node = def.node(t.nodeId);
             TokenPayload contPayload = Scopes.mergeIntoScope(inst, t.payload, payload);
-            TokenState.settle(tx, t, now);
+            Tokens.settle(tx, t, now);
             Instances.touch(tx, inst, now);
-            Token cont = TokenState.continueAt(tx, inst, t, node.next(), contPayload, now);
+            Token cont = Tokens.continueAt(tx, inst, t, node.next(), contPayload, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
                     + inst.id + " -> " + node.next());
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
@@ -393,8 +393,8 @@ public final class WorkflowEngine {
         long ts = System.currentTimeMillis();
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
-        TokenState.settle(tx, t, ts);
-        Token cont = TokenState.continueAt(tx, inst, t, node.next(), t.payload, ts);
+        Tokens.settle(tx, t, ts);
+        Token cont = Tokens.continueAt(tx, inst, t, node.next(), t.payload, ts);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
@@ -416,14 +416,14 @@ public final class WorkflowEngine {
         if (t.availableAt <= 0 || t.availableAt > ts) return;   // deadline cleared or moved
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
-        TokenState.settle(tx, t, ts);
+        Tokens.settle(tx, t, ts);
         if (node.altNext() == null) {
             LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                     + " of instance " + inst.id + " missed its deadline, no escalation -> failing instance");
             instances.fail(tx, inst, "signal '" + node.name() + "' timed out", ts);
             return;
         }
-        Token cont = TokenState.continueAt(tx, inst, t, node.altNext(), t.payload, ts);
+        Token cont = Tokens.continueAt(tx, inst, t, node.altNext(), t.payload, ts);
         LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
@@ -465,15 +465,15 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Hands a token failure to its own state ({@link TokenState#reportFailure}) and applies what
+     * Hands a token failure to {@link Tokens#reportFailure} and applies what
      * the verdict means
      * for the instance: nothing while retries remain, the comp-log for an exhausted compensator, and
      * otherwise the instance itself (as {@code node.name() + ": " + failReason}).
      */
     private void settleFailure(Tx tx, Instance inst, Token t, Node node,
                                String lastError, String failReason, boolean retryable, long now) {
-        TokenState.Outcome outcome = TokenState.of(t.status).reportFailure(tx, t, node, lastError, failReason, retryable, now);
-        if (!(outcome instanceof TokenState.Outcome.Exhausted(String reason, Long compSeq))) return;
+        Tokens.Outcome outcome = Tokens.reportFailure(tx, t, node, lastError, failReason, retryable, now);
+        if (!(outcome instanceof Tokens.Outcome.Exhausted(String reason, Long compSeq))) return;
         if (compSeq != null) {
             instances.compensatorExhausted(tx, inst, node, compSeq, reason, now);
             return;

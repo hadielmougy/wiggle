@@ -8,6 +8,11 @@ The engine is one instance state machine with many concurrent token state machin
 beneath it. The instance owns the question "is this workflow still going"; each token
 owns one unit of execution moving over the graph.
 
+The two are split by responsibility: a state ANSWERS, a lifecycle WRITES.
+`TokenState` and `InstanceState` take no transaction and perform no write — they
+say what a state is and what it permits. `Tokens` and `Instances` perform every
+write, asking the state first.
+
 Each state is a constant on `InstanceState` or `TokenState`, and that constant owns
 the state's own rules: whether it is still live, whether a worker may claim it,
 whether it holds a lease, which states it may move to, and how it gets there. Every
@@ -124,10 +129,10 @@ Every path below lands in `Instances.fail`:
   `COMPENSATING`, for a compensator. `Tokens` reads the instance status as a
   dispatch guard, but never assigns one.
 - **Upward.** A token transition that means something for the instance reports it
-  rather than applying it: `TokenState.reportFailure` returns `Retried` or
+  rather than applying it: `Tokens.reportFailure` returns `Retried` or
   `Exhausted`, and the caller decides whether that is the comp-log or the instance.
-  It is overridden on `RUNNING` alone — only a leased token can fail, and the base
-  refuses rather than relying on a check the caller remembered to write.
+  It asks `TokenState` first, because only a leased token can fail — the state
+  refuses rather than the caller remembering to check.
 - **Retries are internal to the token.** Only exhaustion crosses the boundary.
 - **Cancellation is structural, not a priority rule.** `cancel` takes the instance
   write lock and settles every active token; every other transition re-reads under
