@@ -21,6 +21,21 @@ public interface Tx extends GraphStore {
     void insertInstance(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
+
+    /**
+     * {@code lockInstance} for a set of rows, {@code ids} already sorted ascending. The default
+     * loops -- exactly today's one-lock-per-statement, in the caller's order. A JDBC backend
+     * overrides it with one {@code WHERE id IN (...) ORDER BY id FOR UPDATE}: on a btree primary
+     * key the scan yields ascending ids with no separate sort node, so rows lock in id order, and
+     * two overlapping statements of this same shape acquire in the same global order -- no cycle.
+     * Were a planner ever to reorder, the deadlock is detected by the database and surfaces as
+     * the throw the batch's replay path already handles. Missing ids are simply absent.
+     */
+    default List<Instance> lockInstances(List<String> ids) {
+        List<Instance> out = new java.util.ArrayList<>(ids.size());
+        for (String id : ids) lockInstance(id).ifPresent(out::add);
+        return out;
+    }
     Optional<Instance> findInstance(String id);
     void updateInstance(Instance instance);
 
@@ -41,6 +56,14 @@ public interface Tx extends GraphStore {
         for (Token t : tokens) insertToken(t);
     }
     Optional<Token> findToken(String id);
+
+    /** {@code findToken} for a set of ids: any order, missing ids absent. The default loops; a
+     *  JDBC backend overrides it with one {@code WHERE id IN} read. */
+    default List<Token> findTokens(List<String> ids) {
+        List<Token> out = new java.util.ArrayList<>(ids.size());
+        for (String id : ids) findToken(id).ifPresent(out::add);
+        return out;
+    }
     List<Token> tokensOf(String instanceId);
     void updateToken(Token token);
 

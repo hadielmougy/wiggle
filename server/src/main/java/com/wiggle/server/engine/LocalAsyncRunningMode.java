@@ -59,14 +59,17 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
         Tx tx = ctx.tx();
         Map<String, RunResult> results = new LinkedHashMap<>();
 
-        // Probe without locking: which instance does each run belong to? Two runs on one instance
-        // would interleave writes to the same context, the second silently clobbering the first --
-        // and one poll can hand a worker two arms of the same fork -- so only the first stays.
+        // Probe without locking, one read for the whole batch: which instance does each run
+        // belong to? Two runs on one instance would interleave writes to the same context, the
+        // second silently clobbering the first -- and one poll can hand a worker two arms of the
+        // same fork -- so only the first stays.
+        Map<String, Token> probes = byId(tx.findTokens(
+                ctx.runs().stream().map(Run::startTaskId).toList()));
         List<Run> probed = new ArrayList<>();
         Map<String, String> instanceOf = new HashMap<>();
         Set<String> owned = new HashSet<>();
         for (Run run : ctx.runs()) {
-            Token probe = tx.findToken(run.startTaskId()).orElse(null);
+            Token probe = probes.get(run.startTaskId());
             if (probe == null) {
                 results.put(run.startTaskId(), RunResult.reject(EngineException.notFound("task")));
             } else if (!owned.add(probe.instanceId)) {
@@ -79,16 +82,20 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
             }
         }
 
+        // One statement locks every instance, ids ascending, and one re-read fetches the tokens
+        // as they are under those locks -- the probe rows above are stale by definition.
         Map<String, Instance> locked = new HashMap<>();
-        for (String instanceId : new TreeSet<>(instanceOf.values())) {
-            tx.lockInstance(instanceId).ifPresent(inst -> locked.put(instanceId, inst));
+        for (Instance inst : tx.lockInstances(List.copyOf(new TreeSet<>(instanceOf.values())))) {
+            locked.put(inst.id, inst);
         }
+        Map<String, Token> tokens = byId(tx.findTokens(
+                probed.stream().map(Run::startTaskId).toList()));
 
         List<Run> survivors = new ArrayList<>();
         Map<String, Tokens.LockedTask> tasks = new HashMap<>();
         for (Run run : probed) {
             Instance inst = locked.get(instanceOf.get(run.startTaskId()));
-            Token t = inst == null ? null : tx.findToken(run.startTaskId()).orElse(null);
+            Token t = inst == null ? null : tokens.get(run.startTaskId());
             RunResult refusal = validate(tx, inst, t, run);
             if (refusal != null) {
                 results.put(run.startTaskId(), refusal);
@@ -111,6 +118,12 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
         }
         buffered.flush();
         return results;
+    }
+
+    private static Map<String, Token> byId(List<Token> rows) {
+        Map<String, Token> out = new HashMap<>(rows.size() * 2);
+        for (Token t : rows) out.put(t.id, t);
+        return out;
     }
 
     /** The single-run path's pre-write refusals, as a result instead of a throw; null passes. */

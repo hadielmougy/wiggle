@@ -786,6 +786,21 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        @Override public List<Instance> lockInstances(List<String> ids) {
+            if (ids.isEmpty()) return List.of();
+            // ORDER BY id keeps lock acquisition in id order on a btree PK scan; see Tx.lockInstances.
+            String sql = "SELECT * FROM wf_instance WHERE id IN (" + placeholders(ids.size())
+                    + ") ORDER BY id FOR UPDATE";
+            try (PreparedStatement p = ps(sql)) {
+                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Instance> out = new ArrayList<>(ids.size());
+                    while (rs.next()) out.add(readInstance(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
         @Override public void updateInstances(List<Instance> instances) {
             if (instances.isEmpty()) return;
             try (PreparedStatement p = ps(UPDATE_INSTANCE)) {
@@ -880,6 +895,10 @@ public final class JdbcStorage implements Storage {
             setNullableLong(p, 19, t.compSeq);
         }
 
+        private static String placeholders(int n) {
+            return "?,".repeat(n - 1) + "?";
+        }
+
         private static void setNullableLong(PreparedStatement p, int idx, Long v) throws SQLException {
             if (v == null) p.setNull(idx, java.sql.Types.BIGINT);
             else p.setLong(idx, v);
@@ -890,6 +909,19 @@ public final class JdbcStorage implements Storage {
                 p.setString(1, id);
                 try (ResultSet rs = p.executeQuery()) {
                     return rs.next() ? Optional.of(readToken(rs)) : Optional.empty();
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Token> findTokens(List<String> ids) {
+            if (ids.isEmpty()) return List.of();
+            String sql = "SELECT * FROM wf_token WHERE id IN (" + placeholders(ids.size()) + ")";
+            try (PreparedStatement p = ps(sql)) {
+                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Token> out = new ArrayList<>(ids.size());
+                    while (rs.next()) out.add(readToken(rs));
+                    return out;
                 }
             } catch (SQLException e) { throw wrap(e); }
         }

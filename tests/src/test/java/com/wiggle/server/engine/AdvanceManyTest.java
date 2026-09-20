@@ -483,6 +483,49 @@ class AdvanceManyTest {
     }
 
 
+
+    /**
+     * The one property of the bulk lock no single-threaded test can see: {@code lockInstances}
+     * must take real row locks. Were FOR UPDATE missing from its IN-list statement, every
+     * behavioural test would still pass -- the batch simply would not be isolated against a
+     * concurrent writer. A second transaction trying to lock past it must block until timeout.
+     */
+    @Test @DisplayName("lockInstances takes real row locks: a second transaction cannot lock past it")
+    void bulkLockActuallyLocks() throws Exception {
+        try (Storage storage = new JdbcStorage("jdbc:h2:mem:aml-" + System.nanoTime()
+                + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=250", "sa", "", 4, new H2Dialect())) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = linear("am-lock", ExecutionMode.LOCAL_ASYNC);
+            registry.register(bp.definition());
+            String id = engine.start(bp.name(), bp.version(), Map.of(), null);
+
+            var held = new java.util.concurrent.CountDownLatch(1);
+            var release = new java.util.concurrent.CountDownLatch(1);
+            Thread holder = new Thread(() -> storage.inTx(tx -> {
+                assertEquals(1, tx.lockInstances(List.of(id)).size());
+                held.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+            holder.start();
+            assertTrue(held.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            try {
+                assertThrows(RuntimeException.class,
+                        () -> storage.inTx(tx -> tx.lockInstance(id)),
+                        "the row must be locked; a clean read-through means FOR UPDATE is gone");
+            } finally {
+                release.countDown();
+                holder.join(5_000);
+            }
+        }
+    }
+
     /** Dies with a RuntimeException on transaction number {@code failOnTx}, once. */
     private record FailingStorage(Storage delegate, AtomicLong seen, AtomicLong failOnTx) implements Storage {
 
