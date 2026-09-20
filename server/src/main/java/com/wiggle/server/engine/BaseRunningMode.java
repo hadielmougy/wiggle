@@ -31,11 +31,11 @@ abstract class BaseRunningMode implements RunningMode {
         this.definitions = definitions;
     }
 
-    /** Applies one reported result to the locked token, then drives the continuation to its park. */
+    /** Applies one reported result to the task token, then drives the continuation to its park. */
     final void completeStep(CompleteRunContext ctx) {
         Tx tx = ctx.tx();
-        Instance inst = ctx.locked().inst();
-        Token t = ctx.locked().token();
+        Instance inst = ctx.task().inst();
+        Token t = ctx.task().token();
         Tokens.requireLease(t, ctx.leaseOwner());
         long now = System.currentTimeMillis();
         Instances.requireRunning(inst);
@@ -65,13 +65,13 @@ abstract class BaseRunningMode implements RunningMode {
      */
     final AdvanceOutcome chainSteps(AdvanceRunContext ctx) {
         Tx tx = ctx.tx();
-        Instance inst = ctx.locked().inst();
+        Instance inst = ctx.task().inst();
         long now = System.currentTimeMillis();
         long leaseExpiry = now + ctx.leaseMillis();
         if (!InstanceState.of(inst.status).running()) {
             return new AdvanceOutcome(inst.status.name(), 0, null);
         }
-        Token current = ctx.locked().token();
+        Token current = ctx.task().token();
         Tokens.requireLease(current, ctx.leaseOwner());
         LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
         List<StepInput> steps = ctx.steps();

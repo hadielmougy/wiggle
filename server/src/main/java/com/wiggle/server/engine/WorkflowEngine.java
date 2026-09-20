@@ -207,19 +207,22 @@ public final class WorkflowEngine {
      */
     public void complete(String taskId, String leaseOwner, Object result) {
         transactions.inTxVoid(tx -> {
-            Tokens.LockedTask locked = Tokens.lock(tx, taskId);
-            Instance inst = locked.inst();
-            Token t = locked.token();
-            Tokens.requireLease(t, leaseOwner);
-            Long compSeq = Sagas.seqOf(t);
-            if (compSeq != null) {
-                instances.compensatorCompleted(tx, inst, t, compSeq, System.currentTimeMillis());
-                return;
-            }
-            ExecutionMode mode = definitions.executionMode(tx, inst.workflow, inst.version);
+            Tokens.LockedTask task = Tokens.lock(tx, taskId);
+            Tokens.requireLease(task.token(), leaseOwner);
+            if (completeCompensation(tx, task)) return;
+            ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             modeFactory.create(mode)
-                    .complete(new CompleteRunContext(locked, leaseOwner, result, tx, loopMaxIterations));
+                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations));
         });
+    }
+
+    private boolean completeCompensation(Tx tx, Tokens.LockedTask task) {
+        Long compSeq = Sagas.seqOf(task.token());
+        if (compSeq != null) {
+            instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, System.currentTimeMillis());
+            return true;
+        }
+        return false;
     }
 
     /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
@@ -238,11 +241,10 @@ public final class WorkflowEngine {
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
         if (steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
         return transactions.inTx(tx -> {
-            Tokens.LockedTask locked = Tokens.lock(tx, startTaskId);
-            Instance inst = locked.inst();
-            ExecutionMode mode = definitions.executionMode(tx, inst.workflow, inst.version);
-            return modeFactory.create(mode).advance(new AdvanceRunContext(
-                    locked, leaseOwner, steps, finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+            Tokens.LockedTask task = Tokens.lock(tx, startTaskId);
+            ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
+            return modeFactory.create(mode)
+                    .advance(new AdvanceRunContext(task, leaseOwner, steps, finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
         });
     }
 
@@ -381,9 +383,6 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             Token t = locked.token();
             Tokens.requireLease(t, leaseOwner);
-            // COMPENSATING instances still have live work in flight — their compensators. A
-            // compensator's failure report must reach the retry-or-fail transition
-            // (-> COMPENSATION_FAILED), not be dropped by the terminal-status guard.
             if (!InstanceState.of(inst.status).live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
