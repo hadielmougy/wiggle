@@ -956,7 +956,7 @@ public final class JdbcStorage implements Storage {
          * Atomic claim for PostgreSQL: lock up to {@code max} dispatchable rows with
          * SKIP LOCKED -- which steps over rows another worker already holds instead of
          * blocking on them -- and update them in the same statement. Because no
-         * transaction ever waits on a row locked by another, concurrent claims across
+         * transaction ever waits on a row task by another, concurrent claims across
          * many workers and nodes cannot deadlock, and none of them collide on a row.
          */
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,

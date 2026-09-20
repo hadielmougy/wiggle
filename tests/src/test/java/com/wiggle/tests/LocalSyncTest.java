@@ -177,4 +177,41 @@ class LocalSyncTest {
             assertTrue(engine.poll("w2", queues, 10, null).isEmpty(), "nothing left to dispatch");
         }
     }
+
+    /**
+     * A local mode still has to honour a plain single-step report. Workers in LOCAL_SYNC and
+     * LOCAL_ASYNC normally chain and call AdvanceRun, but {@code complete} stays reachable -- the
+     * saga reverse pass dispatches compensators as SERVER whatever the definition declares, and a
+     * client may report a lone step at any time. A mode that ignores it settles nothing and the
+     * instance silently stalls, which no end-to-end test would catch.
+     */
+    @Test @DisplayName("every local mode advances a single step reported through complete")
+    void completeAdvancesUnderLocalModes() {
+        for (ExecutionMode mode : List.of(ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
+            try (Storage storage = new InMemoryStorage()) {
+                storage.migrate();
+                DefinitionRegistry registry = new DefinitionRegistry(storage);
+                WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+                FlowSpec bp = FlowSpec.define("cmpl-" + mode, 1, Map.class, OneStep.class, (f, s) -> f
+                        .execution(mode)
+                        .thenApply(s::x)
+                        .thenApply(s::y));
+                registry.register(bp.definition());
+                Set<String> queues = bp.definition().queues();
+
+                String id = engine.start(bp.name(), bp.version(), Map.of(), null);
+                TaskActivation first = engine.poll("w1", queues, 10, null).getFirst();
+                String yNode = bp.definition().node(first.nodeId()).next();
+
+                engine.complete(first.taskId(), "w1", Map.of("x", 1L));
+
+                List<TaskActivation> next = engine.poll("w2", queues, 10, null);
+                assertEquals(1, next.size(), mode + ": the continuation must be dispatchable");
+                assertEquals(yNode, next.getFirst().nodeId(), mode + ": advanced to the next node");
+
+                engine.complete(next.getFirst().taskId(), "w2", Map.of("x", 1L, "y", 2L));
+                assertEquals("COMPLETED", engine.instance(id).orElseThrow().status(), mode + ": reached the end");
+            }
+        }
+    }
 }

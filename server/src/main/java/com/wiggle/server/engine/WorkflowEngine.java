@@ -1,21 +1,10 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.core.Doc;
-import com.wiggle.core.Ids;
-import com.wiggle.core.InstanceView;
-import com.wiggle.core.Node;
-import com.wiggle.core.NodeKind;
-import com.wiggle.core.TaskActivation;
-import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.core.WorkflowVersion;
-import com.wiggle.server.store.Rows;
+import com.wiggle.core.*;
+import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
-import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
-import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -48,7 +37,7 @@ public final class WorkflowEngine {
      *  unbounded loop with a buggy condition is a self-inflicted denial of service — it hot-spins
      *  workers and the database and grows the instance's token rows without limit — so every
      *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
-    final long loopMaxIterations = ServerEnv.envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
+    private final long loopMaxIterations = ServerEnv.envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
 
     private final DefinitionRegistry definitions;
     private final Queries queries;
@@ -62,6 +51,8 @@ public final class WorkflowEngine {
     private final Schedules schedules;
     private final long defaultLeaseMillis;
     private final NodeBehaviourFactory nodeBehaviourFactory;
+    /** Built once: the factory reads the engine's collaborators lazily, per create(). */
+    private final RunningModeFactory modeFactory = new DefaultModeFactory();
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
@@ -202,6 +193,12 @@ public final class WorkflowEngine {
         return until;
     }
 
+    class DefaultModeFactory extends RunningModeFactory {
+        @Override Instances instances() { return instances;}
+        @Override NodeBehaviourFactory nodeBehaviourFactory() { return nodeBehaviourFactory;}
+        @Override DefinitionRegistry definitions() {return definitions;}
+    }
+
     /**
      * Completes a task. For TASK nodes (combines included) {@code result} REPLACES the context —
      * the handler's return is the complete next context, sent whole by the worker; a null result
@@ -209,38 +206,23 @@ public final class WorkflowEngine {
      * {@code "value"}.
      */
     public void complete(String taskId, String leaseOwner, Object result) {
-        transactions.inTxVoid(tx -> complete0(taskId, leaseOwner, result, tx));
+        transactions.inTxVoid(tx -> {
+            Tokens.LockedTask task = Tokens.lock(tx, taskId);
+            Tokens.requireLease(task.token(), leaseOwner);
+            if (completeCompensation(tx, task)) return;
+            ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
+            modeFactory.create(mode)
+                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations));
+        });
     }
 
-    private void complete0(String taskId, String leaseOwner, Object result, Tx tx) {
-        Tokens.LockedTask locked = Tokens.lock(tx, taskId);
-        Instance inst = locked.inst();
-        Token t = locked.token();
-        Tokens.requireLease(t, leaseOwner);
-        long now = System.currentTimeMillis();
-        Long compSeq = Sagas.seqOf(t);
+    private boolean completeCompensation(Tx tx, Tokens.LockedTask task) {
+        Long compSeq = Sagas.seqOf(task.token());
         if (compSeq != null) {
-            instances.compensatorCompleted(tx, inst, t, compSeq, now);
-            return;
+            instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, System.currentTimeMillis());
+            return true;
         }
-        Instances.requireRunning(inst);
-        LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-        Node node = def.node(t.nodeId);
-        Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
-        NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
-        String next = behaviour.route(inst, t, node, result);
-        if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
-        String overrun = behaviour.overrunAfter(this, t, node, result);
-        if (overrun != null) {
-            Tokens.settle(tx, t, now);
-            instances.fail(tx, inst, overrun, now);
-            return;
-        }
-        Tokens.settle(tx, t, now);
-        Instances.touch(tx, inst, now);
-        Token cont = Tokens.continueAt(tx, inst, t, next,
-                Scopes.stripCombineScratch(node, t.payload), now);
-        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        return false;
     }
 
     /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
@@ -258,72 +240,12 @@ public final class WorkflowEngine {
      */
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
         if (steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
-        return transactions.inTx(tx -> advance0(startTaskId, leaseOwner, steps, finalHandback, tx));
-    }
-
-    private @NonNull AdvanceOutcome advance0(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback, Tx tx) {
-        Tokens.LockedTask locked = Tokens.lock(tx, startTaskId);
-        Instance inst = locked.inst();
-        long now = System.currentTimeMillis();
-        long leaseExpiry = now + defaultLeaseMillis;
-        if (!InstanceState.of(inst.status).running()) {
-            return new AdvanceOutcome(inst.status.name(), 0, null);
-        }
-        Tokens.requireLease(locked.token(), leaseOwner);
-        LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
-        return doAdvance(tx, def, inst, locked.token(), leaseOwner, steps, finalHandback, now, leaseExpiry);
-    }
-
-    private AdvanceOutcome doAdvance(Tx tx, LazyGraph def, Instance inst, Token current, String leaseOwner,
-                                     List<StepInput> steps, boolean finalHandback, long now, long leaseExpiry) {
-        String nextTaskId = null;
-        for (int i = 0; i < steps.size(); i++) {
-            StepInput step = steps.get(i);
-            Node node = def.node(current.nodeId);
-            requireMatchingNode(node, step, current);
-            NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
-            Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
-            String next = behaviour.routeReported(inst, current, node, step);
-            if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
-            String overrun = behaviour.overrunReported(this, current, node, step);
-            if (overrun != null) {
-                Tokens.settle(tx, current, now);
-                instances.fail(tx, inst, overrun, now);
-                return new AdvanceOutcome(inst.status.name(), 0, null);
-            }
-            Tokens.settle(tx, current, now);
-            Token cont = Tokens.create(inst, next, current.joinStack,
-                    Scopes.stripCombineScratch(node, current.payload), now);
-            Node nextNode = def.node(next);
-            boolean lastStep = i == steps.size() - 1;
-            if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
-                Instances.touch(tx, inst, now);
-                handBack(tx, def, inst, cont, nextNode, now);
-                return new AdvanceOutcome(inst.status.name(), leaseExpiry, null);
-            }
-            Tokens.createLeased(tx, cont, nextNode, leaseOwner, leaseExpiry, now);
-            LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
-                    + " chaining locally " + node.name() + " -> " + next);
-            current = cont;
-            nextTaskId = cont.id;
-        }
-        Instances.touch(tx, inst, now);
-        return new AdvanceOutcome(inst.status.name(), leaseExpiry, nextTaskId);
-    }
-
-    private static void requireMatchingNode(Node node, StepInput step, Token current) {
-        if (!node.id().equals(step.nodeId())) {
-            throw EngineException.conflict("reported step " + step.nodeId() + " but token "
-                    + current.id + " is at " + node.id());
-        }
-    }
-
-    /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */
-    private void handBack(Tx tx, LazyGraph def, Instance inst, Token cont, Node nextNode, long now) {
-        tx.insertToken(cont);
-        LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
-                + " handing back at " + cont.nodeId + " (" + nextNode.kind() + ")");
-        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        return transactions.inTx(tx -> {
+            Tokens.LockedTask task = Tokens.lock(tx, startTaskId);
+            ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
+            return modeFactory.create(mode)
+                    .advance(new AdvanceRunContext(task, leaseOwner, steps, finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+        });
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */
@@ -461,9 +383,6 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             Token t = locked.token();
             Tokens.requireLease(t, leaseOwner);
-            // COMPENSATING instances still have live work in flight — their compensators. A
-            // compensator's failure report must reach the retry-or-fail transition
-            // (-> COMPENSATION_FAILED), not be dropped by the terminal-status guard.
             if (!InstanceState.of(inst.status).live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
@@ -528,21 +447,6 @@ public final class WorkflowEngine {
      * sibling (JOINED), or nothing at all (DONE at an END node).
      */
     private void drive(Tx tx, LazyGraph def, Instance inst, Deque<Token> work, long now) {
-        // Caps chain DEPTH, not fan-out breadth: every extra child a fork/forEach enqueues beyond
-        // the usual single continuation grows the budget by one, so any fan-out width advances
-        // fine while a runaway chain of server-side nodes still trips the cap.
-        long budget = 10_000;
-        long guard = 0;
-        while (!work.isEmpty()) {
-            if (++guard > budget) {
-                throw new IllegalStateException("drive budget exceeded in workflow " + def.key()
-                        + ": " + guard + " advances without parking (runaway server-side node chain)");
-            }
-            Token t = work.pop();
-            int before = work.size();
-            Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
-            if (!nodeBehaviourFactory.getNodeBehaviour(s.node().kind()).advance(s)) return;
-            budget += Math.max(0, work.size() - before - 1);
-        }
+        Drive.pump(nodeBehaviourFactory, tx, def, inst, work, now);
     }
 }
