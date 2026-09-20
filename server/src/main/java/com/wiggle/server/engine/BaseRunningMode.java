@@ -33,9 +33,9 @@ abstract class BaseRunningMode implements RunningMode {
 
     /** Applies one reported result to the task token, then drives the continuation to its park. */
     final void completeStep(CompleteRunContext ctx) {
-        Tx tx = ctx.tx();
-        Instance inst = ctx.task().inst();
-        Token t = ctx.task().token();
+        Tx tx           = ctx.tx();
+        Instance inst   = ctx.task().inst();
+        Token t         = ctx.task().token();
         Tokens.requireLease(t, ctx.leaseOwner());
         long now = System.currentTimeMillis();
         Instances.requireRunning(inst);
@@ -43,12 +43,13 @@ abstract class BaseRunningMode implements RunningMode {
         Node node = def.node(t.nodeId);
         Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
         NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
-        String next = behaviour.route(inst, t, node, ctx.result());
+        StepReport report = StepReport.of(ctx.result());
+        String next = behaviour.route(inst, t, node, report);
         if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
-        String overrun = behaviour.overrunAfter(t, node, ctx.result(), ctx.loopMaxIterations());
-        if (overrun != null) {
+        Overrun overrun = behaviour.overrun(t, node, report, ctx.loopMaxIterations());
+        if (overrun.exceeded()) {
             Tokens.settle(tx, t, now);
-            instances.fail(tx, inst, overrun, now);
+            instances.fail(tx, inst, overrun.message(), now);
             return;
         }
         Tokens.settle(tx, t, now);
@@ -82,12 +83,13 @@ abstract class BaseRunningMode implements RunningMode {
             requireMatchingNode(node, step, current);
             NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
-            String next = behaviour.routeReported(inst, current, node, step);
+            StepReport report = StepReport.of(step);
+            String next = behaviour.route(inst, current, node, report);
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
-            String overrun = behaviour.overrunReported(current, node, step, ctx.loopMaxIterations());
-            if (overrun != null) {
+            Overrun overrun = behaviour.overrun(current, node, report, ctx.loopMaxIterations());
+            if (overrun.exceeded()) {
                 Tokens.settle(tx, current, now);
-                instances.fail(tx, inst, overrun, now);
+                instances.fail(tx, inst, overrun.message(), now);
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
             Tokens.settle(tx, current, now);

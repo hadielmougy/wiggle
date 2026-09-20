@@ -11,26 +11,13 @@ abstract class NodeBehaviour {
 
     abstract boolean advance(Step s);
 
-    String route(Rows.Instance inst, Rows.Token t, Node node, Object result) {
-        throw new IllegalStateException("node kind " + name() + " is not worker-completed");
+    String route(Rows.Instance inst, Rows.Token t, Node node, StepReport report) {
+        throw new IllegalStateException("node kind " + node.kind() + " is not worker-reported");
     }
 
-    String routeReported(Rows.Instance inst, Rows.Token t, Node node, WorkflowEngine.StepInput step) {
-        throw new IllegalStateException("node kind " + name() + " is not worker-reported");
+    Overrun overrun(Rows.Token t, Node node, StepReport report, long maxIterations) {
+        return Overrun.NONE;
     }
-
-    String overrunAfter(Rows.Token t, Node node, Object result, long maxIterations) {
-        return null;
-    }
-
-    String overrunReported(Rows.Token t, Node node, WorkflowEngine.StepInput step, long maxIterations) {
-        return null;
-    }
-
-    private String name() {
-        return NodeBehaviour.class.getSimpleName();
-    }
-
 
     static final class TaskNodeBehaviour extends NodeBehaviour {
 
@@ -46,13 +33,8 @@ abstract class NodeBehaviour {
             return true;
         }
 
-        @Override String route(Rows.Instance inst, Rows.Token t, Node node, Object result) {
-            Scopes.applyStepResult(inst, t, result);
-            return node.next();
-        }
-
-        @Override String routeReported(Rows.Instance inst, Rows.Token t, Node node, WorkflowEngine.StepInput step) {
-            Scopes.applyStepResult(inst, t, step.merge());
+        @Override String route(Rows.Instance inst, Rows.Token t, Node node, StepReport report) {
+            Scopes.applyStepResult(inst, t, report.nextContext());
             return node.next();
         }
     }
@@ -71,40 +53,24 @@ abstract class NodeBehaviour {
             return true;
         }
 
-        @Override String route(Rows.Instance inst, Rows.Token t, Node node, Object result) {
-            boolean value = predicateValue(result);
-            return GraphTraversal.successor(node, value);
+        @Override String route(Rows.Instance inst, Rows.Token t, Node node, StepReport report) {
+            return GraphTraversal.successor(node, report.predicate());
         }
 
-        @Override String routeReported(Rows.Instance inst, Rows.Token t, Node node, WorkflowEngine.StepInput step) {
-            boolean value = step.predicateValue() != null && step.predicateValue();
-            return GraphTraversal.successor(node, value);
+        @Override Overrun overrun(Rows.Token t, Node node, StepReport report, long maxIterations) {
+            return tickLoopBudget(t, node, report.predicate(), maxIterations);
         }
 
-        @Override String overrunAfter(Rows.Token t, Node node, Object result, long maxIterations) {
-            return tickLoopBudget(t, node, predicateValue(result), maxIterations);
-        }
-
-        @Override String overrunReported(Rows.Token t, Node node, WorkflowEngine.StepInput step, long maxIterations) {
-            return tickLoopBudget(t, node, step.predicateValue() != null && step.predicateValue(), maxIterations);
-        }
-
-        private static boolean predicateValue(Object result) {
-            if (result instanceof Boolean b) return b;
-            if (result instanceof Map<?, ?> m && m.get("value") instanceof Boolean b) return b;
-            throw EngineException.badRequest("predicate result must be a boolean or {\"value\": <boolean>}");
-        }
-
-        private static String tickLoopBudget(Rows.Token t, Node node, boolean value, long maxIterations) {
-            if (node.kind() != NodeKind.PREDICATE || !value || node.loopBudget() == 0) return null;
+        private static Overrun tickLoopBudget(Rows.Token t, Node node, boolean value, long maxIterations) {
+            if (node.kind() != NodeKind.PREDICATE || !value || node.loopBudget() == 0) return Overrun.NONE;
             long budget = node.loopBudget() > 0 ? node.loopBudget() : maxIterations;
             long n = t.payload.loopCount(node.id()) + 1;
             if (n > budget) {
-                return "loop '" + node.name() + "' exceeded its budget of " + budget
-                        + " iterations (raise it with doWhile(name, maxIterations, body) or fix the condition)";
+                return Overrun.of("loop '" + node.name() + "' exceeded its budget of " + budget
+                        + " iterations (raise it with doWhile(name, maxIterations, body) or fix the condition)");
             }
             t.payload = t.payload.withLoopCount(node.id(), n);
-            return null;
+            return Overrun.NONE;
         }
     }
 
