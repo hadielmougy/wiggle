@@ -160,8 +160,7 @@ final class Instances {
         TokenPayload contPayload = Scopes.mergeIntoScope(parent, t.payload, child.context.raw());
         TokenState.settle(tx, t, now);
         touch(tx, parent, now);
-        Token cont = TokenState.create(parent, node.next(), t.joinStack, contPayload, now);
-        tx.insertToken(cont);
+        Token cont = TokenState.continueAt(tx, parent, t, node.next(), contPayload, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "sub-workflow " + child.id + " completed -> resuming parent "
                 + parent.id + " at " + node.next());
         pump.drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);

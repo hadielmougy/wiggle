@@ -66,8 +66,6 @@ public final class WorkflowEngine {
         this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
     }
 
-    /** {@code idMinter} produces new instance ids: legacy {@code wfi_...} by default, or epoch-aware
-     *  ids ({@link com.wiggle.core.IdCodec}) when the cell is placed under a coordinator. */
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis, InstanceIds idMinter) {
         this.definitions            = definitions;
         this.queries                = new Queries(storage, pollers);
@@ -79,8 +77,6 @@ public final class WorkflowEngine {
         this.schedules              = new Schedules(transactions, instances);
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
     }
-
-    Instances instances() { return instances; }
 
     public DefinitionRegistry definitions() { return definitions; }
 
@@ -238,8 +234,8 @@ public final class WorkflowEngine {
             }
             TokenState.settle(tx, t, now);
             Instances.touch(tx, inst, now);
-            Token cont = TokenState.create(inst, next, t.joinStack, Scopes.stripCombineScratch(node, t.payload), now);
-            tx.insertToken(cont);
+            Token cont = TokenState.continueAt(tx, inst, t, next,
+                    Scopes.stripCombineScratch(node, t.payload), now);
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
         });
     }
@@ -300,7 +296,7 @@ public final class WorkflowEngine {
                 handBack(tx, def, inst, cont, nextNode, now);
                 return new AdvanceOutcome(inst.status.name(), lease, null);
             }
-            TokenState.mintLeased(tx, cont, nextNode, leaseOwner, lease, now);
+            TokenState.createLeased(tx, cont, nextNode, leaseOwner, lease, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
                     + " chaining locally " + node.name() + " -> " + next);
             current = cont;
@@ -350,8 +346,7 @@ public final class WorkflowEngine {
             TokenPayload contPayload = Scopes.mergeIntoScope(inst, t.payload, payload);
             TokenState.settle(tx, t, now);
             Instances.touch(tx, inst, now);
-            Token cont = TokenState.create(inst, node.next(), t.joinStack, contPayload, now);
-            tx.insertToken(cont);
+            Token cont = TokenState.continueAt(tx, inst, t, node.next(), contPayload, now);
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
                     + inst.id + " -> " + node.next());
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
@@ -399,8 +394,7 @@ public final class WorkflowEngine {
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
         TokenState.settle(tx, t, ts);
-        Token cont = TokenState.create(inst, node.next(), t.joinStack, t.payload, ts);
-        tx.insertToken(cont);
+        Token cont = TokenState.continueAt(tx, inst, t, node.next(), t.payload, ts);
         LOG.log(System.Logger.Level.DEBUG, () -> "timer " + node.name()
                 + " of instance " + inst.id + " fired -> " + node.next());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
@@ -429,8 +423,7 @@ public final class WorkflowEngine {
             instances.fail(tx, inst, "signal '" + node.name() + "' timed out", ts);
             return;
         }
-        Token cont = TokenState.create(inst, node.altNext(), t.joinStack, t.payload, ts);
-        tx.insertToken(cont);
+        Token cont = TokenState.continueAt(tx, inst, t, node.altNext(), t.payload, ts);
         LOG.log(System.Logger.Level.DEBUG, () -> "signal " + node.name()
                 + " of instance " + inst.id + " missed its deadline -> escalating to " + node.altNext());
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
