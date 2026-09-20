@@ -112,7 +112,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            TokenState.markWaiting(s.tx(), s.token(), s.now() + s.node().sleepMillis(), s.now());
+            Tokens.markWaiting(s.tx(), s.token(), s.now() + s.node().sleepMillis(), s.now());
             return true;
         }
     }
@@ -121,13 +121,13 @@ abstract class NodeBehaviour {
     static final class ForkNodeBehaviour extends NodeBehaviour {
 
         @Override boolean advance(Step s) {
-            TokenState.spend(s.tx(), s.token(), NodeKind.FORK, s.now());
+            Tokens.spend(s.tx(), s.token(), NodeKind.FORK, s.now());
             String group = s.token().id;
             String childStack = s.token().pushJoinStack(group);
             List<String> starts = s.node().branches();
             Doc parentView = Scopes.currentView(s.inst(), s.token());
             for (int i = 0; i < starts.size(); i++) {
-                Rows.Token child = TokenState.create(s.inst(), starts.get(i), childStack,
+                Rows.Token child = Tokens.create(s.inst(), starts.get(i), childStack,
                         s.token().payload.push(TokenPayload.FrameKind.ARM, i, null, parentView), s.now());
                 s.tx().insertToken(child);
                 s.work().push(child);
@@ -162,13 +162,13 @@ abstract class NodeBehaviour {
             } else {
                 elements = items == null ? List.of() : (List<?>) items;
             }
-            TokenState.spend(s.tx(), s.token(), NodeKind.DYN_FORK, s.now());
+            Tokens.spend(s.tx(), s.token(), NodeKind.DYN_FORK, s.now());
             if (elements.isEmpty()) {
                 LazyGraph def = s.def();
                 Node join = def.node(s.node().next());
                 Node after = def.node(join.next());
                 String next = Scopes.isCombineNode(after) ? after.next() : join.next();
-                Rows.Token cont = TokenState.continueAt(s.tx(), s.inst(), s.token(), next,
+                Rows.Token cont = Tokens.continueAt(s.tx(), s.inst(), s.token(), next,
                         s.token().payload, s.now());
                 s.work().push(cont);
                 return true;
@@ -178,7 +178,7 @@ abstract class NodeBehaviour {
             String branchStart = s.node().branches().getFirst();
             for (int i = 0; i < elements.size(); i++) {
                 String key = mapKeys == null ? null : mapKeys.get(i);
-                Rows.Token child = TokenState.create(
+                Rows.Token child = Tokens.create(
                         s.inst(), branchStart, childStack, s.token().payload.push(TokenPayload.FrameKind.ITEM, i, key, Doc.of(elements.get(i))), s.now());
                 s.tx().insertToken(child);
                 s.work().push(child);
@@ -193,14 +193,14 @@ abstract class NodeBehaviour {
         boolean advance(Step s) {
             String group = s.token().currentJoinGroup();
             int expected = expectedAt(s.node(), group);
-            TokenState.markJoined(s.tx(), s.token(), s.now());
+            Tokens.markJoined(s.tx(), s.token(), s.now());
             List<Rows.Token> atBarrier = joinedAtBarrier(s.tx(), s.inst(), s.node(), group);
             if (atBarrier.size() < expected) {
                 return true;
             }
-            TokenState.settleAll(s.tx(), atBarrier, s.now());
+            Tokens.settleAll(s.tx(), atBarrier, s.now());
             TokenPayload contPayload = combinePayload(s.def(), s.node(), atBarrier, forkPayload(s.tx(), group));
-            Rows.Token cont = TokenState.create(s.inst(), s.node().next(), s.token().popJoinStack(), contPayload, s.now());
+            Rows.Token cont = Tokens.create(s.inst(), s.node().next(), s.token().popJoinStack(), contPayload, s.now());
             s.tx().insertToken(cont);
             s.work().push(cont);
             return true;
@@ -272,7 +272,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            TokenState.markAwaiting(s.tx(), s.token(), NodeKind.SIGNAL, s.node().name(), s.node().sleepMillis() > 0 ? s.now() + s.node().sleepMillis() : 0, s.now());
+            Tokens.markAwaiting(s.tx(), s.token(), NodeKind.SIGNAL, s.node().name(), s.node().sleepMillis() > 0 ? s.now() + s.node().sleepMillis() : 0, s.now());
             return true;
         }
     }
@@ -287,7 +287,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            TokenState.markAwaiting(s.tx(), s.token(), NodeKind.SUB_WORKFLOW,
+            Tokens.markAwaiting(s.tx(), s.token(), NodeKind.SUB_WORKFLOW,
                     s.node().activity(), 0, s.now());
             try {
                 instances.start(s.tx(), s.node().activity(), null, Scopes.dispatchContext(s.inst(), s.token()), "sub:" + s.token().id, s.token().id);
@@ -309,7 +309,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            TokenState.spend(s.tx(), s.token(), NodeKind.END, s.now());
+            Tokens.spend(s.tx(), s.token(), NodeKind.END, s.now());
             if (!s.node().success()) {
                 instances.fail(s.tx(), s.inst(), s.node().reason() == null ? "terminated" : s.node().reason(), s.now());
                 return false;

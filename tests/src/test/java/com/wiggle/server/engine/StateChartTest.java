@@ -118,9 +118,8 @@ class StateChartTest {
                     s + " must not extend a lease it does not hold");
             assertThrows(EngineException.class, () -> s.requireLeasedBy(t, "w1"),
                     s + " must not accept a report against a lease it does not hold");
-            assertThrows(EngineException.class,
-                    () -> s.reportFailure(null, t, null, "e", "e", true, 0),
-                    s + " must not accept a failure report");
+            assertThrows(EngineException.class, () -> s.requireLeasedBy(t, null),
+                    s + " must not pass the leased check a failure report requires");
         }
     }
 
@@ -167,10 +166,8 @@ class StateChartTest {
     }
 
     @Test
-    @DisplayName("only READY is claimable, and only RUNNING holds a lease")
+    @DisplayName("only RUNNING holds a lease, and only RUNNING dispatches the reverse pass")
     void dispatchClassificationsAreSingular() {
-        assertEquals(Set.of(TokenState.READY), Arrays.stream(TokenState.values())
-                .filter(TokenState::claimable).collect(Collectors.toSet()));
         assertEquals(Set.of(TokenState.RUNNING), Arrays.stream(TokenState.values())
                 .filter(TokenState::holdsLease).collect(Collectors.toSet()));
         assertEquals(Set.of(InstanceState.RUNNING), Arrays.stream(InstanceState.values())

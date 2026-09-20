@@ -2,11 +2,15 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.Ids;
 import com.wiggle.core.Node;
+import com.wiggle.core.NodeKind;
+import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
+import com.wiggle.server.store.Rows.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
 import com.wiggle.server.store.Tx;
 
@@ -16,6 +20,15 @@ import java.util.Optional;
 import java.util.Set;
 
 
+/**
+ * Everything that writes a token. {@link TokenState} says what each state is and what it permits;
+ * this performs the moves, asking there first -- every status write goes through {@link #move},
+ * which refuses a transition no state declares.
+ *
+ * <p>The split is by responsibility, not by whether a method happens to need a field:
+ * <em>state answers, lifecycle writes</em>. Anything here that takes a {@code Tx} belongs here;
+ * anything that only inspects a token belongs next door.
+ */
 final class Tokens {
 
     private final DefinitionRegistry definitions;
@@ -30,15 +43,141 @@ final class Tokens {
         queueWake.ready(queue);
     }
 
+    /** The one place a token's status is written. */
+    private static void move(Tx tx, Token t, TokenStatus target, long now) {
+        t.status = TokenState.of(t.status).moveTo(target);
+        t.updatedAt = now;
+        tx.updateToken(t);
+    }
+
+    static Token create(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
+        Token t = new Token();
+        t.payload = payload == null ? TokenPayload.EMPTY : payload;
+        t.id = Ids.next("tok");
+        t.instanceId = inst.id;
+        t.workflow = inst.workflow;
+        t.version = inst.version;
+        t.nodeId = nodeId;
+        t.kind = NodeKind.TASK;
+        t.status = TokenStatus.READY;
+        t.attempt = 0;
+        t.availableAt = now;
+        t.joinStack = joinStack == null ? "" : joinStack;
+        t.createdAt = now;
+        t.updatedAt = now;
+        return t;
+    }
+
+    /**
+     * The continuation of {@code t} at {@code nextNodeId}, inserted and ready to drive. It inherits
+     * {@code t}'s join stack, which is what keeps a token inside the fork group it was spawned in.
+     *
+     * <p>Use {@link #create} directly only where that is deliberately not what should happen: an
+     * instance's first token belongs to no group, a join's continuation pops the group it just
+     * satisfied, and a locally-chained run leases its continuation back ({@link #createLeased}).
+     */
+    static Token continueAt(Tx tx, Instance inst, Token t, String nextNodeId, TokenPayload payload, long now) {
+        Token cont = create(inst, nextNodeId, t.joinStack, payload, now);
+        tx.insertToken(cont);
+        return cont;
+    }
+
+    static void createLeased(Tx tx, Token cont, Node nextNode, String leaseOwner, long lease, long now) {
+        cont.status = TokenStatus.RUNNING;
+        cont.kind = nextNode.kind();
+        cont.activity = nextNode.activity();
+        cont.queue = nextNode.queue();
+        cont.leaseOwner = leaseOwner;
+        cont.leaseExpiresAt = lease;
+        cont.availableAt = now;
+        cont.updatedAt = now;
+        tx.insertToken(cont);
+    }
+
     void markReady(Tx tx, Token t, Node node, long now) {
-        TokenState.markReady(tx, t, node, now);
+        t.kind = node.kind();
+        t.activity = node.activity();
+        t.queue = node.queue();
+        t.availableAt = now;
+        move(tx, t, TokenStatus.READY, now);
         wake(node.queue());
+    }
+
+    static void markWaiting(Tx tx, Token t, long availableAt, long now) {
+        t.kind = NodeKind.SLEEP;
+        t.availableAt = availableAt;
+        move(tx, t, TokenStatus.WAITING, now);
+    }
+
+    static void markAwaiting(Tx tx, Token t, NodeKind kind, String activity, long deadline, long now) {
+        t.kind = kind;
+        t.activity = activity;
+        t.availableAt = deadline;
+        move(tx, t, TokenStatus.AWAITING, now);
+    }
+
+    static void markJoined(Tx tx, Token t, long now) {
+        t.kind = NodeKind.JOIN;
+        move(tx, t, TokenStatus.JOINED, now);
+    }
+
+    static void settle(Tx tx, Token t, long now) {
+        TokenState.of(t.status).releaseLease(t);
+        move(tx, t, TokenStatus.DONE, now);
+    }
+
+    static void settleAll(Tx tx, List<Token> tokens, long now) {
+        for (Token t : tokens) settle(tx, t, now);
+    }
+
+    static void spend(Tx tx, Token t, NodeKind kind, long now) {
+        t.kind = kind;
+        settle(tx, t, now);
+    }
+
+    static void failParked(Tx tx, Token t, long now) {
+        TokenState.of(t.status).releaseLease(t);
+        move(tx, t, TokenStatus.FAILED, now);
+    }
+
+    static void cancel(Tx tx, Token t, long now) {
+        TokenState.of(t.status).releaseLease(t);
+        move(tx, t, TokenStatus.CANCELLED, now);
+    }
+
+    /** What a failed token means beyond the token itself. */
+    sealed interface Outcome {
+        record Retried() implements Outcome {}
+
+        record Exhausted(String reason, Long compSeq) implements Outcome {}
+    }
+
+    /**
+     * The retry-or-fail transition. Only a leased token can fail, which the state is asked to
+     * confirm before anything is written; what an exhausted token means for its instance is the
+     * caller's call.
+     */
+    static Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
+                                 String failReason, boolean retryable, long now) {
+        TokenState state = TokenState.of(t.status);
+        state.requireLeasedBy(t, null);
+        RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
+        t.attempt++;
+        t.lastError = lastError;
+        state.releaseLease(t);
+        if (retryable && t.attempt < policy.maxAttempts()) {
+            t.availableAt = now + policy.backoffMillis(t.attempt);
+            move(tx, t, TokenStatus.READY, now);
+            return new Outcome.Retried();
+        }
+        move(tx, t, TokenStatus.FAILED, now);
+        return new Outcome.Exhausted(failReason, Sagas.seqOf(t));
     }
 
     static void cancelAll(Tx tx, String instanceId, long now) {
         for (Token t : tx.tokensOf(instanceId)) {
             if (!TokenState.of(t.status).active() || t.id == null) continue;
-            TokenState.cancel(tx, t, now);
+            cancel(tx, t, now);
         }
     }
 
