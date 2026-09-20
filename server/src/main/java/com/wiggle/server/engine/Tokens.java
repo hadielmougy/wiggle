@@ -225,7 +225,7 @@ final class Tokens {
         }
         if (comp) return Optional.of(Sagas.activation(inst, t, workerId, until));
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
-        ExecutionMode mode = resolveMode(definitions.executionMode(tx, t.workflow, t.version));
+        ExecutionMode mode = RunningMode.resolveMode(definitions.executionMode(tx, t.workflow, t.version));
         Doc base = null;
         long itemIndex = 0;
         String itemMapKey = null;
@@ -245,8 +245,7 @@ final class Tokens {
                 base == null ? null : base.raw(), itemIndex, itemMapKey, mode));
     }
 
-    private static ExecutionMode resolveMode(ExecutionMode mode) {
-        return mode == null || mode == ExecutionMode.DEFAULT ? ExecutionMode.SERVER : mode;
-    }
+
+
 
 }

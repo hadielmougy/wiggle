@@ -19,11 +19,11 @@ abstract class NodeBehaviour {
         throw new IllegalStateException("node kind " + name() + " is not worker-reported");
     }
 
-    String overrunAfter(WorkflowEngine e, Rows.Token t, Node node, Object result) {
+    String overrunAfter(Rows.Token t, Node node, Object result, long maxIterations) {
         return null;
     }
 
-    String overrunReported(WorkflowEngine e, Rows.Token t, Node node, WorkflowEngine.StepInput step) {
+    String overrunReported(Rows.Token t, Node node, WorkflowEngine.StepInput step, long maxIterations) {
         return null;
     }
 
@@ -81,12 +81,12 @@ abstract class NodeBehaviour {
             return GraphTraversal.successor(node, value);
         }
 
-        @Override String overrunAfter(WorkflowEngine e, Rows.Token t, Node node, Object result) {
-            return tickLoopBudget(e, t, node, predicateValue(result));
+        @Override String overrunAfter(Rows.Token t, Node node, Object result, long maxIterations) {
+            return tickLoopBudget(t, node, predicateValue(result), maxIterations);
         }
 
-        @Override String overrunReported(WorkflowEngine e, Rows.Token t, Node node, WorkflowEngine.StepInput step) {
-            return tickLoopBudget(e, t, node, step.predicateValue() != null && step.predicateValue());
+        @Override String overrunReported(Rows.Token t, Node node, WorkflowEngine.StepInput step, long maxIterations) {
+            return tickLoopBudget(t, node, step.predicateValue() != null && step.predicateValue(), maxIterations);
         }
 
         private static boolean predicateValue(Object result) {
@@ -95,9 +95,9 @@ abstract class NodeBehaviour {
             throw EngineException.badRequest("predicate result must be a boolean or {\"value\": <boolean>}");
         }
 
-        private static String tickLoopBudget(WorkflowEngine e, Rows.Token t, Node node, boolean value) {
+        private static String tickLoopBudget(Rows.Token t, Node node, boolean value, long maxIterations) {
             if (node.kind() != NodeKind.PREDICATE || !value || node.loopBudget() == 0) return null;
-            long budget = node.loopBudget() > 0 ? node.loopBudget() : e.loopMaxIterations;
+            long budget = node.loopBudget() > 0 ? node.loopBudget() : maxIterations;
             long n = t.payload.loopCount(node.id()) + 1;
             if (n > budget) {
                 return "loop '" + node.name() + "' exceeded its budget of " + budget

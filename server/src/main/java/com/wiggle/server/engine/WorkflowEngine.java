@@ -1,20 +1,10 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.core.Doc;
-import com.wiggle.core.Ids;
-import com.wiggle.core.InstanceView;
-import com.wiggle.core.Node;
-import com.wiggle.core.NodeKind;
-import com.wiggle.core.TaskActivation;
-import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.core.WorkflowVersion;
-import com.wiggle.server.store.Rows;
+import com.wiggle.core.*;
+import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
-import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
 import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.util.ArrayDeque;
@@ -48,7 +38,7 @@ public final class WorkflowEngine {
      *  unbounded loop with a buggy condition is a self-inflicted denial of service — it hot-spins
      *  workers and the database and grows the instance's token rows without limit — so every
      *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
-    final long loopMaxIterations = ServerEnv.envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
+    private final long loopMaxIterations = ServerEnv.envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
 
     private final DefinitionRegistry definitions;
     private final Queries queries;
@@ -62,6 +52,8 @@ public final class WorkflowEngine {
     private final Schedules schedules;
     private final long defaultLeaseMillis;
     private final NodeBehaviourFactory nodeBehaviourFactory;
+    /** Built once: the factory reads the engine's collaborators lazily, per create(). */
+    private final RunningModeFactory modeFactory = new DefaultModeFactory();
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
@@ -202,6 +194,12 @@ public final class WorkflowEngine {
         return until;
     }
 
+    class DefaultModeFactory extends RunningModeFactory {
+        @Override Instances instances() { return instances;}
+        @Override NodeBehaviourFactory nodeBehaviourFactory() { return nodeBehaviourFactory;}
+        @Override DefinitionRegistry definitions() {return definitions;}
+    }
+
     /**
      * Completes a task. For TASK nodes (combines included) {@code result} REPLACES the context —
      * the handler's return is the complete next context, sent whole by the worker; a null result
@@ -209,38 +207,20 @@ public final class WorkflowEngine {
      * {@code "value"}.
      */
     public void complete(String taskId, String leaseOwner, Object result) {
-        transactions.inTxVoid(tx -> complete0(taskId, leaseOwner, result, tx));
-    }
-
-    private void complete0(String taskId, String leaseOwner, Object result, Tx tx) {
-        Tokens.LockedTask locked = Tokens.lock(tx, taskId);
-        Instance inst = locked.inst();
-        Token t = locked.token();
-        Tokens.requireLease(t, leaseOwner);
-        long now = System.currentTimeMillis();
-        Long compSeq = Sagas.seqOf(t);
-        if (compSeq != null) {
-            instances.compensatorCompleted(tx, inst, t, compSeq, now);
-            return;
-        }
-        Instances.requireRunning(inst);
-        LazyGraph def = definitions.graph(tx, t.workflow, t.version);
-        Node node = def.node(t.nodeId);
-        Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
-        NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
-        String next = behaviour.route(inst, t, node, result);
-        if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);
-        String overrun = behaviour.overrunAfter(this, t, node, result);
-        if (overrun != null) {
-            Tokens.settle(tx, t, now);
-            instances.fail(tx, inst, overrun, now);
-            return;
-        }
-        Tokens.settle(tx, t, now);
-        Instances.touch(tx, inst, now);
-        Token cont = Tokens.continueAt(tx, inst, t, next,
-                Scopes.stripCombineScratch(node, t.payload), now);
-        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        transactions.inTxVoid(tx -> {
+            Tokens.LockedTask locked = Tokens.lock(tx, taskId);
+            Instance inst = locked.inst();
+            Token t = locked.token();
+            Tokens.requireLease(t, leaseOwner);
+            Long compSeq = Sagas.seqOf(t);
+            if (compSeq != null) {
+                instances.compensatorCompleted(tx, inst, t, compSeq, System.currentTimeMillis());
+                return;
+            }
+            ExecutionMode mode = definitions.executionMode(tx, inst.workflow, inst.version);
+            modeFactory.create(mode)
+                    .advance(new RunningModeContext(taskId, leaseOwner, result, tx, loopMaxIterations));
+        });
     }
 
     /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
@@ -285,7 +265,7 @@ public final class WorkflowEngine {
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
             String next = behaviour.routeReported(inst, current, node, step);
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
-            String overrun = behaviour.overrunReported(this, current, node, step);
+            String overrun = behaviour.overrunReported( current, node, step, loopMaxIterations);
             if (overrun != null) {
                 Tokens.settle(tx, current, now);
                 instances.fail(tx, inst, overrun, now);

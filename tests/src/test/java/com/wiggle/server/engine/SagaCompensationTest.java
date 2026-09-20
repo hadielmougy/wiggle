@@ -151,6 +151,40 @@ class SagaCompensationTest {
                 "applyRun captured both steps' snapshots despite local chaining");
     }
 
+    /**
+     * The reverse pass is dispatched as SERVER mode whatever the definition declares
+     * ({@code Sagas.activation}), so a compensator completion must not be routed by the
+     * definition's running mode. LOCAL_SYNC covers one non-SERVER definition; this covers the
+     * other, and the two together are what stop a mode-specific completion path from quietly
+     * losing the compensation branch.
+     */
+    @Test @Timeout(30)
+    @DisplayName("locally-batched (LOCAL_ASYNC) compensable steps compensate too")
+    void localAsyncSaga() throws Exception {
+        Recording rec = new Recording();
+        FlowSpec bp = FlowSpec.define("saga-local-async", 1, Map.class, OneStep.class, (f, s) -> f
+                .execution(com.wiggle.core.ExecutionMode.LOCAL_ASYNC)
+                .thenApplyCompensable(s::reserve)
+                .thenApplyCompensable(s::capture)
+                .thenApply(s::boom));
+
+        @ForFlow("saga-local-async")
+        class H {
+            public CompensableActivity<Map<String, Object>, Map<String, Object>> reserve() { return compensableStep("reserved", rec, false); }
+            public CompensableActivity<Map<String, Object>, Map<String, Object>> capture() { return compensableStep("captured", rec, false); }
+            public Map<String, Object> boom(Map<String, Object> ctx) {
+                throw new PermanentActivityException("downstream exploded");
+            }
+        }
+
+        InstanceView v = run(bp, new H());
+        assertEquals("COMPENSATED", v.status(),
+                "a compensator completion must reach the saga, not a running mode's forward path");
+        assertEquals(List.of("captured", "reserved"),
+                rec.undos.stream().map(Undo::step).toList(),
+                "both snapshots captured, undone newest-first");
+    }
+
     @Test @Timeout(30)
     @DisplayName("no declared compensation -> plain FAILED, exactly as before")
     void undeclaredStillFails() throws Exception {
