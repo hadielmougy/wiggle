@@ -292,12 +292,12 @@ public final class WorkflowEngine {
                 return new AdvanceOutcome(inst.status.name(), 0, null);
             }
             Tokens.settle(tx, current, now);
-            Instances.touch(tx, inst, now);
             Token cont = Tokens.create(inst, next, current.joinStack,
                     Scopes.stripCombineScratch(node, current.payload), now);
             Node nextNode = def.node(next);
             boolean lastStep = i == steps.size() - 1;
             if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
+                Instances.touch(tx, inst, now);
                 handBack(tx, def, inst, cont, nextNode, now);
                 return new AdvanceOutcome(inst.status.name(), leaseExpiry, null);
             }
@@ -307,6 +307,7 @@ public final class WorkflowEngine {
             current = cont;
             nextTaskId = cont.id;
         }
+        Instances.touch(tx, inst, now);
         return new AdvanceOutcome(inst.status.name(), leaseExpiry, nextTaskId);
     }
 
