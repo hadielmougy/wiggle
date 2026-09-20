@@ -41,7 +41,6 @@ final class Instances {
     }
 
     private final DefinitionRegistry definitions;
-    private final Tokens tokens;
     private final InstanceIds idMinter;
     private final Pump pump;
     private final Sagas sagas;
@@ -49,7 +48,6 @@ final class Instances {
     Instances(DefinitionRegistry definitions, Tokens tokens,
               InstanceIds idMinter, Pump pump) {
         this.definitions = definitions;
-        this.tokens = tokens;
         this.idMinter = idMinter;
         this.pump = pump;
         this.sagas = new Sagas(this, tokens);
