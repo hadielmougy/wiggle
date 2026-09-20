@@ -9,8 +9,6 @@ import java.util.*;
 
 abstract class NodeBehaviour {
 
-    private static final System.Logger LOG = System.getLogger(NodeBehaviour.class.getName());
-
     abstract boolean advance(Step s);
 
     String route(Rows.Instance inst, Rows.Token t, Node node, Object result) {
@@ -44,7 +42,7 @@ abstract class NodeBehaviour {
 
 
         @Override boolean advance(Step s) {
-            tokens.parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
+            tokens.markReady(s.tx(), s.token(), s.node(), s.now());
             return true;
         }
 
@@ -69,16 +67,13 @@ abstract class NodeBehaviour {
         }
 
         @Override boolean advance(Step s) {
-            tokens.parkReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
+            tokens.markReady(s.tx(), s.token(), s.node(), s.now());
             return true;
         }
 
         @Override String route(Rows.Instance inst, Rows.Token t, Node node, Object result) {
             boolean value = predicateValue(result);
-            String next = GraphTraversal.successor(node, value);
-            LOG.log(System.Logger.Level.DEBUG, () -> "complete: predicate " + node.name()
-                    + " of instance " + inst.id + " evaluated " + value + " -> " + next);
-            return next;
+            return GraphTraversal.successor(node, value);
         }
 
         @Override String routeReported(Rows.Instance inst, Rows.Token t, Node node, WorkflowEngine.StepInput step) {
@@ -117,12 +112,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tx tx = s.tx(); Rows.Instance inst = s.inst(); Rows.Token t = s.token();
-            Node node = s.node(); long now = s.now();
-            Rows.TokenStatus before = TokenState.parkWaiting(tx, t, now + node.sleepMillis(), now);
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (SLEEP) " + before + " -> WAITING until " + t.availableAt
-                    + " (" + node.sleepMillis() + "ms)");
+            TokenState.markWaiting(s.tx(), s.token(), s.now() + s.node().sleepMillis(), s.now());
             return true;
         }
     }
@@ -131,22 +121,17 @@ abstract class NodeBehaviour {
     static final class ForkNodeBehaviour extends NodeBehaviour {
 
         @Override boolean advance(Step s) {
-            Tx tx = s.tx(); Rows.Instance inst = s.inst(); Rows.Token t = s.token();
-            Node node = s.node(); Deque<Rows.Token> work = s.work(); long now = s.now();
-            Rows.TokenStatus before = TokenState.spend(tx, t, NodeKind.FORK, now);
-            String group = t.id;
-            String childStack = t.pushJoinStack(group);
-            List<String> starts = node.branches();
-            Doc parentView = Scopes.currentView(inst, t);
+            TokenState.spend(s.tx(), s.token(), NodeKind.FORK, s.now());
+            String group = s.token().id;
+            String childStack = s.token().pushJoinStack(group);
+            List<String> starts = s.node().branches();
+            Doc parentView = Scopes.currentView(s.inst(), s.token());
             for (int i = 0; i < starts.size(); i++) {
-                Rows.Token child = TokenState.create(inst, starts.get(i), childStack,
-                        t.payload.push(TokenPayload.FrameKind.ARM, i, null, parentView), now);
-                tx.insertToken(child);
-                work.push(child);
+                Rows.Token child = TokenState.create(s.inst(), starts.get(i), childStack,
+                        s.token().payload.push(TokenPayload.FrameKind.ARM, i, null, parentView), s.now());
+                s.tx().insertToken(child);
+                s.work().push(child);
             }
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (FORK) " + before + " -> DONE, spawned " + node.branches().size()
-                    + " branch(es) in group " + group + ": " + node.branches());
             return true;
         }
     }
@@ -161,16 +146,10 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tx tx = s.tx();
-            Rows.Instance inst = s.inst();
-            Rows.Token t = s.token();
-            Node node = s.node();
-            Deque<Rows.Token> work = s.work();
-            long now = s.now();
-            Object items = Scopes.currentView(inst, t).get(node.itemsKey());
+            Object items = Scopes.currentView(s.inst(), s.token()).get(s.node().itemsKey());
             if (items != null && !(items instanceof List) && !(items instanceof Map)) {
-                instances.fail(tx, inst, "forEach '" + node.name() + "': context key '" + node.itemsKey()
-                        + "' holds " + items.getClass().getSimpleName() + ", not a list or map", now);
+                instances.fail(s.tx(), s.inst(), "forEach '" + s.node().name() + "': context key '" + s.node().itemsKey()
+                        + "' holds " + items.getClass().getSimpleName() + ", not a list or map", s.now());
                 return false;
             }
             List<?> elements;
@@ -183,36 +162,27 @@ abstract class NodeBehaviour {
             } else {
                 elements = items == null ? List.of() : (List<?>) items;
             }
-            Rows.TokenStatus before = TokenState.spend(tx, t, NodeKind.DYN_FORK, now);
+            TokenState.spend(s.tx(), s.token(), NodeKind.DYN_FORK, s.now());
             if (elements.isEmpty()) {
-                // Nothing to fan out over: continue past the paired join AND its combine (there is
-                // nothing to collect, so the combine is skipped and the context is untouched).
                 LazyGraph def = s.def();
-                Node join = def.node(node.next());
+                Node join = def.node(s.node().next());
                 Node after = def.node(join.next());
                 String next = Scopes.isCombineNode(after) ? after.next() : join.next();
-                Rows.Token cont = TokenState.create(inst, next, t.joinStack, t.payload, now);
-                tx.insertToken(cont);
-                work.push(cont);
-                LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                        + node.name() + " (DYN_FORK) " + before + " -> DONE, empty '" + node.itemsKey()
-                        + "' skips the join and combine");
+                Rows.Token cont = TokenState.continueAt(s.tx(), s.inst(), s.token(), next,
+                        s.token().payload, s.now());
+                s.work().push(cont);
                 return true;
             }
-            String group = t.id + "#" + elements.size();   // fork token id + width, parsed back at the join
-            String childStack = t.pushJoinStack(group);
-            String branchStart = node.branches().getFirst();
+            String group = s.token().id + "#" + elements.size();   // fork token id + width, parsed back at the join
+            String childStack = s.token().pushJoinStack(group);
+            String branchStart = s.node().branches().getFirst();
             for (int i = 0; i < elements.size(); i++) {
                 String key = mapKeys == null ? null : mapKeys.get(i);
-                Rows.Token child = TokenState.create(inst, branchStart, childStack,
-                        t.payload.push(TokenPayload.FrameKind.ITEM, i, key, Doc.of(elements.get(i))), now);
-                tx.insertToken(child);
-                work.push(child);
+                Rows.Token child = TokenState.create(
+                        s.inst(), branchStart, childStack, s.token().payload.push(TokenPayload.FrameKind.ITEM, i, key, Doc.of(elements.get(i))), s.now());
+                s.tx().insertToken(child);
+                s.work().push(child);
             }
-            int n = elements.size();
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (DYN_FORK) " + before + " -> DONE, spawned " + n
-                    + " isolated branch(es) over '" + node.itemsKey() + "' in group " + group);
             return true;
         }
     }
@@ -221,28 +191,18 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tx tx = s.tx(); LazyGraph def = s.def(); Rows.Instance inst = s.inst(); Rows.Token t = s.token();
-            Node node = s.node(); Deque<Rows.Token> work = s.work(); long now = s.now();
-            String group = t.currentJoinGroup();
-            int expected = expectedAt(node, group);
-            Rows.TokenStatus before = TokenState.parkJoined(tx, t, now);
-            List<Rows.Token> atBarrier = joinedAtBarrier(tx, inst, node, group);
+            String group = s.token().currentJoinGroup();
+            int expected = expectedAt(s.node(), group);
+            TokenState.markJoined(s.tx(), s.token(), s.now());
+            List<Rows.Token> atBarrier = joinedAtBarrier(s.tx(), s.inst(), s.node(), group);
             if (atBarrier.size() < expected) {
-                LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                        + node.name() + " (JOIN) " + before + " -> JOINED, waiting on barrier " + group
-                        + " (" + atBarrier.size() + "/" + expected + ")");
                 return true;
             }
-            TokenState.settleAll(tx, atBarrier, now);
-            // Restore the payload the branches started from, so nesting scopes correctly, then (for a
-            // combine fork) stage each isolated branch's result under its arm name for the aggregator.
-            TokenPayload contPayload = combinePayload(def, node, atBarrier, forkPayload(tx, group));
-            Rows.Token cont = TokenState.create(inst, node.next(), t.popJoinStack(), contPayload, now);
-            tx.insertToken(cont);
-            work.push(cont);
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (JOIN) " + before + " -> JOINED, barrier " + group
-                    + " satisfied (" + atBarrier.size() + "/" + expected + ") -> " + node.next());
+            TokenState.settleAll(s.tx(), atBarrier, s.now());
+            TokenPayload contPayload = combinePayload(s.def(), s.node(), atBarrier, forkPayload(s.tx(), group));
+            Rows.Token cont = TokenState.create(s.inst(), s.node().next(), s.token().popJoinStack(), contPayload, s.now());
+            s.tx().insertToken(cont);
+            s.work().push(cont);
             return true;
         }
 
@@ -312,13 +272,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tx tx = s.tx(); Rows.Instance inst = s.inst(); Rows.Token t = s.token();
-            Node node = s.node(); long now = s.now();
-            Rows.TokenStatus before = TokenState.parkAwaiting(tx, t, NodeKind.SIGNAL, node.name(),
-                    node.sleepMillis() > 0 ? now + node.sleepMillis() : 0, now);
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (SIGNAL) " + before + " -> AWAITING, deadline="
-                    + (t.availableAt > 0 ? t.availableAt : "none"));
+            TokenState.markAwaiting(s.tx(), s.token(), NodeKind.SIGNAL, s.node().name(), s.node().sleepMillis() > 0 ? s.now() + s.node().sleepMillis() : 0, s.now());
             return true;
         }
     }
@@ -333,20 +287,14 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tx tx = s.tx(); Rows.Instance inst = s.inst(); Rows.Token t = s.token();
-            Node node = s.node(); long now = s.now();
-            Rows.TokenStatus before = TokenState.parkAwaiting(tx, t, NodeKind.SUB_WORKFLOW,
-                    node.activity(), 0, now);
-            String childId;
+            TokenState.markAwaiting(s.tx(), s.token(), NodeKind.SUB_WORKFLOW,
+                    s.node().activity(), 0, s.now());
             try {
-                childId = instances.start(tx, node.activity(), null,
-                        Scopes.dispatchContext(inst, t), "sub:" + t.id, t.id);
+                instances.start(s.tx(), s.node().activity(), null, Scopes.dispatchContext(s.inst(), s.token()), "sub:" + s.token().id, s.token().id);
             } catch (EngineException ex) {
-                instances.fail(tx, inst, "sub-workflow '" + node.activity() + "': " + ex.getMessage(), now);
+                instances.fail(s.tx(), s.inst(), "sub-workflow '" + s.node().activity() + "': " + ex.getMessage(), s.now());
                 return false;
             }
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (SUB_WORKFLOW) " + before + " -> AWAITING child " + childId);
             return true;
         }
     }
@@ -361,25 +309,16 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tx tx = s.tx(); Rows.Instance inst = s.inst(); Rows.Token t = s.token();
-            Node node = s.node(); Deque<Rows.Token> work = s.work(); long now = s.now();
-            Rows.TokenStatus before = TokenState.spend(tx, t, NodeKind.END, now);
-            if (!node.success()) {
-                LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                        + node.name() + " (END) " + before + " -> DONE, unsuccessful end -> failing instance");
-                instances.fail(tx, inst, node.reason() == null ? "terminated" : node.reason(), now);
+            TokenState.spend(s.tx(), s.token(), NodeKind.END, s.now());
+            if (!s.node().success()) {
+                instances.fail(s.tx(), s.inst(), s.node().reason() == null ? "terminated" : s.node().reason(), s.now());
                 return false;
             }
-            boolean anyActive = Tokens.anyActive(tx, inst.id);
-            if (anyActive || !work.isEmpty()) {
-                LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                        + node.name() + " (END) " + before + " -> DONE, other tokens still active");
+            boolean anyActive = Tokens.anyActive(s.tx(), s.inst().id);
+            if (anyActive || !s.work().isEmpty()) {
                 return true;
             }
-            LOG.log(System.Logger.Level.DEBUG, () -> "drive: " + inst.id + " token " + t.id + " at "
-                    + node.name() + " (END) " + before + " -> DONE, no tokens remain -> instance COMPLETED"
-                    + (node.reason() != null ? " (" + node.reason() + ")" : ""));
-            instances.complete(tx, inst, node.reason(), now);
+            instances.complete(s.tx(), s.inst(), s.node().reason(), s.now());
             return true;
         }
     }
