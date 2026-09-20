@@ -274,6 +274,8 @@ public final class JdbcStorage implements Storage {
             new Migration(13, "combine-columns", """
             ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS arm_names TEXT;
             ALTER TABLE wf_graph_node ADD COLUMN IF NOT EXISTS collect_key VARCHAR(200);
+            """), new Migration(14, "add-barrier-index", """
+                CREATE INDEX IF NOT EXISTS ix_token_barrier ON wf_token (instance_id, node_id, status);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -878,7 +880,16 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        @Override public void updateToken(Token t) {
+        @Override
+        public boolean hasActiveTokens(String instanceId) {
+            try (PreparedStatement p = ps("SELECT 1 FROM wf_token WHERE instance_id=? AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1")) {
+                p.setString(1, instanceId);
+                try (ResultSet rs = p.executeQuery()) { return rs.next(); }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override
+        public void updateToken(Token t) {
             try (PreparedStatement p = ps("UPDATE wf_token SET node_id=?,kind=?,status=?,activity=?,queue=?," +
                     "attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?,last_error=?,updated_at=?," +
                     "payload=?,comp_seq=? WHERE id=?")) {
@@ -889,6 +900,19 @@ public final class JdbcStorage implements Storage {
                 p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
                 setNullableLong(p, 14, t.compSeq); p.setString(15, t.id);
                 p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override
+        public List<String> joinStacksAt(String instanceId, String nodeId) {
+            try (PreparedStatement p = ps("SELECT join_stack FROM wf_token WHERE instance_id=? AND node_id=? AND status='JOINED'")) {
+                p.setString(1, instanceId);
+                p.setString(2, nodeId);
+                try (ResultSet rs = p.executeQuery()) {
+                    List<String> out = new ArrayList<>();
+                    while (rs.next()) out.add(rs.getString(1));
+                    return out;
+                }
             } catch (SQLException e) { throw wrap(e); }
         }
 
@@ -1270,6 +1294,19 @@ public final class JdbcStorage implements Storage {
         @Override public void markCompensated(String instanceId, long seq) {
             try (PreparedStatement p = ps("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=? AND seq=?")) {
                 p.setString(1, instanceId); p.setLong(2, seq);
+                p.executeUpdate();
+            } catch (SQLException ex) { throw wrap(ex); }
+        }
+
+        @Override
+        public void cancelActiveTokens(String instanceId, long now) {
+            try (PreparedStatement p = ps("""
+                    UPDATE wf_token
+                       SET status='CANCELLED', lease_owner=NULL, lease_expires=0, updated_at=?
+                     WHERE instance_id=? AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED')
+                    """)) {
+                p.setLong(1, now);
+                p.setString(2, instanceId);
                 p.executeUpdate();
             } catch (SQLException ex) { throw wrap(ex); }
         }
