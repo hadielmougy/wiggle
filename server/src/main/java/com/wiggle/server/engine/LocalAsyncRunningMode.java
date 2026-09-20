@@ -1,6 +1,21 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.ExecutionMode;
 import com.wiggle.server.engine.WorkflowEngine.AdvanceOutcome;
+import com.wiggle.server.engine.WorkflowEngine.Run;
+import com.wiggle.server.engine.WorkflowEngine.RunResult;
+import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.server.store.Rows.Token;
+import com.wiggle.server.store.Tx;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 
 public class LocalAsyncRunningMode extends BaseRunningMode {
@@ -17,5 +32,101 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
     @Override
     public AdvanceOutcome advance(AdvanceRunContext ctx) {
         return chainSteps(ctx);
+    }
+
+    /**
+     * Applies N independent single-instance runs under one transaction: validate, then apply.
+     *
+     * <p>Validate locks every instance in sorted id order -- two workers with overlapping batches
+     * take the same locks in the same order and cannot deadlock -- then checks, per run, everything
+     * the single-run path refuses before its first write: the task exists, the lease is held, the
+     * token is not a compensator, the first step matches the token's node, the definition resolves
+     * to LOCAL_ASYNC, and no earlier run in the batch owns the same instance. A compensator can
+     * never survive validation: it only exists while its instance is COMPENSATING, which the
+     * running check answers with the status outcome, exactly as the single-run path does. A run that fails any
+     * of these is answered in the result map and dropped; nothing was written on its behalf, so a
+     * bad run costs its batch-mates nothing.
+     *
+     * <p>Apply is {@link #chainSteps} per survivor, unchanged: a loop overrun fails that instance
+     * durably and its result rides in the same commit as everyone else's. What apply may still
+     * throw -- a later step's node mismatch, a storage failure -- rolls the whole batch back, and
+     * the engine replays each run in its own transaction.
+     */
+    Map<String, RunResult> advanceMany(AdvanceBatchContext ctx) {
+        Tx tx = ctx.tx();
+        Map<String, RunResult> results = new LinkedHashMap<>();
+
+        // Probe without locking: which instance does each run belong to? Two runs on one instance
+        // would interleave writes to the same context, the second silently clobbering the first --
+        // and one poll can hand a worker two arms of the same fork -- so only the first stays.
+        List<Run> probed = new ArrayList<>();
+        Map<String, String> instanceOf = new HashMap<>();
+        Set<String> owned = new HashSet<>();
+        for (Run run : ctx.runs()) {
+            Token probe = tx.findToken(run.startTaskId()).orElse(null);
+            if (probe == null) {
+                results.put(run.startTaskId(), RunResult.reject(EngineException.notFound("task")));
+            } else if (!owned.add(probe.instanceId)) {
+                results.put(run.startTaskId(), RunResult.reject(EngineException.conflict(
+                        "another run in this batch already advances instance " + probe.instanceId
+                                + "; report this run again once it lands")));
+            } else {
+                instanceOf.put(run.startTaskId(), probe.instanceId);
+                probed.add(run);
+            }
+        }
+
+        Map<String, Instance> locked = new HashMap<>();
+        for (String instanceId : new TreeSet<>(instanceOf.values())) {
+            tx.lockInstance(instanceId).ifPresent(inst -> locked.put(instanceId, inst));
+        }
+
+        List<Run> survivors = new ArrayList<>();
+        Map<String, Tokens.LockedTask> tasks = new HashMap<>();
+        for (Run run : probed) {
+            Instance inst = locked.get(instanceOf.get(run.startTaskId()));
+            Token t = inst == null ? null : tx.findToken(run.startTaskId()).orElse(null);
+            RunResult refusal = validate(tx, inst, t, run);
+            if (refusal != null) {
+                results.put(run.startTaskId(), refusal);
+            } else {
+                tasks.put(run.startTaskId(), new Tokens.LockedTask(inst, t));
+                survivors.add(run);
+            }
+        }
+
+        for (Run run : survivors) {
+            results.put(run.startTaskId(), RunResult.of(chainSteps(new AdvanceRunContext(
+                    tasks.get(run.startTaskId()), run.leaseOwner(), run.steps(), run.finalHandback(),
+                    tx, ctx.loopMaxIterations(), ctx.leaseMillis()))));
+        }
+        return results;
+    }
+
+    /** The single-run path's pre-write refusals, as a result instead of a throw; null passes. */
+    private RunResult validate(Tx tx, Instance inst, Token t, Run run) {
+        if (inst == null || t == null) {
+            return RunResult.reject(EngineException.notFound("task"));
+        }
+        if (!InstanceState.of(inst.status).running()) {
+            return RunResult.of(new AdvanceOutcome(inst.status.name(), 0, null));
+        }
+        try {
+            Tokens.requireLease(t, run.leaseOwner());
+        } catch (EngineException e) {
+            return RunResult.reject(e);
+        }
+        if (!t.nodeId.equals(run.steps().getFirst().nodeId())) {
+            return RunResult.reject(EngineException.conflict("reported step "
+                    + run.steps().getFirst().nodeId() + " but token " + t.id + " is at " + t.nodeId));
+        }
+        ExecutionMode mode = RunningMode.resolveMode(
+                definitions().executionMode(tx, inst.workflow, inst.version));
+        if (mode != ExecutionMode.LOCAL_ASYNC) {
+            return RunResult.reject(EngineException.conflict("definition " + inst.workflow
+                    + ":" + inst.version + " runs " + mode
+                    + "; a batch takes only LOCAL_ASYNC runs -- report this run singly"));
+        }
+        return null;
     }
 }

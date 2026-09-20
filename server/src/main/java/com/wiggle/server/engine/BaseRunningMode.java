@@ -31,6 +31,10 @@ abstract class BaseRunningMode implements RunningMode {
         this.definitions = definitions;
     }
 
+    final DefinitionRegistry definitions() {
+        return definitions;
+    }
+
     /** Applies one reported result to the task token, then drives the continuation to its park. */
     final void completeStep(CompleteRunContext ctx) {
         Tx tx           = ctx.tx();

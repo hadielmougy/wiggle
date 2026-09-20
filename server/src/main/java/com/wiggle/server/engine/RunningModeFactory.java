@@ -10,9 +10,14 @@ abstract class RunningModeFactory {
         return switch (resolveMode(mode)) {
             case SERVER         -> new ServerRunningMode(instances(), nodeBehaviourFactory(), definitions());
             case LOCAL_SYNC     -> new LocalSyncRunningMode(instances(), nodeBehaviourFactory(), definitions());
-            case LOCAL_ASYNC    -> new LocalAsyncRunningMode(instances(), nodeBehaviourFactory(), definitions());
+            case LOCAL_ASYNC    -> localAsync();
             default -> throw new IllegalArgumentException("Unknown running mode: " + mode);
         };
+    }
+
+    /** Typed: {@code advanceMany} exists on this mode alone, so its callers need the class. */
+    final LocalAsyncRunningMode localAsync() {
+        return new LocalAsyncRunningMode(instances(), nodeBehaviourFactory(), definitions());
     }
 
     abstract Instances instances();

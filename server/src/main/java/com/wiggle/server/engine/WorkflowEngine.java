@@ -8,6 +8,8 @@ import com.wiggle.server.store.Rows.TokenStatus;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -231,6 +233,29 @@ public final class WorkflowEngine {
     /** The result of applying a reported run: the instance's status, renewed lease, and next token. */
     public record AdvanceOutcome(String instanceStatus, long leaseExpiresAt, String nextTaskId) {}
 
+    /** One run of a cross-instance batch: exactly the arguments of {@link #advance}. */
+    public record Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {}
+
+    /**
+     * A run's fate in a batch: the {@link AdvanceOutcome} the single-run path would have
+     * returned, or the status and message it would have thrown. A rejected run wrote nothing
+     * and may be reported again.
+     */
+    public record RunResult(AdvanceOutcome outcome, Integer errorStatus, String error) {
+
+        public boolean ok() {
+            return outcome != null;
+        }
+
+        static RunResult of(AdvanceOutcome outcome) {
+            return new RunResult(outcome, null, null);
+        }
+
+        static RunResult reject(EngineException e) {
+            return new RunResult(null, e.statusCode(), e.getMessage());
+        }
+    }
+
     /**
      * Applies an ordered run of locally-executed steps (LOCAL_SYNC/LOCAL_ASYNC) atomically under
      * the instance lock. For each step it does exactly what {@link #complete} would: merge the
@@ -246,6 +271,54 @@ public final class WorkflowEngine {
             return modeFactory.create(mode)
                     .advance(new AdvanceRunContext(task, leaseOwner, steps, finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
         });
+    }
+
+    /**
+     * Applies N independent single-instance runs in one call and one commit. Every run is exactly
+     * an {@link #advance}; the batch changes how many transactions and RPCs the same work costs,
+     * never any instance's semantics. Runs the single-run path would have refused are answered per
+     * run without writing, so one bad run cannot roll back its batch-mates. If apply still throws
+     * -- a later step's node mismatch, a storage failure -- the batch rolls back whole and each
+     * run is replayed in its own transaction, so only the genuinely broken run fails.
+     *
+     * <p>Structural defects -- an empty batch, a run with no steps, the same task twice -- refuse
+     * the whole call before the transaction opens: they are caller bugs, not instance state.
+     */
+    public Map<String, RunResult> advanceMany(List<Run> runs) {
+        requireWellFormed(runs);
+        try {
+            return transactions.inTx(tx -> modeFactory.localAsync().advanceMany(
+                    new AdvanceBatchContext(runs, tx, loopMaxIterations, defaultLeaseMillis)));
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.WARNING, () -> "advanceMany: batch of " + runs.size()
+                    + " rolled back (" + e + "); replaying each run in its own transaction");
+            return replaySingly(runs);
+        }
+    }
+
+    private static void requireWellFormed(List<Run> runs) {
+        if (runs.isEmpty()) throw EngineException.badRequest("advanceMany requires at least one run");
+        Set<String> ids = new HashSet<>();
+        for (Run run : runs) {
+            if (run.steps().isEmpty()) throw EngineException.badRequest("advance requires at least one step");
+            if (!ids.add(run.startTaskId())) {
+                throw EngineException.badRequest("task " + run.startTaskId() + " appears twice in the batch");
+            }
+        }
+    }
+
+    /** The pathological path: one run per transaction, so the broken run fails alone. */
+    private Map<String, RunResult> replaySingly(List<Run> runs) {
+        Map<String, RunResult> results = new LinkedHashMap<>();
+        for (Run run : runs) {
+            try {
+                results.put(run.startTaskId(), RunResult.of(
+                        advance(run.startTaskId(), run.leaseOwner(), run.steps(), run.finalHandback())));
+            } catch (EngineException e) {
+                results.put(run.startTaskId(), RunResult.reject(e));
+            }
+        }
+        return results;
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */
