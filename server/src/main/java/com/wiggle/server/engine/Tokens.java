@@ -174,15 +174,14 @@ final class Tokens {
         return new Outcome.Exhausted(failReason, Sagas.seqOf(t));
     }
 
+    /** Cancels every still-active token of an instance in one statement. The per-token
+     *  {@link #cancel} path stays for the callers that hold a token already. */
     static void cancelAll(Tx tx, String instanceId, long now) {
-        for (Token t : tx.tokensOf(instanceId)) {
-            if (!TokenState.of(t.status).active() || t.id == null) continue;
-            cancel(tx, t, now);
-        }
+        tx.cancelActiveTokens(instanceId, now);
     }
 
     static boolean anyActive(Tx tx, String instanceId) {
-        return tx.tokensOf(instanceId).stream().anyMatch(t -> TokenState.of(t.status).active());
+        return tx.hasActiveTokens(instanceId);
     }
 
     record LockedTask(Instance inst, Token token) {}

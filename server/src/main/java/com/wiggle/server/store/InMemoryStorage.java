@@ -209,6 +209,48 @@ public final class InMemoryStorage implements Storage {
             indexToken(stored);
         }
 
+        @Override
+        public boolean hasActiveTokens(String instanceId) {
+            NavigableMap<String, Token> byId = tokensByInstance.get(instanceId);
+            if (byId == null) return false;
+            for (Token t : byId.values()) {
+                if (t.isActive()) return true;
+            }
+            return false;
+        }
+
+        /**
+         * Mirrors the JDBC bulk UPDATE. Goes through {@link #updateToken} rather than mutating in
+         * place so both indexes stay right -- a cancelled token must leave the claimable set, or a
+         * worker keeps being handed work for a dead instance. The snapshot is taken first because
+         * updateToken re-indexes, which structurally modifies the very map being walked.
+         */
+        @Override
+        public void cancelActiveTokens(String instanceId, long now) {
+            NavigableMap<String, Token> byId = tokensByInstance.get(instanceId);
+            if (byId == null) return;
+            for (Token stored : List.copyOf(byId.values())) {
+                if (!stored.isActive()) continue;
+                Token next = stored.clone();
+                next.status = TokenStatus.CANCELLED;
+                next.leaseOwner = null;
+                next.leaseExpiresAt = 0;
+                next.updatedAt = now;
+                updateToken(next);
+            }
+        }
+
+        @Override
+        public List<String> joinStacksAt(String instanceId, String nodeId) {
+            NavigableMap<String, Token> byId = tokensByInstance.get(instanceId);
+            if (byId == null) return List.of();
+            List<String> out = new ArrayList<>();
+            for (Token t : byId.values()) {
+                if (t.status == TokenStatus.JOINED && nodeId.equals(t.nodeId)) out.add(t.joinStack);
+            }
+            return out;
+        }
+
         @Override public List<Token> claimTasks(String workerId, Set<String> queues,
                                                 Set<WorkflowVersion> versions, int max, long now,
                                                 long leaseUntil) {

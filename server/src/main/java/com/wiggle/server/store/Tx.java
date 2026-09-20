@@ -33,14 +33,10 @@ public interface Tx extends GraphStore {
     List<Token> tokensOf(String instanceId);
     void updateToken(Token token);
 
-    /**
-     * Atomically leases up to {@code max} dispatchable tokens. Implementations must
-     * guarantee a token is handed to exactly one worker.
-     *
-     * @param versions when non-empty, claim only tokens of these (workflow, version) pairs -- a
-     *                 worker that bound handlers for specific versions. Empty or null serves every
-     *                 version, which is the default.
-     */
+    List<String> joinStacksAt(String instanceId, String nodeId);
+
+    boolean hasActiveTokens(String instanceId);
+
     List<Token> claimTasks(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
                            int max, long now, long leaseUntil);
 
@@ -99,4 +95,7 @@ public interface Tx extends GraphStore {
     /** The instance's compensation log, ordered by seq ascending. */
     java.util.List<Rows.CompLog> compensationLog(String instanceId);
     void markCompensated(String instanceId, long seq);
+
+    /** Cancels every active token of an instance, stamping {@code now} as their update time. */
+    void cancelActiveTokens(String instanceId, long now);
 }
