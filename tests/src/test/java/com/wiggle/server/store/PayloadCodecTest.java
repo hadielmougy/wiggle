@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -82,6 +83,60 @@ class PayloadCodecTest {
         assertEquals("item", frame.get("kind"));
         assertEquals(2L, frame.get("idx"));
         assertEquals("eu", frame.get("mapKey"));
+    }
+
+    /**
+     * Stack order is the format's sharpest edge. {@code top()} is the LAST element, so an encoder
+     * that reversed the array would silently make the outermost frame the current scope: a forked
+     * branch would start reading the pre-fork view, writes would land on the wrong frame, and the
+     * join would stage whichever view happened to be first. Nothing else here would fail.
+     */
+    @Test @DisplayName("the stack is stored outermost-first, so the last element is the current scope")
+    void stackOrderSurvivesTheRoundTrip() {
+        TokenPayload p = TokenPayload.EMPTY
+                .push(FrameKind.ARM, 0, null, Doc.of(Map.of("depth", "outer")))
+                .push(FrameKind.ITEM, 1, null, Doc.of(Map.of("depth", "inner")));
+
+        List<?> written = (List<?>) Json.parseObject(PayloadCodec.encode(p)).get("__scopes__");
+        assertEquals("outer", ((Map<?, ?>) ((Map<?, ?>) written.getFirst()).get("view")).get("depth"),
+                "the outermost frame is written first");
+        assertEquals("inner", ((Map<?, ?>) ((Map<?, ?>) written.getLast()).get("view")).get("depth"),
+                "the innermost frame is written last");
+
+        TokenPayload back = PayloadCodec.decode(PayloadCodec.encode(p));
+        assertEquals(Doc.of(Map.of("depth", "inner")), back.top().view(),
+                "top() must still be the innermost frame after a round trip");
+    }
+
+    @Test @DisplayName("mapKey is written only for a forEach over a map, and its absence decodes as null")
+    void mapKeyIsOptional() {
+        TokenPayload arm = TokenPayload.EMPTY.push(FrameKind.ARM, 0, null, Doc.of(Map.of("a", 1L)));
+        Map<?, ?> frame = (Map<?, ?>) ((List<?>) Json.parseObject(PayloadCodec.encode(arm))
+                .get("__scopes__")).getFirst();
+        assertFalse(frame.containsKey("mapKey"),
+                "a frame with no map key must not gain one -- old rows do not carry it");
+        assertEquals("arm", frame.get("kind"), "ARM is spelled lowercase on the wire");
+        assertTrue(frame.containsKey("view"), "the view rides under its own key");
+
+        assertNull(PayloadCodec.decode("""
+                {"__scopes__":[{"kind":"arm","idx":0,"view":{}}]}""").top().mapKey());
+    }
+
+    /**
+     * A view is whatever the step returned, which is any JSON value -- a forEach over a list of
+     * numbers gives each item a bare number as its entire context. Storing one must not require it
+     * to be an object.
+     */
+    @Test @DisplayName("a scalar view survives, and so does an absent one")
+    void viewsAreAnyJsonValue() {
+        for (Object view : List.of(7L, "eu", true, List.of(1L, 2L), Map.of("k", "v"))) {
+            TokenPayload p = TokenPayload.EMPTY.push(FrameKind.ITEM, 0, null, Doc.of(view));
+            assertEquals(Doc.of(view), PayloadCodec.decode(PayloadCodec.encode(p)).top().view(),
+                    view + " must round-trip unchanged");
+        }
+        TokenPayload nullView = PayloadCodec.decode("""
+                {"__scopes__":[{"kind":"item","idx":0,"view":null}]}""");
+        assertEquals(Doc.of(null), nullView.top().view(), "a null view decodes rather than throwing");
     }
 
     @Test @DisplayName("a compensation token's snapshots ride as staged inputs")
