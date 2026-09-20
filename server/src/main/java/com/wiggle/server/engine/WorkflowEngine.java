@@ -5,7 +5,6 @@ import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
-import org.checkerframework.checker.nullness.qual.NonNull;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -219,7 +218,7 @@ public final class WorkflowEngine {
             }
             ExecutionMode mode = definitions.executionMode(tx, inst.workflow, inst.version);
             modeFactory.create(mode)
-                    .advance(new RunningModeContext(taskId, leaseOwner, result, tx, loopMaxIterations));
+                    .complete(new CompleteRunContext(locked, leaseOwner, result, tx, loopMaxIterations));
         });
     }
 
@@ -238,72 +237,13 @@ public final class WorkflowEngine {
      */
     public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
         if (steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
-        return transactions.inTx(tx -> advance0(startTaskId, leaseOwner, steps, finalHandback, tx));
-    }
-
-    private @NonNull AdvanceOutcome advance0(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback, Tx tx) {
-        Tokens.LockedTask locked = Tokens.lock(tx, startTaskId);
-        Instance inst = locked.inst();
-        long now = System.currentTimeMillis();
-        long leaseExpiry = now + defaultLeaseMillis;
-        if (!InstanceState.of(inst.status).running()) {
-            return new AdvanceOutcome(inst.status.name(), 0, null);
-        }
-        Tokens.requireLease(locked.token(), leaseOwner);
-        LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
-        return doAdvance(tx, def, inst, locked.token(), leaseOwner, steps, finalHandback, now, leaseExpiry);
-    }
-
-    private AdvanceOutcome doAdvance(Tx tx, LazyGraph def, Instance inst, Token current, String leaseOwner,
-                                     List<StepInput> steps, boolean finalHandback, long now, long leaseExpiry) {
-        String nextTaskId = null;
-        for (int i = 0; i < steps.size(); i++) {
-            StepInput step = steps.get(i);
-            Node node = def.node(current.nodeId);
-            requireMatchingNode(node, step, current);
-            NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
-            Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
-            String next = behaviour.routeReported(inst, current, node, step);
-            if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
-            String overrun = behaviour.overrunReported( current, node, step, loopMaxIterations);
-            if (overrun != null) {
-                Tokens.settle(tx, current, now);
-                instances.fail(tx, inst, overrun, now);
-                return new AdvanceOutcome(inst.status.name(), 0, null);
-            }
-            Tokens.settle(tx, current, now);
-            Token cont = Tokens.create(inst, next, current.joinStack,
-                    Scopes.stripCombineScratch(node, current.payload), now);
-            Node nextNode = def.node(next);
-            boolean lastStep = i == steps.size() - 1;
-            if ((lastStep && finalHandback) || !nextNode.isWorkerDispatched()) {
-                Instances.touch(tx, inst, now);
-                handBack(tx, def, inst, cont, nextNode, now);
-                return new AdvanceOutcome(inst.status.name(), leaseExpiry, null);
-            }
-            Tokens.createLeased(tx, cont, nextNode, leaseOwner, leaseExpiry, now);
-            LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
-                    + " chaining locally " + node.name() + " -> " + next);
-            current = cont;
-            nextTaskId = cont.id;
-        }
-        Instances.touch(tx, inst, now);
-        return new AdvanceOutcome(inst.status.name(), leaseExpiry, nextTaskId);
-    }
-
-    private static void requireMatchingNode(Node node, StepInput step, Token current) {
-        if (!node.id().equals(step.nodeId())) {
-            throw EngineException.conflict("reported step " + step.nodeId() + " but token "
-                    + current.id + " is at " + node.id());
-        }
-    }
-
-    /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */
-    private void handBack(Tx tx, LazyGraph def, Instance inst, Token cont, Node nextNode, long now) {
-        tx.insertToken(cont);
-        LOG.log(System.Logger.Level.DEBUG, () -> "advanceRun: instance " + inst.id
-                + " handing back at " + cont.nodeId + " (" + nextNode.kind() + ")");
-        drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        return transactions.inTx(tx -> {
+            Tokens.LockedTask locked = Tokens.lock(tx, startTaskId);
+            Instance inst = locked.inst();
+            ExecutionMode mode = definitions.executionMode(tx, inst.workflow, inst.version);
+            return modeFactory.create(mode).advance(new AdvanceRunContext(
+                    locked, leaseOwner, steps, finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+        });
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */
@@ -508,21 +448,6 @@ public final class WorkflowEngine {
      * sibling (JOINED), or nothing at all (DONE at an END node).
      */
     private void drive(Tx tx, LazyGraph def, Instance inst, Deque<Token> work, long now) {
-        // Caps chain DEPTH, not fan-out breadth: every extra child a fork/forEach enqueues beyond
-        // the usual single continuation grows the budget by one, so any fan-out width advances
-        // fine while a runaway chain of server-side nodes still trips the cap.
-        long budget = 10_000;
-        long guard = 0;
-        while (!work.isEmpty()) {
-            if (++guard > budget) {
-                throw new IllegalStateException("drive budget exceeded in workflow " + def.key()
-                        + ": " + guard + " advances without parking (runaway server-side node chain)");
-            }
-            Token t = work.pop();
-            int before = work.size();
-            Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
-            if (!nodeBehaviourFactory.getNodeBehaviour(s.node().kind()).advance(s)) return;
-            budget += Math.max(0, work.size() - before - 1);
-        }
+        Drive.pump(nodeBehaviourFactory, tx, def, inst, work, now);
     }
 }
