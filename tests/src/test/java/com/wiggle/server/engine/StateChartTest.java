@@ -10,14 +10,19 @@ import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -215,6 +220,56 @@ class StateChartTest {
                 .map(Enum::name).collect(Collectors.toCollection(LinkedHashSet::new));
         assertEquals(kind(StateChart.instances(), "live"), survived,
                 "the in-memory purge and the chart disagree about which states are terminal");
+    }
+
+    /** Where a class named in the prose might live. */
+    private static final List<String> PACKAGES =
+            List.of("com.wiggle.server.engine.", "com.wiggle.core.", "com.wiggle.server.store.");
+
+    /** {@code `Class.member`} in the chart's narrative text. Deliberately narrow: a member starts
+     *  lowercase, which is what keeps the ALL_CAPS state names from matching. */
+    private static final Pattern PROSE_REF = Pattern.compile("`([A-Z][A-Za-z]*)\\.([a-z][A-Za-z0-9]*)`");
+
+    /**
+     * The transition table's entry points are checked below, and the golden file is checked against
+     * its generator -- but neither looks at method names written into the prose. That is how
+     * {@code retryOrFail} survived being moved onto a state object, and how {@code reportFailure}
+     * went stale when it moved back off. Prose is documentation too, and it rots the same way.
+     */
+    @Test
+    @DisplayName("every Class.member the prose names resolves to code that exists")
+    void proseNamesRealCode() {
+        Matcher m = PROSE_REF.matcher(StateChart.render());
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> broken = new ArrayList<>();
+        while (m.find()) {
+            if (!seen.add(m.group(1) + "." + m.group(2))) continue;
+            String why = unresolved(m.group(1), m.group(2));
+            if (why != null) broken.add(why);
+        }
+        assertTrue(!seen.isEmpty(),
+                "the pattern matched nothing -- the prose changed shape, or this check stopped checking");
+        assertTrue(broken.isEmpty(), "the chart's prose names code that does not exist: " + broken
+                + ". A rename moved it; nothing else here can see prose.");
+    }
+
+    /** Null when the reference resolves, else why it does not. */
+    private static String unresolved(String simpleName, String member) {
+        Class<?> c = null;
+        for (String pkg : PACKAGES) {
+            try {
+                c = Class.forName(pkg + simpleName);
+                break;
+            } catch (ClassNotFoundException keepLooking) {
+                // the next package may have it
+            }
+        }
+        if (c == null) return simpleName + " (no such class in " + PACKAGES + ")";
+        boolean has = Stream.concat(
+                        Arrays.stream(c.getDeclaredMethods()).map(Method::getName),
+                        Arrays.stream(c.getDeclaredFields()).map(Field::getName))
+                .anyMatch(member::equals);
+        return has ? null : simpleName + "." + member + " (the class exists, the member does not)";
     }
 
     @Test
