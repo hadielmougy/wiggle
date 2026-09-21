@@ -30,7 +30,46 @@ public final class Step {
 
     private static final ThreadLocal<Info> CURRENT = new ThreadLocal<>();
 
+    /** Events emitted so far by the activity running on this thread; drained at report time. */
+    private static final ThreadLocal<java.util.List<EmittedEvent>> EMITTED = new ThreadLocal<>();
+
     private Step() {}
+
+    /** A handler-emitted event, buffered until the step's completion report ships it. */
+    public record EmittedEvent(String type, Object payload) { }
+
+    /**
+     * Emits a domain event onto the instance's event log. The event is buffered on the worker
+     * and rides the step's completion report, where the server appends it to the log in the
+     * same transaction that settles the token — so it is committed if and only if this step
+     * attempt completes. An attempt that throws after emitting leaves nothing behind; the
+     * retry emits fresh. Events surface to consumers at step completion (for LOCAL_ASYNC, at
+     * the next batch flush), not at the call.
+     *
+     * <p>{@code type} is the consumer-facing name; the {@code wf.} prefix is reserved for
+     * engine lifecycle events. {@code payload} is any JSON-mappable value, versioned by the
+     * emitter's own convention. Only valid inside an activity body.
+     */
+    public static void emit(String type, Object payload) {
+        current();
+        if (type == null || type.isBlank() || type.startsWith("wf.")) {
+            throw new IllegalArgumentException("event type must be non-blank and not start with "
+                    + "the reserved \"wf.\" prefix: " + type);
+        }
+        java.util.List<EmittedEvent> buffer = EMITTED.get();
+        if (buffer == null) {
+            buffer = new java.util.ArrayList<>(4);
+            EMITTED.set(buffer);
+        }
+        buffer.add(new EmittedEvent(type, payload));
+    }
+
+    /** Takes (and clears) the events this step has emitted; the worker ships them with its report. */
+    static java.util.List<EmittedEvent> drainEmitted() {
+        java.util.List<EmittedEvent> buffer = EMITTED.get();
+        EMITTED.remove();
+        return buffer == null ? java.util.List.of() : buffer;
+    }
 
     /** The engine-global attempt number: 1 on the first try, incremented on every retry. */
     public static int attempt() { return current().attempt(); }
@@ -105,5 +144,8 @@ public final class Step {
 
     static void begin(Info info) { CURRENT.set(info); }
 
-    static void end() { CURRENT.remove(); }
+    static void end() {
+        CURRENT.remove();
+        EMITTED.remove();   // an attempt that failed before draining must not leak into the next task
+    }
 }

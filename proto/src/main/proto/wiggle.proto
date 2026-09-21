@@ -267,6 +267,15 @@ message TaskList {
     int64 retry_after_millis = 2;
 }
 
+// A handler-emitted event riding a completion report. The server appends it to the event
+// log in the same transaction that settles the token, so a retried attempt never leaves
+// one behind and a duplicate completion never appends twice. instance/workflow/correlation
+// and seq are filled server-side from the token; the handler supplies only these two fields.
+message EmittedEvent {
+    string type = 1;                       // handler-chosen; "wf." is reserved for lifecycle events
+    google.protobuf.Value payload = 2;
+}
+
 // One locally-executed step reported back to the server (LOCAL_SYNC/LOCAL_ASYNC).
 message StepResult {
     string node_id = 1;
@@ -274,6 +283,7 @@ message StepResult {
         google.protobuf.Value merge = 2;   // TASK: shallow diff to merge into context
         bool predicate_value = 3;          // PREDICATE: branch selector
     }
+    repeated EmittedEvent events = 4;      // emitted during this step, in emission order
 }
 
 message AdvanceRunRequest {
@@ -297,6 +307,7 @@ message TaskResultRequest {
     string task_id = 1;
     string lease_owner = 2;
     google.protobuf.Value result = 3;
+    repeated EmittedEvent events = 4;      // emitted during this step, in emission order
 }
 
 message TaskFailureRequest {
