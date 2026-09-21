@@ -53,11 +53,17 @@ public final class Worker implements AutoCloseable {
         this(client, workerId, WorkerOptions.defaults());
     }
 
+    /** Collapses concurrent LOCAL_ASYNC final handbacks into one AdvanceMany call. */
+    private final HandbackBatcher handbacks;
+
     public Worker(WiggleClient client, String workerId, WorkerOptions options) {
         this.client = client;
         this.workerId = workerId;
         this.options = options;
+        this.handbacks = new HandbackBatcher(client, options.localBatchSize());
     }
+
+    HandbackBatcher handbacks() { return handbacks; }
 
     public String workerId() { return workerId; }
 
@@ -272,7 +278,8 @@ public final class Worker implements AutoCloseable {
     public void close() {
         if (!running.compareAndSet(true, false)) return;
         if (pollThread != null) pollThread.interrupt();
-        awaitExecutor();
+        awaitExecutor();          // in-flight runs may still submit handbacks while draining
+        handbacks.close();
         if (heartbeats != null) heartbeats.shutdownNow();
     }
 

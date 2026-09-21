@@ -20,6 +20,7 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -368,22 +369,52 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceRun taskId=" + req.getTaskId()
                 + " leaseOwner=" + req.getLeaseOwner() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
         run(resp, () -> {
-            List<WorkflowEngine.StepInput> steps = new ArrayList<>(req.getStepsCount());
-            for (StepResult s : req.getStepsList()) {
-                Object merge = s.getOutcomeCase() == StepResult.OutcomeCase.MERGE
-                        ? ProtoJson.fromValue(s.getMerge()) : null;
-                Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
-                        ? s.getPredicateValue() : null;
-                steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate));
-            }
             WorkflowEngine.AdvanceOutcome out =
-                    engine.advance(req.getTaskId(), req.getLeaseOwner(), steps, req.getFinal());
+                    engine.advance(req.getTaskId(), req.getLeaseOwner(), stepInputs(req), req.getFinal());
             return AdvanceRunResult.newBuilder()
                     .setInstanceStatus(out.instanceStatus())
                     .setLeaseExpiresAt(out.leaseExpiresAt())
                     .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId())
                     .build();
         });
+    }
+
+    @Override
+    public void advanceMany(AdvanceManyRequest req, StreamObserver<AdvanceManyResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceMany runs=" + req.getRunsCount());
+        run(resp, () -> {
+            List<WorkflowEngine.Run> runs = new ArrayList<>(req.getRunsCount());
+            for (AdvanceRunRequest r : req.getRunsList()) {
+                runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), stepInputs(r), r.getFinal()));
+            }
+            Map<String, WorkflowEngine.RunResult> results = engine.advanceMany(runs);
+            AdvanceManyResult.Builder out = AdvanceManyResult.newBuilder();
+            results.forEach((taskId, r) -> {
+                RunOutcome.Builder one = RunOutcome.newBuilder().setTaskId(taskId);
+                if (r.ok()) {
+                    one.setOutcome(AdvanceRunResult.newBuilder()
+                            .setInstanceStatus(r.outcome().instanceStatus())
+                            .setLeaseExpiresAt(r.outcome().leaseExpiresAt())
+                            .setNextTaskId(r.outcome().nextTaskId() == null ? "" : r.outcome().nextTaskId()));
+                } else {
+                    one.setErrorStatus(r.errorStatus()).setError(r.error() == null ? "" : r.error());
+                }
+                out.addResults(one);
+            });
+            return out.build();
+        });
+    }
+
+    private static List<WorkflowEngine.StepInput> stepInputs(AdvanceRunRequest req) {
+        List<WorkflowEngine.StepInput> steps = new ArrayList<>(req.getStepsCount());
+        for (StepResult s : req.getStepsList()) {
+            Object merge = s.getOutcomeCase() == StepResult.OutcomeCase.MERGE
+                    ? ProtoJson.fromValue(s.getMerge()) : null;
+            Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
+                    ? s.getPredicateValue() : null;
+            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate));
+        }
+        return steps;
     }
 
     private ClusterView clusterView() {
