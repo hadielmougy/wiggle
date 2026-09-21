@@ -38,6 +38,11 @@ service WiggleControlPlane {
     // Applies an ordered run of locally-executed steps atomically, keeps the lease, and reports
     // whether the worker should keep going (LOCAL_SYNC / LOCAL_ASYNC execution).
     rpc AdvanceRun(AdvanceRunRequest) returns (AdvanceRunResult);
+
+    // The event feed: pull-and-ack over the durable per-cell event log. A consumer is a
+    // named cursor; PollEvents long-polls like PollTasks, AckEvents advances the cursor.
+    rpc PollEvents(PollEventsRequest) returns (EventList);
+    rpc AckEvents(AckEventsRequest) returns (Ack);
 }
 
 message Empty {}
@@ -309,4 +314,37 @@ message HeartbeatRequest {
 
 message HeartbeatResult {
     int64 lease_expires_at = 1;
+}
+
+message PollEventsRequest {
+    string consumer = 1;          // named cursor; the first poll registers it
+    int32 max = 2;
+    int64 wait_millis = 3;        // long-poll, clamped like PollTasks
+    // Start position when the first poll creates the cursor; ignored once it exists.
+    // 0 = tail (only events appended from now on), -1 = earliest retained, else a seq.
+    int64 start_from = 4;
+}
+
+message EventView {
+    int64 seq = 1;                // per-cell, gapless-not-guaranteed, strictly increasing
+    string instance_id = 2;
+    string workflow = 3;
+    int32 version = 4;
+    string correlation_id = 5;
+    string type = 6;              // STARTED | COMPLETED | FAILED | CANCELLED
+                                  // | COMPENSATING | COMPENSATED | COMPENSATION_FAILED
+    int64 created_at = 7;
+    google.protobuf.Value payload = 8;
+}
+
+message EventList {
+    repeated EventView events = 1;
+    // Same backpressure hint as TaskList: when > 0, hold off this many millis before
+    // polling again.
+    int64 retry_after_millis = 2;
+}
+
+message AckEventsRequest {
+    string consumer = 1;
+    int64 acked_seq = 2;          // cumulative: acknowledges every event with seq <= this
 }
