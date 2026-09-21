@@ -137,11 +137,11 @@ locked-down environments). Each release attaches `wiggle-server-<version>.tar`/`
 `SHA-256SUMS`:
 
 ```bash
-tar xf wiggle-server-0.0.7.tar
+tar xf wiggle-server-0.0.8.tar
 sha256sum -c SHA-256SUMS           # optional: verify the download
 WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   WIGGLE_JDBC_USER=wiggle WIGGLE_JDBC_PASSWORD=wiggle \
-  ./wiggle-server-0.0.7/bin/wiggle
+  ./wiggle-server-0.0.8/bin/wiggle
 ```
 
 As a container — one image bundles **every** storage backend; the JDBC URL scheme picks one at
@@ -153,8 +153,8 @@ environment prefers:
 docker run --rm -p 8080:8080 \
   -e WIGGLE_JDBC_URL=jdbc:postgresql://db:5432/wiggle \
   -e WIGGLE_JDBC_USER=wiggle -e WIGGLE_JDBC_PASSWORD=wiggle \
-  hadielmougy/wiggle:0.0.7                 # Docker Hub
-  # ghcr.io/hadielmougy/wiggle:0.0.7       # …or GHCR (same image)
+  hadielmougy/wiggle:0.0.8                 # Docker Hub
+  # ghcr.io/hadielmougy/wiggle:0.0.8       # …or GHCR (same image)
 ```
 
 **Clustering is just a shared database.** Point several nodes at one PostgreSQL and they form a
@@ -568,16 +568,16 @@ Suggestions and PRs welcome — open an issue.
 **Install** (Maven Central, `sh.wiggle`):
 
 ```kotlin
-implementation("sh.wiggle:wiggle-client:0.0.7")     // DSL + worker + client
-implementation("sh.wiggle:wiggle-server:0.0.7")     // only to embed the server
-implementation("sh.wiggle:wiggle-postgres:0.0.7")   // + your storage module
+implementation("sh.wiggle:wiggle-client:0.0.8")     // DSL + worker + client
+implementation("sh.wiggle:wiggle-server:0.0.8")     // only to embed the server
+implementation("sh.wiggle:wiggle-postgres:0.0.8")   // + your storage module
 ```
 
 Prefer the **BOM** so every wiggle module (and the shared gRPC/protobuf stack) stays version-aligned
 with no per-dependency pins:
 
 ```kotlin
-implementation(platform("sh.wiggle:wiggle-bom:0.0.7"))
+implementation(platform("sh.wiggle:wiggle-bom:0.0.8"))
 implementation("sh.wiggle:wiggle-client")            // versions come from the BOM
 ```
 
@@ -586,7 +586,7 @@ gRPC, protobuf and Guava relocated under `com.wiggle.shaded`, so it has **zero t
 dependencies** and cannot clash with anything already on the app's classpath:
 
 ```kotlin
-implementation("sh.wiggle:wiggle-client-all:0.0.7")  // author flows + run workers, nothing else
+implementation("sh.wiggle:wiggle-client-all:0.0.8")  // author flows + run workers, nothing else
 ```
 
 **Build from source** — JDK 21+, wrapper included:
