@@ -24,9 +24,11 @@ class PortForwards:
     def __init__(self):
         self._procs: dict[str, tuple[subprocess.Popen, int]] = {}
 
-    def ensure(self, key: str, svc: str, remote_port: int, local_port: int, wait: float = 10.0) -> str:
-        """Ensure a forward svc/<svc>:remote -> 127.0.0.1:local is live; returns the gRPC target
-        string ``127.0.0.1:<local_port>`` (ready to hand to grpc.insecure_channel)."""
+    def ensure(self, key: str, svc: str, remote_port: int, local_port: int, wait: float = 10.0,
+               resource: str = "svc") -> str:
+        """Ensure a forward <resource>/<svc>:remote -> 127.0.0.1:local is live; returns the gRPC
+        target string ``127.0.0.1:<local_port>`` (ready to hand to grpc.insecure_channel).
+        ``resource`` is ``svc`` (default) or ``pod`` for a forward pinned to one backing pod."""
         existing = self._procs.get(key)
         if existing and existing[0].poll() is None and _port_open(existing[1]):
             return f"127.0.0.1:{existing[1]}"
@@ -34,7 +36,7 @@ class PortForwards:
             self.stop(key)
         proc = subprocess.Popen(
             ["kubectl", "--context", kind.context(), "-n", C.K8S_NAMESPACE,
-             "port-forward", f"svc/{svc}", f"{local_port}:{remote_port}"],
+             "port-forward", f"{resource}/{svc}", f"{local_port}:{remote_port}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         self._procs[key] = (proc, local_port)

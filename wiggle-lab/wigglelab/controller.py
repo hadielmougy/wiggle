@@ -404,6 +404,28 @@ class Lab:
     def stop_forward_cell(self, cell: str):
         self.pf.stop(f"cell:{cell}")
 
+    # ---- per-pod forwards: a cell Service balances over its pods, so reaching ONE node (its
+    # health port, its gRPC as the leader or a follower specifically) needs a forward pinned to
+    # the pod. Pod names churn on restart; a stale forward just dies with its pod, and the
+    # status map only ever reports live pods.
+    def _pod_local_port(self, pod: str) -> int:
+        names = sorted(p["name"] for p in self.pods(role="cell"))
+        idx = names.index(pod) if pod in names else len(names)
+        return C.POD_LOCAL_PORT_BASE + idx
+
+    def forward_pod(self, pod: str) -> str:
+        self.pf.ensure(f"pod:{pod}", pod, C.CELL_GRPC_PORT, self._pod_local_port(pod),
+                       resource="pod")
+        return self.pf.target(f"pod:{pod}") or ""
+
+    def stop_forward_pod(self, pod: str):
+        self.pf.stop(f"pod:{pod}")
+
+    def pod_forward_status(self, cell: str | None = None) -> dict[str, str | None]:
+        """Live local address per cell pod (None if not forwarded)."""
+        return {p["name"]: self.pf.target(f"pod:{p['name']}")
+                for p in self.pods(role="cell", cell=cell)}
+
     # ---- ops console (per-namespace pod: a gRPC client of the coordinator + the web UI) ----
     @record
     def deploy_console(self, target: str, password: str | None = None,

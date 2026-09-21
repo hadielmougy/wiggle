@@ -29,6 +29,7 @@ DB_PORT = 5432
 COORD_LOCAL_PORT = int(os.environ.get("WIGGLE_LAB_COORD_LOCAL_PORT", "18099"))
 CELL_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CELL_LOCAL_PORT_BASE", "18100"))
 CONSOLE_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CONSOLE_LOCAL_PORT_BASE", "18300"))
+POD_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_POD_LOCAL_PORT_BASE", "18500"))
 
 # The coordinator's own small database -- separate from every cell's on purpose: a cell must never
 # know about coordinators, and the two are linked by nothing but the gRPC contract. Replicas share
