@@ -118,12 +118,12 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public String start(FlowSpec flowSpec, Object context) {
-        return start(flowSpec.name(), com.wiggle.core.RecordMapper.toJson(context), flowSpec.version(), null);
+        return start(flowSpec.name(), context, flowSpec.version(), null);
     }
 
     public String start(String workflow, Object context, Integer version, String correlationId) {
         StartInstanceRequest.Builder req = StartInstanceRequest.newBuilder().setWorkflow(workflow);
-        if (context != null) req.setContext(ProtoJson.toValue(context));
+        if (context != null) req.setContext(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(context)));
         if (version != null) req.setVersion(version);
         if (correlationId != null) req.setCorrelationId(correlationId);
         return call(() -> stub.startInstance(req.build())).getInstanceId();
@@ -238,7 +238,7 @@ public final class WiggleClient implements AutoCloseable {
         TaskResultRequest.Builder req = TaskResultRequest.newBuilder()
                 .setTaskId(taskId)
                 .setLeaseOwner(leaseOwner);
-        if (result != null) req.setResult(ProtoJson.toValue(result));
+        if (result != null) req.setResult(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(result)));
         call(() -> stub.completeTask(req.build()));
     }
 
@@ -254,7 +254,7 @@ public final class WiggleClient implements AutoCloseable {
     /** Delivers a named signal to a running instance; {@code payload} merges into its context. */
     public void signal(String instanceId, String signal, Object payload) {
         SignalRequest.Builder req = SignalRequest.newBuilder().setInstanceId(instanceId).setSignal(signal);
-        if (payload != null) req.setPayload(ProtoJson.toValue(payload));
+        if (payload != null) req.setPayload(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(payload)));
         call(() -> stub.signalInstance(req.build()));
     }
 
@@ -262,7 +262,7 @@ public final class WiggleClient implements AutoCloseable {
     public String createSchedule(String workflow, java.time.Duration every, Object context) {
         CreateScheduleRequest.Builder req = CreateScheduleRequest.newBuilder()
                 .setWorkflow(workflow).setEveryMillis(every.toMillis());
-        if (context != null) req.setContext(ProtoJson.toValue(context));
+        if (context != null) req.setContext(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(context)));
         return call(() -> stub.createSchedule(req.build())).getId();
     }
 
@@ -270,7 +270,7 @@ public final class WiggleClient implements AutoCloseable {
     public String createCronSchedule(String workflow, String cron, Object context) {
         CreateScheduleRequest.Builder req = CreateScheduleRequest.newBuilder()
                 .setWorkflow(workflow).setCron(cron);
-        if (context != null) req.setContext(ProtoJson.toValue(context));
+        if (context != null) req.setContext(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(context)));
         return call(() -> stub.createSchedule(req.build())).getId();
     }
 
