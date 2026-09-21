@@ -119,3 +119,10 @@ tasks.register<JavaExec>("sagaLoad") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.SagaLoadBench")
 }
+
+tasks.register<JavaExec>("runSandbox") {
+    group = "application"
+    description = "Runs the context-integrity sandbox against a server on 127.0.0.1:18100."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.sandbox.WorkerMain")
+}

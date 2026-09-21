@@ -6,7 +6,8 @@ import java.util.Set;
 /** Worker tuning. Defaults are chosen for interactive workloads, not throughput benchmarks. */
 public record WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
                             Duration idleBackoff, Duration errorBackoff,
-                            int localBatchSize, Set<String> queues, Duration awaitRegistration) {
+                            int localBatchSize, Set<String> queues, Duration awaitRegistration,
+                            boolean crossInstanceBatching) {
 
     public WorkerOptions {
         if (localBatchSize < 1) throw new IllegalArgumentException("localBatchSize must be >= 1");
@@ -17,22 +18,34 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
     public static WorkerOptions defaults() {
         return new WorkerOptions(Runtime.getRuntime().availableProcessors(),
                 Duration.ofSeconds(30), Duration.ofSeconds(10),
-                Duration.ofMillis(200), Duration.ofSeconds(2), 64, Set.of(), Duration.ZERO);
+                Duration.ofMillis(200), Duration.ofSeconds(2), 64, Set.of(), Duration.ZERO, false);
+    }
+
+    /**
+     * Ships LOCAL_ASYNC final handbacks for DIFFERENT instances in one AdvanceMany call
+     * (default off). Pays where the server is a real network hop away -- N report RPCs
+     * become one -- and measurably costs where it is not: on a local or same-host deployment
+     * the RPCs it collapses are nearly free, while the batch couples instances into shared
+     * transactions. Measured either way; leave it off unless your RTT says otherwise.
+     */
+    public WorkerOptions withCrossInstanceBatching(boolean on) {
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
+                localBatchSize, queues, awaitRegistration, on);
     }
 
     public WorkerOptions withConcurrency(int c) {
         return new WorkerOptions(c, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching);
     }
 
     public WorkerOptions withLease(Duration d) {
         return new WorkerOptions(concurrency, d, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching);
     }
 
     public WorkerOptions withLongPollWait(Duration d) {
         return new WorkerOptions(concurrency, lease, d, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching);
     }
 
     /**
@@ -42,7 +55,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withLocalBatchSize(int size) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                size, queues, awaitRegistration);
+                size, queues, awaitRegistration, crossInstanceBatching);
     }
 
     /**
@@ -52,7 +65,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withQueues(String... only) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, Set.of(only), awaitRegistration);
+                localBatchSize, Set.of(only), awaitRegistration, crossInstanceBatching);
     }
 
     /**
@@ -63,6 +76,6 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withAwaitRegistration(Duration d) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, d);
+                localBatchSize, queues, d, crossInstanceBatching);
     }
 }

@@ -311,6 +311,37 @@ public final class WiggleClient implements AutoCloseable {
     /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
     public record StepReport(String nodeId, Object merge, Boolean predicateValue) {}
 
+    /** One run of a cross-instance batch: exactly the arguments of {@link #advanceRun}. */
+    public record RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback) {}
+
+    /** A run's fate in a batch: the single-run result, or the status and message it would have
+     *  thrown. A rejected run wrote nothing and may be reported again -- singly, per the message. */
+    public record RunOutcome(com.wiggle.core.AdvanceResult outcome, int errorStatus, String error) {
+        public boolean ok() { return outcome != null; }
+    }
+
+    /**
+     * Reports N independent runs in one call and one server-side commit. Every run is exactly an
+     * {@link #advanceRun}; answers are keyed by task id, one per submitted run.
+     */
+    public Map<String, RunOutcome> advanceMany(List<RunSubmission> runs) {
+        AdvanceManyRequest.Builder req = AdvanceManyRequest.newBuilder();
+        for (RunSubmission run : runs) {
+            AdvanceRunRequest.Builder one = AdvanceRunRequest.newBuilder()
+                    .setTaskId(run.taskId()).setLeaseOwner(run.leaseOwner()).setFinal(run.finalHandback());
+            for (StepReport s : run.steps()) one.addSteps(Wire.stepResult(s));
+            req.addRuns(one);
+        }
+        AdvanceManyResult res = call(() -> stub.advanceMany(req.build()));
+        Map<String, RunOutcome> out = new java.util.LinkedHashMap<>();
+        for (com.wiggle.proto.RunOutcome r : res.getResultsList()) {
+            out.put(r.getTaskId(), r.getErrorStatus() == 0 && r.hasOutcome()
+                    ? new RunOutcome(Wire.advanceResult(r.getOutcome()), 0, null)
+                    : new RunOutcome(null, r.getErrorStatus(), r.getError()));
+        }
+        return out;
+    }
+
     private interface Call<T> { T run(); }
 
     // Every client and worker operation routes through call(), so the shared UNAVAILABLE retry

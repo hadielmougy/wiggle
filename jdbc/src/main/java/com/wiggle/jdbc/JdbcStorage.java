@@ -775,14 +775,49 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=?,term_reason=?," +
+                "error=?,context=?,updated_at=?,revision=revision+1 WHERE id=?";
+
         @Override public void updateInstance(Instance i) {
-            try (PreparedStatement p = ps("UPDATE wf_instance SET status=?,term_reason=?,error=?,context=?," +
-                    "updated_at=?,revision=revision+1 WHERE id=?")) {
-                p.setString(1, i.status.name()); p.setString(2, i.terminationReason); p.setString(3, i.error);
-                p.setString(4, i.context.json()); p.setLong(5, i.updatedAt); p.setString(6, i.id);
+            try (PreparedStatement p = ps(UPDATE_INSTANCE)) {
+                bindInstanceUpdate(p, i);
                 p.executeUpdate();
                 i.revision++;
             } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Instance> lockInstances(List<String> ids) {
+            if (ids.isEmpty()) return List.of();
+            // ORDER BY id keeps lock acquisition in id order on a btree PK scan; see Tx.lockInstances.
+            // SKIP LOCKED where the dialect has it: a batch must never WAIT on an instance another
+            // batch holds -- two workers whose batches share one instance (two arms of one fork)
+            // would otherwise convoy, each batch serialising behind the other's whole commit. A
+            // skipped instance is simply absent from the result; the caller answers its run as
+            // retryable and the worker reports it singly.
+            String sql = "SELECT * FROM wf_instance WHERE id IN (" + placeholders(ids.size())
+                    + ") ORDER BY id FOR UPDATE" + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : "");
+            try (PreparedStatement p = ps(sql)) {
+                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Instance> out = new ArrayList<>(ids.size());
+                    while (rs.next()) out.add(readInstance(rs));
+                    return out;
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void updateInstances(List<Instance> instances) {
+            if (instances.isEmpty()) return;
+            try (PreparedStatement p = ps(UPDATE_INSTANCE)) {
+                for (Instance i : instances) { bindInstanceUpdate(p, i); p.addBatch(); }
+                requireOneRowEach(p.executeBatch(), "update wf_instance");
+                for (Instance i : instances) i.revision++;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        private static void bindInstanceUpdate(PreparedStatement p, Instance i) throws SQLException {
+            p.setString(1, i.status.name()); p.setString(2, i.terminationReason); p.setString(3, i.error);
+            p.setString(4, i.context.json()); p.setLong(5, i.updatedAt); p.setString(6, i.id);
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
@@ -823,12 +858,22 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version," +
+                "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack," +
+                "last_error,created_at,updated_at,payload,comp_seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
         @Override public void insertToken(Token t) {
-            try (PreparedStatement p = ps("INSERT INTO wf_token (id,instance_id,workflow,version,node_id,kind,status," +
-                    "activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,last_error,created_at,updated_at," +
-                    "payload,comp_seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+            try (PreparedStatement p = ps(INSERT_TOKEN)) {
                 bindToken(p, t);
                 p.executeUpdate();
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void insertTokens(List<Token> tokens) {
+            if (tokens.isEmpty()) return;
+            try (PreparedStatement p = ps(INSERT_TOKEN)) {
+                for (Token t : tokens) { bindToken(p, t); p.addBatch(); }
+                requireOneRowEach(p.executeBatch(), "insert wf_token");
             } catch (SQLException e) { throw wrap(e); }
         }
 
@@ -855,6 +900,10 @@ public final class JdbcStorage implements Storage {
             setNullableLong(p, 19, t.compSeq);
         }
 
+        private static String placeholders(int n) {
+            return "?,".repeat(n - 1) + "?";
+        }
+
         private static void setNullableLong(PreparedStatement p, int idx, Long v) throws SQLException {
             if (v == null) p.setNull(idx, java.sql.Types.BIGINT);
             else p.setLong(idx, v);
@@ -865,6 +914,19 @@ public final class JdbcStorage implements Storage {
                 p.setString(1, id);
                 try (ResultSet rs = p.executeQuery()) {
                     return rs.next() ? Optional.of(readToken(rs)) : Optional.empty();
+                }
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public List<Token> findTokens(List<String> ids) {
+            if (ids.isEmpty()) return List.of();
+            String sql = "SELECT * FROM wf_token WHERE id IN (" + placeholders(ids.size()) + ")";
+            try (PreparedStatement p = ps(sql)) {
+                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
+                try (ResultSet rs = p.executeQuery()) {
+                    List<Token> out = new ArrayList<>(ids.size());
+                    while (rs.next()) out.add(readToken(rs));
+                    return out;
                 }
             } catch (SQLException e) { throw wrap(e); }
         }
@@ -888,19 +950,45 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=?,kind=?,status=?," +
+                "activity=?,queue=?,attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?," +
+                "last_error=?,updated_at=?,payload=?,comp_seq=? WHERE id=?";
+
         @Override
         public void updateToken(Token t) {
-            try (PreparedStatement p = ps("UPDATE wf_token SET node_id=?,kind=?,status=?,activity=?,queue=?," +
-                    "attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?,last_error=?,updated_at=?," +
-                    "payload=?,comp_seq=? WHERE id=?")) {
-                p.setString(1, t.nodeId); p.setString(2, t.kind.name()); p.setString(3, t.status.name());
-                p.setString(4, t.activity); p.setString(5, t.queue); p.setInt(6, t.attempt);
-                p.setLong(7, t.availableAt); p.setString(8, t.leaseOwner); p.setLong(9, t.leaseExpiresAt);
-                p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
-                p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
-                setNullableLong(p, 14, t.compSeq); p.setString(15, t.id);
+            try (PreparedStatement p = ps(UPDATE_TOKEN)) {
+                bindTokenUpdate(p, t);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public void updateTokens(List<Token> tokens) {
+            if (tokens.isEmpty()) return;
+            try (PreparedStatement p = ps(UPDATE_TOKEN)) {
+                for (Token t : tokens) { bindTokenUpdate(p, t); p.addBatch(); }
+                requireOneRowEach(p.executeBatch(), "update wf_token");
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        private static void bindTokenUpdate(PreparedStatement p, Token t) throws SQLException {
+            p.setString(1, t.nodeId); p.setString(2, t.kind.name()); p.setString(3, t.status.name());
+            p.setString(4, t.activity); p.setString(5, t.queue); p.setInt(6, t.attempt);
+            p.setLong(7, t.availableAt); p.setString(8, t.leaseOwner); p.setLong(9, t.leaseExpiresAt);
+            p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
+            p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
+            setNullableLong(p, 14, t.compSeq); p.setString(15, t.id);
+        }
+
+        /** A count that is not one row means a buffered write ran out of order (an update flushed
+         *  before its insert, say). Refusing turns silent corruption into a rollback the batch
+         *  caller replays run by run. */
+        private static void requireOneRowEach(int[] counts, String what) {
+            for (int c : counts) {
+                if (c != 1 && c != PreparedStatement.SUCCESS_NO_INFO) {
+                    throw new IllegalStateException(what + ": batched statement touched " + c
+                            + " rows where exactly 1 was expected");
+                }
+            }
         }
 
         @Override

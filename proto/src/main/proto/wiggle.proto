@@ -38,6 +38,11 @@ service WiggleControlPlane {
     // Applies an ordered run of locally-executed steps atomically, keeps the lease, and reports
     // whether the worker should keep going (LOCAL_SYNC / LOCAL_ASYNC execution).
     rpc AdvanceRun(AdvanceRunRequest) returns (AdvanceRunResult);
+    // Applies N independent single-instance runs in one call and one commit (LOCAL_ASYNC final
+    // handbacks). Every run is exactly an AdvanceRun; a rejected run wrote nothing and carries
+    // the status and message the single-run path would have thrown, so the caller can retry it
+    // singly. Answers are keyed by task id, one per submitted run.
+    rpc AdvanceMany(AdvanceManyRequest) returns (AdvanceManyResult);
 }
 
 message Empty {}
@@ -286,6 +291,21 @@ message AdvanceRunResult {
                                            // | COMPENSATING | COMPENSATED | COMPENSATION_FAILED
     int64 lease_expires_at = 2;            // renewed lease covering continued local execution
     string next_task_id = 3;              // token to reference for the next local step (blank if handed back)
+}
+
+message AdvanceManyRequest {
+    repeated AdvanceRunRequest runs = 1;
+}
+
+message RunOutcome {
+    string task_id = 1;
+    AdvanceRunResult outcome = 2;          // set when the run applied (error_status == 0)
+    int32 error_status = 3;                // 0 ok; else the status the single path would throw
+    string error = 4;
+}
+
+message AdvanceManyResult {
+    repeated RunOutcome results = 1;
 }
 
 message TaskResultRequest {

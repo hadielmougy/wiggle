@@ -88,6 +88,10 @@ public final class InMemoryStorage implements Storage {
 
     private final class MemTx implements Tx {
 
+        /** Writes apply directly under the storage lock; a throw undoes nothing. */
+        @Override public boolean transactional() { return false; }
+
+
         @Override public void putDefinition(String name, int version, String json,
                                             String fingerprint, String fingerprintAlgo) {
             if (definitions.containsKey(name + ":" + version)) return;

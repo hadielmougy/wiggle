@@ -18,20 +18,67 @@ import java.util.Set;
  */
 public interface Tx extends GraphStore {
 
+    /**
+     * Whether a throw rolls this transaction's writes back. The in-memory store answers false:
+     * it applies writes directly and cannot undo them. Write-buffering keys off this -- deferring
+     * writes that a rollback cannot reclaim would let a mid-transaction throw discard the buffer
+     * while already-issued writes stand, leaving a state no execution could have produced.
+     */
+    default boolean transactional() { return true; }
+
     void insertInstance(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
+
+    /**
+     * {@code lockInstance} for a set of rows, {@code ids} already sorted ascending. The default
+     * loops -- exactly today's one-lock-per-statement, in the caller's order. A JDBC backend
+     * overrides it with one {@code WHERE id IN (...) ORDER BY id FOR UPDATE}: on a btree primary
+     * key the scan yields ascending ids with no separate sort node, so rows lock in id order, and
+     * two overlapping statements of this same shape acquire in the same global order -- no cycle.
+     * Were a planner ever to reorder, the deadlock is detected by the database and surfaces as
+     * the throw the batch's replay path already handles. Missing ids are simply absent.
+     */
+    default List<Instance> lockInstances(List<String> ids) {
+        List<Instance> out = new java.util.ArrayList<>(ids.size());
+        for (String id : ids) lockInstance(id).ifPresent(out::add);
+        return out;
+    }
     Optional<Instance> findInstance(String id);
     void updateInstance(Instance instance);
+
+    /** {@code updateInstance} for a set of rows; same contract as {@link #insertTokens}. */
+    default void updateInstances(List<Instance> instances) {
+        for (Instance i : instances) updateInstance(i);
+    }
     List<Instance> listInstances(String workflow, InstanceStatus status, int limit);
     /** Instances started with {@code correlationId} (a business key), newest first. */
     List<Instance> findByCorrelation(String correlationId, int limit);
     int countInstances(InstanceStatus status);
 
     void insertToken(Token token);
+
+    /** {@code insertToken} for a set of rows. The default loops; a JDBC backend overrides it with
+     *  one {@code executeBatch}, which is where a cross-instance batch actually saves round-trips. */
+    default void insertTokens(List<Token> tokens) {
+        for (Token t : tokens) insertToken(t);
+    }
     Optional<Token> findToken(String id);
+
+    /** {@code findToken} for a set of ids: any order, missing ids absent. The default loops; a
+     *  JDBC backend overrides it with one {@code WHERE id IN} read. */
+    default List<Token> findTokens(List<String> ids) {
+        List<Token> out = new java.util.ArrayList<>(ids.size());
+        for (String id : ids) findToken(id).ifPresent(out::add);
+        return out;
+    }
     List<Token> tokensOf(String instanceId);
     void updateToken(Token token);
+
+    /** {@code updateToken} for a set of rows; same contract as {@link #insertTokens}. */
+    default void updateTokens(List<Token> tokens) {
+        for (Token t : tokens) updateToken(t);
+    }
 
     List<String> joinStacksAt(String instanceId, String nodeId);
 

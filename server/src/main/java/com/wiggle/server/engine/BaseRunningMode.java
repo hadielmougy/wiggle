@@ -31,6 +31,10 @@ abstract class BaseRunningMode implements RunningMode {
         this.definitions = definitions;
     }
 
+    final DefinitionRegistry definitions() {
+        return definitions;
+    }
+
     /** Applies one reported result to the task token, then drives the continuation to its park. */
     final void completeStep(CompleteRunContext ctx) {
         Tx tx           = ctx.tx();
@@ -80,7 +84,7 @@ abstract class BaseRunningMode implements RunningMode {
         for (int i = 0; i < steps.size(); i++) {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
-            requireMatchingNode(node, step, current);
+            requireMatchingNode(current, step);
             NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
             StepReport report = StepReport.of(step);
@@ -112,10 +116,11 @@ abstract class BaseRunningMode implements RunningMode {
         return new AdvanceOutcome(inst.status.name(), leaseExpiry, nextTaskId);
     }
 
-    private static void requireMatchingNode(Node node, StepInput step, Token current) {
-        if (!node.id().equals(step.nodeId())) {
+    /** A reported step must name the node its token is actually at; shared with batch validate. */
+    static void requireMatchingNode(Token current, StepInput step) {
+        if (!current.nodeId.equals(step.nodeId())) {
             throw EngineException.conflict("reported step " + step.nodeId() + " but token "
-                    + current.id + " is at " + node.id());
+                    + current.id + " is at " + current.nodeId);
         }
     }
 

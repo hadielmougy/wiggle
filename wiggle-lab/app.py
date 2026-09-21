@@ -422,6 +422,22 @@ with forwards:
             action(f"Forward {cell}", lab.forward_cell, cell)
             st.rerun()
 
+        # The Service balances over this cell's pods; these rows pin a forward to ONE pod, for
+        # talking to a specific node (the leader, a follower, a pod being debugged).
+        pod_status = lab.pod_forward_status(cell)
+        for pod, paddr in pod_status.items():
+            p1, p2, p3 = st.columns([2, 3, 1.3])
+            p1.markdown(f"&nbsp;&nbsp;&nbsp;↳ `{pod}`")
+            p2.code(paddr or "— not forwarded —", language=None)
+            if paddr:
+                p2.caption(f"this pod only: WIGGLE_URL={paddr}")
+                if p3.button("Stop", key=f"fw-stop-pod-{pod}"):
+                    lab.stop_forward_pod(pod)
+                    st.rerun()
+            elif p3.button("Forward", key=f"fw-pod-{pod}"):
+                action(f"Forward {pod}", lab.forward_pod, pod)
+                st.rerun()
+
     st.divider()
     st.markdown("**Ops console (web UI)**")
     st.caption("The console is a pod serving the web UI: a pure gRPC client. Point it at a **standalone "
