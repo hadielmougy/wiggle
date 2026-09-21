@@ -23,6 +23,13 @@ import java.util.List;
  *
  * <p>{@link #flush()} must be called before the transaction body returns: the wrapper cannot know
  * when the underlying transaction is about to commit, and unflushed writes are simply lost.
+ *
+ * <p>Correctness picks the flush points, not throughput: a compensable step, for one, reads the
+ * compensation log to number its entry, and that read flushes everything accumulated so far. A
+ * saga-heavy batch therefore batches less -- by design, since the alternative is a stale sequence.
+ *
+ * <p>Wrap only a transaction that rolls back ({@link Tx#transactional()}): a buffer discarded by a
+ * throw is only correct when the writes already issued are discarded with it.
  */
 public interface BufferedTx extends Tx {
 

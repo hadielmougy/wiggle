@@ -18,6 +18,14 @@ import java.util.Set;
  */
 public interface Tx extends GraphStore {
 
+    /**
+     * Whether a throw rolls this transaction's writes back. The in-memory store answers false:
+     * it applies writes directly and cannot undo them. Write-buffering keys off this -- deferring
+     * writes that a rollback cannot reclaim would let a mid-transaction throw discard the buffer
+     * while already-issued writes stand, leaving a state no execution could have produced.
+     */
+    default boolean transactional() { return true; }
+
     void insertInstance(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);

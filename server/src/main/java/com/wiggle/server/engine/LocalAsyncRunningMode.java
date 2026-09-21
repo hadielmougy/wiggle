@@ -109,14 +109,18 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
         // batch reach the store as executeBatch groups instead of a round-trip apiece, and any
         // read a step makes flushes first, so nothing behaves differently -- it just travels
         // together. The flush before returning is what makes the buffered writes part of the
-        // commit at all.
-        BufferedTx buffered = BufferedTx.of(tx);
+        // commit at all. Only where a rollback exists, though: on a non-transactional store a
+        // mid-apply throw would discard the buffer while unbuffered writes (a saga capture, say)
+        // stand, and the replay would then re-execute a step whose compensation entry already
+        // landed -- the undo would run twice. Direct writes keep the prefix consistent there, and
+        // the replay's lease checks refuse the already-settled runs instead of re-running them.
+        Tx applyTx = tx.transactional() ? BufferedTx.of(tx) : tx;
         for (Run run : survivors) {
             results.put(run.startTaskId(), RunResult.of(chainSteps(new AdvanceRunContext(
                     tasks.get(run.startTaskId()), run.leaseOwner(), run.steps(), run.finalHandback(),
-                    buffered, ctx.loopMaxIterations(), ctx.leaseMillis()))));
+                    applyTx, ctx.loopMaxIterations(), ctx.leaseMillis()))));
         }
-        buffered.flush();
+        if (applyTx instanceof BufferedTx buffered) buffered.flush();
         return results;
     }
 

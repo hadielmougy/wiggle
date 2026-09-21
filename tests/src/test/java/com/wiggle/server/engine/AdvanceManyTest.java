@@ -526,6 +526,40 @@ class AdvanceManyTest {
         }
     }
 
+
+    /**
+     * On a store with no rollback the apply phase must write DIRECTLY, not through the buffer.
+     * The hazard is a broken run whose FIRST step is compensable: its saga capture is unbuffered
+     * and lands immediately, but its settle rides the buffer -- a mid-run throw discards the
+     * buffer, the token still looks RUNNING, and the replay re-executes the step, capturing a
+     * second time. The undo would later run twice. Direct writes keep capture and settle
+     * together, so the replay finds the settled token and refuses instead of re-running.
+     */
+    @Test @DisplayName("a failed batch on the in-memory store cannot double a saga capture")
+    void nonTransactionalApplyCannotDoubleACapture() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            FlowSpec bp = FlowSpec.define("am-direct", 1, Map.class, SagaSteps.class, (f, s) -> f
+                    .execution(ExecutionMode.LOCAL_ASYNC)
+                    .thenApplyCompensable(s::reserve)
+                    .thenApply(s::boom));
+            registry.register(bp.definition());
+            engine.start(bp.name(), bp.version(), Map.of(), null);
+            TaskActivation a = engine.poll("w1", bp.definition().queues(), 10, null).getFirst();
+
+            // The compensable first step succeeds; the second step lies about its node.
+            Map<String, RunResult> results = engine.advanceMany(List.of(new Run(a.taskId(), "w1",
+                    List.of(new StepInput(a.nodeId(), Map.of("reserved", true), null),
+                            new StepInput("no-such-node", Map.of(), null)), true)));
+
+            assertEquals(409, results.get(a.taskId()).errorStatus());
+            assertEquals(1, storage.inTx(tx -> tx.compensationLog(a.instanceId())).size(),
+                    "one completion, one capture -- the replay must not have re-executed the step");
+        }
+    }
+
     /** Dies with a RuntimeException on transaction number {@code failOnTx}, once. */
     private record FailingStorage(Storage delegate, AtomicLong seen, AtomicLong failOnTx) implements Storage {
 
