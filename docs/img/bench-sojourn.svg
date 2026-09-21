@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 470" width="980" height="470" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
-  <title id="t">Wiggle rate-ceiling benchmark — end-to-end completion latency over time at two offered rates</title>
-  <desc id="d">Probe sojourn (submit to COMPLETED) over a sustained-load stage against a kind cluster with fresh databases. At 300 starts/sec latency settles to sub-second. At 340 the queue grows steadily: latency climbs to about 24 seconds over 90 seconds. Measured on one laptop.</desc>
+  <title id="t">Wiggle rate-ceiling benchmark — end-to-end completion latency over time at three offered rates</title>
+  <desc id="d">Probe sojourn (submit to COMPLETED) over sustained-load stages against one server node on one PostgreSQL. At 300 starts/sec latency stays near one second. At 350 a 60-second burst holds, but over 90 seconds the backlog compounds and latency climbs past 30 seconds. At 400 it climbs past 25 seconds within a minute. Measured on one laptop.</desc>
 
-  <text x="80" y="30" font-size="15" font-weight="700" fill="#1e2233">Where the queue starts to pile up — a kind cluster on one laptop</text>
-  <text x="80" y="50" font-size="11.5" fill="#7c8296">probe sojourn (start → COMPLETED) during a sustained-load stage · order-fulfilment fork/join workflow · fresh databases</text>
+  <text x="80" y="30" font-size="15" font-weight="700" fill="#1e2233">Where the queue starts to pile up — one node, one PostgreSQL, one laptop</text>
+  <text x="80" y="50" font-size="11.5" fill="#7c8296">probe sojourn (start → COMPLETED) during a sustained-load stage · order-fulfilment fork/join workflow · fresh database</text>
 
   <!-- grid + axes -->
   <g stroke="#e3e6ee" stroke-width="1">
@@ -31,20 +31,26 @@
   </g>
   <text x="490" y="378" font-size="11" fill="#7c8296" text-anchor="middle">time into the stage</text>
 
-  <!-- 300/s: sustained, settling to sub-second -->
+  <!-- 300/s over 60s: sustained -->
   <polyline fill="none" stroke="#2f9e63" stroke-width="2.5" stroke-linejoin="round"
-    points="80,332 98,323 116,328 135,330 153,315 171,298 189,294 208,304 226,313 244,309 262,291 280,309 299,315 317,292 335,297 353,307 372,313 390,336 408,318 426,326 444,337 463,337 481,337 499,337 517,336 536,333 554,336 572,337 590,337 608,332"/>
+    points="80,337 98,334 116,337 135,337 153,337 171,337 189,337 208,336 226,333 244,321 262,315 280,318 299,311 317,320 335,325 353,323 372,321 390,326 408,328 426,323 444,327 463,334 481,337 499,337 517,337 536,326 554,332 572,330 590,320 608,328"/>
 
-  <!-- 340/s over 90s: over the ceiling -->
+  <!-- 400/s over 60s: over the ceiling within a minute -->
+  <polyline fill="none" stroke="#c78a2d" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="6 4"
+    points="80,337 98,331 116,323 135,318 153,308 171,302 189,292 208,276 226,252 244,234 262,224 280,215 299,210 317,201 335,194 353,177 372,172 390,168 408,162 426,130 444,121 463,118 481,114 499,71 517,46 536,46 554,46 572,46 590,56 608,69"/>
+
+  <!-- 350/s over 90s: holds the first minute, then compounds -->
   <polyline fill="none" stroke="#d64545" stroke-width="2.5" stroke-linejoin="round"
-    points="80,336 116,313 153,307 189,258 226,281 262,268 299,261 335,245 372,228 408,195 444,195 481,181 517,173 554,141 590,119 627,97 663,64 700,63 736,62 772,61 809,64 845,81 882,101"/>
+    points="80,337 98,329 116,330 135,323 153,313 171,294 189,301 208,291 226,289 244,269 262,259 280,247 299,235 317,210 335,196 353,182 372,172 390,147 408,140 426,116 444,109 463,102 481,69 499,52 517,59 536,50 554,46 572,46 590,46 608,46 627,46 645,46 663,46 681,46 700,46 718,46 736,46 754,46 772,46 791,46 809,46 827,46 845,46 864,46 882,46"/>
 
   <!-- series labels -->
-  <text x="470" y="325" font-size="12" font-weight="600" fill="#2f9e63">300/s — sustained (settles below 1s)</text>
-  <text x="380" y="165" font-size="12" font-weight="600" fill="#d64545">340/s — over the ceiling: holds 60s, then the backlog compounds</text>
+  <text x="640" y="325" font-size="12" font-weight="600" fill="#2f9e63">300/s — sustained (≈1s)</text>
+  <text x="360" y="90" font-size="12" font-weight="600" fill="#c78a2d">400/s — piling within a minute</text>
+  <text x="700" y="140" font-size="12" font-weight="600" fill="#d64545">350/s × 90s — holds 60s,</text>
+  <text x="700" y="156" font-size="12" font-weight="600" fill="#d64545">then the backlog compounds</text>
 
   <!-- verdict box -->
   <rect x="80" y="398" width="820" height="52" rx="9" fill="#f6f8fc" stroke="#aab0c0" stroke-width="1.2"/>
-  <text x="98" y="420" font-size="12.5" fill="#1e2233"><tspan font-weight="700">Ceiling ≈ 300–340 starts/sec sustained</tspan> — ≈2,400+ durable step executions/sec through the cluster, with sub-second completion latency at 300/s.</text>
-  <text x="98" y="438" font-size="11" fill="#7c8296">340/s survives a 60s burst but drifts over 90s. Every component shares the laptop's 10 cores — a floor, not a ceiling. Scale past it by adding cells on real hardware.</text>
+  <text x="98" y="420" font-size="12.5" fill="#1e2233"><tspan font-weight="700">Ceiling ≈ 300–350 starts/sec sustained</tspan> — ≈2,400 durable step executions/sec through one node and one PostgreSQL, with ≈1s completion latency at 300/s.</text>
+  <text x="98" y="438" font-size="11" fill="#7c8296">350/s survives a 60s burst but drifts over 90s. Everything shares the laptop's 10 cores — a floor, not a ceiling. The previous 2-node, 2-database kind cluster measured the same window.</text>
 </svg>

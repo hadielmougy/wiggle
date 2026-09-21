@@ -411,42 +411,51 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 5. Performance
 
-**The engine alone, one JVM** (embedded server, in-memory store, 8-step workflow, 4 workers):
+**The engine alone, one JVM** (embedded server, in-memory store, 20-step workflow, 4 workers):
 
 | execution mode | throughput |
 |---|---|
-| `SERVER` (a round-trip per step) | **2,481 instances/sec** · 19.8k durable step completions/sec |
-| `LOCAL_SYNC` (chained, commit per step) | 3,313 instances/sec · 26.5k steps/sec |
-| `LOCAL_ASYNC` (chained, batched commits) | **11,478 instances/sec · 91.8k steps/sec** |
+| `SERVER` (a round-trip per step) | 962 instances/sec · **19.2k durable step completions/sec** |
+| `LOCAL_SYNC` (chained, commit per step) | 1,379 instances/sec · 27.6k steps/sec |
+| `LOCAL_ASYNC` (chained, batched commits) | **4,402 instances/sec · 88.0k steps/sec** |
 
-**A real deployment on one laptop** — the kind-based lab cluster, PostgreSQL-backed, reached
-over `kubectl port-forward`. We ramp the offered start rate and watch *probe sojourn* — the
+**A real deployment on one laptop** — one server node on one PostgreSQL 16, direct gRPC, no
+Kubernetes in the path. We ramp the offered start rate and watch *probe sojourn* — the
 end-to-end time of a fresh instance from `start()` to `COMPLETED`. Flat sojourn means the
-cluster is keeping up; monotonic growth means arrivals are outrunning it and backlog is
+node is keeping up; monotonic growth means arrivals are outrunning it and backlog is
 compounding:
 
-![Probe sojourn over time: at 300 starts/sec latency settles below one second; at 340 the backlog compounds, climbing to ~24s over 90 seconds. Ceiling ≈ 300–340 starts/sec on one laptop.](docs/img/bench-sojourn.svg)
+![Probe sojourn over time: at 300 starts/sec latency stays near one second; at 350 a 60-second burst holds but latency compounds past 30s over 90 seconds; at 400 it compounds within a minute. Ceiling ≈ 300–350 starts/sec on one laptop.](docs/img/bench-sojourn.svg)
 
 | offered rate | window | end-to-end latency | verdict |
 |---|---|---|---|
-| **300/s** | 60s | settles **below 1s** | ✅ sustained |
-| 340/s | 60s | plateau ≈4s, stable | ✅ holds a burst |
-| 340/s | 90s | 4s → 24s, monotonic | ❌ queue piling |
+| 250/s | 60s | flat **265ms** | ✅ sustained |
+| **300/s** | 60s | ≈**1s**, stable | ✅ sustained |
+| 350/s | 60s | plateau ≈5s, stable | ✅ holds a burst |
+| 350/s | 90s | 0.3s → 33s, monotonic | ❌ queue piling |
+| 400/s | 60s | 0.3s → 25s, monotonic | ❌ queue piling |
 
-**≈300 durable workflow starts/sec — ≈2,400 durable step executions/sec — sustained through the
-cluster with sub-second completion latency**; ~340/s survives a one-minute burst before the
-backlog compounds. Submit latency p50 ≈ 26ms / p99 ≈ 130ms throughout. Each instance is the
-8-step `order-fulfilment` fork/join workflow (validate → gate → 2 parallel branches → explicit
-combine → notify → audit, `LOCAL_ASYNC` mode), every step durably committed to PostgreSQL.
+**≈300 durable workflow starts/sec — ≈2,400 durable step executions/sec — sustained through one
+node and one database with ≈1s completion latency** (sub-second at 250/s); ~350/s survives a
+one-minute burst before the backlog compounds. Submit latency p50 ≈ 12ms / p99 ≈ 130ms
+throughout. Each instance is the 8-step `order-fulfilment` fork/join workflow (validate → gate →
+2 parallel branches → explicit combine → notify → audit, `LOCAL_ASYNC` mode), every step durably
+committed to PostgreSQL.
+
+The previous edition of this measurement ran the multi-cell kind cluster — 2 server nodes, each
+with its own PostgreSQL, reached over `kubectl port-forward` — and found the same 300–340/s
+window. That is its own footnote confirmed: nodes multiply availability and API capacity, never
+database throughput; one node on one database now does what two of each did, because the ceiling
+is the machine.
 
 **Environment — deliberately modest, everything on one machine:**
 
 | | |
 |---|---|
 | Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
-| Cluster | kind (Kubernetes-in-Docker) inside a 10-CPU / 7.7 GB Docker Desktop VM |
-| Topology | 2 server nodes, **each its own PostgreSQL 16** (fresh DBs) · no pod resource limits<br><sub>(run on the multi-cell topology of the time; the control plane sat outside the execution path)</sub> |
-| Client side | submitter + 1 worker (`concurrency=100` per node) on the host, gRPC via `kubectl port-forward` |
+| Topology | **1 server node** (`dist` distribution) on **1 PostgreSQL 16** (fresh DB, Docker) — direct gRPC, no Kubernetes |
+| Server env | `WIGGLE_POLL_INTERVAL_MILLIS=200` · `WIGGLE_HOUSEKEEPING_BATCH=500` · `WIGGLE_JDBC_POOL_SIZE=50` |
+| Client side | submitter (24 threads) + 2 workers (`concurrency=100` each, `LOCAL_ASYNC` batch 64) on the host |
 | Runtime | OpenJDK 21 |
 
 **Adaptive polling** (opt-in flags; each reacts to what the last poll observed — never to queue
@@ -463,18 +472,25 @@ measurably ate the ceiling — the fix and its A/B are in the repo history).
 
 ![Adaptive polling before/after: draining 2,000 due timers falls from 19.9s (100/sec, the batch-per-tick floor) to 1.18s (~1,700/sec); cross-node dispatch latency falls from p50 105ms / p99 117ms to p50 28ms / p99 39ms.](docs/img/bench-adaptive.svg)
 
-Honest footnotes: the submitter, worker, Kubernetes, the server nodes, and the databases all
+Honest footnotes: the submitter, the workers, the server node, PostgreSQL and its Docker VM all
 share those 10 cores — a floor, not a ceiling.
-The same is true of nodes: an A/B run showed 2 nodes on one database on this single box does *not*
-raise the ceiling — nodes multiply availability and API capacity, never database throughput.
-And measured on **fresh databases** deliberately: after a day of accumulated benchmark history
-(~500k retained instances / ~900k token rows) the same setup showed ~2× the latency at 300/s —
-retention and purge cadence are part of capacity planning, not an afterthought.
+Nodes don't move it: an A/B run showed 2 nodes on one database on this single box does *not*
+raise the ceiling — nodes multiply availability and API capacity, never database throughput —
+and the previous 2-node / 2-database edition of this measurement found the same window.
+Measured on a **fresh database** deliberately: with accumulated benchmark history
+(~500k retained instances / ~900k token rows) the same setup has shown ~2× the latency at the
+ceiling — retention and purge cadence are part of capacity planning, not an afterthought.
+And short windows flatter: several rates that look sustainable over a 20-second stage pile up
+visibly over 60–90 seconds, which is why every verdict above uses the longer windows.
 
 Reproduce everything (the tools ship in the repo):
 
 ```bash
 ./gradlew :example:bench             # the embedded engine numbers (set WIGGLE_EXECUTION_MODE)
+
+WIGGLE_SERVER_URL=127.0.0.1:8080 \
+  ./gradlew :example:rateCeiling     # the deployment ceiling: ramps rates, judges by probe sojourn
+                                     # (point it at a running node with a worker attached)
 
 ./gradlew :example:timerBench        # timer promotion (WIGGLE_ADAPTIVE_HOUSEKEEPING=true to compare)
 
