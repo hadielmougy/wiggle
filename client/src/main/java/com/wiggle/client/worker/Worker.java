@@ -278,8 +278,7 @@ public final class Worker implements AutoCloseable {
     public void close() {
         if (!running.compareAndSet(true, false)) return;
         if (pollThread != null) pollThread.interrupt();
-        awaitExecutor();          // in-flight runs may still submit handbacks while draining
-        handbacks.close();
+        awaitExecutor();          // in-flight runs flush their own handbacks while draining
         if (heartbeats != null) heartbeats.shutdownNow();
     }
 

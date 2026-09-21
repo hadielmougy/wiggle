@@ -132,7 +132,14 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
 
     /** The single-run path's pre-write refusals, as a result instead of a throw; null passes. */
     private RunResult validate(Tx tx, Instance inst, Token t, Run run) {
-        if (inst == null || t == null) {
+        // An absent instance is EITHER gone or held by a concurrent batch and skipped by the
+        // lock (SKIP LOCKED): both answer 409-retryable, and the single-run retry -- which
+        // waits on locks -- tells the truth for whichever it was.
+        if (inst == null) {
+            return RunResult.reject(EngineException.conflict("instance of task " + run.startTaskId()
+                    + " is held by a concurrent operation or gone -- report this run singly"));
+        }
+        if (t == null) {
             return RunResult.reject(EngineException.notFound("task"));
         }
         if (!InstanceState.of(inst.status).running()) {

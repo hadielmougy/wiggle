@@ -164,8 +164,8 @@ final class LocalRun {
         // A final handback needs nothing back but durability, so LOCAL_ASYNC routes it through
         // the worker's batcher -- concurrent runs land in one AdvanceMany call. A mid-chain flush
         // needs the leased continuation id synchronously and stays a single call.
-        AdvanceResult advanced = handback && maxBatch > 1
-                ? w.handbacks().handback(serverTaskId, leaseOwner, List.copyOf(buffer))
+        AdvanceResult advanced = handback && maxBatch > 1 && w.options().crossInstanceBatching()
+                ? w.handbacks().handback(instanceId, serverTaskId, leaseOwner, List.copyOf(buffer))
                 : w.client().advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), handback);
         buffer.clear();
         if (!advanced.running() || handback || advanced.nextTaskId() == null) return false;

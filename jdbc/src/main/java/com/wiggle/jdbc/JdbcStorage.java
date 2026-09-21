@@ -789,8 +789,13 @@ public final class JdbcStorage implements Storage {
         @Override public List<Instance> lockInstances(List<String> ids) {
             if (ids.isEmpty()) return List.of();
             // ORDER BY id keeps lock acquisition in id order on a btree PK scan; see Tx.lockInstances.
+            // SKIP LOCKED where the dialect has it: a batch must never WAIT on an instance another
+            // batch holds -- two workers whose batches share one instance (two arms of one fork)
+            // would otherwise convoy, each batch serialising behind the other's whole commit. A
+            // skipped instance is simply absent from the result; the caller answers its run as
+            // retryable and the worker reports it singly.
             String sql = "SELECT * FROM wf_instance WHERE id IN (" + placeholders(ids.size())
-                    + ") ORDER BY id FOR UPDATE";
+                    + ") ORDER BY id FOR UPDATE" + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : "");
             try (PreparedStatement p = ps(sql)) {
                 for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
                 try (ResultSet rs = p.executeQuery()) {

@@ -71,7 +71,7 @@ class CrossInstanceBatchTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "xib-w",
-                     WorkerOptions.defaults().withConcurrency(8)).registerHandler(new H())) {
+                     WorkerOptions.defaults().withConcurrency(8).withCrossInstanceBatching(true)).registerHandler(new H())) {
             client.register(bp);
             w.start();
             List<String> ids = new ArrayList<>();
