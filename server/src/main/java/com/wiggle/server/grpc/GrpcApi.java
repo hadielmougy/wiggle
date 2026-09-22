@@ -417,12 +417,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
                     ? s.getPredicateValue() : null;
             String error = s.getOutcomeCase() == StepResult.OutcomeCase.ERROR ? s.getError() : null;
-            Long startedAt = s.getStartedAt() == 0 ? null : s.getStartedAt();
-            Long finishedAt = s.getFinishedAt() == 0 ? null : s.getFinishedAt();
-            String after = s.getAfterNode().isEmpty() ? null : s.getAfterNode();
-            steps.add(s.getUndoOf().isEmpty()
-                    ? new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate, error, startedAt, finishedAt, after)
-                    : WorkflowEngine.StepInput.undo(s.getUndoOf(), error, startedAt, finishedAt, after));
+            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate, error,
+                    s.getStartedAt() == 0 ? null : s.getStartedAt(),
+                    s.getFinishedAt() == 0 ? null : s.getFinishedAt()));
         }
         return steps;
     }
@@ -433,8 +430,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 + " instanceId=" + req.getInstanceId() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
         run(resp, () -> observeProto(engine.observe(req.getWorkflow(), req.getVersion() == 0 ? null : req.getVersion(),
                 req.getInstanceId(), req.getCorrelationId().isEmpty() ? null : req.getCorrelationId(),
-                req.getReporter(), stepInputs(req.getStepsList()), req.getFinal(),
-                req.getFailure().isEmpty() ? null : req.getFailure())));
+                req.getReporter(), stepInputs(req.getStepsList()), req.getFinal())));
     }
 
     @Override
@@ -445,8 +441,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             for (ObserveRunRequest r : req.getRunsList()) {
                 runs.add(new WorkflowEngine.ObservedRun(r.getWorkflow(), r.getVersion() == 0 ? null : r.getVersion(),
                         r.getInstanceId(), r.getCorrelationId().isEmpty() ? null : r.getCorrelationId(),
-                        r.getReporter(), stepInputs(r.getStepsList()), r.getFinal(),
-                        r.getFailure().isEmpty() ? null : r.getFailure()));
+                        r.getReporter(), stepInputs(r.getStepsList()), r.getFinal()));
             }
             ObserveManyResult.Builder out = ObserveManyResult.newBuilder();
             for (WorkflowEngine.ObserveOutcome o : engine.observeMany(runs)) {

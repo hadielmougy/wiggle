@@ -277,15 +277,19 @@ public final class JdbcStorage implements Storage {
             """), new Migration(14, "add-barrier-index", """
                 CREATE INDEX IF NOT EXISTS ix_token_barrier ON wf_token (instance_id, node_id, status);
             """),
-            // When a step ran as its reporter measured it. A locally-chained or observed run is
-            // flushed after the fact, so the server's own timestamps say when the batch landed, not
-            // how long each step took; these two carry the step's clock. Nullable: a step that was
-            // not timed has neither, and duration stats read only rows that have both. The anomaly
-            // table records where an observed run departed from its topology.
-            new Migration(15, "step-timings-and-anomalies", """
+            // Observed execution. A step's own clock (started_at/finished_at) and the order it was
+            // reported in (seq), which the judge uses as the tie-break between steps whose clocks
+            // agree; nullable, and duration stats read only rows that have both times. An observed
+            // run's settle time on the instance (null on every other instance, so the sweep's
+            // index touches only observed runs). The anomaly table records where an observed run
+            // departed from its topology.
+            new Migration(15, "observed-execution", """
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS started_at BIGINT;
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS finished_at BIGINT;
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS seq BIGINT;
             CREATE INDEX IF NOT EXISTS ix_token_timed ON wf_token (workflow, version, status, finished_at);
+            ALTER TABLE wf_instance ADD COLUMN IF NOT EXISTS settle_at BIGINT;
+            CREATE INDEX IF NOT EXISTS ix_instance_settle ON wf_instance (status, settle_at);
             CREATE TABLE IF NOT EXISTS wf_anomaly (
               id             VARCHAR(64)  PRIMARY KEY,
               instance_id    VARCHAR(128) NOT NULL,
@@ -299,22 +303,6 @@ public final class JdbcStorage implements Storage {
             );
             CREATE INDEX IF NOT EXISTS ix_anomaly_instance ON wf_anomaly (instance_id);
             CREATE INDEX IF NOT EXISTS ix_anomaly_workflow ON wf_anomaly (workflow, observed_at);
-            """),
-            // When an observed run is due to be judged: pushed out by every report, pulled in by
-            // END. Null on every other instance, so the sweep's index touches only observed runs.
-            new Migration(16, "observed-settle", """
-            ALTER TABLE wf_instance ADD COLUMN IF NOT EXISTS settle_at BIGINT;
-            CREATE INDEX IF NOT EXISTS ix_instance_settle ON wf_instance (status, settle_at);
-            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS seq BIGINT;
-            """),
-            // The step an observed step named as its cause, carried across a message boundary so
-            // the judge can order two services' steps without trusting their clocks. Nullable.
-            new Migration(17, "observed-causal-hint", """
-            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS after_node VARCHAR(64);
-            """),
-            // The compensable node an observed undo step reversed. Nullable: null on forward steps.
-            new Migration(18, "observed-undo", """
-            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS undo_of VARCHAR(64);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -914,8 +902,8 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version," +
                 "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack," +
-                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,after_node,undo_of) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
         @Override public void insertToken(Token t) {
             try (PreparedStatement p = ps(INSERT_TOKEN)) {
@@ -932,7 +920,7 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /** Binds parameters 1..24 in wf_token insert column order. */
+        /** Binds parameters 1..22 in wf_token insert column order. */
         private void bindToken(PreparedStatement p, Token t) throws SQLException {
             p.setString(1, t.id);
             p.setString(2, t.instanceId);
@@ -956,8 +944,6 @@ public final class JdbcStorage implements Storage {
             setNullableLong(p, 20, t.startedAt);
             setNullableLong(p, 21, t.finishedAt);
             setNullableLong(p, 22, t.seq);
-            p.setString(23, t.afterNode);
-            p.setString(24, t.undoOf);
         }
 
         private static String placeholders(int n) {
@@ -1012,7 +998,7 @@ public final class JdbcStorage implements Storage {
 
         private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=?,kind=?,status=?," +
                 "activity=?,queue=?,attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?," +
-                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=?,after_node=?,undo_of=? WHERE id=?";
+                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=? WHERE id=?";
 
         @Override
         public void updateToken(Token t) {
@@ -1037,8 +1023,7 @@ public final class JdbcStorage implements Storage {
             p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
             p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
             setNullableLong(p, 14, t.compSeq); setNullableLong(p, 15, t.startedAt);
-            setNullableLong(p, 16, t.finishedAt); setNullableLong(p, 17, t.seq); p.setString(18, t.afterNode);
-            p.setString(19, t.undoOf); p.setString(20, t.id);
+            setNullableLong(p, 16, t.finishedAt); setNullableLong(p, 17, t.seq); p.setString(18, t.id);
         }
 
         /** A count that is not one row means a buffered write ran out of order (an update flushed
@@ -1189,7 +1174,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Instance> dueSettle(long now, int max) {
             List<Instance> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status IN ('RUNNING','COMPENSATING') AND settle_at IS NOT NULL "
+            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
                     + "AND settle_at <= ? ORDER BY settle_at LIMIT ?")) {
                 p.setLong(1, now); p.setInt(2, max);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) out.add(readInstance(rs)); }
@@ -1485,14 +1470,13 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
             List<Rows.StepDuration> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, undo_of, instance_id FROM wf_token "
+            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at FROM wf_token "
                     + "WHERE workflow=? AND version=? AND status='DONE' AND finished_at > ? AND started_at IS NOT NULL "
                     + "ORDER BY finished_at DESC LIMIT ?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setLong(3, since); p.setInt(4, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
-                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2)),
-                                rs.getString(4) != null, rs.getString(5)));
+                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2))));
                     }
                 }
             } catch (SQLException ex) { throw wrap(ex); }
@@ -1567,8 +1551,6 @@ public final class JdbcStorage implements Storage {
             t.finishedAt = rs.wasNull() ? null : finishedAt;
             long seq = rs.getLong("seq");
             t.seq = rs.wasNull() ? null : seq;
-            t.afterNode = rs.getString("after_node");
-            t.undoOf = rs.getString("undo_of");
             t.createdAt = rs.getLong("created_at");
             t.updatedAt = rs.getLong("updated_at");
             return t;
