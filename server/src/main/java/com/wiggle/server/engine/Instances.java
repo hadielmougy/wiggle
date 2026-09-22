@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.Doc;
-
+import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.server.store.Rows.Instance;
@@ -71,6 +71,27 @@ final class Instances {
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
         pump.drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
         return inst.id;
+    }
+
+    /**
+     * Starts an instance whose steps run elsewhere: its first token is created already held by
+     * {@code reporter} rather than driven, so nothing is ever offered to a worker. The definition
+     * must be {@link ExecutionMode#OBSERVED}, and only that mode ever calls this.
+     */
+    Tokens.LockedTask startObserved(Tx tx, String workflow, Integer version, String correlationId,
+                                    String reporter) {
+        int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
+                () -> EngineException.notFound("workflow '" + workflow + "'"));
+        ObservedRunningMode.requireObserved(definitions.executionMode(tx, workflow, v), workflow + ":" + v);
+        LazyGraph def = definitions.graph(tx, workflow, v);
+        long now = System.currentTimeMillis();
+        Instance inst = Instances.create(tx, idMinter.next(), def.name(), def.version(),
+                null, correlationId, null, now);
+        Token t = Tokens.create(inst, def.startNode(), "", null, now);
+        Tokens.createLeased(tx, t, def.node(def.startNode()), reporter, ObservedRunningMode.NO_EXPIRY, now);
+        LOG.log(System.Logger.Level.DEBUG, () -> "observe: instance " + inst.id + " of " + def.key()
+                + " reported by " + reporter + " correlationId=" + correlationId);
+        return new Tokens.LockedTask(inst, t);
     }
 
     /**

@@ -16,7 +16,7 @@ public final class LocalExecutionSnippet {
     static FlowSpec define() {
         // docs:begin execution-mode
         FlowSpec spec = FlowSpec.define("name", 1, Ctx.class, Steps.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
+                .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | OBSERVED | DEFAULT
                 .thenApply(s::first)
         // docs:elide         ...);
                 // docs:skip

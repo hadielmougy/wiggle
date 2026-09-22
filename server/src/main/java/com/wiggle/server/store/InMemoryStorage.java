@@ -85,6 +85,8 @@ public final class InMemoryStorage implements Storage {
 
     /** instanceId -> compensation log entries (seq-ordered append). */
     private final Map<String, List<Rows.CompLog>> compLogs = new ConcurrentHashMap<>();
+    /** Insertion-ordered, so newest-first is a reverse walk. Guarded by the global lock. */
+    private final List<Rows.Anomaly> anomalies = new ArrayList<>();
 
     private final class MemTx implements Tx {
 
@@ -451,6 +453,31 @@ public final class InMemoryStorage implements Storage {
             for (Rows.CompLog e : log) out.add(e.clone());
             out.sort(java.util.Comparator.comparingLong(e -> e.seq));
             return out;
+        }
+
+        @Override public void insertAnomaly(Rows.Anomaly anomaly) {
+            anomalies.add(anomaly);
+        }
+
+        @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
+            List<Rows.Anomaly> out = new ArrayList<>();
+            for (int k = anomalies.size() - 1; k >= 0 && out.size() < limit; k--) {
+                Rows.Anomaly a = anomalies.get(k);
+                if (workflow != null && !workflow.equals(a.workflow())) continue;
+                if (instanceId != null && !instanceId.equals(a.instanceId())) continue;
+                out.add(a);
+            }
+            return out;
+        }
+
+        @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
+            return tokens.values().stream()
+                    .filter(t -> t.status == TokenStatus.DONE && t.startedAt != null && t.finishedAt != null)
+                    .filter(t -> workflow.equals(t.workflow) && t.version == version && t.finishedAt > since)
+                    .sorted(Comparator.comparingLong((Token t) -> t.finishedAt).reversed())
+                    .limit(max)
+                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt)))
+                    .toList();
         }
 
         @Override public void markCompensated(String instanceId, long seq) {

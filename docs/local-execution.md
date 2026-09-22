@@ -92,7 +92,7 @@ run now and I have lease budget."*
 <!-- snippet: local-execution/execution-mode -->
 ```java
 FlowSpec spec = FlowSpec.define("name", 1, Ctx.class, Steps.class, (f, s) -> f
-        .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | DEFAULT
+        .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | OBSERVED | DEFAULT
         .thenApply(s::first)
         ...);
 ```

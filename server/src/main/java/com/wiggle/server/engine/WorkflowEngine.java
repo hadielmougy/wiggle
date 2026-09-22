@@ -7,6 +7,7 @@ import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -227,8 +228,18 @@ public final class WorkflowEngine {
         return false;
     }
 
-    /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
-    public record StepInput(String nodeId, Object merge, Boolean predicateValue) {}
+    /**
+     * One step reported after it ran: a task's complete next context, a predicate's value, or the
+     * error it threw (observed runs only). {@code startedAt}/{@code finishedAt} are the step's own
+     * clock in epoch millis, or null when the reporter did not time it.
+     */
+    public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
+                            Long startedAt, Long finishedAt) {
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue) {
+            this(nodeId, merge, predicateValue, null, null, null);
+        }
+    }
 
     /** The result of applying a reported run: the instance's status, renewed lease, and next token. */
     public record AdvanceOutcome(String instanceStatus, long leaseExpiresAt, String nextTaskId) {}
@@ -329,6 +340,90 @@ public final class WorkflowEngine {
             }
         }
         return results;
+    }
+
+    /**
+     * Applies a run of steps an instrumented application already executed (OBSERVED execution).
+     * A blank {@code instanceId} starts the run: the instance is minted and its id returned for
+     * the reports that follow. Nothing here is refused for departing from the topology -- that is
+     * recorded as an anomaly and the run resynchronised -- so a report is refused only when it
+     * names no known instance, or a workflow that is not OBSERVED.
+     */
+    public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
+                                 String reporter, List<StepInput> steps, boolean fin) {
+        if (steps.isEmpty() && !fin) throw EngineException.badRequest("observe requires at least one step");
+        if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
+        return transactions.inTx(tx -> {
+            Tokens.LockedTask task;
+            if (instanceId == null || instanceId.isBlank()) {
+                task = instances.startObserved(tx, workflow, version, correlationId, reporter);
+            } else {
+                Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+                ObservedRunningMode.requireObserved(
+                        definitions.executionMode(tx, inst.workflow, inst.version), inst.workflow + ":" + inst.version);
+                Token held = tx.tokensOf(inst.id).stream().filter(Token::isActive).findFirst().orElse(null);
+                task = new Tokens.LockedTask(inst, held);
+            }
+            return modeFactory.observed().observe(
+                    new ObserveRunContext(task, reporter, steps, fin, tx, loopMaxIterations));
+        });
+    }
+
+    /** One run of an observe batch: exactly the arguments of {@link #observe}. */
+    public record ObservedRun(String workflow, Integer version, String instanceId, String correlationId,
+                              String reporter, List<StepInput> steps, boolean fin) {}
+
+    /** A run's fate in an observe batch: its result, or the status and message it would have thrown. */
+    public record ObserveOutcome(ObserveResult result, Integer errorStatus, String error) {
+
+        public boolean ok() {
+            return result != null;
+        }
+    }
+
+    /**
+     * Applies N observed runs, each in its own transaction, and answers every one in submission
+     * order. Observation needs no atomicity across runs: a run that is refused is refused alone,
+     * and the ones around it stand.
+     */
+    public List<ObserveOutcome> observeMany(List<ObservedRun> runs) {
+        List<ObserveOutcome> out = new ArrayList<>(runs.size());
+        for (ObservedRun r : runs) {
+            try {
+                out.add(new ObserveOutcome(observe(r.workflow(), r.version(), r.instanceId(), r.correlationId(),
+                        r.reporter(), r.steps(), r.fin()), null, null));
+            } catch (EngineException e) {
+                out.add(new ObserveOutcome(null, e.statusCode(), e.getMessage()));
+            } catch (RuntimeException e) {
+                out.add(new ObserveOutcome(null, 500, e.toString()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Per-node duration statistics for one workflow version over its newest {@code sample} timed
+     * steps that finished after {@code since}; a null or zero version means the latest. Slowest
+     * 95th percentile first, so the head of the list is the bottleneck.
+     */
+    public List<NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
+        WorkflowDefinition def = (version == null || version <= 0
+                ? definitions.latest(workflow) : definitions.lookup(workflow, version))
+                .orElseThrow(() -> EngineException.notFound("workflow '" + workflow + "'"));
+        List<Rows.StepDuration> durations = transactions.read(
+                tx -> tx.stepDurations(def.name(), def.version(), since, sample));
+        return StepStatistics.summarise(durations, id -> {
+            Node n = def.nodes().get(id);
+            return n == null ? id : n.name();
+        });
+    }
+
+    /** Departures of observed runs from their topology, newest first; either filter may be null. */
+    public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
+        return transactions.read(tx -> tx.anomalies(workflow, instanceId, limit)).stream()
+                .map(a -> new AnomalyView(a.instanceId(), a.workflow(), a.version(), a.kind(),
+                        a.expectedNode(), a.reportedNode(), a.detail(), a.at()))
+                .toList();
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */

@@ -145,4 +145,16 @@ public interface Tx extends GraphStore {
 
     /** Cancels every active token of an instance, stamping {@code now} as their update time. */
     void cancelActiveTokens(String instanceId, long now);
+
+    void insertAnomaly(Rows.Anomaly anomaly);
+
+    /** Anomalies newest first, narrowed by workflow and/or instance when either is non-null. */
+    List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit);
+
+    /**
+     * The durations of the newest {@code max} settled, timed steps of one workflow version that
+     * finished after {@code since}. Bounded so the percentiles are computed over a sample the
+     * server can hold, not a table scan the console waits on.
+     */
+    List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max);
 }
