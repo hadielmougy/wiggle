@@ -5,6 +5,11 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.core.AnomalyView;
+import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.NodeStats;
+import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.RegisteredNode;
@@ -33,9 +38,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ConsoleDataTest {
 
+    static {
+        System.setProperty("wiggle.observe.settleMillis", "0");   // observed runs are judged at settle; no grace here
+    }
+
     /** The steps a spec names. A worker binds them by name; nothing here implements them. */
     interface Steps {
         Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> more(Map<String, Object> ctx);
     }
 
     private static FlowSpec wf() {
@@ -113,6 +123,39 @@ class ConsoleDataTest {
                 data.cancel(a, "from test");
                 assertEquals("CANCELLED", data.instance(a).orElseThrow().instance().status(), "cancel routed by id");
             }
+        }
+    }
+
+    @Test @DisplayName("direct mode: step stats and anomalies read through the seam")
+    void statsAndAnomalies() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
+            FlowSpec spec = FlowSpec.define("obs", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work).thenApply(s::more));
+            WorkflowDefinition d = spec.definition();
+            conn.client().register(new FlowSpec(new WorkflowDefinition(d.name(), d.version(), d.startNode(), d.nodes(),
+                    d.queues(), ExecutionMode.OBSERVED, d.checkpoints())));
+            String a = d.startNode(), b = d.node(a).next();
+            long t0 = 1_700_000_000_000L;
+            server.engine().observe("obs", null, null, "r1", "app", List.of(
+                    new StepInput(a, null, null, null, t0, t0 + 5),
+                    new StepInput(b, null, null, null, t0 + 5, t0 + 25)), true);
+            server.engine().observe("obs", null, null, "r2", "app", List.of(
+                    new StepInput(a, null, null, null, t0, t0 + 5)), true);   // closed before END
+            server.engine().settleObservedRuns(10);
+
+            GrpcDashboardData data = new GrpcDashboardData(new ConsoleBackend.Direct(conn));
+            List<NodeStats> stats = data.stepStats("obs", null, 0, 100);
+            assertEquals(2, stats.size());
+            assertEquals("more", stats.get(0).name(), "slowest p95 first");
+            assertEquals(20, stats.get(0).p95Millis());
+            assertEquals(2, stats.get(1).count(), "work ran in both runs");
+            assertTrue(data.stepStats("obs", null, t0 + 1000, 100).isEmpty(), "the window bounds the sample");
+
+            List<AnomalyView> anomalies = data.anomalies("obs", null, 10);
+            assertEquals(1, anomalies.size());
+            assertEquals("INCOMPLETE", anomalies.get(0).kind());
+            assertEquals(1, data.anomalies(null, anomalies.get(0).instanceId(), 10).size(), "by instance");
+            assertTrue(data.anomalies("other", null, 10).isEmpty());
         }
     }
 }

@@ -57,6 +57,25 @@ final class Wire {
         return out;
     }
 
+    static List<com.wiggle.core.NodeStats> nodeStats(com.wiggle.proto.StepStats res) {
+        List<com.wiggle.core.NodeStats> out = new ArrayList<>(res.getNodesCount());
+        for (com.wiggle.proto.NodeStats n : res.getNodesList()) {
+            out.add(new com.wiggle.core.NodeStats(n.getNodeId(), n.getName().isEmpty() ? null : n.getName(),
+                    n.getCount(), n.getMeanMillis(), n.getP50Millis(), n.getP95Millis(), n.getMaxMillis()));
+        }
+        return out;
+    }
+
+    static List<com.wiggle.core.AnomalyView> anomalies(com.wiggle.proto.AnomalyList res) {
+        List<com.wiggle.core.AnomalyView> out = new ArrayList<>(res.getAnomaliesCount());
+        for (com.wiggle.proto.Anomaly a : res.getAnomaliesList()) {
+            out.add(new com.wiggle.core.AnomalyView(a.getInstanceId(), a.getWorkflow(), a.getVersion(), a.getKind(),
+                    a.hasExpectedNode() ? a.getExpectedNode() : null, a.hasReportedNode() ? a.getReportedNode() : null,
+                    a.hasDetail() ? a.getDetail() : null, a.getAt()));
+        }
+        return out;
+    }
+
     static Map<String, Object> clusterMap(ClusterView v) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("self", v.getSelf());
