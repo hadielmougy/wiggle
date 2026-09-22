@@ -6,72 +6,162 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The console's built-in auth: an operator account and an optional read-only viewer account, by session
- * cookie (from the {@code /login} form) or HTTP Basic (for {@code curl}). Authentication answers "who are
- * you"; authorization is one bit — {@link Role#OPERATOR} may mutate (cancel / signal / schedules),
- * {@link Role#VIEWER} is read-only. With no operator password the console is unauthenticated and every
- * request is treated as an operator (open mode). Ported from the cell dashboard's {@code PasswordAuth} to
- * the servlet API; sessions are per process.
+ * The console's auth, by session cookie (from the {@code /login} form) or HTTP Basic (for
+ * {@code curl}). Authentication answers "who are you"; authorization is one bit —
+ * {@link Role#ADMIN} may mutate (cancel / signal / schedules / users), {@link Role#VIEWER} is
+ * read-only.
+ *
+ * <p>Two sources of accounts. The environment configures up to two <b>built-in</b> accounts
+ * ({@code WIGGLE_DASHBOARD_PASSWORD} and the optional viewer), which no one can change from the
+ * running console. On top of those, an admin manages accounts in a {@link ConsoleUsers} file,
+ * and any account can change its own password.
+ *
+ * <p>With neither a built-in password nor a managed account the console is unauthenticated and
+ * every request is an admin (open mode); creating the first managed account therefore turns
+ * authentication on. Sessions are per process.
  */
 final class ConsoleAuth {
 
     static final String SESSION_COOKIE = "wiggle_session";
     private static final long SESSION_TTL_MILLIS = 12 * 60 * 60 * 1000L;
 
-    /** Access level: OPERATOR has full read/write, VIEWER is read-only. */
-    enum Role { OPERATOR, VIEWER }
+    /** Access level: ADMIN has full read/write, VIEWER is read-only. */
+    enum Role {
+        ADMIN, VIEWER;
+
+        /** The name this role travels under, in the user file and the JSON API. */
+        String wire() { return name().toLowerCase(); }
+
+        /** Parses a role name; {@code operator} is the old name for {@link #ADMIN}. */
+        static Role of(String name) {
+            String v = name == null ? "" : name.trim().toLowerCase();
+            return switch (v) {
+                case "admin", "operator" -> ADMIN;
+                case "viewer" -> VIEWER;
+                default -> throw new IllegalArgumentException("role is 'admin' or 'viewer', not '" + name + "'");
+            };
+        }
+    }
 
     private final String user;
     private final String password;
     private final String viewerUser;
     private final String viewerPassword;
     private final boolean secureCookies;
+    private final ConsoleUsers users;
     private final SecureRandom random = new SecureRandom();
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
 
-    private record Session(long expiry, Role role) {}
+    private record Session(long expiry, String user, Role role) {}
 
-    /** Operator-only console (no read-only viewer account). */
+    /** Admin-only console (no read-only viewer account), with no managed users. */
     ConsoleAuth(String user, String password, boolean secureCookies) {
-        this(user, password, null, null, secureCookies);
+        this(user, password, null, null, secureCookies, null);
     }
 
     ConsoleAuth(String user, String password, String viewerUser, String viewerPassword, boolean secureCookies) {
+        this(user, password, viewerUser, viewerPassword, secureCookies, null);
+    }
+
+    ConsoleAuth(String user, String password, String viewerUser, String viewerPassword, boolean secureCookies,
+                ConsoleUsers users) {
+        this.users = users;
         this.user = user == null || user.isBlank() ? "admin" : user;
         this.password = password == null || password.isBlank() ? null : password;
         this.viewerUser = viewerUser == null || viewerUser.isBlank() ? "viewer" : viewerUser;
-        // A viewer account only exists alongside operator auth; ignored in open mode.
+        // A built-in viewer only exists alongside the built-in admin; ignored without it.
         this.viewerPassword = this.password == null || viewerPassword == null || viewerPassword.isBlank()
                 ? null : viewerPassword;
         this.secureCookies = secureCookies;
     }
 
-    boolean required() { return password != null; }
+    /** Whether anyone must sign in: a built-in password, or any managed account, turns auth on. */
+    boolean required() { return password != null || (users != null && !users.isEmpty()); }
 
+    /** The built-in admin's name, which is also the login form's default. */
     String user() { return user; }
 
+    /** The managed accounts, or null when this console has no user file. */
+    ConsoleUsers users() { return users; }
+
+    /** The names no managed account may take, because a built-in already answers to them. */
+    Set<String> builtinNames() {
+        Set<String> names = new LinkedHashSet<>();
+        if (password != null) names.add(user);
+        if (viewerPassword != null) names.add(viewerUser);
+        return names;
+    }
+
+    /** Whether a built-in admin can still sign in; false means managed admins are the only way in. */
+    boolean hasBuiltinAdmin() { return password != null; }
+
     String apiChallenge() {
-        return password != null ? "Basic realm=\"Wiggle\", charset=\"UTF-8\"" : null;
+        return required() ? "Basic realm=\"Wiggle\", charset=\"UTF-8\"" : null;
     }
 
     /** The caller's role, or null if authentication is required and they aren't authenticated. */
     Role role(HttpServletRequest req) {
-        if (password == null) return Role.OPERATOR;   // open mode: everyone is an operator
-        Role s = sessionRole(req);
-        return s != null ? s : basicRole(req.getHeader("Authorization"));
+        if (!required()) return Role.ADMIN;   // open mode: everyone is an admin
+        Session s = session(req);
+        if (s != null) return s.role();
+        Credentials c = basic(req.getHeader("Authorization"));
+        return c == null ? null : credentialRole(c.user(), c.password());
+    }
+
+    /** The caller's account name, or null when unauthenticated or in open mode. */
+    String signedInUser(HttpServletRequest req) {
+        if (!required()) return null;
+        Session s = session(req);
+        if (s != null) return s.user();
+        Credentials c = basic(req.getHeader("Authorization"));
+        return c != null && credentialRole(c.user(), c.password()) != null ? c.user() : null;
     }
 
     boolean authenticated(HttpServletRequest req) {
         return role(req) != null;
     }
 
-    /** Whether the caller may perform mutating operations (cancel / signal / schedule changes). */
+    /** Whether the caller may perform mutating operations (cancel / signal / schedules / users). */
     boolean canWrite(HttpServletRequest req) {
-        return role(req) == Role.OPERATOR;
+        return role(req) == Role.ADMIN;
+    }
+
+    /**
+     * Changes the caller's own password, given their current one. Built-in accounts come from the
+     * environment and cannot be changed here. Every other session of that account is dropped; the
+     * caller keeps the one they are using.
+     */
+    void changeOwnPassword(HttpServletRequest req, String current, String next) {
+        String name = signedInUser(req);
+        if (name == null) throw new IllegalStateException("not signed in");
+        if (builtinNames().contains(name)) {
+            throw new IllegalArgumentException("'" + name + "' is a built-in account set in the environment; "
+                    + "change WIGGLE_DASHBOARD_PASSWORD where the console is deployed, not here");
+        }
+        requireUsers();
+        if (users.verify(name, current) == null) {
+            throw new IllegalArgumentException("the current password is wrong");
+        }
+        users.setPassword(name, next, System.currentTimeMillis());
+        revokeSessions(name, sessionToken(req));
+    }
+
+    /** Drops every session of {@code name}, except {@code keepToken} when it is non-null. */
+    void revokeSessions(String name, String keepToken) {
+        sessions.entrySet().removeIf(e -> e.getValue().user().equals(name) && !e.getKey().equals(keepToken));
+    }
+
+    ConsoleUsers requireUsers() {
+        if (users == null) {
+            throw new IllegalStateException("this console manages no users: it was built without a user file");
+        }
+        return users;
     }
 
     /** On matching credentials, mints a session bound to the matched role and returns the {@code
@@ -80,7 +170,7 @@ final class ConsoleAuth {
         Role role = credentialRole(u, p);
         if (role == null) return null;
         String token = newToken();
-        sessions.put(token, new Session(System.currentTimeMillis() + SESSION_TTL_MILLIS, role));
+        sessions.put(token, new Session(System.currentTimeMillis() + SESSION_TTL_MILLIS, u, role));
         return cookie(token, SESSION_TTL_MILLIS / 1000);
     }
 
@@ -91,15 +181,16 @@ final class ConsoleAuth {
 
     String expiredCookie() { return cookie("", 0); }
 
-    /** Which role these credentials authenticate as, or null if they match neither account. */
+    /** Which role these credentials authenticate as, built-ins first, or null if none match. */
     private Role credentialRole(String u, String p) {
-        if (password == null) return null;
-        if (eq(u, user) && eq(p, password)) return Role.OPERATOR;
+        if (password != null && eq(u, user) && eq(p, password)) return Role.ADMIN;
         if (viewerPassword != null && eq(u, viewerUser) && eq(p, viewerPassword)) return Role.VIEWER;
-        return null;
+        return users == null ? null : users.verify(u, p);
     }
 
-    private Role basicRole(String header) {
+    private record Credentials(String user, String password) {}
+
+    private static Credentials basic(String header) {
         if (header == null || !header.regionMatches(true, 0, "Basic ", 0, 6)) return null;
         String decoded;
         try {
@@ -109,16 +200,16 @@ final class ConsoleAuth {
         }
         int colon = decoded.indexOf(':');
         if (colon < 0) return null;
-        return credentialRole(decoded.substring(0, colon), decoded.substring(colon + 1));
+        return new Credentials(decoded.substring(0, colon), decoded.substring(colon + 1));
     }
 
-    private Role sessionRole(HttpServletRequest req) {
+    private Session session(HttpServletRequest req) {
         String token = sessionToken(req);
         if (token == null) return null;
         Session s = sessions.get(token);
         if (s == null) return null;
         if (s.expiry() < System.currentTimeMillis()) { sessions.remove(token); return null; }
-        return s.role();
+        return s;
     }
 
     private static String sessionToken(HttpServletRequest req) {

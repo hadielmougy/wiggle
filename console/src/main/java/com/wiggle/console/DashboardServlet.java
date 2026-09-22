@@ -49,11 +49,16 @@ public final class DashboardServlet extends HttpServlet {
             if (path.equals("/api/backlog")) { backlog(req, res); return; }
             if (path.equals("/api/stats")) { stats(req, res); return; }
             if (path.equals("/api/anomalies")) { anomalies(req, res); return; }
+            if (path.equals("/api/password")) { changeOwnPassword(req, res); return; }
+            if (path.startsWith("/api/users")) { users(req, res, sub(path, "/api/users")); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
             if (path.startsWith("/api/schedules")) { schedules(req, res, sub(path, "/api/schedules")); return; }
             if (path.startsWith("/api/")) { error(res, 404, "unknown endpoint"); return; }
             staticFile(res, path);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            // A rejected user name, password or role: the caller's mistake, not the console's.
+            error(res, 400, e.getMessage());
         } catch (WiggleApiException e) {
             error(res, e.status(), e.getMessage());
         } catch (RuntimeException e) {
@@ -66,10 +71,95 @@ public final class DashboardServlet extends HttpServlet {
         ConsoleAuth.Role role = auth.role(req);   // null if auth is required and the caller isn't authenticated
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("required", auth.required());
-        out.put("user", auth.required() ? auth.user() : null);
-        out.put("role", role == null ? null : role.name().toLowerCase());
-        out.put("canWrite", role == ConsoleAuth.Role.OPERATOR);
+        out.put("user", auth.signedInUser(req));
+        out.put("role", role == null ? null : role.wire());
+        out.put("canWrite", role == ConsoleAuth.Role.ADMIN);
+        // A built-in account's password lives in the environment, so this console cannot change it.
+        out.put("canChangePassword", auth.users() != null && auth.signedInUser(req) != null
+                && !auth.builtinNames().contains(auth.signedInUser(req)));
+        out.put("managesUsers", auth.users() != null);
         json(res, 200, out);
+    }
+
+    /**
+     * The managed accounts. Reading them is admin-only too: the filter guards writes, and who can
+     * sign in is not a viewer's business.
+     */
+    private void users(HttpServletRequest req, HttpServletResponse res, String[] parts) throws IOException {
+        if (auth.users() == null) { error(res, 404, "this console manages no users"); return; }
+        if (!auth.canWrite(req)) { error(res, 403, "admin role required"); return; }
+        ConsoleUsers users = auth.users();
+        switch (req.getMethod()) {
+            case "GET" -> {
+                if (parts.length != 0) { error(res, 404, "not found"); return; }
+                List<Object> list = new ArrayList<>();
+                for (String name : auth.builtinNames()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", name);
+                    m.put("role", name.equals(auth.user()) ? "admin" : "viewer");
+                    m.put("builtin", true);
+                    list.add(m);
+                }
+                for (ConsoleUsers.User u : users.list()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", u.name());
+                    m.put("role", u.role().wire());
+                    m.put("builtin", false);
+                    m.put("createdAt", u.createdAt());
+                    m.put("updatedAt", u.updatedAt());
+                    list.add(m);
+                }
+                json(res, 200, Map.of("users", list));
+            }
+            case "POST" -> {
+                Map<String, Object> body = Json.asObject(readBody(req));
+                long now = System.currentTimeMillis();
+                if (parts.length == 2 && parts[1].equals("password")) {   // an admin resets someone's password
+                    users.setPassword(parts[0], String.valueOf(body.get("password")), now);
+                    auth.revokeSessions(parts[0], null);   // whoever held that password is signed out
+                    json(res, 200, Map.of("ok", true));
+                    return;
+                }
+                if (parts.length != 0) { error(res, 404, "not found"); return; }
+                String name = String.valueOf(body.get("user"));
+                ConsoleAuth.Role role = ConsoleAuth.Role.of(String.valueOf(body.get("role")));
+                users.create(name, String.valueOf(body.get("password")), role, auth.builtinNames(), now);
+                json(res, 200, Map.of("user", name, "role", role.wire()));
+            }
+            case "DELETE" -> {
+                if (parts.length != 1) { error(res, 404, "not found"); return; }
+                String name = parts[0];
+                if (auth.builtinNames().contains(name)) {
+                    error(res, 400, "'" + name + "' is a built-in account set in the environment; "
+                            + "remove it where the console is deployed");
+                    return;
+                }
+                // Refuse the move that locks everyone out: the last admin, with no built-in behind it.
+                if (!auth.hasBuiltinAdmin() && users.has(name)
+                        && ConsoleAuth.Role.ADMIN == roleOf(users, name) && users.admins() <= 1) {
+                    error(res, 400, "'" + name + "' is the only admin and there is no built-in admin "
+                            + "to fall back on; add another admin first");
+                    return;
+                }
+                users.delete(name);
+                auth.revokeSessions(name, null);
+                json(res, 200, Map.of("ok", true));
+            }
+            default -> error(res, 405, "GET, POST or DELETE");
+        }
+    }
+
+    private static ConsoleAuth.Role roleOf(ConsoleUsers users, String name) {
+        return users.list().stream().filter(u -> u.name().equals(name))
+                .map(ConsoleUsers.User::role).findFirst().orElse(null);
+    }
+
+    /** Self-service: the signed-in account changes its own password, proving the current one. */
+    private void changeOwnPassword(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        if (!req.getMethod().equals("POST")) { error(res, 405, "POST required"); return; }
+        Map<String, Object> body = Json.asObject(readBody(req));
+        auth.changeOwnPassword(req, String.valueOf(body.get("current")), String.valueOf(body.get("password")));
+        json(res, 200, Map.of("ok", true));
     }
 
     private void login(HttpServletRequest req, HttpServletResponse res) throws IOException {

@@ -46,9 +46,10 @@
     [:header
      [:h1 "🌀 WIGGLE"]
      [:div.tabs
-      (for [[k label] [[:instances "Instances"] [:workflows "Workflows"]
-                       [:schedules "Schedules"] [:signals "Signals"]
-                       [:backlog "Backlog"] [:performance "Performance"]]]
+      (for [[k label] (cond-> [[:instances "Instances"] [:workflows "Workflows"]
+                               [:schedules "Schedules"] [:signals "Signals"]
+                               [:backlog "Backlog"] [:performance "Performance"]]
+                        (st/can-manage-users?) (conj [:users "Users"]))]
         ^{:key k}
         [:button {:class (when (= k tab) "active")
                   :on-click #(st/set-tab! k)} label])]
@@ -60,9 +61,22 @@
        [:div.account
         [:span.user (:user auth)]
         (when (= (:role auth) "viewer") [:span.badge.readonly {:title "read-only access"} "read-only"])
+        (when (st/can-change-password?)
+          [:button.ghost {:on-click #(st/open-window! :password)} "Password"])
         [:button.ghost {:on-click #(set! (.. js/window -location -href) "/logout")} "Log out"]])]))
 
 ;; ---------------------------------------------------------------- signal form
+
+(defn password-field
+  "One password box and a button. on-submit is (fn [password]); the box clears after it fires."
+  [placeholder on-submit label]
+  (let [v (r/atom "")]
+    (fn [placeholder on-submit label]
+      [:div.row {:style {:padding "10px 14px"}}
+       [:input {:type "password" :style {:flex 1} :value @v :placeholder placeholder
+                :auto-complete "new-password"
+                :on-change #(reset! v (.. % -target -value))}]
+       [:button.primary {:on-click #(let [p @v] (reset! v "") (on-submit p))} label]])))
 
 (defn signal-form
   "Inline payload editor for delivering a signal. on-send is (fn [payload-clj])."
@@ -489,11 +503,106 @@
                          :on-close st/close-window!}
         [detail-body]]))])
 
+;; ---------------------------------------------------------------- users tab
+
+(defn user-form []
+  (let [s (r/atom {:user "" :password "" :role "viewer"})]
+    (fn []
+      (let [{:keys [user password role]} @s]
+        [:section.panel
+         [:h2 "New user"]
+         [:div {:style {:padding 14}}
+          [:div.field [:span "name"]
+           [:input {:value user :placeholder "letters, digits, dot, dash, underscore"
+                    :on-change #(swap! s assoc :user (.. % -target -value))}]]
+          [:div.field [:span "password"]
+           [:input {:type "password" :value password :placeholder "at least 8 characters"
+                    :auto-complete "new-password"
+                    :on-change #(swap! s assoc :password (.. % -target -value))}]]
+          [:div.field [:span "role"]
+           [:select {:value role :on-change #(swap! s assoc :role (.. % -target -value))}
+            [:option {:value "viewer"} "viewer — read-only"]
+            [:option {:value "admin"} "admin — full access, manages users"]]]
+          [:div.row
+           [:button.primary
+            {:on-click #(do (act/create-user! {:user user :password password :role role})
+                            (reset! s {:user "" :password "" :role "viewer"}))}
+            "create user"]]
+          [:p.muted {:style {:margin "10px 0 0"}}
+           "The account is stored on this console, hashed. Tell the person their password out of band;"
+           " they can change it from here once they sign in."]]]))))
+
+(defn users-list []
+  (let [resetting (r/atom nil)]
+    (fn []
+      [:section.panel
+       [:h2 "Users" [:span.count (count (:users @db))]]
+       [:p.muted
+        "Who can sign in to this console. A built-in account comes from the environment where the"
+        " console runs, so its password and role are set there, not here."]
+       (if-not (seq (:users @db))
+         [:div.empty "no accounts yet"]
+         [:table
+          [:thead [:tr [:th "user"] [:th "role"] [:th "source"] [:th "created"] [:th ""]]]
+          [:tbody
+           (for [u (:users @db)]
+             ^{:key (:name u)}
+             [:<>
+              [:tr
+               [:td [:strong (:name u)]]
+               [:td [:span.badge {:class (when (= (:role u) "admin") "RUNNING")} (:role u)]]
+               [:td.muted (if (:builtin u) "environment" "this console")]
+               [:td.muted (if (:builtin u) "—" (str (u/ago (:createdAt u)) " ago"))]
+               [:td.actions
+                (when-not (:builtin u)
+                  [:<>
+                   [:button.ghost {:on-click #(swap! resetting (fn [c] (when-not (= c (:name u)) (:name u))))}
+                    (if (= @resetting (:name u)) "close" "set password")]
+                   [:button.danger {:on-click #(act/delete-user! (:name u))} "delete"]])]]
+              (when (= @resetting (:name u))
+                [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
+                      [password-field "new password"
+                       (fn [p] (act/reset-password! (:name u) p) (reset! resetting nil))
+                       "set password"]]])])]])])))
+
+(defn users-tab []
+  ;; The form is narrow and the table is not: give the table the full width rather than half of it.
+  [:div.cols.wide-left
+   [user-form]
+   [users-list]])
+
 ;; ---------------------------------------------------------------- root
 
 (defn toast []
   (when-let [t (:toast @db)]
     [:div {:class (str "toast " (name (:kind t)))} (:text t)]))
+
+(defn change-password-window []
+  (let [s (r/atom {:current "" :next "" :confirm ""})]
+    (fn []
+      (let [{:keys [current next confirm]} @s]
+        [floating-window {:title [:span "Change password"
+                                  [:span.muted {:style {:fontWeight 400}} " · " (get-in @db [:auth :user])]]
+                          :on-close st/close-window!}
+         [:div {:style {:padding 14}}
+          [:div.field [:span "current password"]
+           [:input {:type "password" :value current :auto-complete "current-password"
+                    :on-change #(swap! s assoc :current (.. % -target -value))}]]
+          [:div.field [:span "new password"]
+           [:input {:type "password" :value next :placeholder "at least 8 characters"
+                    :auto-complete "new-password"
+                    :on-change #(swap! s assoc :next (.. % -target -value))}]]
+          [:div.field [:span "new password again"]
+           [:input {:type "password" :value confirm :auto-complete "new-password"
+                    :on-change #(swap! s assoc :confirm (.. % -target -value))}]]
+          [:div.row
+           [:button.primary
+            {:on-click #(if (not= next confirm)
+                          (st/toast! :err "the two new passwords do not match")
+                          (act/change-password! current next st/close-window!))}
+            "change password"]]
+          [:p.muted {:style {:margin "10px 0 0"}}
+           "Your other sessions are signed out; this one stays."]]]))))
 
 (defn app []
   [:div
@@ -505,5 +614,7 @@
       :schedules [schedules-tab]
       :signals   [signals-tab]
       :backlog   [backlog-tab]
-      :performance [performance-tab])]
+      :performance [performance-tab]
+      :users     [users-tab])]
+   (when (= :password (get-in @db [:window :kind])) [change-password-window])
    [toast]])

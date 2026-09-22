@@ -190,7 +190,9 @@ helm install wiggle deploy/helm/wiggle \
 A standalone web UI that is a **pure gRPC client** — point it at a cluster with `WIGGLE_URL`.
 Live instance trace over the workflow diagram, cancel, deliver signals, schedules, and search by
 **instance id or correlation id**. Optional login with an operator account and a **read-only
-viewer** account. Server nodes themselves serve no UI — just a `/healthz` probe for Kubernetes.
+viewer** account, and an admin can add further accounts of either role from the console itself,
+each able to change its own password. Server nodes themselves serve no UI — just a `/healthz`
+probe for Kubernetes.
 
 ![The console's instance detail: an onboarding run traced over its own diagram — fork, join, a sub-workflow, and a signal step waiting on manager approval, with the token table and an inline deliver button.](docs/img/console-instance-trace.png)
 

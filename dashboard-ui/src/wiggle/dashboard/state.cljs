@@ -6,7 +6,7 @@
 
 (defonce db
   (r/atom
-   {:tab       :instances          ; :instances | :workflows | :schedules | :signals | :backlog | :performance
+   {:tab       :instances          ; :instances | :workflows | :schedules | :signals | :backlog | :performance | :users
     :auth      nil                 ; {:required bool :user ".."} — drives the logout button
     :cluster   nil
     :workflows []
@@ -14,6 +14,7 @@
     :signals   []
     :backlog   nil                 ; {:slices .. :uncoveredSlices .. :strandedTasks ..}
     :schedules []
+    :users     []                  ; console accounts, built-ins first (admins only)
     :stats     nil                 ; {:workflow .. :nodes [..]} per-step durations, slowest p95 first
     :anomalies []                  ; observed runs that departed from their topology, newest first
     :perf      {:workflow "" :window "1h"}   ; what the performance tab shows
@@ -48,3 +49,9 @@
 
 ;; ---- authorization: true unless the server says this session is read-only (a viewer) ----
 (defn can-write? [] (get-in @db [:auth :canWrite] true))
+
+;; ---- console accounts: an admin manages them, and only when this console keeps a user file ----
+(defn manages-users? [] (boolean (get-in @db [:auth :managesUsers])))
+(defn can-manage-users? [] (and (manages-users?) (can-write?)))
+;; A built-in account's password comes from the environment, so the console cannot change it.
+(defn can-change-password? [] (boolean (get-in @db [:auth :canChangePassword])))

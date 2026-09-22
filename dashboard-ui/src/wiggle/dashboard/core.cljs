@@ -16,6 +16,7 @@
     :backlog   (act/load-backlog!)
     :schedules (act/load-schedules!)
     :performance (act/load-perf!)
+    :users     (act/load-users!)
     :workflows nil)) ; a graph is static once loaded
 
 (defn- tick! []
