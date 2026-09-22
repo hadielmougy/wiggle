@@ -342,31 +342,62 @@ public final class WorkflowEngine {
         return results;
     }
 
+    /** How long after END, or a final report, an observed run waits for stragglers before it is judged. */
+    private final long observeSettleMillis = ServerEnv.envLong("wiggle.observe.settleMillis", "WIGGLE_OBSERVE_SETTLE_MILLIS", 5_000);
+    /** How long an observed run may go without a report before it is judged as stalled. */
+    private final long observeStallMillis = ServerEnv.envLong("wiggle.observe.stallMillis", "WIGGLE_OBSERVE_STALL_MILLIS", 600_000);
+
     /**
-     * Applies a run of steps an instrumented application already executed (OBSERVED execution).
-     * A blank {@code instanceId} starts the run: the instance is minted and its id returned for
-     * the reports that follow. Nothing here is refused for departing from the topology -- that is
-     * recorded as an anomaly and the run resynchronised -- so a report is refused only when it
-     * names no known instance, or a workflow that is not OBSERVED.
+     * Appends a run of steps an instrumented application already executed (OBSERVED execution)
+     * to the run {@code correlationId} names, creating it on first sight; a blank key mints one,
+     * for a run only this reporter will ever report. Nothing is judged here -- the settle sweep
+     * does that once the run has gone quiet -- so the only refusals are a workflow that is not
+     * OBSERVED or does not exist.
      */
     public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
                                  String reporter, List<StepInput> steps, boolean fin) {
         if (steps.isEmpty() && !fin) throw EngineException.badRequest("observe requires at least one step");
         if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
+        String key = correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId;
         return transactions.inTx(tx -> {
-            Tokens.LockedTask task;
-            if (instanceId == null || instanceId.isBlank()) {
-                task = instances.startObserved(tx, workflow, version, correlationId, reporter);
-            } else {
-                Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+            Instance inst;
+            if (instanceId != null && !instanceId.isBlank()) {
+                inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
                 ObservedRunningMode.requireObserved(
                         definitions.executionMode(tx, inst.workflow, inst.version), inst.workflow + ":" + inst.version);
-                Token held = tx.tokensOf(inst.id).stream().filter(Token::isActive).findFirst().orElse(null);
-                task = new Tokens.LockedTask(inst, held);
+            } else {
+                inst = instances.observedRun(tx, workflow, version, key);
             }
-            return modeFactory.observed().observe(
-                    new ObserveRunContext(task, reporter, steps, fin, tx, loopMaxIterations));
+            return modeFactory.observed().observe(new ObserveRunContext(inst, reporter, steps, fin, tx),
+                    observeSettleMillis, observeStallMillis);
         });
+    }
+
+    /** Leader duty: judge observed runs whose settle time has passed. */
+    public int settleObservedRuns(int max) {
+        List<Instance> due = transactions.read(tx -> tx.dueSettle(System.currentTimeMillis(), max));
+        int done = 0;
+        for (Instance probe : due) {
+            try {
+                transactions.inTxVoid(tx -> settleObservedRun(tx, probe.id));
+                done++;
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "settle of observed run " + probe.id + " failed: " + e);
+            }
+        }
+        return done;
+    }
+
+    private void settleObservedRun(Tx tx, String id) {
+        Instance inst = tx.lockInstance(id).orElse(null);
+        long now = System.currentTimeMillis();
+        if (inst == null || !InstanceState.of(inst.status).running() || inst.settleAt == null || inst.settleAt > now) return;
+        WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
+                .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
+        boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
+        modeFactory.observed().settle(tx, inst, def, idle, now);
+        LOG.log(System.Logger.Level.DEBUG, () -> "settled observed run " + inst.id + " -> " + inst.status
+                + (idle ? " (idle)" : ""));
     }
 
     /** One run of an observe batch: exactly the arguments of {@link #observe}. */

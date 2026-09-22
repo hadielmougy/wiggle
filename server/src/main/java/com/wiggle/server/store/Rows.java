@@ -32,6 +32,9 @@ public final class Rows {
         public Doc context = Doc.EMPTY;
         /** When this instance is a sub-workflow: the parent's waiting token; null otherwise. */
         public String parentTokenId;
+        /** Observed runs only: when the run is due to be judged. Every report pushes it out by the
+         *  stall threshold; reaching END pulls it in to a short grace. Null on every other instance. */
+        public Long settleAt;
         public long createdAt;
         public long updatedAt;
         public long revision;

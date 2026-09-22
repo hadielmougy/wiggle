@@ -82,6 +82,16 @@ final class ServerBundle {
             return () -> Ids.next("wfi");
         }
         LivePlacement live = placement == null ? new LivePlacement() : placement;
-        return live.minter(ns, cellId, Ids::token)::get;   // :placement speaks Supplier; adapt here
+        java.util.function.Supplier<String> minted = live.minter(ns, cellId, Ids::token);
+        return new InstanceIds() {
+            @Override public String next() { return minted.get(); }
+
+            /** Stamped like a minted id, from the key's digest in place of a fresh ulid, so the
+             *  same key on this cell always names one instance. Routing a key to its cell across
+             *  cells is the reporter's job. */
+            @Override public String forKey(String key) {
+                return live.minter(ns, cellId, () -> Ids.digest(key)).get();
+            }
+        };
     }
 }

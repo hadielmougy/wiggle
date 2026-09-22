@@ -1,16 +1,16 @@
 package com.wiggle.server.engine;
 
-/**
- * Where a new instance's id comes from: the legacy {@code wfi_...} form by default, or the
- * epoch-aware {@code ns[.c{cell}].e{epoch}.s{shard}.ulid} form ({@link com.wiggle.core.IdCodec})
- * once the cell is placed under a coordinator.
- *
- * <p>An id is minted per start, not per instance object, so an implementation must be safe to call
- * from several threads and must not reuse a value.
- */
+import com.wiggle.core.Ids;
+
+/** Mints instance ids. {@link #forKey} derives one from a business key instead, so every
+ *  reporter of one observed run lands on the same instance. */
 @FunctionalInterface
 public interface InstanceIds {
 
-    /** A fresh, never-before-issued instance id. */
     String next();
+
+    /** The id an observed run keyed by {@code key} has on this cell; the same key always yields it. */
+    default String forKey(String key) {
+        return "wfo_" + Ids.digest(key);
+    }
 }

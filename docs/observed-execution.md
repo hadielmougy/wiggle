@@ -24,10 +24,9 @@ Durations alone are something OpenTelemetry already gives you; use both.
 
 ## 2. What an observed graph may contain
 
-Only `TASK`, `PREDICATE` and `END` nodes, and no compensable steps. Registration refuses
-anything else with a 400: a sleep, fork, join, signal or sub-workflow needs the server to run
-it, and there is no server-side run for something that already happened. Fan-out (`fork`,
-`forEach`) is deferred until run correlation across threads is solved on the reporting side.
+Steps, predicates, static forks and joins, and ends; no compensable steps. Registration refuses
+anything else with a 400: a sleep, signal, sub-workflow or runtime fan-out (`forEach`) needs the
+server to run it, and there is no server-side run for something that already happened.
 
 A spec never declares this mode: the DSL offers `executeInServer()`, `executeInLocalSync()` and
 `executeInLocalAsync()`, and nothing else. OBSERVED is stamped on the definition by the observer
@@ -71,31 +70,47 @@ the difference between the two fields, never their agreement with the server's c
 
 ## 4. Engine semantics
 
-- The first report of a run mints the instance. Its one token is created already **held by the
-  reporter** (`RUNNING`, lease owner = `reporter`, expiry = never), which is what keeps it out
-  of every poll and every lease-reclaim sweep. There is never a `READY` token in an observed
-  instance.
-- Each step is applied as the shared step machinery would (route, loop budget, settle), then the
-  continuation is held the same way. An `END` successor is driven, which is the only pump an
-  observed instance ever sees.
-- Anomaly kinds and what follows each:
+Reports append; judgement happens later. That is what lets several services report one run in
+any order.
+
+- **A run is keyed.** The instance id is derived from `(workflow, version, correlation id)`, so
+  every reporter of a run lands on the same instance whether it reports first or last. Two
+  reporters creating it at once collide on the primary key and the loser reads the winner's row.
+  A blank key mints a random one: that run is single-reporter by construction.
+- **A report only appends.** Each step becomes a settled, timed token carrying its reporter. A
+  step whose successor is END also writes the END token, which marks the run as closing. A step
+  the graph does not know is recorded as `UNKNOWN_NODE` at once. A step reported with an error
+  fails the run on the spot (`<step>: <error>`), no retry: the code already threw.
+- **Settling.** Every report pushes the run's settle time out by the stall threshold
+  (`WIGGLE_OBSERVE_STALL_MILLIS`, default 10 min). Reaching END, or a report marked `final`,
+  pulls it in to a short grace (`WIGGLE_OBSERVE_SETTLE_MILLIS`, default 5 s) so stragglers from
+  other services still land. The leader's housekeeping tick judges runs whose settle time has
+  passed.
+- **Judgement** sorts the run's steps by their own clock (arrival order breaks ties) and walks a
+  frontier -- the steps the graph expects next. A predicate's value picks its branch, a fork
+  releases every branch head, a join releases its successor once every branch arrived, END closes
+  the run. Interleaved branches are all in the frontier, so fan-out across services raises nothing.
 
 | kind | when | then |
 |---|---|---|
-| `OUT_OF_ORDER` | reported node ≠ the node the held token is at | held token cancelled, run resynchronised at the reported node |
-| `UNKNOWN_NODE` | no such step in the graph | step skipped |
-| `AFTER_END` | steps arrive once the instance is terminal | rest of the report ignored |
-| `INCOMPLETE` | `final` while still `RUNNING` | instance `FAILED` ("run ended before END, at …") |
+| `UNKNOWN_NODE` | no such step in the graph (at arrival) | step skipped |
+| `AFTER_END` | steps arrive once the instance is terminal (at arrival) | tokens kept for their timings |
+| `DUPLICATE` | a step already consumed runs again and lies on no cycle | ignored; at-least-once delivery, most likely |
+| `OUT_OF_ORDER` | a step outside the frontier, not a duplicate | frontier resynchronised at that step |
+| `INCOMPLETE` | judged without END reached | instance `FAILED` ("run ended before END, at …") |
+| `STALLED` | judged because the run went quiet, not because END or `final` arrived | with `INCOMPLETE` |
 
-- A step reported with `error` fails its token (`FAILED`, `last_error`) and the instance
-  (`<step>: <error>`), no retry: the code already threw.
-- The reply carries the instance id, its status, and how many anomalies that report added.
+- **Verdict.** A successful END reached means `COMPLETED`, whatever was recorded along the way;
+  anomalies are findings, not failures. A failing END fails with its reason. No END fails as
+  incomplete.
+- **Context.** Off unless the reporter ships it; a shipped return value replaces the instance
+  context, last writer wins.
 
 ## 5. Storage
 
 Migration 15: `wf_token.started_at` / `finished_at` (nullable), an index for the duration
 sample, and `wf_anomaly` (instance, workflow, version, kind, expected/reported node, detail,
-time). Duration statistics are computed in the server over the newest N timed `DONE` tokens of
+time). Migration 16: `wf_instance.settle_at` (nullable, observed runs only) and its index. Duration statistics are computed in the server over the newest N timed `DONE` tokens of
 a version (default 10 000), so no percentile SQL has to be portable.
 
 ## 6. Reporting side

@@ -299,6 +299,12 @@ public final class JdbcStorage implements Storage {
             );
             CREATE INDEX IF NOT EXISTS ix_anomaly_instance ON wf_anomaly (instance_id);
             CREATE INDEX IF NOT EXISTS ix_anomaly_workflow ON wf_anomaly (workflow, observed_at);
+            """),
+            // When an observed run is due to be judged: pushed out by every report, pulled in by
+            // END. Null on every other instance, so the sweep's index touches only observed runs.
+            new Migration(16, "observed-settle", """
+            ALTER TABLE wf_instance ADD COLUMN IF NOT EXISTS settle_at BIGINT;
+            CREATE INDEX IF NOT EXISTS ix_instance_settle ON wf_instance (status, settle_at);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -769,17 +775,31 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
+        private static final String INSERT_INSTANCE = "INSERT INTO wf_instance " +
+                "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision," +
+                "parent_token_id,settle_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
         @Override public void insertInstance(Instance i) {
-            try (PreparedStatement p = ps("INSERT INTO wf_instance " +
-                    "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision," +
-                    "parent_token_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")) {
-                p.setString(1, i.id); p.setString(2, i.workflow); p.setInt(3, i.version);
-                p.setString(4, i.correlationId); p.setString(5, i.status.name());
-                p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.context.json());
-                p.setLong(9, i.createdAt); p.setLong(10, i.updatedAt); p.setLong(11, i.revision);
-                p.setString(12, i.parentTokenId);
+            try (PreparedStatement p = ps(INSERT_INSTANCE)) {
+                bindInstance(p, i);
                 p.executeUpdate();
             } catch (SQLException e) { throw wrap(e); }
+        }
+
+        @Override public boolean insertInstanceIfAbsent(Instance i) {
+            try (PreparedStatement p = ps(dialect.insertIgnore(INSERT_INSTANCE))) {
+                bindInstance(p, i);
+                return p.executeUpdate() > 0;
+            } catch (SQLException e) { throw wrap(e); }
+        }
+
+        private static void bindInstance(PreparedStatement p, Instance i) throws SQLException {
+            p.setString(1, i.id); p.setString(2, i.workflow); p.setInt(3, i.version);
+            p.setString(4, i.correlationId); p.setString(5, i.status.name());
+            p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.context.json());
+            p.setLong(9, i.createdAt); p.setLong(10, i.updatedAt); p.setLong(11, i.revision);
+            p.setString(12, i.parentTokenId);
+            setNullableLong(p, 13, i.settleAt);
         }
 
         @Override public Optional<Instance> lockInstance(String id) { return loadInstance(id, true); }
@@ -799,7 +819,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=?,term_reason=?," +
-                "error=?,context=?,updated_at=?,revision=revision+1 WHERE id=?";
+                "error=?,context=?,updated_at=?,settle_at=?,revision=revision+1 WHERE id=?";
 
         @Override public void updateInstance(Instance i) {
             try (PreparedStatement p = ps(UPDATE_INSTANCE)) {
@@ -840,7 +860,8 @@ public final class JdbcStorage implements Storage {
 
         private static void bindInstanceUpdate(PreparedStatement p, Instance i) throws SQLException {
             p.setString(1, i.status.name()); p.setString(2, i.terminationReason); p.setString(3, i.error);
-            p.setString(4, i.context.json()); p.setLong(5, i.updatedAt); p.setString(6, i.id);
+            p.setString(4, i.context.json()); p.setLong(5, i.updatedAt); setNullableLong(p, 6, i.settleAt);
+            p.setString(7, i.id);
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
@@ -1150,6 +1171,16 @@ public final class JdbcStorage implements Storage {
         @Override public List<Token> dueTimers(long now, int max) {
             return query("SELECT * FROM wf_token WHERE status='WAITING' AND kind='SLEEP' AND available_at<=? " +
                     "ORDER BY available_at LIMIT ?", now, max);
+        }
+
+        @Override public List<Instance> dueSettle(long now, int max) {
+            List<Instance> out = new ArrayList<>();
+            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
+                    + "AND settle_at <= ? ORDER BY settle_at LIMIT ?")) {
+                p.setLong(1, now); p.setInt(2, max);
+                try (ResultSet rs = p.executeQuery()) { while (rs.next()) out.add(readInstance(rs)); }
+            } catch (SQLException e) { throw wrap(e); }
+            return out;
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {
@@ -1487,6 +1518,8 @@ public final class JdbcStorage implements Storage {
             i.createdAt = rs.getLong("created_at");
             i.updatedAt = rs.getLong("updated_at");
             i.revision = rs.getLong("revision");
+            long settleAt = rs.getLong("settle_at");
+            i.settleAt = rs.wasNull() ? null : settleAt;
             return i;
         }
 

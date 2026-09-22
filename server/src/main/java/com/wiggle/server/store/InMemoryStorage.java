@@ -153,6 +153,10 @@ public final class InMemoryStorage implements Storage {
 
         @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }
 
+        @Override public boolean insertInstanceIfAbsent(Instance i) {
+            return instances.putIfAbsent(i.id, i.clone()) == null;
+        }
+
         @Override public Optional<Instance> lockInstance(String id) { return findInstance(id); }
 
         @Override public Optional<Instance> findInstance(String id) {
@@ -351,6 +355,15 @@ public final class InMemoryStorage implements Storage {
             if (live == null || live.nextFireAt != expectedFireAt) return false;
             live.nextFireAt = nextFireAt;
             return true;
+        }
+
+        @Override public List<Instance> dueSettle(long now, int max) {
+            return instances.values().stream()
+                    .filter(i -> i.status == InstanceStatus.RUNNING && i.settleAt != null && i.settleAt <= now)
+                    .sorted(Comparator.comparingLong((Instance i) -> i.settleAt))
+                    .limit(max)
+                    .map(Instance::clone)
+                    .toList();
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {

@@ -27,6 +27,12 @@ public interface Tx extends GraphStore {
     default boolean transactional() { return true; }
 
     void insertInstance(Instance instance);
+
+    /**
+     * {@code insertInstance} that leaves an existing row alone: false when the id was already
+     * taken. Two reporters can create the same keyed observed run at once; the loser re-reads.
+     */
+    boolean insertInstanceIfAbsent(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
 
@@ -114,6 +120,9 @@ public interface Tx extends GraphStore {
 
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
+
+    /** RUNNING observed runs whose settle time has passed, soonest first. */
+    List<Instance> dueSettle(long now, int max);
 
     /** Snapshot of the dispatchable backlog, for lag monitoring. */
     Rows.QueueDepth queueDepth(long now);

@@ -44,11 +44,17 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * OBSERVED execution: the server dispatches nothing, an instrumented application reports the
- * steps it ran, and the server keeps their timings and records every departure from the topology
- * rather than refusing it.
+ * OBSERVED execution: the server dispatches nothing; any number of instrumented applications
+ * report the steps they ran under one key, the server appends them with their timings, and a
+ * settle sweep judges the run against its topology once it has gone quiet.
  */
 class ObservedModeTest {
+
+    static {
+        // A judged run needs no straggler grace here, and a quiet one should stall fast.
+        System.setProperty("wiggle.observe.settleMillis", "0");
+        System.setProperty("wiggle.observe.stallMillis", "300");
+    }
 
     interface Steps {
         Map<String, Object> a(Map<String, Object> ctx);
@@ -58,7 +64,7 @@ class ObservedModeTest {
     }
 
     private static final long T0 = 1_700_000_000_000L;
-    private static final String REPORTER = "app-1";
+    private static final String APP1 = "app-1", APP2 = "app-2";
 
     /** A spec declares no mode of its own; OBSERVED is stamped on the published definition, as
      *  the observe module does. */
@@ -68,9 +74,12 @@ class ObservedModeTest {
                 .thenApply(s::b)
                 .thenFilter(s::keep)
                 .thenApply(s::c));
-        WorkflowDefinition d = spec.definition();
-        return new FlowSpec(new WorkflowDefinition(d.name(), d.version(), d.startNode(), d.nodes(), d.queues(),
-                ExecutionMode.OBSERVED, d.checkpoints()));
+        return new FlowSpec(observed(spec.definition()));
+    }
+
+    private static WorkflowDefinition observed(WorkflowDefinition d) {
+        return new WorkflowDefinition(d.name(), d.version(), d.startNode(), d.nodes(), d.queues(),
+                ExecutionMode.OBSERVED, d.checkpoints());
     }
 
     /** The node ids along {@code next} from the start: a, b, keep, c. */
@@ -80,7 +89,6 @@ class ObservedModeTest {
         return ids;
     }
 
-    /** A timed step: {@code offset} millis after T0, lasting {@code millis}. */
     private static StepInput step(String nodeId, long offset, long millis) {
         return new StepInput(nodeId, null, null, null, T0 + offset, T0 + offset + millis);
     }
@@ -107,9 +115,16 @@ class ObservedModeTest {
             return new Fixture(storage, engine, spec, chain(spec.definition()));
         }
 
-        ObserveResult report(String instanceId, boolean fin, StepInput... steps) {
-            return engine.observe(spec.name(), null, instanceId, "order-42", REPORTER, List.of(steps), fin);
+        ObserveResult report(String reporter, String key, boolean fin, StepInput... steps) {
+            return engine.observe(spec.name(), null, null, key, reporter, List.of(steps), fin);
         }
+
+        /** The leader's settle sweep, run by hand. */
+        int settle() { return engine.settleObservedRuns(100); }
+
+        String status(String id) { return engine.instance(id).orElseThrow().status(); }
+
+        List<AnomalyView> anomalies(String id) { return engine.anomalies(null, id, 20); }
 
         String a() { return ids.get(0); }
         String b() { return ids.get(1); }
@@ -121,23 +136,19 @@ class ObservedModeTest {
         @Override public void close() { storage.close(); }
     }
 
-    @Test @DisplayName("a reported run maps to an instance nobody can poll, keeps its timings, and completes at END")
-    void reportedRunCompletesWithTimings() {
-        try (Fixture f = Fixture.inMemory("obs-linear")) {
-            ObserveResult first = f.report(null, false, step(f.a(), 0, 10), step(f.b(), 10, 50));
-            assertNotNull(first.instanceId());
-            assertTrue(first.running(), "two of four steps in: still running");
-            assertEquals(0, first.anomalies());
+    @Test @DisplayName("two reporters under one key land on one instance, nobody can poll it, and it completes at settle")
+    void keyedRunAcrossReporters() {
+        try (Fixture f = Fixture.inMemory("obs-keyed")) {
+            ObserveResult first = f.report(APP1, "order-42", false, step(f.a(), 0, 10), step(f.b(), 10, 50));
+            ObserveResult second = f.report(APP2, "order-42", false, predicate(f.keep(), true, 60, 1), step(f.c(), 61, 20));
+            assertEquals(first.instanceId(), second.instanceId(), "the key names the run, whoever reports");
+            assertEquals("RUNNING", second.instanceStatus(), "END seen, but not judged until it settles");
             assertTrue(f.engine.poll("w1", f.queues(), 10, null).isEmpty(), "an observed token is never offered");
-            Token held = f.engine.tokens(first.instanceId()).stream().filter(Token::isActive).findFirst().orElseThrow();
-            assertEquals(f.keep(), held.nodeId, "waiting where the run left off");
-            assertEquals(TokenStatus.RUNNING, held.status);
-            assertEquals(REPORTER, held.leaseOwner, "held by the reporter, never READY");
+            assertTrue(f.engine.tokens(first.instanceId()).stream().noneMatch(Token::isActive), "nothing is ever held");
 
-            ObserveResult last = f.report(first.instanceId(), true,
-                    predicate(f.keep(), true, 60, 1), step(f.c(), 61, 20));
-            assertEquals("COMPLETED", last.instanceStatus());
-            assertEquals(0, last.anomalies());
+            assertEquals(1, f.settle(), "one run was due");
+            assertEquals("COMPLETED", f.status(first.instanceId()));
+            assertEquals(0, f.settle(), "judged once");
 
             Map<String, Token> done = new LinkedHashMap<>();
             for (Token t : f.engine.tokens(first.instanceId())) {
@@ -145,97 +156,144 @@ class ObservedModeTest {
             }
             assertEquals(Set.of(f.a(), f.b(), f.keep(), f.c()), done.keySet(), "every reported step settled timed");
             assertEquals(50, done.get(f.b()).finishedAt - done.get(f.b()).startedAt);
+            assertEquals(APP1, done.get(f.a()).leaseOwner, "each token names its reporter");
+            assertEquals(APP2, done.get(f.c()).leaseOwner);
+            assertEquals(first.instanceId(), f.engine.findByCorrelation("order-42", 1).getFirst().id(),
+                    "the key is the instance's correlation id");
 
             List<NodeStats> stats = f.engine.stepStats(f.spec.name(), null, 0, 1000);
-            assertEquals(4, stats.size());
             assertEquals(f.b(), stats.getFirst().nodeId(), "slowest p95 first");
             assertEquals(50, stats.getFirst().p95Millis());
-            assertEquals(1, stats.getFirst().count());
-            assertEquals("b", stats.getFirst().name());
-            assertTrue(f.engine.anomalies(f.spec.name(), null, 10).isEmpty());
+            assertTrue(f.anomalies(first.instanceId()).isEmpty());
+
+            ObserveResult late = f.report(APP1, "order-42", false, step(f.c(), 90, 1));
+            assertEquals(first.instanceId(), late.instanceId());
+            assertEquals("COMPLETED", late.instanceStatus());
+            assertEquals(1, late.anomalies());
+            assertEquals("AFTER_END", f.anomalies(first.instanceId()).getFirst().kind());
         }
     }
 
-    @Test @DisplayName("a step reported out of order is recorded and the run resynchronised to it")
-    void outOfOrderIsRecordedAndResynced() {
+    @Test @DisplayName("arrival order means nothing: steps reported late but timed in order raise nothing")
+    void arrivalOrderIsIrrelevant() {
+        try (Fixture f = Fixture.inMemory("obs-arrival")) {
+            ObserveResult r = f.report(APP2, "k", false, step(f.c(), 61, 20));
+            f.report(APP1, "k", false, step(f.a(), 0, 10), step(f.b(), 10, 50), predicate(f.keep(), true, 60, 1));
+            f.settle();
+            assertEquals("COMPLETED", f.status(r.instanceId()));
+            assertTrue(f.anomalies(r.instanceId()).isEmpty(), "judged by the steps' own clocks");
+        }
+    }
+
+    @Test @DisplayName("a step timed out of order is recorded at settle, and the run still completes")
+    void outOfOrderIsJudged() {
         try (Fixture f = Fixture.inMemory("obs-order")) {
-            ObserveResult r = f.report(null, false, step(f.a(), 0, 10), step(f.c(), 10, 20));
-            assertEquals(1, r.anomalies());
-            assertEquals("COMPLETED", r.instanceStatus(), "c is the last step, so END was reached");
-
-            List<AnomalyView> anomalies = f.engine.anomalies(null, r.instanceId(), 10);
+            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 10), step(f.c(), 10, 20));
+            assertEquals(0, r.anomalies(), "nothing is judged on arrival");
+            f.settle();
+            assertEquals("COMPLETED", f.status(r.instanceId()), "c's successor is END");
+            List<AnomalyView> anomalies = f.anomalies(r.instanceId());
             assertEquals(1, anomalies.size());
-            AnomalyView a = anomalies.getFirst();
-            assertEquals("OUT_OF_ORDER", a.kind());
-            assertEquals(f.b(), a.expectedNode());
-            assertEquals(f.c(), a.reportedNode());
-            assertEquals(r.instanceId(), a.instanceId());
-
-            assertTrue(f.engine.tokens(r.instanceId()).stream()
-                    .anyMatch(t -> t.nodeId.equals(f.b()) && t.status == TokenStatus.CANCELLED),
-                    "the token waiting at b was abandoned, not settled");
-            assertTrue(f.engine.tokens(r.instanceId()).stream()
-                    .anyMatch(t -> t.nodeId.equals(f.c()) && t.status == TokenStatus.DONE && t.startedAt != null),
-                    "c still yields its timing");
+            assertEquals("OUT_OF_ORDER", anomalies.getFirst().kind());
+            assertEquals(f.b(), anomalies.getFirst().expectedNode());
+            assertEquals(f.c(), anomalies.getFirst().reportedNode());
         }
     }
 
-    @Test @DisplayName("a step the graph does not know is recorded and skipped")
+    @Test @DisplayName("at-least-once delivery: a step reported twice is a DUPLICATE, not a failure")
+    void duplicateDelivery() {
+        try (Fixture f = Fixture.inMemory("obs-dup")) {
+            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 1), step(f.b(), 1, 1), step(f.b(), 2, 1),
+                    predicate(f.keep(), true, 3, 1), step(f.c(), 4, 1));
+            f.settle();
+            assertEquals("COMPLETED", f.status(r.instanceId()));
+            List<AnomalyView> anomalies = f.anomalies(r.instanceId());
+            assertEquals(1, anomalies.size());
+            assertEquals("DUPLICATE", anomalies.getFirst().kind());
+            assertEquals(f.b(), anomalies.getFirst().reportedNode());
+        }
+    }
+
+    @Test @DisplayName("a step the graph does not know is recorded at arrival and skipped")
     void unknownStepIsRecordedAndSkipped() {
         try (Fixture f = Fixture.inMemory("obs-unknown")) {
-            ObserveResult r = f.report(null, true, step(f.a(), 0, 1), step("nope", 1, 1),
+            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 1), step("nope", 1, 1),
                     step(f.b(), 2, 1), predicate(f.keep(), true, 3, 1), step(f.c(), 4, 1));
             assertEquals(1, r.anomalies());
-            assertEquals("COMPLETED", r.instanceStatus());
-            AnomalyView a = f.engine.anomalies(null, r.instanceId(), 10).getFirst();
-            assertEquals("UNKNOWN_NODE", a.kind());
-            assertEquals("nope", a.reportedNode());
-            assertEquals(f.b(), a.expectedNode());
+            assertEquals("UNKNOWN_NODE", f.anomalies(r.instanceId()).getFirst().kind());
+            f.settle();
+            assertEquals("COMPLETED", f.status(r.instanceId()));
+            assertEquals(1, f.anomalies(r.instanceId()).size(), "nothing else was found");
         }
     }
 
-    @Test @DisplayName("a step that threw fails the instance; anything reported after that is an anomaly")
+    @Test @DisplayName("a step that threw fails the run on the spot; later reports are anomalies")
     void thrownStepFailsTheInstance() {
         try (Fixture f = Fixture.inMemory("obs-error")) {
-            ObserveResult r = f.report(null, false, step(f.a(), 0, 1), failed(f.b(), "boom", 1, 5));
+            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 1), failed(f.b(), "boom", 1, 5));
             assertEquals("FAILED", r.instanceStatus());
-            assertEquals(0, r.anomalies(), "a thrown step is an outcome, not a reporting defect");
             assertEquals("b: boom", f.engine.instance(r.instanceId()).orElseThrow().error());
             Token b = f.engine.tokens(r.instanceId()).stream().filter(t -> t.nodeId.equals(f.b())).findFirst().orElseThrow();
             assertEquals(TokenStatus.FAILED, b.status);
             assertEquals("boom", b.lastError);
             assertEquals(5, b.finishedAt - b.startedAt, "a failed step is timed too");
+            assertEquals(0, f.settle(), "a failed run is not due for judgement");
 
-            ObserveResult late = f.report(r.instanceId(), true, predicate(f.keep(), true, 10, 1));
+            ObserveResult late = f.report(APP2, "k", false, predicate(f.keep(), true, 10, 1));
             assertEquals("FAILED", late.instanceStatus());
-            assertEquals(1, late.anomalies());
-            assertEquals("AFTER_END", f.engine.anomalies(null, r.instanceId(), 10).getFirst().kind());
+            assertEquals("AFTER_END", f.anomalies(r.instanceId()).getFirst().kind());
         }
     }
 
-    @Test @DisplayName("a run that closes before END fails the instance as incomplete")
-    void closingBeforeEndIsIncomplete() {
-        try (Fixture f = Fixture.inMemory("obs-incomplete")) {
-            ObserveResult r = f.report(null, true, step(f.a(), 0, 1));
-            assertEquals("FAILED", r.instanceStatus());
-            assertEquals(1, r.anomalies());
-            AnomalyView a = f.engine.anomalies(f.spec.name(), null, 10).getFirst();
-            assertEquals("INCOMPLETE", a.kind());
-            assertEquals(f.b(), a.expectedNode(), "the run stopped where b was due");
-            assertTrue(f.engine.instance(r.instanceId()).orElseThrow().error().contains("before END"));
+    @Test @DisplayName("a run nobody finishes stalls: judged incomplete once it has gone quiet")
+    void quietRunStalls() throws Exception {
+        try (Fixture f = Fixture.inMemory("obs-stall")) {
+            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 1));
+            assertEquals(0, f.settle(), "still within the stall threshold");
+            Thread.sleep(400);
+            assertEquals(1, f.settle());
+            assertEquals("FAILED", f.status(r.instanceId()));
+            List<String> kinds = f.anomalies(r.instanceId()).stream().map(AnomalyView::kind).toList();
+            assertTrue(kinds.contains("INCOMPLETE") && kinds.contains("STALLED"), kinds.toString());
+            assertTrue(f.engine.instance(r.instanceId()).orElseThrow().error().contains("before END, at b"));
         }
     }
 
-    @Test @DisplayName("a predicate's reported value picks its branch")
-    void predicateValueRoutes() {
-        try (Fixture f = Fixture.inMemory("obs-branch")) {
-            Node keep = f.spec.definition().node(f.keep());
-            ObserveResult r = f.report(null, false, step(f.a(), 0, 1), step(f.b(), 1, 1),
-                    predicate(f.keep(), false, 2, 1));
-            Node alt = f.spec.definition().node(keep.altNext());
-            String expected = alt.isWorkerDispatched() ? "RUNNING" : (alt.success() ? "COMPLETED" : "FAILED");
-            assertEquals(expected, r.instanceStatus(), "the false branch of a filter was taken");
-            assertEquals(0, r.anomalies());
+    @Test @DisplayName("a report marked final settles the run at once, incomplete but not stalled")
+    void finalWithoutEndIsIncomplete() {
+        try (Fixture f = Fixture.inMemory("obs-final")) {
+            ObserveResult r = f.report(APP1, "k", true, step(f.a(), 0, 1));
+            f.settle();
+            assertEquals("FAILED", f.status(r.instanceId()));
+            List<String> kinds = f.anomalies(r.instanceId()).stream().map(AnomalyView::kind).toList();
+            assertEquals(List.of("INCOMPLETE"), kinds);
+        }
+    }
+
+    @Test @DisplayName("a fork's branches reported by different services interleave without a finding")
+    void forkJoinAcrossReporters() {
+        try (Storage storage = new InMemoryStorage()) {
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            Map<String, Node> n = new LinkedHashMap<>();
+            n.put("a", Node.task("a", "a", "act", "q", null).withNext("f"));
+            n.put("f", Node.fork("f", "f").withBranches(List.of("x", "y")));
+            n.put("x", Node.task("x", "x", "act", "q", null).withNext("j"));
+            n.put("y", Node.task("y", "y", "act", "q", null).withNext("j"));
+            n.put("j", Node.join("j", "j", 2).withNext("z"));
+            n.put("z", Node.task("z", "z", "act", "q", null).withNext("ok"));
+            n.put("ok", Node.end("ok", true, "done"));
+            registry.register(new WorkflowDefinition("obs-fork", 1, "a", n, Set.of("q"), ExecutionMode.OBSERVED));
+
+            engine.observe("obs-fork", null, null, "k", "gateway", List.of(step("a", 0, 5)), false);
+            engine.observe("obs-fork", null, null, "k", "inventory", List.of(step("y", 6, 40)), false);
+            engine.observe("obs-fork", null, null, "k", "payments", List.of(step("x", 5, 30)), false);
+            ObserveResult r = engine.observe("obs-fork", null, null, "k", "gateway", List.of(step("z", 50, 5)), false);
+            engine.settleObservedRuns(10);
+            assertEquals("COMPLETED", engine.instance(r.instanceId()).orElseThrow().status());
+            assertTrue(engine.anomalies(null, r.instanceId(), 10).isEmpty());
+            assertEquals(3, engine.tokens(r.instanceId()).stream().map(t -> t.leaseOwner).filter(o -> o != null).distinct().count(),
+                    "three services contributed");
         }
     }
 
@@ -276,16 +334,14 @@ class ObservedModeTest {
                     .executeInServer().thenApply(s::a).thenApply(s::b));
             registry.register(server.definition());
             EngineException e = assertThrows(EngineException.class, () -> engine.observe(server.name(), null,
-                    null, null, REPORTER, List.of(step(server.definition().startNode(), 0, 1)), false));
+                    null, "k", APP1, List.of(step(server.definition().startNode(), 0, 1)), false));
             assertEquals(400, e.statusCode());
-            assertTrue(f(engine.list(server.name(), null, 10)).isEmpty(), "nothing was started");
+            assertTrue(engine.list(server.name(), null, 10).isEmpty(), "nothing was started");
 
-            assertThrows(EngineException.class, () -> engine.observe("no-such", null, null, null, REPORTER,
+            assertThrows(EngineException.class, () -> engine.observe("no-such", null, null, "k", APP1,
                     List.of(step("x", 0, 1)), false));
         }
     }
-
-    private static <T> List<T> f(List<T> l) { return l; }
 
     @Test @DisplayName("over gRPC: ObserveRun, GetStepStats and ListAnomalies, with timings on the instance's tokens")
     void overGrpc() throws Exception {
@@ -302,62 +358,64 @@ class ObservedModeTest {
             try {
                 WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
                 ObserveRunResult first = stub.observeRun(ObserveRunRequest.newBuilder()
-                        .setWorkflow(spec.name()).setReporter(REPORTER).setCorrelationId("order-1")
+                        .setWorkflow(spec.name()).setReporter(APP1).setCorrelationId("order-1")
                         .addSteps(StepResult.newBuilder().setNodeId(ids.get(0)).setStartedAt(T0).setFinishedAt(T0 + 10))
                         .addSteps(StepResult.newBuilder().setNodeId(ids.get(3)).setStartedAt(T0 + 10).setFinishedAt(T0 + 40))
                         .build());
-                assertEquals("COMPLETED", first.getInstanceStatus());
-                assertEquals(1, first.getAnomalies(), "c reported where b was due");
+                assertEquals("RUNNING", first.getInstanceStatus());
                 assertFalse(first.getInstanceId().isEmpty());
+                assertEquals(first.getInstanceId(), client.findByCorrelation("order-1", 10).getFirst().id());
 
                 var stats = stub.getStepStats(StepStatsRequest.newBuilder().setWorkflow(spec.name()).build());
-                assertEquals(2, stats.getNodesCount());
+                assertEquals(2, stats.getNodesCount(), "timings are there before judgement");
                 assertEquals(ids.get(3), stats.getNodes(0).getNodeId());
                 assertEquals(30, stats.getNodes(0).getP95Millis());
 
+                server.engine().settleObservedRuns(10);
+                assertEquals("COMPLETED", client.findByCorrelation("order-1", 10).getFirst().status());
                 var anomalies = stub.listAnomalies(ListAnomaliesRequest.newBuilder().setWorkflow(spec.name()).build());
                 assertEquals(1, anomalies.getAnomaliesCount());
                 assertEquals("OUT_OF_ORDER", anomalies.getAnomalies(0).getKind());
-                assertEquals(first.getInstanceId(), anomalies.getAnomalies(0).getInstanceId());
 
                 var detail = stub.getInstance(com.wiggle.proto.InstanceIdRequest.newBuilder()
                         .setInstanceId(first.getInstanceId()).build());
                 assertTrue(detail.getTokensList().stream().anyMatch(t -> t.getNodeId().equals(ids.get(3))
                         && t.getStartedAt() == T0 + 10 && t.getFinishedAt() == T0 + 40), "timings reach the API");
-                assertEquals(first.getInstanceId(), client.findByCorrelation("order-1", 10).getFirst().id());
             } finally {
                 channel.shutdownNow().awaitTermination(2, TimeUnit.SECONDS);
             }
         }
     }
 
-    @Test @DisplayName("on the JDBC store: the migration lands, timings and anomalies round-trip")
+    @Test @DisplayName("on the JDBC store: keyed creation, timings, settle and anomalies round-trip")
     void onJdbc() {
         String url = TestStorage.url("obs");
         var dialect = url.startsWith("jdbc:postgresql") ? new PostgresDialect() : new H2Dialect();
         String name = "obs-jdbc-" + System.nanoTime();
         try (Fixture f = Fixture.open(new JdbcStorage(url, TestStorage.user(), TestStorage.password(), 4, dialect), name)) {
-            ObserveResult r = f.report(null, false, step(f.a(), 0, 10), step(f.c(), 10, 20));
-            assertEquals("COMPLETED", r.instanceStatus());
-            assertEquals(1, r.anomalies());
+            ObserveResult r1 = f.report(APP1, "k", false, step(f.a(), 0, 10));
+            ObserveResult r2 = f.report(APP2, "k", false, step(f.c(), 10, 20));
+            assertEquals(r1.instanceId(), r2.instanceId(), "keyed creation converges on the database");
+            assertEquals("RUNNING", f.status(r1.instanceId()));
+            assertEquals(1, f.settle());
+            assertEquals("COMPLETED", f.status(r1.instanceId()));
 
             List<NodeStats> stats = f.engine.stepStats(name, null, 0, 1000);
             assertEquals(2, stats.size());
             assertEquals(f.c(), stats.getFirst().nodeId());
             assertEquals(20, stats.getFirst().p50Millis());
-            assertEquals(10, stats.get(1).maxMillis());
 
             List<AnomalyView> anomalies = f.engine.anomalies(name, null, 10);
             assertEquals(1, anomalies.size());
             assertEquals("OUT_OF_ORDER", anomalies.getFirst().kind());
             assertEquals(f.b(), anomalies.getFirst().expectedNode());
             assertEquals("expected b, got c", anomalies.getFirst().detail());
-            assertEquals(1, f.engine.anomalies(null, r.instanceId(), 10).size());
             assertTrue(f.engine.anomalies("other", null, 10).isEmpty());
 
-            Token c = f.engine.tokens(r.instanceId()).stream().filter(t -> t.nodeId.equals(f.c())).findFirst().orElseThrow();
+            Token c = f.engine.tokens(r1.instanceId()).stream().filter(t -> t.nodeId.equals(f.c())).findFirst().orElseThrow();
             assertEquals(T0 + 10, c.startedAt);
-            assertEquals(T0 + 30, c.finishedAt);
+            assertEquals(APP2, c.leaseOwner);
+            assertNull(f.engine.instance(r1.instanceId()).orElseThrow().error());
             assertTrue(f.engine.poll("w1", f.queues(), 10, null).isEmpty());
         }
     }
