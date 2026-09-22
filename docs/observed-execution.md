@@ -29,15 +29,17 @@ anything else with a 400: a sleep, fork, join, signal or sub-workflow needs the 
 it, and there is no server-side run for something that already happened. Fan-out (`fork`,
 `forEach`) is deferred until run correlation across threads is solved on the reporting side.
 
-The mode is declared like the others, and like the others it is part of the version's
-fingerprint:
+A spec never declares this mode: the DSL offers `executeInServer()`, `executeInLocalSync()` and
+`executeInLocalAsync()`, and nothing else. OBSERVED is stamped on the definition by the observer
+that publishes it, so a spec cannot be handed to a worker by mistake with a mode no worker
+serves. Like the others, the mode is part of the version's fingerprint:
 
+<!-- snippet: observed/topology -->
 ```java
-FlowSpec spec = FlowSpec.define("checkout", 1, Ctx.class, Steps.class, (f, s) -> f
-        .execution(ExecutionMode.OBSERVED)
+FlowSpec spec = FlowSpec.define("checkout", 1, Order.class, CheckoutSteps.class, (f, s) -> f
         .thenApply(s::validate)
         .thenFilter(s::inStock)
-        .thenApply(s::charge));
+        .thenApply(s::charge));   // no execution mode: an observer stamps OBSERVED when it publishes
 ```
 
 ## 3. Wire protocol

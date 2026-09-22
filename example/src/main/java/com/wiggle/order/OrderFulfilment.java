@@ -34,7 +34,7 @@ public final class OrderFulfilment {
 
     public static FlowSpec flowSpec() {
         return FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps.class, (f, s) -> {
-            var validated = f.execution(ExecutionMode.LOCAL_ASYNC)
+            var validated = f.executeInLocalAsync()
                     .thenApply(s::validate)
                     .thenFilter(s::inStock);
 

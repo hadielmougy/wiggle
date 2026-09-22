@@ -73,7 +73,7 @@ class LocalBoundaryTest {
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             Map<String, AtomicInteger> runs = new ConcurrentHashMap<>();
             FlowSpec bp = FlowSpec.define("lb-fork", 1, Map.class, ForkSteps.class, (f, s) -> {
-                var prepped = f.execution(mode).thenApply(s::seed).thenApply(s::prep);
+                var prepped = Modes.in(f, mode).thenApply(s::seed).thenApply(s::prep);
                 var left = prepped.thenApply(s::l1).thenApply(s::l2);
                 var right = prepped.thenApply(s::r1);
                 return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
@@ -102,7 +102,7 @@ class LocalBoundaryTest {
     void gateFalseHandsBack() throws Exception {
         AtomicInteger downstream = new AtomicInteger();
         FlowSpec bp = FlowSpec.define("lb-gate", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_SYNC)
+                .executeInLocalSync()
                 .thenApply(s::seed)
                 .thenFilter(s::keep)
                 .thenApply(s::never));
@@ -165,8 +165,7 @@ class LocalBoundaryTest {
 
     private static FlowSpec queueSplitFlowSpec(
             ExecutionMode mode, String label, Map<String, String> ranOn) {
-        return FlowSpec.define("lb-queues", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(mode)
+        return FlowSpec.define("lb-queues", 1, Map.class, OneStep.class, (f, s) -> Modes.in(f, mode)
                 .thenApply(s::a)
                 .thenApply(s::b)
                 .thenApply(s::c, "special")

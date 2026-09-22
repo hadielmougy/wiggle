@@ -9,13 +9,13 @@ Status: **Phase 0–2 implemented + `.checkpoint()` + graceful-shutdown drain** 
 > (set `WIGGLE_EXECUTION_MODE`, `WIGGLE_JDBC_URL`, `WIGGLE_BENCH_*`).
 
 > **Implemented:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition (in the
-> fingerprint) with the `.execution(...)` DSL flag, the `AdvanceRun` wire RPC + `execution_mode`
+> fingerprint) with the `.executeInLocalSync()` / `.executeInLocalAsync()` DSL calls, the `AdvanceRun` wire RPC + `execution_mode`
 > on `TaskActivation`, `WorkflowEngine.advanceRun` (which already applies multi-step batches
 > atomically), and the worker's unified local loop: `LOCAL_SYNC` flushes every step, `LOCAL_ASYNC`
 > buffers up to `WorkerOptions.localBatchSize` (default 64) and flushes the run in one call. A
 > mid-run failure flushes the successful prefix then fails the offending step's token.
 > The `WIGGLE_EXECUTION_MODE` server default is still deferred — `DEFAULT` resolves to `SERVER`;
-> set the mode per-workflow via `.execution(...)`.
+> set the mode per-workflow via `.executeIn...()`.
 
 ## 1. Summary
 
@@ -92,7 +92,7 @@ run now and I have lease budget."*
 <!-- snippet: local-execution/execution-mode -->
 ```java
 FlowSpec spec = FlowSpec.define("name", 1, Ctx.class, Steps.class, (f, s) -> f
-        .execution(ExecutionMode.LOCAL_SYNC)   // SERVER | LOCAL_SYNC | LOCAL_ASYNC | OBSERVED | DEFAULT
+        .executeInLocalSync()   // or executeInServer() / executeInLocalAsync(); none = server default
         .thenApply(s::first)
         ...);
 ```
@@ -115,7 +115,7 @@ concrete mode onto each `TaskActivation`** (§6), so the worker never needs to k
 env or re-derive the default — it just obeys what it was handed.
 
 ### 5.3 Optional future knobs (not v1)
-- `WIGGLE_LOCAL_MAX_STEPS` / `.execution(mode, maxSteps)` — cap a local run length for fairness.
+- `WIGGLE_LOCAL_MAX_STEPS` / `.executeInLocalAsync(maxSteps)` — cap a local run length for fairness.
 - `WIGGLE_LOCAL_ASYNC_FLUSH_MILLIS` — periodic flush cadence for `LOCAL_ASYNC`.
 - Per-step `.thenApply(...).checkpoint()` — force a commit boundary even in async mode.
 

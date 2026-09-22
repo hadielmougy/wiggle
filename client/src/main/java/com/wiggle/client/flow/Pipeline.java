@@ -45,7 +45,14 @@ final class Pipeline {
 
     void defaultQueue(String queue) { this.defaultQueue = Objects.requireNonNull(queue); }
 
-    void executionMode(ExecutionMode mode) { this.executionMode = Objects.requireNonNull(mode, "mode"); }
+    /** SERVER, LOCAL_SYNC or LOCAL_ASYNC: a spec declares how workers run it. OBSERVED is not a
+     *  spec's to declare -- an observer stamps it on the definition it publishes. */
+    void executionMode(ExecutionMode mode) {
+        if (Objects.requireNonNull(mode, "mode") == ExecutionMode.OBSERVED) {
+            throw new IllegalArgumentException("a spec cannot declare OBSERVED; observe it with wiggle-observe");
+        }
+        this.executionMode = mode;
+    }
 
     /** Records the graph's entry node. Called once, for the first node attached to the root stream. */
     void startAt(String id) { this.startNode = id; }

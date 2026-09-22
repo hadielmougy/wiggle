@@ -314,7 +314,7 @@ public final class Cookbook {
         }
     }
 
-    // 7. execution(LOCAL_ASYNC) + checkpoint + repeatWhile -- batched local execution with a
+    // 7. executeInLocalAsync() + checkpoint + repeatWhile -- batched local execution with a
     //    deliberate commit point, so a crash mid-loop only replays the current iteration.
     /** What tcb-batched-loop names; BatchedLoopWithCheckpoint implements it. */
     public interface BatchedSteps {
@@ -329,7 +329,7 @@ public final class Cookbook {
         public FlowSpec spec() {
             // docs:begin batched-loop
             FlowSpec spec = FlowSpec.define("tcb-batched-loop", 1, Batch.class, BatchedSteps.class, (f, s) -> f
-                    .execution(ExecutionMode.LOCAL_ASYNC)
+                    .executeInLocalAsync()
                     .repeatWhile(s::moreBatches, b -> b
                             .thenApply(s::processBatch)
                             .checkpoint())   // flush the buffer before the next iteration
@@ -372,7 +372,7 @@ public final class Cookbook {
             FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", 1, Basket.class, KitchenSinkSteps.class, (f, s) -> {
                 var ready = f
                         .defaultQueue("default")
-                        .execution(ExecutionMode.LOCAL_SYNC)
+                        .executeInLocalSync()
                         .thenApply(s::intake)
                         .thenFilter(s::hasItems);
 

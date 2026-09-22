@@ -130,7 +130,7 @@ class ManyWorkflowsStateSweepTest {
     /** 3. fork/combine under LOCAL_SYNC -> COMPLETED, exercising local chaining of a join */
     private static FlowSpec forked() {
         return FlowSpec.define(PREFIX + "forked", 1, Map.class, ForkedSteps.class, (f, s) -> {
-            var seeded = f.execution(ExecutionMode.LOCAL_SYNC).thenApply(s::a);
+            var seeded = f.executeInLocalSync().thenApply(s::a);
             return Wiggle.allOf(seeded.thenApply(s::left), seeded.thenApply(s::right))
                     .combineWithContext(s::merge)
                     .thenApply(s::c);
@@ -140,7 +140,7 @@ class ManyWorkflowsStateSweepTest {
     /** 4. forEach over a collection under LOCAL_ASYNC -> COMPLETED */
     private static FlowSpec fannedOut() {
         return FlowSpec.define(PREFIX + "foreach", 1, Map.class, ForeachSteps.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_ASYNC)
+                .executeInLocalAsync()
                 .thenApply(s::a)
                 .thenForEach("items", Map.class, b -> b.thenApply(s::each))
                 .combine(s::collect));

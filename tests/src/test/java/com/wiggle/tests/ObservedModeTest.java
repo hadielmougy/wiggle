@@ -60,13 +60,17 @@ class ObservedModeTest {
     private static final long T0 = 1_700_000_000_000L;
     private static final String REPORTER = "app-1";
 
+    /** A spec declares no mode of its own; OBSERVED is stamped on the published definition, as
+     *  the observe module does. */
     private static FlowSpec observed(String name) {
-        return FlowSpec.define(name, 1, Map.class, Steps.class, (f, s) -> f
-                .execution(ExecutionMode.OBSERVED)
+        FlowSpec spec = FlowSpec.define(name, 1, Map.class, Steps.class, (f, s) -> f
                 .thenApply(s::a)
                 .thenApply(s::b)
                 .thenFilter(s::keep)
                 .thenApply(s::c));
+        WorkflowDefinition d = spec.definition();
+        return new FlowSpec(new WorkflowDefinition(d.name(), d.version(), d.startNode(), d.nodes(), d.queues(),
+                ExecutionMode.OBSERVED, d.checkpoints()));
     }
 
     /** The node ids along {@code next} from the start: a, b, keep, c. */
@@ -269,7 +273,7 @@ class ObservedModeTest {
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
             FlowSpec server = FlowSpec.define("srv-linear", 1, Map.class, Steps.class, (f, s) -> f
-                    .execution(ExecutionMode.SERVER).thenApply(s::a).thenApply(s::b));
+                    .executeInServer().thenApply(s::a).thenApply(s::b));
             registry.register(server.definition());
             EngineException e = assertThrows(EngineException.class, () -> engine.observe(server.name(), null,
                     null, null, REPORTER, List.of(step(server.definition().startNode(), 0, 1)), false));
