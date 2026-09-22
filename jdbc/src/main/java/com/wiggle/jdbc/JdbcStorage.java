@@ -311,6 +311,10 @@ public final class JdbcStorage implements Storage {
             // the judge can order two services' steps without trusting their clocks. Nullable.
             new Migration(17, "observed-causal-hint", """
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS after_node VARCHAR(64);
+            """),
+            // The compensable node an observed undo step reversed. Nullable: null on forward steps.
+            new Migration(18, "observed-undo", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS undo_of VARCHAR(64);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -910,8 +914,8 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version," +
                 "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack," +
-                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,after_node) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,after_node,undo_of) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
         @Override public void insertToken(Token t) {
             try (PreparedStatement p = ps(INSERT_TOKEN)) {
@@ -928,7 +932,7 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /** Binds parameters 1..23 in wf_token insert column order. */
+        /** Binds parameters 1..24 in wf_token insert column order. */
         private void bindToken(PreparedStatement p, Token t) throws SQLException {
             p.setString(1, t.id);
             p.setString(2, t.instanceId);
@@ -953,6 +957,7 @@ public final class JdbcStorage implements Storage {
             setNullableLong(p, 21, t.finishedAt);
             setNullableLong(p, 22, t.seq);
             p.setString(23, t.afterNode);
+            p.setString(24, t.undoOf);
         }
 
         private static String placeholders(int n) {
@@ -1007,7 +1012,7 @@ public final class JdbcStorage implements Storage {
 
         private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=?,kind=?,status=?," +
                 "activity=?,queue=?,attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?," +
-                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=?,after_node=? WHERE id=?";
+                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=?,after_node=?,undo_of=? WHERE id=?";
 
         @Override
         public void updateToken(Token t) {
@@ -1033,7 +1038,7 @@ public final class JdbcStorage implements Storage {
             p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
             setNullableLong(p, 14, t.compSeq); setNullableLong(p, 15, t.startedAt);
             setNullableLong(p, 16, t.finishedAt); setNullableLong(p, 17, t.seq); p.setString(18, t.afterNode);
-            p.setString(19, t.id);
+            p.setString(19, t.undoOf); p.setString(20, t.id);
         }
 
         /** A count that is not one row means a buffered write ran out of order (an update flushed
@@ -1184,7 +1189,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Instance> dueSettle(long now, int max) {
             List<Instance> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
+            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status IN ('RUNNING','COMPENSATING') AND settle_at IS NOT NULL "
                     + "AND settle_at <= ? ORDER BY settle_at LIMIT ?")) {
                 p.setLong(1, now); p.setInt(2, max);
                 try (ResultSet rs = p.executeQuery()) { while (rs.next()) out.add(readInstance(rs)); }
@@ -1480,13 +1485,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
             List<Rows.StepDuration> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at FROM wf_token "
+            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, undo_of FROM wf_token "
                     + "WHERE workflow=? AND version=? AND status='DONE' AND finished_at > ? AND started_at IS NOT NULL "
                     + "ORDER BY finished_at DESC LIMIT ?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setLong(3, since); p.setInt(4, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
-                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2))));
+                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2)),
+                                rs.getString(4) != null));
                     }
                 }
             } catch (SQLException ex) { throw wrap(ex); }
@@ -1562,6 +1568,7 @@ public final class JdbcStorage implements Storage {
             long seq = rs.getLong("seq");
             t.seq = rs.wasNull() ? null : seq;
             t.afterNode = rs.getString("after_node");
+            t.undoOf = rs.getString("undo_of");
             t.createdAt = rs.getLong("created_at");
             t.updatedAt = rs.getLong("updated_at");
             return t;

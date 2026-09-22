@@ -82,6 +82,8 @@ public final class Rows {
         public Long seq;
         /** Observed steps only: the node this step named as its cause, if any. */
         public String afterNode;
+        /** Observed undos only: the compensable node this step reversed. Null on a forward step. */
+        public String undoOf;
         public long createdAt;
         public long updatedAt;
 
@@ -185,5 +187,5 @@ public final class Rows {
                           String expectedNode, String reportedNode, String detail, long at) { }
 
     /** One settled, timed step: what the duration statistics are computed from. */
-    public record StepDuration(String nodeId, long millis) { }
+    public record StepDuration(String nodeId, long millis, boolean undo) { }
 }

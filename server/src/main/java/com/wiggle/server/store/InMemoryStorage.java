@@ -359,7 +359,8 @@ public final class InMemoryStorage implements Storage {
 
         @Override public List<Instance> dueSettle(long now, int max) {
             return instances.values().stream()
-                    .filter(i -> i.status == InstanceStatus.RUNNING && i.settleAt != null && i.settleAt <= now)
+                    .filter(i -> (i.status == InstanceStatus.RUNNING || i.status == InstanceStatus.COMPENSATING)
+                            && i.settleAt != null && i.settleAt <= now)
                     .sorted(Comparator.comparingLong((Instance i) -> i.settleAt))
                     .limit(max)
                     .map(Instance::clone)
@@ -489,7 +490,7 @@ public final class InMemoryStorage implements Storage {
                     .filter(t -> workflow.equals(t.workflow) && t.version == version && t.finishedAt > since)
                     .sorted(Comparator.comparingLong((Token t) -> t.finishedAt).reversed())
                     .limit(max)
-                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt)))
+                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt), t.undoOf != null))
                     .toList();
         }
 

@@ -16,16 +16,21 @@ import java.util.Set;
 
 /**
  * Judges an observed run against its topology once the run has settled. Pure: the steps come in
- * sorted by the reporter's clock, and the verdict is a function of them and the graph alone, so
- * the same judgement can be replayed offline over any day of runs.
+ * sorted by the reporter's clock, and the verdict is a function of them, the graph, and whether
+ * the run was declared failed, so the same judgement can be replayed offline over any day of runs.
  *
- * <p>The judge walks a frontier, the set of steps the graph expects next. A step in the frontier
- * consumes it and releases its successors: a predicate's value picks the branch, a fork releases
- * every branch head, a join releases its successor once every branch has arrived, END closes the
- * run. Two branches whose steps interleave in time are both in the frontier, so fan-out across
- * services raises nothing. A step outside the frontier is a DUPLICATE when it was already
+ * <p>The forward pass walks a frontier, the set of steps the graph expects next. A step in the
+ * frontier consumes it and releases its successors: a predicate's value picks the branch, a fork
+ * releases every branch head, a join releases its successor once every branch has arrived, END
+ * closes the run. Two branches whose steps interleave in time are both in the frontier, so fan-out
+ * across services raises nothing. A step outside the frontier is a DUPLICATE when it was already
  * consumed and lies on no cycle (at-least-once delivery), and OUT_OF_ORDER otherwise, after which
  * the frontier resynchronises to that step's successors so the rest of the run still judges.
+ *
+ * <p>The reverse pass judges compensation. Once the run was declared failed, every compensable
+ * step the forward pass consumed is expected to have been undone, newest first; the undos the
+ * run reported are checked against that expectation, and what the verdict says about the run's
+ * end depends on whether they all arrived and none failed.
  */
 final class Conformance {
 
@@ -34,22 +39,38 @@ final class Conformance {
     /**
      * One reported step. {@code at} is its clock and {@code seq} its arrival order, the priority
      * when nothing causal separates two steps; {@code after} is the node it named as its cause,
-     * or null.
+     * or null; {@code undoOf} is set when the step is the undo of that compensable node; {@code
+     * failed} when the step threw.
      */
-    record Step(String nodeId, Boolean predicateValue, long at, long seq, String after) {
+    record Step(String nodeId, Boolean predicateValue, long at, long seq, String after, String undoOf, boolean failed) {
 
         Step(String nodeId, Boolean predicateValue, long at) {
-            this(nodeId, predicateValue, at, 0, null);
+            this(nodeId, predicateValue, at, 0, null, null, false);
+        }
+
+        Step(String nodeId, Boolean predicateValue, long at, long seq, String after) {
+            this(nodeId, predicateValue, at, seq, after, null, false);
+        }
+
+        static Step undo(String nodeId, long at, long seq, boolean failed) {
+            return new Step(nodeId, null, at, seq, null, nodeId, failed);
+        }
+
+        boolean isUndo() {
+            return undoOf != null;
         }
     }
 
     record Finding(String kind, String expected, String reported, String detail) {}
 
     /**
-     * The verdict: findings in order, whether a successful END was reached, the reason if an END
-     * was reached that terminates the run as failed, and where the run stopped if it never got there.
+     * The verdict. {@code completed}: a successful END was reached. {@code endReason}: an END was
+     * reached that terminates the run as failed. {@code stoppedAt}: where the run stopped if it
+     * never got there. {@code compensated}: the run was declared failed and every undo it owed
+     * arrived and succeeded; {@code compensationError} says why not, when not.
      */
-    record Verdict(List<Finding> findings, boolean completed, String endReason, String stoppedAt) {
+    record Verdict(List<Finding> findings, boolean completed, String endReason, String stoppedAt,
+                   boolean compensated, String compensationError) {
 
         boolean reachedEnd() {
             return completed || endReason != null;
@@ -57,9 +78,18 @@ final class Conformance {
     }
 
     static Verdict judge(WorkflowDefinition def, List<Step> steps) {
+        return judge(def, steps, false);
+    }
+
+    /** {@code failed}: the run was declared failed, so undos are owed for what completed. */
+    static Verdict judge(WorkflowDefinition def, List<Step> steps, boolean failed) {
         Walk w = new Walk(def);
-        for (Step s : order(def, steps)) w.take(s);
-        return w.verdict();
+        List<Step> undos = new ArrayList<>();
+        for (Step s : order(def, steps)) {
+            if (s.isUndo()) undos.add(s);
+            else w.take(s);
+        }
+        return w.verdict(undos, failed);
     }
 
     /**
@@ -72,12 +102,12 @@ final class Conformance {
      * topology; it resolves to the latest reported occurrence of that node up to the step's own
      * clock (or the earliest after it, when clocks are what is wrong). A hint that resolves to
      * nothing is ignored, so a lost report never blocks judgement, and a cycle -- which only a
-     * bug can produce -- is broken by the clock.
+     * bug can produce -- is broken by the clock. An undo is ordered by its clock alone.
      */
     static List<Step> order(WorkflowDefinition def, List<Step> steps) {
         List<Step> byClock = new ArrayList<>(steps);
         byClock.sort(java.util.Comparator.comparingLong(Step::at).thenComparingLong(Step::seq));
-        if (byClock.stream().noneMatch(s -> s.after() != null)) return byClock;
+        if (byClock.stream().noneMatch(s -> s.after() != null && !s.isUndo())) return byClock;
 
         Map<String, Set<String>> before = predecessors(def);
         int n = byClock.size();
@@ -86,7 +116,7 @@ final class Conformance {
         for (int i = 0; i < n; i++) successors.add(new ArrayList<>());
         for (int i = 0; i < n; i++) {
             Step s = byClock.get(i);
-            if (s.after() == null || s.after().equals(s.nodeId())) continue;
+            if (s.isUndo() || s.after() == null || s.after().equals(s.nodeId())) continue;
             Set<String> preds = before.get(s.nodeId());
             if (preds == null || !preds.contains(s.after())) continue;
             int cause = resolveCause(byClock, i, s.after());
@@ -111,10 +141,10 @@ final class Conformance {
         return out;
     }
 
-    /** The latest occurrence of {@code node} at or before step {@code i} in clock order, else the earliest after it. */
+    /** The latest forward occurrence of {@code node} at or before step {@code i} in clock order, else the earliest after it. */
     private static int resolveCause(List<Step> byClock, int i, String node) {
-        for (int k = i - 1; k >= 0; k--) if (node.equals(byClock.get(k).nodeId())) return k;
-        for (int k = i + 1; k < byClock.size(); k++) if (node.equals(byClock.get(k).nodeId())) return k;
+        for (int k = i - 1; k >= 0; k--) if (!byClock.get(k).isUndo() && node.equals(byClock.get(k).nodeId())) return k;
+        for (int k = i + 1; k < byClock.size(); k++) if (!byClock.get(k).isUndo() && node.equals(byClock.get(k).nodeId())) return k;
         return -1;
     }
 
@@ -144,6 +174,8 @@ final class Conformance {
         private final Map<String, Integer> joinPending = new HashMap<>();
         private final Set<String> cyclic;
         private final List<Finding> findings = new ArrayList<>();
+        /** Compensable steps as they completed, oldest first: what a failure obliges the run to undo. */
+        private final List<String> completedCompensable = new ArrayList<>();
         private boolean completed;
         private String endReason;
 
@@ -157,8 +189,8 @@ final class Conformance {
             Node node = def.nodes().get(s.nodeId());
             if (node == null || !node.isWorkerDispatched()) return;   // recorded at arrival as UNKNOWN_NODE
             if (frontier.remove(node.id())) {
-                consumed.add(node.id());
-                release(successorOf(node, s.predicateValue()));
+                consume(node, s);
+                if (!s.failed()) release(successorOf(node, s.predicateValue()));   // a step that threw leads nowhere
                 return;
             }
             String expected = expectation();
@@ -170,18 +202,76 @@ final class Conformance {
             findings.add(new Finding(ObservedRunningMode.OUT_OF_ORDER, expected, node.id(),
                     "expected " + expectedNames() + ", got " + node.name()));
             frontier.clear();
-            consumed.add(node.id());
-            release(successorOf(node, s.predicateValue()));
+            consume(node, s);
+            if (!s.failed()) release(successorOf(node, s.predicateValue()));
         }
 
-        Verdict verdict() {
+        private void consume(Node node, Step s) {
+            consumed.add(node.id());
+            if (node.compensable() && !s.failed()) completedCompensable.add(node.id());
+        }
+
+        Verdict verdict(List<Step> undos, boolean failed) {
             String stoppedAt = null;
-            if (!completed && endReason == null) {
+            if (!completed && endReason == null && !failed) {
                 stoppedAt = expectedNames();
                 findings.add(new Finding(ObservedRunningMode.INCOMPLETE, expectation(), null,
                         "run ended before END, at " + stoppedAt));
             }
-            return new Verdict(List.copyOf(findings), completed, endReason, stoppedAt);
+            String compensationError = reverse(undos, failed);
+            return new Verdict(List.copyOf(findings), completed, endReason, stoppedAt,
+                    failed && compensationError == null, compensationError);
+        }
+
+        /**
+         * The reverse pass: every completed compensable step owes an undo once the run failed,
+         * newest first. Returns why compensation did not succeed, or null when it did (or was
+         * never owed).
+         */
+        private String reverse(List<Step> undos, boolean failed) {
+            List<String> expected = new ArrayList<>(completedCompensable);
+            java.util.Collections.reverse(expected);
+            Set<String> undone = new HashSet<>();
+            String error = null;
+            for (Step u : undos) {
+                Node node = def.nodes().get(u.undoOf());
+                String name = node == null ? u.undoOf() : node.name();
+                if (!completedCompensable.contains(u.undoOf())) {
+                    findings.add(new Finding(ObservedRunningMode.UNDO_WITHOUT_STEP, null, u.undoOf(),
+                            "undo of " + name + ", which this run never completed"));
+                    continue;
+                }
+                if (!failed) {
+                    findings.add(new Finding(ObservedRunningMode.UNDO_WITHOUT_FAILURE, null, u.undoOf(),
+                            "undo of " + name + " in a run that was not declared failed"));
+                }
+                if (!undone.add(u.undoOf())) {
+                    findings.add(new Finding(ObservedRunningMode.DUPLICATE, null, u.undoOf(),
+                            "undo of " + name + " ran again; the topology undoes it once"));
+                    continue;
+                }
+                if (failed) {
+                    // Newest first: this undo is out of turn when a newer step's undo is still pending.
+                    int pos = expected.indexOf(u.undoOf());
+                    String newerPending = null;
+                    for (int k = 0; k < pos; k++) if (!undone.contains(expected.get(k))) { newerPending = expected.get(k); break; }
+                    if (newerPending != null) {
+                        findings.add(new Finding(ObservedRunningMode.UNDO_OUT_OF_ORDER, newerPending, u.undoOf(),
+                                "undo of " + name + " before the undo of " + def.nodes().get(newerPending).name()
+                                        + " (newest first)"));
+                    }
+                }
+                if (u.failed() && error == null) error = "undo of " + name + " failed";
+            }
+            if (!failed) return null;
+            if (error != null) return error;
+            List<String> missing = new ArrayList<>();
+            for (String id : expected) if (!undone.contains(id)) missing.add(id);
+            for (String id : missing) {
+                findings.add(new Finding(ObservedRunningMode.MISSING_UNDO, id, null,
+                        "undo of " + def.nodes().get(id).name() + " never reported"));
+            }
+            return missing.isEmpty() ? null : "undo of " + def.nodes().get(missing.getFirst()).name() + " never reported";
         }
 
         private static String successorOf(Node node, Boolean predicateValue) {

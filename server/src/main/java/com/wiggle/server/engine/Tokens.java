@@ -94,7 +94,7 @@ final class Tokens {
                 : TokenPayload.EMPTY;
         Token t = create(inst, node.id(), "", payload, now);
         t.kind = node.kind();
-        t.activity = node.activity();
+        t.activity = step != null && step.undo() ? node.activity() + StepStatistics.UNDO_SUFFIX : node.activity();
         t.queue = node.queue();
         t.leaseOwner = reporter;
         t.seq = seq;
@@ -103,6 +103,7 @@ final class Tokens {
             t.finishedAt = step.finishedAt();
             t.lastError = step.error();
             t.afterNode = step.afterNode();
+            if (step.undo()) t.undoOf = node.id();
             if (step.error() != null) t.attempt = 1;
         }
         // What happened, in the state machine's terms: the step ran, then settled or failed.

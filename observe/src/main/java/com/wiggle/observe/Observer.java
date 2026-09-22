@@ -95,19 +95,16 @@ public final class Observer implements AutoCloseable {
     }
 
     /**
-     * Publishes {@code spec} as an {@link ExecutionMode#OBSERVED} workflow and wraps {@code impl},
-     * the application's implementation of its step interface, so that calls on the returned
-     * {@link Observed#steps()} are reported. The spec names no execution mode of its own: the
-     * observer stamps OBSERVED on the definition it publishes, and a spec that asked for a worker
-     * mode is refused, since no worker will ever serve it.
+     * Publishes {@code spec} as an {@link ExecutionMode#OBSERVED} workflow and returns the handle
+     * every report of it goes through: {@link ObservedFlow#record} and its siblings, by run key,
+     * step name and times. The spec names no execution mode of its own: the observer stamps
+     * OBSERVED on the definition it publishes, and a spec that asked for a worker mode is refused,
+     * since no worker will ever serve it.
      */
-    public <S> Observed<S> observe(FlowSpec spec, Class<S> contract, S impl) {
+    public ObservedFlow publish(FlowSpec spec) {
         if (spec.definition().executionMode() != ExecutionMode.DEFAULT) {
             throw new IllegalArgumentException("workflow '" + spec.definition().key() + "' asks to run in "
                     + spec.definition().executionMode() + "; an observed flow names no execution mode");
-        }
-        if (!contract.isInstance(impl)) {
-            throw new IllegalArgumentException(impl.getClass().getName() + " does not implement " + contract.getName());
         }
         FlowSpec observed = new FlowSpec(observedCopy(spec.definition()));
         try {
@@ -116,7 +113,19 @@ public final class Observer implements AutoCloseable {
             throw new IllegalStateException("could not publish '" + spec.definition().key() + "': "
                     + e.getStatus().getCode() + " " + e.getStatus().getDescription(), e);
         }
-        return new Observed<>(this, observed, contract, impl);
+        return new ObservedFlow(this, observed);
+    }
+
+    /**
+     * {@link #publish} plus code instrumentation: wraps {@code impl}, the application's
+     * implementation of the spec's step interface, so that calls on the returned
+     * {@link Observed#steps()} are timed and reported under the thread's current {@link Run}.
+     */
+    public <S> Observed<S> observe(FlowSpec spec, Class<S> contract, S impl) {
+        if (!contract.isInstance(impl)) {
+            throw new IllegalArgumentException(impl.getClass().getName() + " does not implement " + contract.getName());
+        }
+        return new Observed<>(publish(spec), contract, impl);
     }
 
     private static com.wiggle.core.WorkflowDefinition observedCopy(com.wiggle.core.WorkflowDefinition d) {

@@ -180,11 +180,13 @@ final class Reporter implements AutoCloseable {
                 .setReporter(options.reporter())
                 .setCorrelationId(run.correlationId())
                 .setFinal(b.fin());
+        if (b.failure() != null) req.setFailure(b.failure());
         if (run.instanceId() != null) req.setInstanceId(run.instanceId());
         for (StepRecord s : b.steps()) {
             StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId())
                     .setStartedAt(s.startedAt()).setFinishedAt(s.finishedAt());
             if (s.afterNode() != null) sr.setAfterNode(s.afterNode());
+            if (s.undoOf() != null) sr.setUndoOf(s.undoOf());
             if (s.error() != null) sr.setError(s.error());
             else if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
             else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(RecordMapper.toJson(s.merge())));

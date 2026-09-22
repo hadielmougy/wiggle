@@ -295,6 +295,9 @@ message StepResult {
     // The step that caused this one (OBSERVED): the run's last completed step as the reporter
     // saw it, carried across a message boundary. The judge orders by it where the graph agrees.
     string after_node = 7;
+    // Set when this step is the UNDO of a compensable step (OBSERVED): the node it reverses. The
+    // judge expects every completed compensable step's undo, newest first, once the run failed.
+    string undo_of = 8;
 }
 
 message AdvanceRunRequest {
@@ -337,6 +340,7 @@ message ObserveRunRequest {
     string reporter = 5;                   // the observing process, stamped as the tokens' lease owner
     repeated StepResult steps = 6;         // ordered, as they ran
     bool final = 7;                        // the run is over: closing without reaching END is an anomaly
+    string failure = 8;                    // declares the run failed, with a reason: undos are now expected
 }
 
 message ObserveRunResult {

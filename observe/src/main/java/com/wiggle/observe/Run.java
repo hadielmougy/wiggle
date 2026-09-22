@@ -22,9 +22,10 @@ import java.util.concurrent.Callable;
  */
 public final class Run implements AutoCloseable {
 
-    enum Kind { IMPLICIT, BEGUN, JOINED }
+    /** {@code API}: one explicit report through {@link ObservedFlow}, bound to no thread. */
+    enum Kind { IMPLICIT, BEGUN, JOINED, API }
 
-    private final Observed<?> owner;
+    private final ObservedFlow owner;
     private final Kind kind;
     private final String correlationId;
     private final List<StepRecord> buffer = new ArrayList<>();
@@ -39,11 +40,11 @@ public final class Run implements AutoCloseable {
     /** The server answered with a terminal status, or a report was lost: nothing more is sent. */
     private volatile boolean dead;
 
-    Run(Observed<?> owner, Kind kind, String correlationId) {
+    Run(ObservedFlow owner, Kind kind, String correlationId) {
         this(owner, kind, correlationId, null);
     }
 
-    Run(Observed<?> owner, Kind kind, String correlationId, String after) {
+    Run(ObservedFlow owner, Kind kind, String correlationId, String after) {
         this.owner = owner;
         this.kind = kind;
         this.correlationId = correlationId;
@@ -108,6 +109,22 @@ public final class Run implements AutoCloseable {
         end();
     }
 
+    /**
+     * Declares the run failed with a reason, from any side: the undos of its completed compensable
+     * steps are now expected. What this side still holds goes with it, and the run ends here.
+     */
+    public void fail(String reason) {
+        Batch flush;
+        synchronized (this) {
+            if (ended) return;
+            ended = true;
+            flush = new Batch(this, List.copyOf(buffer), false, reason == null || reason.isBlank() ? "failed" : reason);
+            buffer.clear();
+        }
+        if (!dead) owner.reporter().submit(flush);
+        Observation.detach(this);
+    }
+
     void record(StepRecord step, boolean atEnd) {
         Batch flush = null;
         synchronized (this) {
@@ -162,7 +179,7 @@ public final class Run implements AutoCloseable {
     }
 
     private Batch take(boolean fin) {
-        Batch b = new Batch(this, List.copyOf(buffer), fin);
+        Batch b = new Batch(this, List.copyOf(buffer), fin, null);
         buffer.clear();
         return b;
     }
@@ -181,10 +198,11 @@ public final class Run implements AutoCloseable {
         return dead;
     }
 
-    Observed<?> owner() {
+    ObservedFlow owner() {
         return owner;
     }
 
-    /** A flushed slice of a run: its steps in order, and whether the originator says the run ends with them. */
-    record Batch(Run run, List<StepRecord> steps, boolean fin) {}
+    /** A flushed slice of a run: its steps in order, whether the originator says the run ends with
+     *  them, and a failure declared with them. */
+    record Batch(Run run, List<StepRecord> steps, boolean fin, String failure) {}
 }

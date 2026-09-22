@@ -6,7 +6,13 @@ import com.wiggle.core.AnomalyView;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.NodeStats;
+import com.wiggle.client.worker.Compensable;
+import com.wiggle.client.worker.CompensableActivity;
+import com.wiggle.client.worker.Compensation;
+import com.wiggle.observe.Compensations;
 import com.wiggle.observe.Observation;
+import com.wiggle.observe.ObservedFlow;
+import com.wiggle.observe.StepTimer;
 import com.wiggle.observe.Observed;
 import com.wiggle.observe.Observer;
 import com.wiggle.observe.ObserverOptions;
@@ -373,6 +379,136 @@ class ObserveClientTest {
             assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty(), "one run, in order, across two threads");
         } finally {
             pool.shutdownNow();
+        }
+    }
+
+    /** A saga contract: two steps with an undo, one without. */
+    interface BookingSteps {
+        CompensableActivity<Map<String, Object>, Map<String, Object>> reserve();
+        CompensableActivity<Map<String, Object>, Map<String, Object>> charge();
+        Map<String, Object> ship(Map<String, Object> b);
+    }
+
+    static final class Booking implements BookingSteps {
+        final List<String> undone = new java.util.concurrent.CopyOnWriteArrayList<>();
+        volatile boolean chargeFails;
+
+        CompensableActivity<Map<String, Object>, Map<String, Object>> activity(String name, boolean fail) {
+            return new CompensableActivity<>() {
+                public Map<String, Object> execute(Map<String, Object> b) {
+                    if (fail) throw new IllegalStateException(name + " declined");
+                    return b;
+                }
+                public void compensate(Compensation<Map<String, Object>, Map<String, Object>> c) { undone.add(name); }
+            };
+        }
+        public CompensableActivity<Map<String, Object>, Map<String, Object>> reserve() { return activity("reserve", false); }
+        public CompensableActivity<Map<String, Object>, Map<String, Object>> charge() { return activity("charge", chargeFails); }
+        public Map<String, Object> ship(Map<String, Object> b) { return b; }
+    }
+
+    private static FlowSpec saga(String name) {
+        return FlowSpec.define(name, 1, Map.class, BookingSteps.class, (f, s) -> f
+                .thenApplyCompensable(s::reserve).thenApplyCompensable(s::charge).thenApply(s::ship));
+    }
+
+    @Test @DisplayName("the explicit API: a service reports steps by key, name and times, with no run object at all")
+    void explicitApi() throws Exception {
+        FlowSpec spec = spec("obsc-api");
+        try (WiggleServer server = new WiggleServer(config()).start();
+             Observer observer = Observer.connect(server.baseUrl(), ObserverOptions.defaults().withReporter("gateway"))) {
+            ObservedFlow flow = observer.publish(spec);
+            long t0 = System.currentTimeMillis() - 1000;
+            flow.record("order-20", "a", t0, t0 + 10);
+            flow.record("order-20", "b", t0 + 10, t0 + 50, "a");
+            flow.recordPredicate("order-20", "keep", true, t0 + 60, t0 + 61);
+            StepTimer c = flow.start("order-20", "c");
+            Thread.sleep(15);
+            c.done();
+            assertThrows(IllegalArgumentException.class, () -> flow.record("order-20", "nope", t0, t0),
+                    "an unknown step is refused here, not on the server");
+
+            InstanceView v = awaitTerminal(server.engine(), spec.name(), "order-20");
+            assertEquals("COMPLETED", v.status());
+            assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty());
+            Map<String, Token> done = new LinkedHashMap<>();
+            for (Token t : server.engine().tokens(v.id())) if (t.startedAt != null) done.put(t.nodeId, t);
+            assertEquals(4, done.size());
+            String bNode = spec.definition().node(spec.definition().startNode()).next();
+            assertEquals(40, done.get(bNode).finishedAt - done.get(bNode).startedAt, "the caller's own times are kept");
+            assertEquals(spec.definition().startNode(), done.get(bNode).afterNode, "the hint names the step by name");
+            assertTrue(done.get(spec.definition().node(bNode).next()).finishedAt - done.get(spec.definition().node(bNode).next()).startedAt < 15);
+        }
+    }
+
+    @Test @DisplayName("the explicit API: a declared failure, then undos, end a saga COMPENSATED")
+    void explicitApiCompensation() throws Exception {
+        FlowSpec spec = saga("obsc-api-saga");
+        try (WiggleServer server = new WiggleServer(config()).start();
+             Observer inventory = Observer.connect(server.baseUrl(), ObserverOptions.defaults().withReporter("inventory"));
+             Observer payments = Observer.connect(server.baseUrl(), ObserverOptions.defaults().withReporter("payments"))) {
+            ObservedFlow inv = inventory.publish(spec);
+            ObservedFlow pay = payments.publish(spec);
+            long t0 = System.currentTimeMillis() - 1000;
+            inv.record("order-21", "reserve", t0, t0 + 10);
+            pay.recordError("order-21", "charge", "CardDeclined", t0 + 10, t0 + 20);
+            InstanceView failing = await(() -> server.engine().findByCorrelation("order-21", 1).stream()
+                    .filter(i -> "COMPENSATING".equals(i.status())).findFirst().orElse(null), Duration.ofSeconds(10));
+            assertEquals("charge: CardDeclined", failing.error());
+            assertThrows(IllegalArgumentException.class, () -> inv.recordUndo("order-21", "ship", t0, t0), "ship has no undo");
+            StepTimer undo = inv.startUndo("order-21", "reserve");
+            undo.done();
+            InstanceView v = awaitTerminal(server.engine(), spec.name(), "order-21");
+            assertEquals("COMPENSATED", v.status());
+            assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty());
+        }
+    }
+
+    @Test @DisplayName("instrumented: a compensable activity's execute and compensate are both reported")
+    void instrumentedSaga() throws Exception {
+        FlowSpec spec = saga("obsc-saga");
+        Booking booking = new Booking();
+        booking.chargeFails = true;
+        try (WiggleServer server = new WiggleServer(config()).start();
+             Observer observer = Observer.connect(server.baseUrl())) {
+            Observed<BookingSteps> flow = observer.observe(spec, BookingSteps.class, booking);
+            BookingSteps s = flow.steps();
+            Map<String, Object> order = Map.of("id", "order-22");
+            Run run = flow.begin("order-22");
+            Map<String, Object> reserved = s.reserve().execute(order);
+            assertThrows(IllegalStateException.class, () -> s.charge().execute(reserved), "the application's own exception");
+            assertNull(flow.current(), "the throw ended the run on this side");
+
+            // the application runs its undo, as it would on any platform, through the same wrapped activity
+            try (Run again = flow.join("order-22")) {
+                s.reserve().compensate(Compensations.of(order, reserved));
+            }
+            assertEquals(List.of("reserve"), booking.undone);
+
+            InstanceView v = awaitTerminal(server.engine(), spec.name(), "order-22");
+            assertEquals("COMPENSATED", v.status());
+            assertEquals("charge: IllegalStateException: charge declined", v.error());
+            assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty(), server.engine().anomalies(null, v.id(), 10).toString());
+            String reserveNode = spec.definition().startNode();
+            assertTrue(server.engine().tokens(v.id()).stream().anyMatch(t -> reserveNode.equals(t.undoOf) && t.startedAt != null),
+                    "the undo is a timed token naming the step it reversed");
+        }
+    }
+
+    @Test @DisplayName("run.fail declares a business failure from an open run")
+    void runFail() throws Exception {
+        FlowSpec spec = saga("obsc-runfail");
+        Booking booking = new Booking();
+        try (WiggleServer server = new WiggleServer(config()).start();
+             Observer observer = Observer.connect(server.baseUrl())) {
+            Observed<BookingSteps> flow = observer.observe(spec, BookingSteps.class, booking);
+            Run run = flow.begin("order-23");
+            flow.steps().reserve().execute(Map.of());
+            run.fail("out of stock downstream");
+            assertNull(flow.current());
+            InstanceView failing = await(() -> server.engine().findByCorrelation("order-23", 1).stream()
+                    .filter(i -> "COMPENSATING".equals(i.status())).findFirst().orElse(null), Duration.ofSeconds(10));
+            assertEquals("out of stock downstream", failing.error());
         }
     }
 }

@@ -234,14 +234,24 @@ public final class WorkflowEngine {
      * clock in epoch millis, or null when the reporter did not time it.
      */
     public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
-                            Long startedAt, Long finishedAt, String afterNode) {
+                            Long startedAt, Long finishedAt, String afterNode, boolean undo) {
 
         public StepInput(String nodeId, Object merge, Boolean predicateValue) {
-            this(nodeId, merge, predicateValue, null, null, null, null);
+            this(nodeId, merge, predicateValue, null, null, null, null, false);
         }
 
         public StepInput(String nodeId, Object merge, Boolean predicateValue, String error, Long startedAt, Long finishedAt) {
-            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, null);
+            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, null, false);
+        }
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue, String error, Long startedAt,
+                         Long finishedAt, String afterNode) {
+            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, afterNode, false);
+        }
+
+        /** An undo of {@code nodeId}, a compensable step this run completed earlier. */
+        public static StepInput undo(String nodeId, String error, Long startedAt, Long finishedAt, String afterNode) {
+            return new StepInput(nodeId, null, null, error, startedAt, finishedAt, afterNode, true);
         }
     }
 
@@ -360,7 +370,14 @@ public final class WorkflowEngine {
      */
     public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
                                  String reporter, List<StepInput> steps, boolean fin) {
-        if (steps.isEmpty() && !fin) throw EngineException.badRequest("observe requires at least one step");
+        return observe(workflow, version, instanceId, correlationId, reporter, steps, fin, null);
+    }
+
+    /** {@link #observe(String, Integer, String, String, String, List, boolean)} that may also declare
+     *  the run failed with {@code failure}, after which the run's compensable steps' undos are expected. */
+    public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
+                                 String reporter, List<StepInput> steps, boolean fin, String failure) {
+        if (steps.isEmpty() && !fin && failure == null) throw EngineException.badRequest("observe requires at least one step");
         if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
         String key = correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId;
         return transactions.inTx(tx -> {
@@ -372,7 +389,7 @@ public final class WorkflowEngine {
             } else {
                 inst = instances.observedRun(tx, workflow, version, key);
             }
-            return modeFactory.observed().observe(new ObserveRunContext(inst, reporter, steps, fin, tx),
+            return modeFactory.observed().observe(new ObserveRunContext(inst, reporter, steps, fin, failure, tx),
                     observeSettleMillis, observeStallMillis);
         });
     }
@@ -395,7 +412,7 @@ public final class WorkflowEngine {
     private void settleObservedRun(Tx tx, String id) {
         Instance inst = tx.lockInstance(id).orElse(null);
         long now = System.currentTimeMillis();
-        if (inst == null || !InstanceState.of(inst.status).running() || inst.settleAt == null || inst.settleAt > now) return;
+        if (inst == null || !ObservedRunningMode.open(inst) || inst.settleAt == null || inst.settleAt > now) return;
         WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
                 .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
         boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
@@ -406,7 +423,7 @@ public final class WorkflowEngine {
 
     /** One run of an observe batch: exactly the arguments of {@link #observe}. */
     public record ObservedRun(String workflow, Integer version, String instanceId, String correlationId,
-                              String reporter, List<StepInput> steps, boolean fin) {}
+                              String reporter, List<StepInput> steps, boolean fin, String failure) {}
 
     /** A run's fate in an observe batch: its result, or the status and message it would have thrown. */
     public record ObserveOutcome(ObserveResult result, Integer errorStatus, String error) {
@@ -426,7 +443,7 @@ public final class WorkflowEngine {
         for (ObservedRun r : runs) {
             try {
                 out.add(new ObserveOutcome(observe(r.workflow(), r.version(), r.instanceId(), r.correlationId(),
-                        r.reporter(), r.steps(), r.fin()), null, null));
+                        r.reporter(), r.steps(), r.fin(), r.failure()), null, null));
             } catch (EngineException e) {
                 out.add(new ObserveOutcome(null, e.statusCode(), e.getMessage()));
             } catch (RuntimeException e) {

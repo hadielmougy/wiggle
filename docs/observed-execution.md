@@ -24,9 +24,10 @@ Durations alone are something OpenTelemetry already gives you; use both.
 
 ## 2. What an observed graph may contain
 
-Steps, predicates, static forks and joins, and ends; no compensable steps. Registration refuses
-anything else with a 400: a sleep, signal, sub-workflow or runtime fan-out (`forEach`) needs the
-server to run it, and there is no server-side run for something that already happened.
+Steps, predicates, static forks and joins, and ends. A step may be compensable: its undo is then
+expected once the run fails, and reported like any other step (§4). Registration refuses anything
+else with a 400: a sleep, signal, sub-workflow or runtime fan-out (`forEach`) needs the server to
+run it, and there is no server-side run for something that already happened.
 
 A spec never declares this mode: the DSL offers `executeInServer()`, `executeInLocalSync()` and
 `executeInLocalAsync()`, and nothing else. OBSERVED is stamped on the definition by the observer
@@ -39,7 +40,7 @@ the mode is part of the version's fingerprint:
 FlowSpec spec = FlowSpec.define("checkout", 1, Order.class, CheckoutSteps.class, (f, s) -> f
         .thenApply(s::validate)
         .thenFilter(s::inStock)
-        .thenApply(s::charge));   // no execution mode: an observer stamps OBSERVED when it publishes
+        .thenApplyCompensable(s::charge));   // no execution mode: an observer stamps OBSERVED when it publishes
 ```
 
 ## 3. Wire protocol
@@ -106,8 +107,21 @@ any order.
 | `DUPLICATE` | a step already consumed runs again and lies on no cycle | ignored; at-least-once delivery, most likely |
 | `OUT_OF_ORDER` | a step outside the frontier, not a duplicate | frontier resynchronised at that step |
 | `INCOMPLETE` | judged without END reached | instance `FAILED` ("run ended before END, at …") |
-| `STALLED` | judged because the run went quiet, not because END or `final` arrived | with `INCOMPLETE` |
+| `STALLED` | judged because the run went quiet, not because END or `final` arrived | with `INCOMPLETE`, or with undos outstanding |
+| `UNDO_WITHOUT_STEP` | an undo for a step the run never completed, or that declares no undo | ignored |
+| `UNDO_WITHOUT_FAILURE` | an undo in a run that was never declared failed | recorded; the run still completes |
+| `UNDO_OUT_OF_ORDER` | undos must run newest first; this one came out of turn | recorded; still counts |
+| `MISSING_UNDO` | the run failed and a completed step's undo never arrived | `COMPENSATION_FAILED` |
 
+- **Failure and compensation.** A run is declared failed by a step that threw, or explicitly
+  with a reason (`ObserveRunRequest.failure`, `run.fail`, `flow.fail`). With anything compensable
+  in its graph the instance enters `COMPENSATING`, the saga's state for a reverse pass in flight,
+  and the services run their undos and report them (`StepResult.undo_of`) like any other step.
+  A graph with nothing to undo fails in place, `FAILED`. Each undo that lands checks whether
+  every completed compensable step now has one; when so the run settles at the short grace,
+  otherwise at the stall threshold. At judgement the expected undos are the completed compensable
+  steps newest first; every one present and none failed ends `COMPENSATED` (vacuously when nothing
+  needed undoing), an undo that threw or one still missing ends `COMPENSATION_FAILED`, naming it.
 - **Causal hints.** A step may name the step that caused it (`after_node`). Within a service
   that is the previous step, which arrival order already covers; at a message boundary the
   sender's last completed step travels in the message (`wiggle-after`) and becomes the
@@ -126,7 +140,8 @@ any order.
 Migration 15: `wf_token.started_at` / `finished_at` (nullable), an index for the duration
 sample, and `wf_anomaly` (instance, workflow, version, kind, expected/reported node, detail,
 time). Migration 16: `wf_instance.settle_at` (nullable, observed runs only) and its index; migration 17:
-`wf_token.after_node` (nullable), the causal hint. Duration statistics are computed in the server over the newest N timed `DONE` tokens of
+`wf_token.after_node` (nullable), the causal hint; migration 18: `wf_token.undo_of` (nullable), the step an
+undo reversed. Duration statistics are computed in the server over the newest N timed `DONE` tokens of
 a version (default 10 000), so no percentile SQL has to be portable.
 
 ## 6. Console
@@ -144,6 +159,33 @@ merged row keeps the worst cell's p50 and p95, since percentiles cannot be recom
 application publishes a topology and reports against it, and needs neither a worker nor the
 instance API. It depends on `wiggle-client` for the flow DSL and owns its own connection.
 
+### The foundation: report by key, name and times
+
+Every way of observing comes down to one call: a service names the run's key, the step, and when
+it ran. Nothing is opened, joined or scoped, no thread is involved, and a run's first report
+creates it wherever it comes from. Times are the caller's, epoch millis; `start(key, step)` returns
+a timer that measures for you. Step names are validated against the published spec, so a typo
+fails in the service rather than as an anomaly on the server. Everything below -- the proxy, the
+thread-bound run, the Kafka adapter -- is a caller of this.
+
+<!-- snippet: observed/report -->
+```java
+try (Observer observer = Observer.connect("localhost:8080")) {
+    ObservedFlow checkout = observer.publish(spec);        // stamps OBSERVED, registers, validates names
+
+    checkout.record(orderId, "validate", startedAt, finishedAt);
+    checkout.recordPredicate(orderId, "inStock", true, startedAt, finishedAt);
+    checkout.recordError(orderId, "charge", "CardDeclined", startedAt, finishedAt);   // declares the run failed
+    checkout.recordUndo(orderId, "charge", startedAt, finishedAt);                  // the compensation ran
+}
+```
+
+`fail(key, reason)` declares a business failure without a thrown step; `end(key)` says the
+originator is done. Reports are batched and sent behind the caller: a full queue or a failed call
+drops the report and counts it in `observer.dropped()`, never blocks.
+
+### Code instrumentation, on top
+
 <!-- snippet: observed/usage -->
 ```java
 try (Observer observer = Observer.connect("localhost:8080")) {
@@ -152,7 +194,7 @@ try (Observer observer = Observer.connect("localhost:8080")) {
 
     try (Run run = checkout.begin(orderId)) {    // a run under a business key
         Order o = s.validate(order);
-        if (s.inStock(o)) s.charge(o);
+        if (s.inStock(o)) s.charge().execute(o); // execute is the step; compensate would be its undo
     }
 }
 ```
@@ -160,30 +202,27 @@ try (Observer observer = Observer.connect("localhost:8080")) {
 - **Wrapping.** `steps()` is a proxy over the flow's step interface around the application's
   implementation (which therefore implements that interface). Every call on a method that names
   a step is timed and recorded; a method that names no step passes straight through. The
-  application sees its own return values and its own exceptions, unwrapped.
+  application sees its own return values and its own exceptions, unwrapped. A step declared as a
+  factory (`CompensableActivity<A, B> charge()`) is wrapped one level deeper: the activity's
+  `execute` is the step and its `compensate` is the step's undo, so the application undoes as it
+  always did and the run is judged on it.
 - **Runs.** `begin(correlationId)` opens a run on the calling thread as its originator;
   `join(correlationId)` or `join(RunContext)` opens one as a participant in a run another
   service started; a step called with no run open opens an implicit one. Every run has a key
   (a blank one is minted), and every report names it, so all reporters of a run land on the
   same instance. An implicit run ends at `END`. A begun or joined run lives until it is closed:
   an originator closing before `END` reports the run as over (`INCOMPLETE` if nothing reached
-  `END`); a participant's close only flushes. A step that throws ends its run.
+  `END`); a participant's close only flushes. A step that throws ends its run and declares the
+  failure; `run.fail(reason)` declares one without a throw.
 - **Across services.** `Observation.context()` (or `run.context()`) is what to send along with
   a message: `wiggle-workflow`, `wiggle-version`, `wiggle-run`, and `wiggle-after` (the step
-  completed last on this side, the receiver's first step's cause), via `RunContext.toHeaders()`. The receiving service reads them back with
-  `RunContext.fromHeaders(...)` and joins. The Kafka adapter does both for you.
+  completed last on this side, the receiver's first step's cause), via `RunContext.toHeaders()`.
+  The receiving service reads them back with `RunContext.fromHeaders(...)` and joins. The Kafka
+  adapter does both for you.
 - **Across threads.** `run.wrap(runnable)` / `run.wrap(callable)` bind the run on whatever
   thread executes the task; `attach(run)` / `detach()` cover hand-offs those cannot express.
 - **Inside a step.** `Observation.correlationId()`, `instanceId()` and `context()` read the
   current thread's run, the way a worker reads `Step`; outside a run they throw.
-- **Reporting.** Steps buffer per run and flush when the buffer reaches `batchSize` (64), when
-  it has waited `linger` (1 s), or when the run ends. One daemon thread sends them in
-  `ObserveMany` calls, at most one batch per run per call so the second batch of a run can name
-  the instance its first minted. The application never waits on the network: a full queue
-  (`queueCapacity`, 10 000) or a failed call drops the report, marks the run lost, and counts it
-  in `Observer.dropped()`.
-- **Timing.** `started_at` is wall-clock at entry; `finished_at` is that plus the monotonic
-  elapsed time, so a duration is never skewed by a clock adjustment mid-step.
 - **Context.** Off by default. `withCaptureContext(true)` ships each task step's return value as
   the instance's context, through the same record-to-JSON mapping the client uses.
 - **TLS.** `ObserverOptions.withTls(Tls.Options)` / `withRequireTls`, the client's semantics.

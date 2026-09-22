@@ -351,10 +351,9 @@ class ObservedModeTest {
             Map<String, Node> withUndo = new LinkedHashMap<>();
             withUndo.put("t", Node.task("t", "t", "act", "q", null).withNext("ok").withCompensable());
             withUndo.put("ok", Node.end("ok", true, "done"));
-            e = assertThrows(EngineException.class, () -> registry.register(
-                    new WorkflowDefinition("obs-undo", 1, "t", withUndo, Set.of("q"), ExecutionMode.OBSERVED)));
-            assertEquals(400, e.statusCode());
-            assertTrue(e.getMessage().contains("compensable"), e.getMessage());
+            assertDoesNotThrow(() -> registry.register(
+                    new WorkflowDefinition("obs-undo", 1, "t", withUndo, Set.of("q"), ExecutionMode.OBSERVED)),
+                    "a compensable step is observable: its undo is reported like any step");
 
             assertDoesNotThrow(() -> registry.register(
                     new WorkflowDefinition("srv-sleep", 1, "t", withSleep, Set.of("q"), ExecutionMode.SERVER)),
@@ -453,11 +452,112 @@ class ObservedModeTest {
             assertEquals(T0 + 10, c.startedAt);
             assertEquals(APP2, c.leaseOwner);
             assertNull(c.afterNode);
+            assertNull(c.undoOf);
             ObserveResult r3 = f.report(APP1, "k2", false, stepAfter(f.a(), 0, 1, null), stepAfter(f.b(), 1, 1, f.a()));
             assertEquals(f.a(), f.engine.tokens(r3.instanceId()).stream().filter(t -> t.nodeId.equals(f.b()))
                     .findFirst().orElseThrow().afterNode, "the hint round-trips through the store");
             assertNull(f.engine.instance(r1.instanceId()).orElseThrow().error());
             assertTrue(f.engine.poll("w1", f.queues(), 10, null).isEmpty());
+        }
+    }
+
+    /** reserve(undo) -> charge(undo) -> ship -> ok, registered OBSERVED on a fresh engine. */
+    private record Saga(Storage storage, WorkflowEngine engine) implements AutoCloseable {
+        static Saga open() {
+            Storage storage = new InMemoryStorage();
+            DefinitionRegistry registry = new DefinitionRegistry(storage);
+            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
+            Map<String, Node> n = new LinkedHashMap<>();
+            n.put("reserve", Node.task("reserve", "reserve", "act", "q", null).withNext("charge").withCompensable());
+            n.put("charge", Node.task("charge", "charge", "act", "q", null).withNext("ship").withCompensable());
+            n.put("ship", Node.task("ship", "ship", "act", "q", null).withNext("ok"));
+            n.put("ok", Node.end("ok", true, "done"));
+            registry.register(new WorkflowDefinition("obs-saga", 1, "reserve", n, Set.of("q"), ExecutionMode.OBSERVED));
+            return new Saga(storage, engine);
+        }
+
+        ObserveResult report(String reporter, String failure, StepInput... steps) {
+            return engine.observe("obs-saga", null, null, "k", reporter, List.of(steps), false, failure);
+        }
+
+        String status(String id) { return engine.instance(id).orElseThrow().status(); }
+        List<String> kinds(String id) { return engine.anomalies(null, id, 20).stream().map(AnomalyView::kind).toList(); }
+
+        @Override public void close() { storage.close(); }
+    }
+
+    private static StepInput undo(String nodeId, long offset, long millis) {
+        return StepInput.undo(nodeId, null, T0 + offset, T0 + offset + millis, null);
+    }
+
+    @Test @DisplayName("a declared failure enters the reverse pass; the services' undos land and the run ends COMPENSATED")
+    void declaredFailureThenUndos() {
+        try (Saga s = Saga.open()) {
+            s.report("inventory", null, step("reserve", 0, 10));
+            ObserveResult r = s.report("payments", "card declined", step("charge", 10, 10));
+            assertEquals("COMPENSATING", r.instanceStatus(), "the graph has undos: the reverse pass is open");
+            assertEquals("card declined", s.engine.instance(r.instanceId()).orElseThrow().error());
+            assertEquals(0, s.engine.settleObservedRuns(10), "undos outstanding: not due yet");
+
+            s.report("payments", null, undo("charge", 30, 5));
+            assertEquals(0, s.engine.settleObservedRuns(10), "one undo still owed");
+            ObserveResult last = s.report("inventory", null, undo("reserve", 40, 5));
+            assertEquals("COMPENSATING", last.instanceStatus());
+            assertEquals(1, s.engine.settleObservedRuns(10), "every undo landed: judged after the short grace");
+            assertEquals("COMPENSATED", s.status(r.instanceId()));
+            assertTrue(s.kinds(r.instanceId()).isEmpty(), s.kinds(r.instanceId()).toString());
+
+            Token undoTok = s.engine.tokens(r.instanceId()).stream().filter(t -> "charge".equals(t.undoOf)).findFirst().orElseThrow();
+            assertEquals(TokenStatus.DONE, undoTok.status);
+            assertEquals("payments", undoTok.leaseOwner);
+            assertTrue(undoTok.activity.endsWith("#compensate"), "an undo token is named as the saga path names one");
+            List<NodeStats> stats = s.engine.stepStats("obs-saga", null, 0, 100);
+            assertTrue(stats.stream().anyMatch(n -> n.nodeId().equals("charge#compensate") && n.name().equals("charge (undo)")),
+                    "undo durations are kept apart from the step's: " + stats);
+        }
+    }
+
+    @Test @DisplayName("undos still outstanding when the run goes quiet end it COMPENSATION_FAILED")
+    void missingUndoStalls() throws Exception {
+        try (Saga s = Saga.open()) {
+            ObserveResult r = s.report("inventory", "boom", step("reserve", 0, 10), step("charge", 10, 10));
+            s.report("payments", null, undo("charge", 30, 5));
+            Thread.sleep(400);
+            assertEquals(1, s.engine.settleObservedRuns(10));
+            assertEquals("COMPENSATION_FAILED", s.status(r.instanceId()));
+            List<String> kinds = s.kinds(r.instanceId());
+            assertTrue(kinds.contains("MISSING_UNDO") && kinds.contains("STALLED"), kinds.toString());
+            assertTrue(s.engine.instance(r.instanceId()).orElseThrow().error().contains("undo of reserve never reported"));
+        }
+    }
+
+    @Test @DisplayName("a thrown step declares the failure; a graph with nothing to undo fails in place")
+    void thrownStepAndPlainGraph() {
+        try (Saga s = Saga.open()) {
+            ObserveResult r = s.report("inventory", null, step("reserve", 0, 10), failed("charge", "gateway down", 10, 5));
+            assertEquals("COMPENSATING", r.instanceStatus(), "charge threw after reserve completed: reserve's undo is owed");
+            assertEquals("charge: gateway down", s.engine.instance(r.instanceId()).orElseThrow().error());
+            s.report("inventory", null, undo("reserve", 20, 5));
+            s.engine.settleObservedRuns(10);
+            assertEquals("COMPENSATED", s.status(r.instanceId()));
+        }
+        try (Fixture f = Fixture.inMemory("obs-plain")) {
+            ObserveResult r = f.engine.observe(f.spec.name(), null, null, "k", APP1, List.of(step(f.a(), 0, 1)), false, "no stock");
+            assertEquals("FAILED", r.instanceStatus(), "nothing compensable in the graph: fails in place");
+            assertEquals("no stock", f.engine.instance(r.instanceId()).orElseThrow().error());
+        }
+    }
+
+    @Test @DisplayName("an undo reported in a run that never failed is a finding, and the run still completes")
+    void undoWithoutFailure() {
+        try (Saga s = Saga.open()) {
+            ObserveResult r = s.report("inventory", null, step("reserve", 0, 1), step("charge", 1, 1), undo("charge", 2, 1), step("ship", 3, 1));
+            assertEquals("RUNNING", r.instanceStatus());
+            s.engine.settleObservedRuns(10);
+            assertEquals("COMPLETED", s.status(r.instanceId()));
+            assertEquals(List.of("UNDO_WITHOUT_FAILURE"), s.kinds(r.instanceId()));
+            ObserveResult bad = s.report("inventory", null, undo("ship", 4, 1));
+            assertTrue(s.kinds(r.instanceId()).contains("UNDO_WITHOUT_STEP"), "ship declares no undo: " + s.kinds(r.instanceId()));
         }
     }
 }

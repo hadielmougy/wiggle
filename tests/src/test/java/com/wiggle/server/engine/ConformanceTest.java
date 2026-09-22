@@ -53,6 +53,20 @@ class ConformanceTest {
         return new WorkflowDefinition("loop", 1, "a", n, Set.of("q"), ExecutionMode.OBSERVED);
     }
 
+    /** reserve(undo) -> charge(undo) -> ship -> ok: a saga. */
+    private static WorkflowDefinition saga() {
+        Map<String, Node> n = new LinkedHashMap<>();
+        n.put("reserve", Node.task("reserve", "reserve", "act", "q", null).withNext("charge").withCompensable());
+        n.put("charge", Node.task("charge", "charge", "act", "q", null).withNext("ship").withCompensable());
+        n.put("ship", Node.task("ship", "ship", "act", "q", null).withNext("ok"));
+        n.put("ok", Node.end("ok", true, "done"));
+        return new WorkflowDefinition("saga", 1, "reserve", n, Set.of("q"), ExecutionMode.OBSERVED);
+    }
+
+    private static Step undo(String node, long t) { return Step.undo(node, t, 0, false); }
+    private static Step undoFailed(String node, long t) { return Step.undo(node, t, 0, true); }
+    private static Step threw(String node, long t) { return new Step(node, null, t, 0, null, null, true); }
+
     private static Step at(String node, long t) { return new Step(node, null, t); }
     private static Step pred(String node, boolean v, long t) { return new Step(node, v, t); }
     private static List<String> kinds(Verdict v) { return v.findings().stream().map(Finding::kind).toList(); }
@@ -197,5 +211,61 @@ class ConformanceTest {
         assertNull(p.get("a"), "the start has no predecessor");
         assertEquals(Set.of("a", "b", "keep"), Conformance.predecessors(linear()).get("c"));
         assertEquals(Set.of("a", "again"), Conformance.predecessors(looped()).get("a"), "a loop makes a step its own predecessor");
+    }
+
+    @Test @DisplayName("after a failure, every completed compensable step undone newest-first is a clean compensation")
+    void compensatedCleanly() {
+        Verdict v = Conformance.judge(saga(), List.of(at("reserve", 1), at("charge", 2), threw("ship", 3),
+                undo("charge", 4), undo("reserve", 5)), true);
+        assertTrue(v.compensated());
+        assertNull(v.compensationError());
+        assertEquals(List.of(), v.findings(), "no INCOMPLETE for a failed run, no ordering finding");
+        assertFalse(v.completed());
+    }
+
+    @Test @DisplayName("an undo still missing when judged fails the compensation and names it")
+    void missingUndo() {
+        Verdict v = Conformance.judge(saga(), List.of(at("reserve", 1), at("charge", 2), undo("charge", 3)), true);
+        assertFalse(v.compensated());
+        assertEquals("undo of reserve never reported", v.compensationError());
+        assertEquals(List.of("MISSING_UNDO"), kinds(v));
+        assertEquals("reserve", v.findings().getFirst().expected());
+    }
+
+    @Test @DisplayName("undos out of order are recorded but still count; a failed undo fails the compensation")
+    void undoOrderAndFailure() {
+        Verdict v = Conformance.judge(saga(), List.of(at("reserve", 1), at("charge", 2),
+                undo("reserve", 3), undo("charge", 4)), true);
+        assertTrue(v.compensated(), "both undos arrived");
+        assertEquals(List.of("UNDO_OUT_OF_ORDER"), kinds(v));
+        assertEquals("charge", v.findings().getFirst().expected(), "charge was due first, newest first");
+
+        Verdict failed = Conformance.judge(saga(), List.of(at("reserve", 1), at("charge", 2),
+                undoFailed("charge", 3), undo("reserve", 4)), true);
+        assertFalse(failed.compensated());
+        assertEquals("undo of charge failed", failed.compensationError());
+    }
+
+    @Test @DisplayName("an undo the run never earned, or one without a failure, is a finding")
+    void undoWithoutStepOrFailure() {
+        Verdict v = Conformance.judge(saga(), List.of(at("reserve", 1), undo("charge", 2), undo("reserve", 3)), true);
+        assertEquals(List.of("UNDO_WITHOUT_STEP"), kinds(v), "charge never completed");
+        assertTrue(v.compensated(), "reserve, the one step completed, was undone");
+
+        Verdict noFailure = Conformance.judge(saga(), List.of(at("reserve", 1), at("charge", 2), at("ship", 3), undo("charge", 4)), false);
+        assertTrue(noFailure.completed(), "the run reached END regardless");
+        assertEquals(List.of("UNDO_WITHOUT_FAILURE"), kinds(noFailure));
+        assertFalse(noFailure.compensated(), "nothing was owed");
+    }
+
+    @Test @DisplayName("a failure with nothing completed to undo compensates vacuously; a repeated undo is a duplicate")
+    void nothingToUndoAndDuplicateUndo() {
+        Verdict v = Conformance.judge(saga(), List.of(threw("reserve", 1)), true);
+        assertTrue(v.compensated());
+        assertEquals(List.of(), v.findings());
+
+        Verdict dup = Conformance.judge(saga(), List.of(at("reserve", 1), threw("charge", 2), undo("reserve", 3), undo("reserve", 4)), true);
+        assertTrue(dup.compensated());
+        assertEquals(List.of("DUPLICATE"), kinds(dup));
     }
 }
