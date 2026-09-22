@@ -5,6 +5,7 @@ import com.wiggle.server.store.GraphStore;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * A memory-thrifty view over a compiled graph. Where {@link com.wiggle.core.WorkflowDefinition}
@@ -56,11 +57,16 @@ public final class DefaultLazyGraph implements LazyGraph {
 
     @Override
     public Node node(String id) {
-        Node cached = lru.get(id);
-        if (cached != null) return cached;
-        Node n = graphs.graphNode(name, version, id).orElseThrow(
+        return find(id).orElseThrow(
                 () -> new IllegalStateException("unknown node '" + id + "' in workflow " + name));
-        lru.put(id, n);
+    }
+
+    @Override
+    public Optional<Node> find(String id) {
+        Node cached = lru.get(id);
+        if (cached != null) return Optional.of(cached);
+        Optional<Node> n = graphs.graphNode(name, version, id);
+        n.ifPresent(node -> lru.put(id, node));
         return n;
     }
 }

@@ -35,6 +35,20 @@ abstract class BaseRunningMode implements RunningMode {
         return definitions;
     }
 
+    final Instances instances() {
+        return instances;
+    }
+
+    final NodeBehaviourFactory behaviours() {
+        return nodeBehaviourFactory;
+    }
+
+    /** The step's own clock, when its reporter sent one; a step reported untimed leaves both null. */
+    static void stamp(Token t, StepInput step) {
+        t.startedAt = step.startedAt();
+        t.finishedAt = step.finishedAt();
+    }
+
     /** Applies one reported result to the task token, then drives the continuation to its park. */
     final void completeStep(CompleteRunContext ctx) {
         Tx tx           = ctx.tx();

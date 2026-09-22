@@ -7,6 +7,7 @@ import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -227,8 +228,32 @@ public final class WorkflowEngine {
         return false;
     }
 
-    /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
-    public record StepInput(String nodeId, Object merge, Boolean predicateValue) {}
+    /**
+     * One step reported after it ran: a task's complete next context, a predicate's value, or the
+     * error it threw (observed runs only). {@code startedAt}/{@code finishedAt} are the step's own
+     * clock in epoch millis, or null when the reporter did not time it.
+     */
+    public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
+                            Long startedAt, Long finishedAt, String afterNode, boolean undo) {
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue) {
+            this(nodeId, merge, predicateValue, null, null, null, null, false);
+        }
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue, String error, Long startedAt, Long finishedAt) {
+            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, null, false);
+        }
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue, String error, Long startedAt,
+                         Long finishedAt, String afterNode) {
+            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, afterNode, false);
+        }
+
+        /** An undo of {@code nodeId}, a compensable step this run completed earlier. */
+        public static StepInput undo(String nodeId, String error, Long startedAt, Long finishedAt, String afterNode) {
+            return new StepInput(nodeId, null, null, error, startedAt, finishedAt, afterNode, true);
+        }
+    }
 
     /** The result of applying a reported run: the instance's status, renewed lease, and next token. */
     public record AdvanceOutcome(String instanceStatus, long leaseExpiresAt, String nextTaskId) {}
@@ -329,6 +354,186 @@ public final class WorkflowEngine {
             }
         }
         return results;
+    }
+
+    /** How long after END, or a final report, an observed run waits for stragglers before it is judged. */
+    private final long observeSettleMillis = ServerEnv.envLong("wiggle.observe.settleMillis", "WIGGLE_OBSERVE_SETTLE_MILLIS", 5_000);
+    /** How long an observed run may go without a report before it is judged as stalled. */
+    private final long observeStallMillis = ServerEnv.envLong("wiggle.observe.stallMillis", "WIGGLE_OBSERVE_STALL_MILLIS", 600_000);
+
+    /**
+     * Appends a run of steps an instrumented application already executed (OBSERVED execution)
+     * to the run {@code correlationId} names, creating it on first sight; a blank key mints one,
+     * for a run only this reporter will ever report. Nothing is judged here -- the settle sweep
+     * does that once the run has gone quiet -- so the only refusals are a workflow that is not
+     * OBSERVED or does not exist.
+     */
+    public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
+                                 String reporter, List<StepInput> steps, boolean fin) {
+        return observe(workflow, version, instanceId, correlationId, reporter, steps, fin, null);
+    }
+
+    /** {@link #observe(String, Integer, String, String, String, List, boolean)} that may also declare
+     *  the run failed with {@code failure}, after which the run's compensable steps' undos are expected. */
+    public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
+                                 String reporter, List<StepInput> steps, boolean fin, String failure) {
+        if (steps.isEmpty() && !fin && failure == null) throw EngineException.badRequest("observe requires at least one step");
+        if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
+        String key = correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId;
+        return transactions.inTx(tx -> {
+            Instance inst;
+            if (instanceId != null && !instanceId.isBlank()) {
+                inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+                ObservedRunningMode.requireObserved(
+                        definitions.executionMode(tx, inst.workflow, inst.version), inst.workflow + ":" + inst.version);
+            } else {
+                inst = instances.observedRun(tx, workflow, version, key);
+            }
+            return modeFactory.observed().observe(new ObserveRunContext(inst, reporter, steps, fin, failure, tx),
+                    observeSettleMillis, observeStallMillis);
+        });
+    }
+
+    /** Drift detection: how many recent runs of a step form "now", how many earlier ones "before"
+     *  needs, how many times slower "now" must be (as a percentage over "before"), by how much at
+     *  least, and how long one finding silences the next for the same step. */
+    private final int driftWindow = (int) ServerEnv.envLong("wiggle.observe.drift.window", "WIGGLE_OBSERVE_DRIFT_WINDOW", 20);
+    private final int driftBaseline = (int) ServerEnv.envLong("wiggle.observe.drift.baseline", "WIGGLE_OBSERVE_DRIFT_BASELINE", 30);
+    private final long driftPercent = ServerEnv.envLong("wiggle.observe.drift.percent", "WIGGLE_OBSERVE_DRIFT_PERCENT", 100);
+    private final long driftMinMillis = ServerEnv.envLong("wiggle.observe.drift.minMillis", "WIGGLE_OBSERVE_DRIFT_MIN_MILLIS", 5);
+    private final long driftCooldownMillis = ServerEnv.envLong("wiggle.observe.drift.cooldownMillis", "WIGGLE_OBSERVE_DRIFT_COOLDOWN_MILLIS", 3_600_000);
+
+    /**
+     * Leader duty: records a DEGRADING anomaly for every timed step whose recent runs are markedly
+     * slower than the runs before them -- the latest version of every workflow with timed steps,
+     * undos judged apart from the steps they reverse. A finding names the run that tipped it and
+     * silences the same step for the cooldown, so a slow week reads as one finding, not one per run.
+     */
+    public int detectDegradation() {
+        long now = System.currentTimeMillis();
+        int found = 0;
+        for (String name : definitions.names()) {
+            WorkflowDefinition def = definitions.latest(name).orElse(null);
+            if (def == null) continue;
+            found += transactions.inTx(tx -> detectDegradation(tx, def, now));
+        }
+        return found;
+    }
+
+    private int detectDegradation(Tx tx, WorkflowDefinition def, long now) {
+        List<Rows.StepDuration> sample = tx.stepDurations(def.name(), def.version(), 0, driftWindow + Math.max(driftBaseline, 1000));
+        if (sample.size() < driftWindow + driftBaseline) return 0;
+        Map<String, List<Rows.StepDuration>> byStep = new LinkedHashMap<>();
+        for (Rows.StepDuration d : sample) {
+            byStep.computeIfAbsent(d.undo() ? d.nodeId() + StepStatistics.UNDO_SUFFIX : d.nodeId(), k -> new ArrayList<>()).add(d);
+        }
+        Set<String> recentlyFound = new HashSet<>();
+        for (Rows.Anomaly a : tx.anomalies(def.name(), null, 500)) {
+            if (ObservedRunningMode.DEGRADING.equals(a.kind()) && a.at() > now - driftCooldownMillis) recentlyFound.add(a.reportedNode());
+        }
+        int found = 0;
+        for (Map.Entry<String, List<Rows.StepDuration>> e : byStep.entrySet()) {
+            if (recentlyFound.contains(e.getKey())) continue;
+            List<Long> newestFirst = e.getValue().stream().map(Rows.StepDuration::millis).toList();
+            Degradation.Drift drift = Degradation.detect(newestFirst, driftWindow, driftBaseline,
+                    1.0 + driftPercent / 100.0, driftMinMillis).orElse(null);
+            if (drift == null) continue;
+            String nodeId = e.getKey().endsWith(StepStatistics.UNDO_SUFFIX)
+                    ? e.getKey().substring(0, e.getKey().length() - StepStatistics.UNDO_SUFFIX.length()) : e.getKey();
+            Node node = def.nodes().get(nodeId);
+            String label = (node == null ? nodeId : node.name()) + (e.getKey().endsWith(StepStatistics.UNDO_SUFFIX) ? " (undo)" : "");
+            String detail = String.format("%s: p50 %d ms over the last %d runs, %d ms over the %d before (%.1fx)",
+                    label, drift.recentP50(), drift.recent(), drift.baselineP50(), drift.baseline(), drift.factor());
+            tx.insertAnomaly(new Rows.Anomaly(Ids.next("anm"), e.getValue().getFirst().instanceId(), def.name(), def.version(),
+                    ObservedRunningMode.DEGRADING, drift.baselineP50() + "ms", e.getKey(), detail, now));
+            LOG.log(System.Logger.Level.INFO, () -> "degrading step in " + def.key() + ": " + detail);
+            found++;
+        }
+        return found;
+    }
+
+    /** Leader duty: judge observed runs whose settle time has passed. */
+    public int settleObservedRuns(int max) {
+        List<Instance> due = transactions.read(tx -> tx.dueSettle(System.currentTimeMillis(), max));
+        int done = 0;
+        for (Instance probe : due) {
+            try {
+                transactions.inTxVoid(tx -> settleObservedRun(tx, probe.id));
+                done++;
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "settle of observed run " + probe.id + " failed: " + e);
+            }
+        }
+        return done;
+    }
+
+    private void settleObservedRun(Tx tx, String id) {
+        Instance inst = tx.lockInstance(id).orElse(null);
+        long now = System.currentTimeMillis();
+        if (inst == null || !ObservedRunningMode.open(inst) || inst.settleAt == null || inst.settleAt > now) return;
+        WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
+                .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
+        boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
+        modeFactory.observed().settle(tx, inst, def, idle, now);
+        LOG.log(System.Logger.Level.DEBUG, () -> "settled observed run " + inst.id + " -> " + inst.status
+                + (idle ? " (idle)" : ""));
+    }
+
+    /** One run of an observe batch: exactly the arguments of {@link #observe}. */
+    public record ObservedRun(String workflow, Integer version, String instanceId, String correlationId,
+                              String reporter, List<StepInput> steps, boolean fin, String failure) {}
+
+    /** A run's fate in an observe batch: its result, or the status and message it would have thrown. */
+    public record ObserveOutcome(ObserveResult result, Integer errorStatus, String error) {
+
+        public boolean ok() {
+            return result != null;
+        }
+    }
+
+    /**
+     * Applies N observed runs, each in its own transaction, and answers every one in submission
+     * order. Observation needs no atomicity across runs: a run that is refused is refused alone,
+     * and the ones around it stand.
+     */
+    public List<ObserveOutcome> observeMany(List<ObservedRun> runs) {
+        List<ObserveOutcome> out = new ArrayList<>(runs.size());
+        for (ObservedRun r : runs) {
+            try {
+                out.add(new ObserveOutcome(observe(r.workflow(), r.version(), r.instanceId(), r.correlationId(),
+                        r.reporter(), r.steps(), r.fin(), r.failure()), null, null));
+            } catch (EngineException e) {
+                out.add(new ObserveOutcome(null, e.statusCode(), e.getMessage()));
+            } catch (RuntimeException e) {
+                out.add(new ObserveOutcome(null, 500, e.toString()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Per-node duration statistics for one workflow version over its newest {@code sample} timed
+     * steps that finished after {@code since}; a null or zero version means the latest. Slowest
+     * 95th percentile first, so the head of the list is the bottleneck.
+     */
+    public List<NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
+        WorkflowDefinition def = (version == null || version <= 0
+                ? definitions.latest(workflow) : definitions.lookup(workflow, version))
+                .orElseThrow(() -> EngineException.notFound("workflow '" + workflow + "'"));
+        List<Rows.StepDuration> durations = transactions.read(
+                tx -> tx.stepDurations(def.name(), def.version(), since, sample));
+        return StepStatistics.summarise(durations, id -> {
+            Node n = def.nodes().get(id);
+            return n == null ? id : n.name();
+        });
+    }
+
+    /** Departures of observed runs from their topology, newest first; either filter may be null. */
+    public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
+        return transactions.read(tx -> tx.anomalies(workflow, instanceId, limit)).stream()
+                .map(a -> new AnomalyView(a.instanceId(), a.workflow(), a.version(), a.kind(),
+                        a.expectedNode(), a.reportedNode(), a.detail(), a.at()))
+                .toList();
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */

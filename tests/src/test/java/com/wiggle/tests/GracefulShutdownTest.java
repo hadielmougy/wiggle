@@ -80,7 +80,7 @@ class GracefulShutdownTest {
         // Default batch size (64) means step "a" alone never triggers a flush -- its result sits
         // only in the worker's in-memory buffer until a boundary, a full batch, or a drain.
         FlowSpec bp = FlowSpec.define("shutdown-drain", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_ASYNC)
+                .executeInLocalAsync()
                 .thenApply(s::a)
                 .thenApply(s::b)
                 .thenApply(s::c));

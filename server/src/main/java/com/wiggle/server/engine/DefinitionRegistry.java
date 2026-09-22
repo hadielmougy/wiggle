@@ -64,6 +64,9 @@ public final class DefinitionRegistry {
      * as a change to the graph.
      */
     public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
+        if (RunningMode.resolveMode(def.executionMode()) == ExecutionMode.OBSERVED) {
+            ObservedRunningMode.requireObservable(def);
+        }
         storage.inTxVoid(new Registration(def, force));
         modeCache.put(def.key(), def.executionMode());
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
@@ -163,5 +166,7 @@ public final class DefinitionRegistry {
         @Override public String startNode() { return def.startNode(); }
 
         @Override public Node node(String id) { return def.node(id); }
+
+        @Override public Optional<Node> find(String id) { return Optional.ofNullable(def.nodes().get(id)); }
     }
 }

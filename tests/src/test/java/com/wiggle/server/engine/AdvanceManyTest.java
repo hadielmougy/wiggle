@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.tests.Modes;
+
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.CompensableActivity;
@@ -62,8 +64,7 @@ class AdvanceManyTest {
     }
 
     private static FlowSpec linear(String name, ExecutionMode mode) {
-        return FlowSpec.define(name, 1, Map.class, TwoSteps.class, (f, s) -> f
-                .execution(mode)
+        return FlowSpec.define(name, 1, Map.class, TwoSteps.class, (f, s) -> Modes.in(f, mode)
                 .thenApply(s::x)
                 .thenApply(s::y));
     }
@@ -145,7 +146,7 @@ class AdvanceManyTest {
             FlowSpec bp = FlowSpec.define("am-fork", 1, Map.class, ForkSteps.class, (f, s) ->
                     Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b))
                             .combine(s::pick)
-                            .execution(ExecutionMode.LOCAL_ASYNC));
+                            .executeInLocalAsync());
             registry.register(bp.definition());
             Set<String> queues = bp.definition().queues();
             engine.start(bp.name(), bp.version(), Map.of(), null);
@@ -248,7 +249,7 @@ class AdvanceManyTest {
             FlowSpec loop = FlowSpec.define("am-loop", 1, Map.class, LoopSteps.class, (f, s) -> f
                     .repeatWhile(s::forever, 3, b -> b.thenApply(s::spin))
                     .thenApply(s::after)
-                    .execution(ExecutionMode.LOCAL_ASYNC));
+                    .executeInLocalAsync());
             FlowSpec line = linear("am-line", ExecutionMode.LOCAL_ASYNC);
             registry.register(loop.definition());
             registry.register(line.definition());
@@ -288,7 +289,7 @@ class AdvanceManyTest {
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
             FlowSpec bp = FlowSpec.define("am-saga", 1, Map.class, SagaSteps.class, (f, s) -> f
-                    .execution(ExecutionMode.LOCAL_ASYNC)
+                    .executeInLocalAsync()
                     .thenApplyCompensable(s::reserve)
                     .thenApply(s::boom));
             registry.register(bp.definition());
@@ -542,7 +543,7 @@ class AdvanceManyTest {
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
             FlowSpec bp = FlowSpec.define("am-direct", 1, Map.class, SagaSteps.class, (f, s) -> f
-                    .execution(ExecutionMode.LOCAL_ASYNC)
+                    .executeInLocalAsync()
                     .thenApplyCompensable(s::reserve)
                     .thenApply(s::boom));
             registry.register(bp.definition());

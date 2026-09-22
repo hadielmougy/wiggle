@@ -130,7 +130,7 @@ class SagaCompensationTest {
     void localSyncSaga() throws Exception {
         Recording rec = new Recording();
         FlowSpec bp = FlowSpec.define("saga-local", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(com.wiggle.core.ExecutionMode.LOCAL_SYNC)
+                .executeInLocalSync()
                 .thenApplyCompensable(s::reserve)
                 .thenApplyCompensable(s::capture)
                 .thenApply(s::boom));
@@ -163,7 +163,7 @@ class SagaCompensationTest {
     void localAsyncSaga() throws Exception {
         Recording rec = new Recording();
         FlowSpec bp = FlowSpec.define("saga-local-async", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(com.wiggle.core.ExecutionMode.LOCAL_ASYNC)
+                .executeInLocalAsync()
                 .thenApplyCompensable(s::reserve)
                 .thenApplyCompensable(s::capture)
                 .thenApply(s::boom));

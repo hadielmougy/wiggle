@@ -67,7 +67,7 @@ class CrossInstanceBatchTest {
         FlowSpec bp = FlowSpec.define("xib-fork", 1, Map.class, ForkSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b))
                         .combine(s::pick)
-                        .execution(ExecutionMode.LOCAL_ASYNC));
+                        .executeInLocalAsync());
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "xib-w",
@@ -100,7 +100,7 @@ class CrossInstanceBatchTest {
             Map<String, Object> y(Map<String, Object> ctx);
         }
         FlowSpec bp = FlowSpec.define("xib-wire", 1, Map.class, TwoSteps.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_ASYNC)
+                .executeInLocalAsync()
                 .thenApply(s::x)
                 .thenApply(s::y));
         try (WiggleServer server = new WiggleServer(config()).start();

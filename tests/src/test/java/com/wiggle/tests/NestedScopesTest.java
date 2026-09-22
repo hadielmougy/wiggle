@@ -60,8 +60,7 @@ class NestedScopesTest {
     }
 
     private static FlowSpec forkInForEach(ExecutionMode mode) {
-        return FlowSpec.define("fork-in-foreach", 1, Map.class, ForkInForEachSteps.class, (f, s) -> f
-                .execution(mode)
+        return FlowSpec.define("fork-in-foreach", 1, Map.class, ForkInForEachSteps.class, (f, s) -> Modes.in(f, mode)
                 .thenForEach("per-item", "items", String.class, item ->
                         Wiggle.allOf(item.thenApply(s::up), item.thenApply(s::down))
                                 .combineWithContext(s::merge))

@@ -203,14 +203,14 @@ The child is referenced **by name**, so it is an independently registered and ve
 its own handlers — not an inlined fragment. The parent parks while it runs and resumes with the
 child's final context, which is why the `Class` argument says what to continue as.
 
-## 7. `execution(LOCAL_ASYNC)` + `checkpoint` + `repeatWhile`
+## 7. `executeInLocalAsync()` + `checkpoint` + `repeatWhile`
 
 Batched local execution with an explicit flush.
 
 <!-- snippet: cookbook/batched-loop -->
 ```java
 FlowSpec spec = FlowSpec.define("tcb-batched-loop", 1, Batch.class, BatchedSteps.class, (f, s) -> f
-        .execution(ExecutionMode.LOCAL_ASYNC)
+        .executeInLocalAsync()
         .repeatWhile(s::moreBatches, b -> b
                 .thenApply(s::processBatch)
                 .checkpoint())   // flush the buffer before the next iteration
@@ -232,7 +232,7 @@ escalation, a checkpointed loop.
 FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", 1, Basket.class, KitchenSinkSteps.class, (f, s) -> {
     var ready = f
             .defaultQueue("default")
-            .execution(ExecutionMode.LOCAL_SYNC)
+            .executeInLocalSync()
             .thenApply(s::intake)
             .thenFilter(s::hasItems);
 
@@ -272,6 +272,6 @@ thing.
 | `thenSubFlow` | 6, 8 |
 | `thenSleep` | 8 |
 | `checkpoint` | 7, 8 |
-| `execution(...)` | 7, 8 |
+| `executeInLocalSync()` / `executeInLocalAsync()` | 7, 8 |
 | per-node queue / `defaultQueue` | 3, 8 |
 | `RetryPolicy` per step | 2, 8 |

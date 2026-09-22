@@ -179,7 +179,7 @@ public class WorkerMain {
         List<com.wiggle.client.WiggleClient> clients = conns.stream().map(DirectConnection::client).toList();
         var client = clients.getFirst();
         FlowSpec spec = FlowSpec.define("test-flow", 8, RetryPolicy.fixed(5, Duration.ofSeconds(1)), Order.class, OrderSteps.class, (f, s) -> {
-            var flow = f.execution(ExecutionMode.LOCAL_ASYNC);
+            var flow = f.executeInLocalAsync();
             var checked = flow.apply(s::validate, "validate").thenFilter(s::inStock, "inStock");
 
             // dynamic fan-out over the order lines; each line hops queues mid-item

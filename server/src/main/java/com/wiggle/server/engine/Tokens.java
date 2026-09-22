@@ -82,6 +82,37 @@ final class Tokens {
         return cont;
     }
 
+    /**
+     * A token for a step that already ran elsewhere: born settled, never dispatched, carrying the
+     * step's own timings and the reporter that ran it. A null {@code step} settles a structural
+     * node (an END) with no timing. The status still goes through the state machine.
+     */
+    static Token insertSettled(Tx tx, Instance inst, Node node, TokenStatus status, String reporter,
+                               WorkflowEngine.StepInput step, long seq, long now) {
+        TokenPayload payload = step != null && step.predicateValue() != null
+                ? new TokenPayload(List.of(), java.util.Map.of(), java.util.Map.of(ObservedRunningMode.PREDICATE_KEY, step.predicateValue()))
+                : TokenPayload.EMPTY;
+        Token t = create(inst, node.id(), "", payload, now);
+        t.kind = node.kind();
+        t.activity = step != null && step.undo() ? node.activity() + StepStatistics.UNDO_SUFFIX : node.activity();
+        t.queue = node.queue();
+        t.leaseOwner = reporter;
+        t.seq = seq;
+        if (step != null) {
+            t.startedAt = step.startedAt();
+            t.finishedAt = step.finishedAt();
+            t.lastError = step.error();
+            t.afterNode = step.afterNode();
+            if (step.undo()) t.undoOf = node.id();
+            if (step.error() != null) t.attempt = 1;
+        }
+        // What happened, in the state machine's terms: the step ran, then settled or failed.
+        t.status = TokenState.of(t.status).moveTo(TokenStatus.RUNNING);
+        t.status = TokenState.of(t.status).moveTo(status);
+        tx.insertToken(t);
+        return t;
+    }
+
     static void createLeased(Tx tx, Token cont, Node nextNode, String leaseOwner, long lease, long now) {
         cont.status = TokenStatus.RUNNING;
         cont.kind = nextNode.kind();

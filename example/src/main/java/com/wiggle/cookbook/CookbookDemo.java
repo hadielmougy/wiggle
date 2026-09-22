@@ -80,7 +80,7 @@ public final class CookbookDemo {
                 run(client, "6. thenSubFlow + gate + allOf", parentChild.spec(),
                         Map.of("email", "hadi@wiggle.dev"));
 
-                run(client, "7. execution(LOCAL_ASYNC) + checkpoint + repeatWhile",
+                run(client, "7. executeInLocalAsync() + checkpoint + repeatWhile",
                         batchedLoop.spec(), Map.of());
 
                 run(client, "8. kitchen sink -- almost every operator in one graph",

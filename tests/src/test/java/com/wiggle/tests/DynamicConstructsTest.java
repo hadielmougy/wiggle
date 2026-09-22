@@ -116,8 +116,7 @@ class DynamicConstructsTest {
 
 
     private static FlowSpec counterLoop(ExecutionMode mode) {
-        return FlowSpec.define("dyn-loop", 1, Map.class, LoopSteps.class, (f, s) -> f
-                .execution(mode)
+        return FlowSpec.define("dyn-loop", 1, Map.class, LoopSteps.class, (f, s) -> Modes.in(f, mode)
                 .thenApply(s::init)
                 .repeatWhile(s::more, b -> b.thenApply(s::work))
                 .thenApply(s::after));
@@ -139,7 +138,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile iterates until the condition fails, in every execution mode")
     void loopIterates() throws Exception {
         for (ExecutionMode mode : ExecutionMode.values()) {
-            if (mode == ExecutionMode.DEFAULT) continue;
+            if (mode == ExecutionMode.DEFAULT || mode == ExecutionMode.OBSERVED) continue;   // no worker serves OBSERVED
             AtomicInteger bodyRuns = new AtomicInteger();
             InstanceView v = run(counterLoop(mode), new LoopH(bodyRuns), Map.of(), null);
             assertEquals("COMPLETED", v.status(), mode + " status");
@@ -177,8 +176,7 @@ class DynamicConstructsTest {
 
     /** Two-step body: the item value evolves scalar -> map, proving the value threads the body. */
     private static FlowSpec fanOut(ExecutionMode mode) {
-        return FlowSpec.define("dyn-fan", 1, Map.class, FanSteps.class, (f, s) -> f
-                .execution(mode)
+        return FlowSpec.define("dyn-fan", 1, Map.class, FanSteps.class, (f, s) -> Modes.in(f, mode)
                 .thenForEach("per-item", "items", String.class, b -> b
                         .thenApply(s::upper)
                         .thenApply(s::measure))

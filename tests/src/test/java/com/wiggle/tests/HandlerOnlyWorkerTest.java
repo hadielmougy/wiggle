@@ -62,8 +62,7 @@ class HandlerOnlyWorkerTest {
 
     /** A chain long enough that a local run has something to chain. */
     private static FlowSpec linear(ExecutionMode mode) {
-        return FlowSpec.define("how-linear", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(mode)
+        return FlowSpec.define("how-linear", 1, Map.class, OneStep.class, (f, s) -> Modes.in(f, mode)
                 .thenApply(s::a)
                 .thenApply(s::b)
                 .thenFilter(s::keep)
