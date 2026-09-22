@@ -29,7 +29,7 @@ class EventStoreTest {
     }
 
     private static Rows.Event event(String instance, String type, long at) {
-        return new Rows.Event(0, instance, "store-flow", 1, "key-" + instance, type, 1,
+        return new Rows.Event(0, instance, "store-flow", 1, "key-" + instance, type, null, 1,
                 "{\"reason\":\"" + type + "\"}", at);
     }
 
@@ -66,15 +66,24 @@ class EventStoreTest {
         assertEquals(instance, mine.get(0).instanceId());
         assertEquals("key-" + instance, mine.get(0).correlationId());
         assertEquals(1, mine.get(0).payloadVer());
+        assertNull(mine.get(0).nodeId(), "a lifecycle entry names no step");
         assertTrue(mine.get(0).payload().contains("wf.started"), mine.get(0).payload());
         assertEquals(1, storage.inTx(tx -> tx.eventsAfter(base, 1)).size(), "max bounds the read");
+
+        long emitted = storage.inTx(tx -> tx.appendEvent(new Rows.Event(0, instance, "store-flow", 1,
+                "key-" + instance, "payment.captured", "n2", 1, "{\"amount\":42}", now - 8_000)));
+        Rows.Event back = storage.inTx(tx -> tx.eventsAfter(second, 100)).getFirst();
+        assertEquals(emitted, back.seq());
+        assertEquals("n2", back.nodeId(), "an emitted entry names the step it came from");
+        assertEquals("payment.captured", back.type());
+        assertTrue(back.payload().contains("42"), back.payload());
 
         // The visibility window: an entry appended now is not served by a feed reading as of a
         // moment before it, which is what keeps a consumer from stepping over an in-flight append.
         long fresh = storage.inTx(tx -> tx.appendEvent(event(instance, "wf.cancelled", now)));
-        assertTrue(storage.inTx(tx -> tx.eventsAfter(second, now - 1_000, 100)).isEmpty(),
+        assertTrue(storage.inTx(tx -> tx.eventsAfter(emitted, now - 1_000, 100)).isEmpty(),
                 "nothing younger than the window is served");
-        assertEquals(1, storage.inTx(tx -> tx.eventsAfter(second, now + 1_000, 100)).size(),
+        assertEquals(1, storage.inTx(tx -> tx.eventsAfter(emitted, now + 1_000, 100)).size(),
                 "and it is served once the window has passed it");
 
         assertNull(storage.inTx(tx -> tx.eventCursor(consumer)), "an unknown consumer has no cursor");
@@ -100,6 +109,6 @@ class EventStoreTest {
         int trimmed = storage.inTx(tx -> tx.deleteEvents(now - 9_500, first, 100));
         assertEquals(1, trimmed, "only the entry that is both old enough and acknowledged");
         List<Rows.Event> left = storage.inTx(tx -> tx.eventsAfter(base, 100));
-        assertEquals(List.of(second, fresh), left.stream().map(Rows.Event::seq).toList());
+        assertEquals(List.of(second, emitted, fresh), left.stream().map(Rows.Event::seq).toList());
     }
 }

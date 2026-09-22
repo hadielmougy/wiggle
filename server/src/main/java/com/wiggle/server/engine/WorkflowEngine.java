@@ -209,26 +209,35 @@ public final class WorkflowEngine {
      * {@code "value"}.
      */
     public void complete(String taskId, String leaseOwner, Object result) {
-        complete(taskId, leaseOwner, result, null, null);
+        complete(taskId, leaseOwner, result, null, null, List.of());
     }
 
     /** {@link #complete(String, String, Object)} with the handler's own start and finish, which
      *  replace the server's claimed-to-settled stamps on the token. */
     public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt) {
+        complete(taskId, leaseOwner, result, startedAt, finishedAt, List.of());
+    }
+
+    /** {@link #complete(String, String, Object, Long, Long)} with the events the handler emitted,
+     *  appended to the log in the transaction that settles the step. */
+    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt,
+                         List<EmittedEvent> events) {
         transactions.inTxVoid(tx -> {
             Tokens.LockedTask task = Tokens.lock(tx, taskId);
             Tokens.requireLease(task.token(), leaseOwner);
-            if (completeCompensation(tx, task)) return;
+            if (completeCompensation(tx, task, events)) return;
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
-            modeFactory.create(mode)
-                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt));
+            modeFactory.create(mode).complete(new CompleteRunContext(task, leaseOwner, result, tx,
+                    loopMaxIterations, startedAt, finishedAt, events));
         });
     }
 
-    private boolean completeCompensation(Tx tx, Tokens.LockedTask task) {
+    private boolean completeCompensation(Tx tx, Tokens.LockedTask task, List<EmittedEvent> events) {
         Long compSeq = Sagas.seqOf(task.token());
         if (compSeq != null) {
-            instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, System.currentTimeMillis());
+            long now = System.currentTimeMillis();
+            Events.emitted(tx, task.inst(), task.token().nodeId, events, now);
+            instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, now);
             return true;
         }
         return false;
@@ -240,10 +249,19 @@ public final class WorkflowEngine {
      * clock in epoch millis, or null when the reporter did not time it.
      */
     public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
-                            Long startedAt, Long finishedAt) {
+                            Long startedAt, Long finishedAt, List<EmittedEvent> events) {
+
+        public StepInput {
+            events = events == null ? List.of() : List.copyOf(events);
+        }
 
         public StepInput(String nodeId, Object merge, Boolean predicateValue) {
-            this(nodeId, merge, predicateValue, null, null, null);
+            this(nodeId, merge, predicateValue, null, null, null, List.of());
+        }
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
+                         Long startedAt, Long finishedAt) {
+            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, List.of());
         }
     }
 
@@ -536,7 +554,8 @@ public final class WorkflowEngine {
     private static List<EventView> view(List<Rows.Event> events) {
         return events.stream()
                 .map(e -> new EventView(e.seq(), e.instanceId(), e.workflow(), e.version(), e.correlationId(),
-                        e.type(), e.createdAt(), e.payload() == null ? Map.of() : Json.parseObject(e.payload())))
+                        e.type(), e.nodeId(), e.createdAt(),
+                        e.payload() == null ? Map.of() : Json.parseObject(e.payload())))
                 .toList();
     }
 

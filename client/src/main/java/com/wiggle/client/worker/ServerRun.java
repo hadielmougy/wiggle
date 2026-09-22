@@ -33,8 +33,9 @@ final class ServerRun {
         try {
             Object result = handler.invoke(task.context());
             long finishedAt = startedAt + (System.nanoTime() - t0) / 1_000_000;
+            java.util.List<com.wiggle.core.EmittedEvent> emitted = Step.drainEmitted();
             lease.stop();   // the handler is done: no extension may race or trail the settle below
-            settle(result, startedAt, finishedAt);
+            settle(result, startedAt, finishedAt, emitted);
         } catch (PermanentActivityException e) {
             lease.stop();
             reportFailure(Worker.describe(e), false);
@@ -54,13 +55,15 @@ final class ServerRun {
     }
 
     /** Reports a finished step: a predicate must have produced a boolean, a task merges its result. */
-    private void settle(Object result, long startedAt, long finishedAt) {
+    private void settle(Object result, long startedAt, long finishedAt,
+                        java.util.List<com.wiggle.core.EmittedEvent> emitted) {
         if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
             reportFailure("predicate '" + task.stepName() + "' returned " + Worker.typeName(result), false);
             return;
         }
         w.client().complete(task.taskId(), task.leaseOwner(),
-                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result, startedAt, finishedAt);
+                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result,
+                startedAt, finishedAt, emitted);
     }
 
     private void reportFailure(String message, boolean retryable) {

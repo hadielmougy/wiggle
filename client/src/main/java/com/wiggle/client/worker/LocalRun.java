@@ -109,7 +109,7 @@ final class LocalRun {
             failRun("predicate '" + node.name() + "' returned " + Worker.typeName(outcome.result()), false);
             return false;
         }
-        return advance(outcome.result(), outcome.startedAt(), outcome.finishedAt());
+        return advance(outcome.result(), outcome.startedAt(), outcome.finishedAt(), outcome.events());
     }
 
     private Invocation invoke(ActivityHandler handler) {
@@ -119,7 +119,8 @@ final class LocalRun {
         long t0 = System.nanoTime();
         try {
             Object result = handler.invoke(ctx);
-            return Invocation.ok(result, startedAt, startedAt + (System.nanoTime() - t0) / 1_000_000);
+            return Invocation.ok(result, startedAt, startedAt + (System.nanoTime() - t0) / 1_000_000,
+                    Step.drainEmitted());
         } catch (PermanentActivityException e) {
             failRun(Worker.describe(e), false);
             return Invocation.failed();
@@ -135,14 +136,15 @@ final class LocalRun {
     }
 
     /** Records the step, flushes when due, and moves to the successor; false = run is over. */
-    private boolean advance(Object result, long startedAt, long finishedAt) {
+    private boolean advance(Object result, long startedAt, long finishedAt,
+                            java.util.List<com.wiggle.core.EmittedEvent> events) {
         boolean isPredicate = node.kind() == NodeKind.PREDICATE;
         boolean predicateValue = isPredicate && (Boolean) result;
         Node next = def.node(GraphTraversal.successor(node, predicateValue));
         boolean handback = GraphTraversal.classify(next, w.servedQueues()) != null;
         buffer.add(isPredicate
-                ? new WiggleClient.StepReport(node.id(), null, predicateValue, startedAt, finishedAt)
-                : new WiggleClient.StepReport(node.id(), result, null, startedAt, finishedAt));
+                ? new WiggleClient.StepReport(node.id(), null, predicateValue, startedAt, finishedAt, events)
+                : new WiggleClient.StepReport(node.id(), result, null, startedAt, finishedAt, events));
         if (!isPredicate) ctx = applyReplace(ctx, result);
         if (shouldFlush(handback) && !flushAndContinue(handback)) return false;
         node = next;
@@ -195,9 +197,13 @@ final class LocalRun {
     }
 
     /** The outcome of invoking a handler: a result, or "already reported as failed". */
-    private record Invocation(boolean ok, Object result, long startedAt, long finishedAt) {
-        static Invocation ok(Object result, long startedAt, long finishedAt) { return new Invocation(true, result, startedAt, finishedAt); }
-        static Invocation failed() { return new Invocation(false, null, 0, 0); }
+    private record Invocation(boolean ok, Object result, long startedAt, long finishedAt,
+                             java.util.List<com.wiggle.core.EmittedEvent> events) {
+        static Invocation ok(Object result, long startedAt, long finishedAt,
+                             java.util.List<com.wiggle.core.EmittedEvent> events) {
+            return new Invocation(true, result, startedAt, finishedAt, events);
+        }
+        static Invocation failed() { return new Invocation(false, null, 0, 0, java.util.List.of()); }
     }
 
     /** Mirrors the server: a step's return REPLACES the context (null = unchanged, no merge). */

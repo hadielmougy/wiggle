@@ -499,7 +499,7 @@ public final class InMemoryStorage implements Storage {
         @Override public long appendEvent(Rows.Event e) {
             long seq = ++eventSeq;
             events.add(new Rows.Event(seq, e.instanceId(), e.workflow(), e.version(), e.correlationId(),
-                    e.type(), e.payloadVer(), e.payload(), e.createdAt()));
+                    e.type(), e.nodeId(), e.payloadVer(), e.payload(), e.createdAt()));
             return seq;
         }
 

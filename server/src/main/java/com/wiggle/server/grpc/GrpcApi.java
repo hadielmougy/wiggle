@@ -340,7 +340,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             Object result = req.hasResult() ? ProtoJson.fromValue(req.getResult()) : null;
             engine.complete(req.getTaskId(), req.getLeaseOwner(), result,
                     req.getStartedAt() == 0 ? null : req.getStartedAt(),
-                    req.getFinishedAt() == 0 ? null : req.getFinishedAt());
+                    req.getFinishedAt() == 0 ? null : req.getFinishedAt(),
+                    emitted(req.getEventsList()));
             return Ack.newBuilder().setOk(true).build();
         });
     }
@@ -421,9 +422,20 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             String error = s.getOutcomeCase() == StepResult.OutcomeCase.ERROR ? s.getError() : null;
             steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate, error,
                     s.getStartedAt() == 0 ? null : s.getStartedAt(),
-                    s.getFinishedAt() == 0 ? null : s.getFinishedAt()));
+                    s.getFinishedAt() == 0 ? null : s.getFinishedAt(),
+                    emitted(s.getEventsList())));
         }
         return steps;
+    }
+
+    /** The wire's emitted events, validated by {@link com.wiggle.core.EmittedEvent}'s own contract. */
+    private static List<com.wiggle.core.EmittedEvent> emitted(List<EmittedEvent> reported) {
+        List<com.wiggle.core.EmittedEvent> out = new ArrayList<>(reported.size());
+        for (EmittedEvent e : reported) {
+            out.add(new com.wiggle.core.EmittedEvent(e.getType(),
+                    e.hasPayload() ? ProtoJson.fromValue(e.getPayload()) : null));
+        }
+        return out;
     }
 
     @Override
@@ -538,6 +550,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 .setSeq(e.seq()).setInstanceId(e.instanceId()).setWorkflow(e.workflow())
                 .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt());
         if (e.correlationId() != null) b.setCorrelationId(e.correlationId());
+        if (e.nodeId() != null) b.setNodeId(e.nodeId());
         if (e.payload() != null && !e.payload().isEmpty()) b.setPayload(ProtoJson.toValue(e.payload()));
         return b.build();
     }
