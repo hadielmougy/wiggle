@@ -11,6 +11,7 @@ include(
     "postgres",
     "client",
     "observe",
+    "observe-kafka",
     "client-all",
     "bom",
     "dist",

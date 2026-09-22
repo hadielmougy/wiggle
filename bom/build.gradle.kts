@@ -22,7 +22,7 @@ dependencies {
     constraints {
         // --- wiggle's own modules, at this build's version ---
         listOf(
-            "wiggle-core", "wiggle-proto", "wiggle-client", "wiggle-observe", "wiggle-server",
+            "wiggle-core", "wiggle-proto", "wiggle-client", "wiggle-observe", "wiggle-observe-kafka", "wiggle-server",
             "wiggle-jdbc", "wiggle-postgres", "wiggle-client-all",
             // wiggle-server has an api dependency on it, so a consumer resolves it whether or
             // not they name it; the BOM should pin it like everything else it can drag in.

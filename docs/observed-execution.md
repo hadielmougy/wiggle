@@ -170,3 +170,27 @@ try (Observer observer = Observer.connect("localhost:8080")) {
 - **Context.** Off by default. `withCaptureContext(true)` ships each task step's return value as
   the instance's context, through the same record-to-JSON mapping the client uses.
 - **TLS.** `ObserverOptions.withTls(Tls.Options)` / `withRequireTls`, the client's semantics.
+
+## 8. Kafka: `wiggle-observe-kafka`
+
+A run crosses a topic as three record headers. The producing service stamps its run on the
+record; the consuming service joins it around its handler. Only the record and header types of
+`kafka-clients` are touched (the dependency is `compileOnly`; you bring your own Kafka), so the
+same two calls work from a plain consumer loop, a Spring Kafka listener or a Quarkus one.
+
+<!-- snippet: observe-kafka/produce -->
+```java
+try (Run run = checkout.begin((String) order.get("id"))) {
+    checkout.steps().accept(order);
+    producer.send(KafkaRuns.inject(new ProducerRecord<>("orders", (String) order.get("id"), "{...}")));
+}
+```
+
+<!-- snippet: observe-kafka/consume -->
+```java
+KafkaRuns.handle(checkout, record, r -> checkout.steps().reserve(Map.of("id", r.key())));
+```
+
+A record with no run headers is still observed: keyed by the record key when it has one, else
+by its topic, partition and offset, so a platform that never adopted correlation ids gets a run
+per message. `KafkaRuns.inject` outside an open run throws rather than sending a bare record.
