@@ -105,7 +105,9 @@ public final class Housekeeper implements AutoCloseable {
         try {
             LOG.log(System.Logger.Level.DEBUG, "retention sweep: leader running");
             int purged = engine.purgeTerminalInstancesOlderThan(retention.toMillis(), batchSize * 10);
-            if (purged > 0) LOG.log(System.Logger.Level.INFO, () -> "purged " + purged + " terminal instances");
+            int trimmed = engine.trimEvents(batchSize * 10);
+            if (purged > 0 || trimmed > 0) LOG.log(System.Logger.Level.INFO, () -> "purged " + purged
+                    + " terminal instances, trimmed " + trimmed + " events");
             else LOG.log(System.Logger.Level.DEBUG, "retention sweep: nothing to purge");
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "retention sweep failed: " + e);

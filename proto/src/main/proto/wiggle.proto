@@ -38,6 +38,12 @@ service WiggleControlPlane {
     // Applies an ordered run of locally-executed steps atomically, keeps the lease, and reports
     // whether the worker should keep going (LOCAL_SYNC / LOCAL_ASYNC execution).
     rpc AdvanceRun(AdvanceRunRequest) returns (AdvanceRunResult);
+
+    // The event feed: pull-and-ack over the durable event log. A consumer is a named cursor;
+    // PollEvents long-polls like PollTasks, AckEvents advances the cursor. Contract only until
+    // the server serves it: a call today answers UNIMPLEMENTED.
+    rpc PollEvents(PollEventsRequest) returns (EventList);
+    rpc AckEvents(AckEventsRequest) returns (Ack);
     // Applies N independent single-instance runs in one call and one commit (LOCAL_ASYNC final
     // handbacks). Every run is exactly an AdvanceRun; a rejected run wrote nothing and carries
     // the status and message the single-run path would have thrown, so the caller can retry it
@@ -429,3 +435,38 @@ message HeartbeatRequest {
 message HeartbeatResult {
     int64 lease_expires_at = 1;
 }
+
+message PollEventsRequest {
+    string consumer = 1;          // named cursor; the first poll registers it
+    int32 max = 2;
+    int64 wait_millis = 3;        // long-poll, clamped like PollTasks
+    // Start position when the first poll creates the cursor; ignored once it exists.
+    // 0 = tail (only events appended from now on), -1 = earliest retained, else a seq.
+    int64 start_from = 4;
+}
+
+// One entry of the event log: an instance lifecycle transition, written in the transaction
+// that made it. type is wf.started | wf.completed | wf.failed | wf.cancelled | wf.compensating
+// | wf.compensated | wf.compensation_failed; the wf. prefix is reserved for the engine.
+message EventView {
+    int64 seq = 1;                // strictly increasing per log; gaps are possible
+    string instance_id = 2;
+    string workflow = 3;
+    int32 version = 4;
+    string correlation_id = 5;
+    string type = 6;
+    int64 created_at = 7;
+    google.protobuf.Value payload = 8;
+}
+
+message EventList {
+    repeated EventView events = 1;
+    // Same backpressure hint as TaskList: when > 0, hold off this many millis before polling again.
+    int64 retry_after_millis = 2;
+}
+
+message AckEventsRequest {
+    string consumer = 1;
+    int64 acked_seq = 2;          // cumulative: acknowledges every event with seq <= this
+}
+

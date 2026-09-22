@@ -350,6 +350,8 @@ public final class WorkflowEngine {
 
     /** How long after END, or a final report, an observed run waits for stragglers before it is judged. */
     private final long observeSettleMillis = ServerEnv.envLong("wiggle.observe.settleMillis", "WIGGLE_OBSERVE_SETTLE_MILLIS", 5_000);
+    /** How long an event stays in the log past its append, once every consumer has acknowledged it. */
+    private final long eventRetentionMillis = ServerEnv.envLong("wiggle.events.retentionMillis", "WIGGLE_EVENTS_RETENTION_MILLIS", 7L * 24 * 3_600_000);
     /** How long an observed run may go without a report before it is judged as stalled. */
     private final long observeStallMillis = ServerEnv.envLong("wiggle.observe.stallMillis", "WIGGLE_OBSERVE_STALL_MILLIS", 600_000);
 
@@ -456,6 +458,25 @@ public final class WorkflowEngine {
     }
 
     /** Departures of observed runs from their topology, newest first; either filter may be null. */
+    /** Up to {@code max} entries of the event log after {@code afterSeq}, oldest first. */
+    public List<EventView> events(long afterSeq, int max) {
+        return transactions.read(tx -> tx.eventsAfter(afterSeq, max)).stream()
+                .map(e -> new EventView(e.seq(), e.instanceId(), e.workflow(), e.version(), e.correlationId(),
+                        e.type(), e.createdAt(), e.payload() == null ? Map.of() : Json.parseObject(e.payload())))
+                .toList();
+    }
+
+    /**
+     * Drops events older than the retention window that every consumer has acknowledged (all of
+     * them, while no consumer exists). Leader-only, from the housekeeper's retention sweep.
+     */
+    public int trimEvents(int max) {
+        long cutoff = System.currentTimeMillis() - eventRetentionMillis;
+        int trimmed = transactions.read(tx -> tx.deleteEvents(cutoff, tx.oldestAckedSeq(), max));
+        if (trimmed > 0) LOG.log(System.Logger.Level.DEBUG, () -> "trimEvents: removed " + trimmed + " event(s)");
+        return trimmed;
+    }
+
     public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
         return transactions.read(tx -> tx.anomalies(workflow, instanceId, limit)).stream()
                 .map(a -> new AnomalyView(a.instanceId(), a.workflow(), a.version(), a.kind(),

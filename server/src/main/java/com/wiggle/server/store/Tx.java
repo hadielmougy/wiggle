@@ -160,6 +160,22 @@ public interface Tx extends GraphStore {
     /** Anomalies newest first, narrowed by workflow and/or instance when either is non-null. */
     List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit);
 
+    /** Appends to the event log and returns the seq the store assigned; visible with the transaction. */
+    long appendEvent(Rows.Event event);
+
+    /** Up to {@code max} events with seq greater than {@code afterSeq}, ascending. */
+    List<Rows.Event> eventsAfter(long afterSeq, int max);
+
+    /** The lowest seq any consumer cursor has acknowledged, or null when no cursor exists. */
+    Long oldestAckedSeq();
+
+    /**
+     * Deletes up to {@code max} of the oldest events created before {@code createdBefore}; when
+     * {@code upToSeq} is non-null, only events with seq at or below it, so an unacknowledged
+     * event outlives the age cap for as long as a consumer is still on its way to it.
+     */
+    int deleteEvents(long createdBefore, Long upToSeq, int max);
+
     /**
      * The durations of the newest {@code max} settled, timed steps of one workflow version that
      * finished after {@code since}. Bounded so the percentiles are computed over a sample the
