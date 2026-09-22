@@ -615,6 +615,10 @@ Where it's going — the honest list:
       anomalies and per-step latency without a worker in the path.
 - [x] **Worker-reported timings** — every execution mode lands in the same Performance view,
       by the handler's own clock, with queue wait.
+- [x] **Event log** — durable lifecycle events with a pull-and-ack feed, so other systems can
+      react to what the engine decided ([docs/event-log.md](docs/event-log.md)).
+- [ ] **Handler-emitted events** — `Step.emit` on the event log, committed with the step that
+      emitted it.
 - [ ] **Observed-run ingest beyond the API** — event-broker adapters (correlation in Kafka
       headers), method instrumentation, and OpenTelemetry spans as reports.
 - [ ] **Worker-mode anomalies** — retry exhausted, lease reclaimed, and loop budget hit,
@@ -636,6 +640,7 @@ Suggestions and PRs welcome — open an issue.
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
 | 🔍 **[Observed execution](docs/observed-execution.md)** | `OBSERVED` mode + `wiggle-observe`: conformance + bottlenecks for steps you run yourself |
+| 📨 **[Event log](docs/event-log.md)** | durable lifecycle events, pulled and acknowledged by named consumers |
 | 📽 **[Slide deck](https://hadielmougy.github.io/wiggle/presentation.html)** | the 5-minute tour |
 | 🐍 **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** · 🐹 **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** | idiomatic clients, same control plane |
 

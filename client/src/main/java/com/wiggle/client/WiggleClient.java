@@ -108,6 +108,26 @@ public final class WiggleClient implements AutoCloseable {
         return Wire.nodeStats(call(() -> stub.getStepStats(req.build())));
     }
 
+    /**
+     * The next entries of the event log for {@code consumer}, oldest first, long-polling up to
+     * {@code waitMillis} for one to appear. A consumer is a named cursor: its first poll registers
+     * it at the log's tail ({@code startFrom} 0), at the earliest entry still retained ({@code -1}),
+     * or after the seq it names, and later polls ignore {@code startFrom}.
+     *
+     * <p>Delivery is at-least-once and the cursor only moves on {@link #ackEvents}, so a consumer
+     * that dies mid-batch is served the same entries again. Acknowledge what you have handled.
+     */
+    public java.util.List<com.wiggle.core.EventView> pollEvents(String consumer, int max, long waitMillis, long startFrom) {
+        return Wire.events(call(() -> stub.pollEvents(com.wiggle.proto.PollEventsRequest.newBuilder()
+                .setConsumer(consumer).setMax(max).setWaitMillis(waitMillis).setStartFrom(startFrom).build())));
+    }
+
+    /** Acknowledges every event up to {@code ackedSeq} for {@code consumer}; cumulative, never backwards. */
+    public void ackEvents(String consumer, long ackedSeq) {
+        call(() -> stub.ackEvents(com.wiggle.proto.AckEventsRequest.newBuilder()
+                .setConsumer(consumer).setAckedSeq(ackedSeq).build()));
+    }
+
     /** Departures of observed runs from their topology, newest first; either filter may be null. */
     public java.util.List<com.wiggle.core.AnomalyView> anomalies(String workflow, String instanceId, int limit) {
         com.wiggle.proto.ListAnomaliesRequest.Builder req = com.wiggle.proto.ListAnomaliesRequest.newBuilder().setLimit(limit);

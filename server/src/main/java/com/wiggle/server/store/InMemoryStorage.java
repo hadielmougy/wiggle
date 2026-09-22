@@ -96,6 +96,8 @@ public final class InMemoryStorage implements Storage {
     /** The event log in seq order; seq is assigned on append. Guarded by the global lock. */
     private final List<Rows.Event> events = new ArrayList<>();
     private long eventSeq;
+    /** consumer -> its place in the log. */
+    private final Map<String, Rows.EventCursor> eventCursors = new ConcurrentHashMap<>();
 
     private final class MemTx implements Tx {
 
@@ -501,17 +503,36 @@ public final class InMemoryStorage implements Storage {
             return seq;
         }
 
-        @Override public List<Rows.Event> eventsAfter(long afterSeq, int max) {
+        @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
             List<Rows.Event> out = new ArrayList<>();
             for (Rows.Event e : events) {
-                if (e.seq() > afterSeq) out.add(e);
+                if (e.seq() > afterSeq && e.createdAt() < createdBefore) out.add(e);
                 if (out.size() >= max) break;
             }
             return out;
         }
 
+        @Override public long latestEventSeq() {
+            return eventSeq;
+        }
+
+        @Override public Rows.EventCursor eventCursor(String consumer) {
+            return eventCursors.get(consumer);
+        }
+
+        @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
+            eventCursors.putIfAbsent(cursor.consumer(), cursor);
+        }
+
+        @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) {
+            eventCursors.compute(consumer, (k, cur) -> cur == null
+                    ? new Rows.EventCursor(k, ackedSeq, now, now)
+                    : new Rows.EventCursor(k, Math.max(cur.ackedSeq(), ackedSeq), now, cur.createdAt()));
+        }
+
         @Override public Long oldestAckedSeq() {
-            return null;   // cursors arrive with the feed
+            return eventCursors.values().stream().mapToLong(Rows.EventCursor::ackedSeq).min().stream()
+                    .boxed().findFirst().orElse(null);
         }
 
         @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {

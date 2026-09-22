@@ -352,6 +352,8 @@ public final class WorkflowEngine {
     private final long observeSettleMillis = ServerEnv.envLong("wiggle.observe.settleMillis", "WIGGLE_OBSERVE_SETTLE_MILLIS", 5_000);
     /** How long an event stays in the log past its append, once every consumer has acknowledged it. */
     private final long eventRetentionMillis = ServerEnv.envLong("wiggle.events.retentionMillis", "WIGGLE_EVENTS_RETENTION_MILLIS", 7L * 24 * 3_600_000);
+    /** How long an appended event is held back from the feed, covering appends still in flight. */
+    private final long eventVisibilityMillis = ServerEnv.envLong("wiggle.events.visibilityMillis", "WIGGLE_EVENTS_VISIBILITY_MILLIS", 50);
     /** How long an observed run may go without a report before it is judged as stalled. */
     private final long observeStallMillis = ServerEnv.envLong("wiggle.observe.stallMillis", "WIGGLE_OBSERVE_STALL_MILLIS", 600_000);
 
@@ -460,7 +462,79 @@ public final class WorkflowEngine {
     /** Departures of observed runs from their topology, newest first; either filter may be null. */
     /** Up to {@code max} entries of the event log after {@code afterSeq}, oldest first. */
     public List<EventView> events(long afterSeq, int max) {
-        return transactions.read(tx -> tx.eventsAfter(afterSeq, max)).stream()
+        return view(transactions.read(tx -> tx.eventsAfter(afterSeq, max)));
+    }
+
+    /**
+     * Serves one consumer's next events and leaves its cursor where it was: delivery is
+     * at-least-once, and only {@link #ackEvents} moves the cursor on. The first poll of a
+     * consumer registers it, at the tail ({@code startFrom} 0), at the earliest event still
+     * retained ({@code -1}), or after a seq it names; later polls ignore {@code startFrom}.
+     *
+     * <p>Long-polls until {@code deadline} the way a worker poll does, and never serves an event
+     * younger than the visibility window, so a consumer cannot read past an append still in flight.
+     */
+    public List<EventView> pollEvents(String consumer, int max, long startFrom, long deadline,
+                                      Cancellation cancelled) {
+        String name = requireConsumer(consumer);
+        int limit = max > 0 ? max : 1;
+        long from = transactions.read(tx -> cursorSeq(tx, name, startFrom, System.currentTimeMillis()));
+        long interval = Math.max(10, Math.min(eventVisibilityMillis, 200));
+        while (true) {
+            if (cancelled.cancelled()) return List.of();
+            long visibleBefore = System.currentTimeMillis() - eventVisibilityMillis;
+            List<Rows.Event> batch = transactions.read(tx -> tx.eventsAfter(from, visibleBefore, limit));
+            if (!batch.isEmpty()) {
+                LOG.log(System.Logger.Level.DEBUG, () -> "pollEvents: consumer " + name + " served "
+                        + batch.size() + " event(s) after seq " + from);
+                return view(batch);
+            }
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0) return List.of();
+            try {
+                Thread.sleep(Math.min(interval, remaining));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return List.of();
+            }
+        }
+    }
+
+    /**
+     * Acknowledges every event up to {@code ackedSeq} for one consumer and returns where its
+     * cursor now stands. Cumulative and never backwards, so a replayed ack is harmless; an ack
+     * past the log's head is clamped to it, since nothing beyond has been delivered.
+     */
+    public long ackEvents(String consumer, long ackedSeq) {
+        String name = requireConsumer(consumer);
+        return transactions.read(tx -> {
+            long target = Math.max(0, Math.min(ackedSeq, tx.latestEventSeq()));
+            tx.advanceEventCursor(name, target, System.currentTimeMillis());
+            Rows.EventCursor cursor = tx.eventCursor(name);
+            return cursor == null ? target : cursor.ackedSeq();
+        });
+    }
+
+    /** The seq a consumer resumes after: its cursor, registered at {@code startFrom} on a first poll. */
+    private static long cursorSeq(Tx tx, String consumer, long startFrom, long now) {
+        Rows.EventCursor cursor = tx.eventCursor(consumer);
+        if (cursor != null) return cursor.ackedSeq();
+        long from = startFrom == 0 ? tx.latestEventSeq() : Math.max(0, startFrom);
+        tx.createEventCursorIfAbsent(new Rows.EventCursor(consumer, from, now, now));
+        Rows.EventCursor created = tx.eventCursor(consumer);
+        return created == null ? from : created.ackedSeq();
+    }
+
+    private static String requireConsumer(String consumer) {
+        if (consumer == null || consumer.isBlank()) {
+            throw EngineException.badRequest("a consumer name is required: the feed's cursor is named, "
+                    + "so two consumers with no name would share one place in the log");
+        }
+        return consumer;
+    }
+
+    private static List<EventView> view(List<Rows.Event> events) {
+        return events.stream()
                 .map(e -> new EventView(e.seq(), e.instanceId(), e.workflow(), e.version(), e.correlationId(),
                         e.type(), e.createdAt(), e.payload() == null ? Map.of() : Json.parseObject(e.payload())))
                 .toList();
