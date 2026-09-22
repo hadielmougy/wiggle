@@ -523,26 +523,57 @@ WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
 ```
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
-has six tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
+has seven tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
 overlaying token status onto the workflow diagram, cancel, inline signal delivery), **Workflows**
 (render any compiled graph), **Schedules** (create/delete interval and cron schedules), **Signals**,
 **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
-and **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
+**Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
 execution mode, the slowest step ringed on the diagram, and the anomalies of observed runs —
-[observed-execution.md](observed-execution.md)). `./gradlew :console:build` compiles the bundle automatically (needs Node;
+[observed-execution.md](observed-execution.md)), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
 
 ![The console's instance detail: an onboarding run traced over its own diagram, with its tokens and an inline signal form.](img/console-instance-trace.png)
 
-**Auth.** Set `WIGGLE_DASHBOARD_PASSWORD` to require login as the **operator** account
-(`WIGGLE_DASHBOARD_USER`, default `admin`). Optionally also set
-`WIGGLE_DASHBOARD_VIEWER_PASSWORD` for a **read-only viewer** account
-(`WIGGLE_DASHBOARD_VIEWER_USER`, default `viewer`): a viewer sees everything but any mutating call
-(cancel, signal, schedule — every non-GET `/api/*`) is rejected. Browsers get a `/login` form that
-sets an HttpOnly session cookie; programmatic clients can use HTTP Basic auth. Unset password =
-open access (warning at startup). Credentials travel cleartext over plain HTTP, so serve over TLS
-for anything exposed.
+**Auth.** Two roles: **admin** does everything, **viewer** sees everything but is refused any
+mutating call (cancel, signal, schedule, users — every non-GET `/api/*`). Browsers get a
+`/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
+auth. Credentials travel cleartext over plain HTTP, so serve over TLS for anything exposed.
+
+Accounts come from two places. **Built-in** accounts are configured where the console is
+deployed: `WIGGLE_DASHBOARD_PASSWORD` for the admin (`WIGGLE_DASHBOARD_USER`, default `admin`)
+and optionally `WIGGLE_DASHBOARD_VIEWER_PASSWORD` for a viewer (`WIGGLE_DASHBOARD_VIEWER_USER`,
+default `viewer`). Nothing in the running console can change them. **Managed** accounts are the
+ones an admin creates in the console itself (§7.1a). With neither a built-in password nor a
+managed account, the console is open and every request is an admin (warning at startup).
+
+### 7.1a Users an admin manages
+
+An admin gets a **Users** tab: create an account with a name, a password and a role
+(`admin` or `viewer`), set someone's password, or delete an account. Everyone who signs in with
+a managed account can change their own password from the header, proving their current one
+first. A viewer may do that too — it is the one write a viewer is allowed, since it changes
+nothing but their own account.
+
+Accounts live in a JSON file the console owns, `WIGGLE_CONSOLE_USERS_FILE` (default
+`wiggle-users.json` in the working directory), **not** in the workflow database. The gRPC
+control plane has no per-RPC authorization yet, so anything stored behind it is reachable by
+every worker that can dial the server; console credentials stay out of that blast radius. In
+Kubernetes that means mounting a volume for the file, or the accounts go when the pod does.
+
+Passwords are stored as PBKDF2-HMAC-SHA256 hashes over a per-account random salt, never in the
+clear, and the file is rewritten atomically and kept owner-only where the filesystem allows.
+
+Three rules keep a console reachable:
+
+- A managed account cannot take a built-in account's name, and built-in accounts cannot be
+  deleted or re-passworded from the console — they are set in the environment.
+- The last remaining admin cannot be deleted when there is no built-in admin to fall back on.
+- Creating the first managed account **turns authentication on**, even if no password was
+  configured. Sign in with the account you just made.
+
+Changing or resetting a password signs out that account's other sessions; the one doing the
+changing stays signed in. Deleting an account signs it out everywhere.
 
 | Env var | Default | Meaning |
 |---|---|---|
@@ -550,6 +581,7 @@ for anything exposed.
 | `WIGGLE_DASHBOARD_PORT` | `8090` | console HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where accounts an admin creates in the console are kept ([§7.1a](#71a-users-an-admin-manages)) |
 | `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console + the client certs it presents to the server |
 
 ### 7.1a Transport security (TLS / mTLS)

@@ -57,6 +57,12 @@
   (GET (str "/api/anomalies?limit=" (or limit 200)
             (when (seq workflow) (str "&workflow=" (enc workflow))))))
 
+(defn users           [] (GET "/api/users"))
+(defn create-user     [body] (POST "/api/users" body))
+(defn delete-user     [name] (DELETE (str "/api/users/" (enc name))))
+(defn reset-password  [name password] (POST (str "/api/users/" (enc name) "/password") {:password password}))
+(defn change-password [current password] (POST "/api/password" {:current current :password password}))
+
 (defn cancel-instance [id reason]
   (POST (str "/api/instances/" (enc id) "/cancel"
              (when (seq reason) (str "?reason=" (enc reason)))) nil))

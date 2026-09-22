@@ -94,6 +94,33 @@
                (when (= instance-id (:selected @db)) (load-detail! instance-id))))
       (.catch st/on-error)))
 
+(defn load-users! []
+  (when (st/can-manage-users?)
+    (-> (api/users)
+        (.then #(swap! db assoc :users (:users %)))
+        (.catch st/on-error))))
+
+(defn create-user! [body]
+  (-> (api/create-user body)
+      (.then (fn [_] (st/toast! :ok (str "user '" (:user body) "' created")) (load-auth!) (load-users!)))
+      (.catch st/on-error)))
+
+(defn delete-user! [name]
+  (-> (api/delete-user name)
+      (.then (fn [_] (st/toast! :ok (str "user '" name "' deleted")) (load-users!)))
+      (.catch st/on-error)))
+
+(defn reset-password! [name password]
+  (-> (api/reset-password name password)
+      (.then (fn [_] (st/toast! :ok (str "password reset for '" name "'; their sessions were signed out"))
+               (load-users!)))
+      (.catch st/on-error)))
+
+(defn change-password! [current password on-done]
+  (-> (api/change-password current password)
+      (.then (fn [_] (st/toast! :ok "password changed") (when on-done (on-done))))
+      (.catch st/on-error)))
+
 (defn create-schedule! [body]
   (-> (api/create-schedule body)
       (.then (fn [_] (st/toast! :ok "schedule created") (load-schedules!)))

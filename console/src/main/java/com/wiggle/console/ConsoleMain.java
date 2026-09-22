@@ -5,6 +5,8 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.core.Tls;
 
+import java.nio.file.Path;
+
 /**
  * The standalone ops console: one binary that serves the dashboard SPA as a pure gRPC client, the same
  * way in either deployment.
@@ -46,12 +48,16 @@ public final class ConsoleMain {
 
         int port = Integer.parseInt(env("WIGGLE_DASHBOARD_PORT", "8090"));
         // Optional read-only account: set WIGGLE_DASHBOARD_VIEWER_PASSWORD to add a viewer that can see
-        // everything but can't cancel/signal/schedule. Only meaningful when the operator password is set.
+        // everything but can't cancel/signal/schedule. Only meaningful alongside the built-in admin.
+        // Accounts an admin manages from the console live in this file, not in the control plane:
+        // the gRPC API has no per-RPC authorization, so credentials there would be readable by every
+        // worker. Mount it on a volume, or the accounts go when the container does.
+        ConsoleUsers users = new ConsoleUsers(Path.of(env("WIGGLE_CONSOLE_USERS_FILE", "wiggle-users.json")));
         ConsoleAuth auth = new ConsoleAuth(env("WIGGLE_DASHBOARD_USER", "admin"),
                 env("WIGGLE_DASHBOARD_PASSWORD", null),
                 env("WIGGLE_DASHBOARD_VIEWER_USER", "viewer"),
                 env("WIGGLE_DASHBOARD_VIEWER_PASSWORD", null),
-                tls.hasKeyStore());
+                tls.hasKeyStore(), users);
         DashboardData data = new GrpcDashboardData(backend);
         ConsoleServer server = new ConsoleServer(data, auth, port, tls).start();
 

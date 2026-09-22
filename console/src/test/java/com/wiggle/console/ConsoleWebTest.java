@@ -88,8 +88,9 @@ class ConsoleWebTest {
 
                 assertTrue(get(http, base + "/api/cluster", null).body().contains("\"members\""), "cluster");
                 assertTrue(get(http, base + "/api/workflows", null).body().contains("wf"), "workflows");
-                assertEquals("{\"required\":false,\"user\":null,\"role\":\"operator\",\"canWrite\":true}",
-                        get(http, base + "/api/auth", null).body(), "open mode = full operator access");
+                assertEquals("{\"required\":false,\"user\":null,\"role\":\"admin\",\"canWrite\":true,"
+                                + "\"canChangePassword\":false,\"managesUsers\":false}",
+                        get(http, base + "/api/auth", null).body(), "open mode = full admin access");
 
                 HttpResponse<String> cancelled = http.send(HttpRequest.newBuilder(
                         URI.create(base + "/api/instances/" + a + "/cancel")).POST(HttpRequest.BodyPublishers.noBody())
@@ -203,12 +204,12 @@ class ConsoleWebTest {
                 assertTrue(get(http, base + "/api/instances/" + id, "viewer:view-pass").body().contains("RUNNING"),
                         "instance untouched by the rejected cancel");
 
-                // operator: same call succeeds
+                // admin: same call succeeds
                 assertTrue(get(http, base + "/api/auth", "admin:op-pass").body().contains("\"canWrite\":true"),
-                        "operator can write");
-                assertEquals(200, post(http, cancel, "admin:op-pass").statusCode(), "operator cancel works");
+                        "an admin can write");
+                assertEquals(200, post(http, cancel, "admin:op-pass").statusCode(), "an admin cancel works");
                 assertTrue(get(http, base + "/api/instances/" + id, "admin:op-pass").body().contains("CANCELLED"),
-                        "operator cancel took");
+                        "an admin cancel took");
 
                 // wrong password authenticates as neither -> 401
                 assertEquals(401, get(http, base + "/api/instances", "viewer:nope").statusCode(), "bad creds rejected");
