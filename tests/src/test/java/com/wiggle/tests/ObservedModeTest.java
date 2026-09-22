@@ -238,20 +238,25 @@ class ObservedModeTest {
         }
     }
 
-    @Test @DisplayName("a step that threw fails the run on the spot; later reports are anomalies")
+    @Test @DisplayName("a step that threw fails the run at settle with its error; steps still on their way are not after the end")
     void thrownStepFailsTheInstance() {
         try (Fixture f = Fixture.inMemory("obs-error")) {
-            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 1), failed(f.b(), "boom", 1, 5));
-            assertEquals("FAILED", r.instanceStatus());
+            // payments reports the throw first; inventory's earlier steps land a moment later
+            ObserveResult r = f.report(APP2, "k", false, failed(f.b(), "boom", 10, 5));
+            assertEquals("RUNNING", r.instanceStatus(), "closing, not judged on arrival");
+            ObserveResult late = f.report(APP1, "k", false, step(f.a(), 0, 10));
+            assertEquals(0, late.anomalies(), "the earlier step belongs to the run");
+            assertEquals(1, f.settle());
+            assertEquals("FAILED", f.status(r.instanceId()));
             assertEquals("b: boom", f.engine.instance(r.instanceId()).orElseThrow().error());
+            assertTrue(f.anomalies(r.instanceId()).isEmpty(), "a throw is the outcome, not a departure: " + f.anomalies(r.instanceId()));
             Token b = f.engine.tokens(r.instanceId()).stream().filter(t -> t.nodeId.equals(f.b())).findFirst().orElseThrow();
             assertEquals(TokenStatus.FAILED, b.status);
             assertEquals("boom", b.lastError);
             assertEquals(5, b.finishedAt - b.startedAt, "a failed step is timed too");
-            assertEquals(0, f.settle(), "a failed run is not due for judgement");
 
-            ObserveResult late = f.report(APP2, "k", false, predicate(f.keep(), true, 10, 1));
-            assertEquals("FAILED", late.instanceStatus());
+            ObserveResult after = f.report(APP2, "k", false, predicate(f.keep(), true, 20, 1));
+            assertEquals("FAILED", after.instanceStatus());
             assertEquals("AFTER_END", f.anomalies(r.instanceId()).getFirst().kind());
         }
     }

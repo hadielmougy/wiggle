@@ -81,7 +81,8 @@ public class ObservedRunningMode extends BaseRunningMode {
     /**
      * Appends the reported steps to the run and reschedules its judgement. A step the graph does
      * not know is recorded as an anomaly at once; a step reported once the run is terminal is kept
-     * for its timing and recorded as AFTER_END; a step that threw fails the run on the spot.
+     * for its timing and recorded as AFTER_END; a step that threw marks the run closing, and the
+     * judge fails it with that step's error once the run has settled.
      */
     ObserveResult observe(ObserveRunContext ctx, long settleMillis, long stallMillis) {
         Tx tx = ctx.tx();
@@ -110,10 +111,10 @@ public class ObservedRunningMode extends BaseRunningMode {
             }
             Node node = reported.get();
             if (step.error() != null) {
+                // The run is over, but not judged here: another service's earlier steps may still
+                // be on their way, and they belong to this run, not after it.
                 Tokens.insertSettled(tx, inst, node, TokenStatus.FAILED, ctx.reporter(), step, seq, now);
-                if (InstanceState.of(inst.status).running()) {
-                    instances().fail(tx, inst, node.name() + ": " + step.error(), now);
-                }
+                closing = true;
                 continue;
             }
             Token t = Tokens.insertSettled(tx, inst, node, TokenStatus.DONE, ctx.reporter(), step, seq, now);
@@ -157,7 +158,7 @@ public class ObservedRunningMode extends BaseRunningMode {
         for (Conformance.Finding f : verdict.findings()) {
             record(tx, inst, f.kind(), f.expected(), f.reported(), f.detail(), now);
         }
-        if (idle && !verdict.reachedEnd()) {
+        if (idle && !verdict.reachedEnd() && verdict.failedAt() == null) {
             record(tx, inst, STALLED, verdict.stoppedAt(), null, "no report for " + (now - inst.updatedAt) / 1000 + "s", now);
         }
         inst.settleAt = null;
@@ -165,6 +166,11 @@ public class ObservedRunningMode extends BaseRunningMode {
             instances().complete(tx, inst, null, now);
         } else if (verdict.endReason() != null) {
             instances().fail(tx, inst, verdict.endReason(), now);
+        } else if (verdict.failedAt() != null) {
+            Token thrown = reported.stream().filter(t -> t.status == TokenStatus.FAILED && t.nodeId.equals(verdict.failedAt()))
+                    .findFirst().orElse(null);
+            instances().fail(tx, inst, def.node(verdict.failedAt()).name() + ": "
+                    + (thrown == null || thrown.lastError == null ? "failed" : thrown.lastError), now);
         } else {
             instances().fail(tx, inst, "run ended before END, at " + verdict.stoppedAt(), now);
         }
