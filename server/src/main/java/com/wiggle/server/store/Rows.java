@@ -182,6 +182,13 @@ public final class Rows {
     public record Anomaly(String id, String instanceId, String workflow, int version, String kind,
                           String expectedNode, String reportedNode, String detail, long at) { }
 
+    /**
+     * One entry of the event log. {@code seq} is assigned by the store on append (0 before);
+     * {@code payloadVer} is the persisted envelope version of {@code payload}, a JSON object.
+     */
+    public record Event(long seq, String instanceId, String workflow, int version, String correlationId,
+                        String type, int payloadVer, String payload, long createdAt) { }
+
     /** One settled, timed step: how long it ran, and how long it waited to be claimed (zero for a
      *  step reported after the fact, which was never queued). What the statistics are computed from. */
     public record StepDuration(String nodeId, long millis, long waitMillis) { }

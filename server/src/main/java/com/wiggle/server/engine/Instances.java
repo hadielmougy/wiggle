@@ -100,6 +100,7 @@ final class Instances {
             return tx.lockInstance(id).orElseThrow(() -> EngineException.conflict("observed run " + id
                     + " was created concurrently and is not yet visible; report it again"));
         }
+        Events.started(tx, inst, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "observe: instance " + id + " of " + workflow + ":" + v
                 + " keyed by " + key);
         return tx.lockInstance(id).orElse(inst);
@@ -218,11 +219,12 @@ final class Instances {
         return tx.deleteTerminalInstancesBefore(cutoff, max);
     }
 
-    /** The one place an instance's status is written. */
+    /** The one place an instance's status is written, and so the one place the event log hears of it. */
     private static void move(Tx tx, Instance inst, InstanceStatus target, long now) {
         inst.status = InstanceState.of(inst.status).moveTo(target);
         inst.updatedAt = now;
         tx.updateInstance(inst);
+        Events.moved(tx, inst, now);
     }
 
     /** A new instance, born RUNNING. {@code parentTokenId} links a sub-workflow to the token
@@ -240,6 +242,7 @@ final class Instances {
         inst.createdAt = now;
         inst.updatedAt = now;
         tx.insertInstance(inst);
+        Events.started(tx, inst, now);
         return inst;
     }
 }

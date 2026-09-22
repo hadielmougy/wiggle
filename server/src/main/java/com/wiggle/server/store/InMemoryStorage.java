@@ -93,6 +93,9 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, List<Rows.CompLog>> compLogs = new ConcurrentHashMap<>();
     /** Insertion-ordered, so newest-first is a reverse walk. Guarded by the global lock. */
     private final List<Rows.Anomaly> anomalies = new ArrayList<>();
+    /** The event log in seq order; seq is assigned on append. Guarded by the global lock. */
+    private final List<Rows.Event> events = new ArrayList<>();
+    private long eventSeq;
 
     private final class MemTx implements Tx {
 
@@ -489,6 +492,38 @@ public final class InMemoryStorage implements Storage {
                 out.add(a);
             }
             return out;
+        }
+
+        @Override public long appendEvent(Rows.Event e) {
+            long seq = ++eventSeq;
+            events.add(new Rows.Event(seq, e.instanceId(), e.workflow(), e.version(), e.correlationId(),
+                    e.type(), e.payloadVer(), e.payload(), e.createdAt()));
+            return seq;
+        }
+
+        @Override public List<Rows.Event> eventsAfter(long afterSeq, int max) {
+            List<Rows.Event> out = new ArrayList<>();
+            for (Rows.Event e : events) {
+                if (e.seq() > afterSeq) out.add(e);
+                if (out.size() >= max) break;
+            }
+            return out;
+        }
+
+        @Override public Long oldestAckedSeq() {
+            return null;   // cursors arrive with the feed
+        }
+
+        @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
+            int n = 0;
+            Iterator<Rows.Event> it = events.iterator();
+            while (it.hasNext() && n < max) {
+                Rows.Event e = it.next();
+                if (e.createdAt() >= createdBefore || (upToSeq != null && e.seq() > upToSeq)) break;
+                it.remove();
+                n++;
+            }
+            return n;
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
