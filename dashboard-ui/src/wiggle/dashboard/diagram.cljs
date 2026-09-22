@@ -52,9 +52,17 @@
         tx (:x to),               ty (+ (:y to) (/ (:h to) 2))]
     [(/ (+ sx tx) 2) (- (/ (+ sy ty) 2) 5)]))
 
-(defn- node-box [{:keys [x y w h node]} status on-click selected?]
+(defn heat-colour
+  "green -> amber -> red for a 0..1 share of the slowest step's p95."
+  [h]
+  (cond (nil? h) nil
+        (< h 0.34) "#3ecf7a"
+        (< h 0.67) "#c9a86a"
+        :else "#ff8080"))
+
+(defn- node-box [{:keys [x y w h node]} status on-click selected? heat sub]
   (let [kind (:kind node)
-        ring (status-ring status)]
+        ring (or (status-ring status) (heat-colour heat))]
     [:g.node-box {:transform (str "translate(" x "," y ")")
                   :on-click #(when on-click (on-click (:id node)))
                   :style {:cursor (when on-click "pointer")}}
@@ -67,14 +75,17 @@
              :stroke-width (if selected? 2 1.5)}]
      [:text.node-label {:x 12 :y 20} (str (kind-glyph kind) "  " (:name node))]
      [:text.node-sub {:x 12 :y 37}
-      (str kind
-           (when (:queue node) (str " · " (:queue node)))
-           (when (:activity node) (str " · " (:activity node))))]]))
+      (or sub
+          (str kind
+               (when (:queue node) (str " · " (:queue node)))
+               (when (:activity node) (str " · " (:activity node)))))]]))
 
 (defn diagram
   "graph: the /api/workflows/{name} payload. statuses: optional {node-id -> token-status}.
+   heat: optional {node-id -> 0..1}, ringing each node by its share of the slowest p95.
+   subs: optional {node-id -> text} shown under the name instead of kind/queue/activity.
    on-node: optional (fn [node-id]) click handler."
-  [graph {:keys [statuses on-node selected]}]
+  [graph {:keys [statuses on-node selected heat subs]}]
   (let [{:keys [nodes edges width height]} (layout/layout graph)]
     [:div.diagram-wrap
      [:svg {:width (max width 320) :height (max height 140)
@@ -99,7 +110,7 @@
       (into [:g]
             (for [[id p] nodes]
               ^{:key id}
-              [node-box p (get statuses id) on-node (= id selected)]))]
+              [node-box p (get statuses id) on-node (= id selected) (get heat id) (get subs id)]))]
      [:div.legend
       (for [[k _] (sort kind-fill)]
         ^{:key k}

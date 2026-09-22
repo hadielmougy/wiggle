@@ -6,7 +6,7 @@
 
 (defonce db
   (r/atom
-   {:tab       :instances          ; :instances | :workflows | :schedules | :signals | :backlog
+   {:tab       :instances          ; :instances | :workflows | :schedules | :signals | :backlog | :performance
     :auth      nil                 ; {:required bool :user ".."} — drives the logout button
     :cluster   nil
     :workflows []
@@ -14,6 +14,9 @@
     :signals   []
     :backlog   nil                 ; {:slices .. :uncoveredSlices .. :strandedTasks ..}
     :schedules []
+    :stats     nil                 ; {:workflow .. :nodes [..]} per-step durations, slowest p95 first
+    :anomalies []                  ; observed runs that departed from their topology, newest first
+    :perf      {:workflow "" :window "1h"}   ; what the performance tab shows
     :filter    {:workflow "" :status "" :limit 100
                 :search "" :search-by :correlation}   ; free-text lookup by :correlation | :id
     :selected  nil                 ; selected instance id
@@ -41,6 +44,7 @@
   (toast! :err (or (ex-message e) (str e))))
 
 (defn set-filter! [k v] (swap! db assoc-in [:filter k] v))
+(defn set-perf! [k v] (swap! db assoc-in [:perf k] v))
 
 ;; ---- authorization: true unless the server says this session is read-only (a viewer) ----
 (defn can-write? [] (get-in @db [:auth :canWrite] true))

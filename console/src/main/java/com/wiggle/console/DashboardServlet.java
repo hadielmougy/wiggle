@@ -47,6 +47,8 @@ public final class DashboardServlet extends HttpServlet {
             if (path.equals("/api/cluster")) { clusterView(res); return; }
             if (path.equals("/api/signals")) { signals(req, res); return; }
             if (path.equals("/api/backlog")) { backlog(req, res); return; }
+            if (path.equals("/api/stats")) { stats(req, res); return; }
+            if (path.equals("/api/anomalies")) { anomalies(req, res); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
             if (path.startsWith("/api/schedules")) { schedules(req, res, sub(path, "/api/schedules")); return; }
@@ -176,6 +178,36 @@ public final class DashboardServlet extends HttpServlet {
         json(res, 200, out);
     }
 
+    /** Per-node durations of one workflow; see DashboardData#stepStats. */
+    private void stats(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        String workflow = trimToNull(req.getParameter("workflow"));
+        if (workflow == null) { error(res, 400, "workflow is required"); return; }
+        int version = parseInt(req.getParameter("version"), 0);
+        long since = parseLong(req.getParameter("since"), 0);
+        int sample = parseInt(req.getParameter("sample"), 10_000);
+        List<Object> nodes = new ArrayList<>();
+        for (com.wiggle.core.NodeStats n : data.stepStats(workflow, version == 0 ? null : version, since, sample)) {
+            nodes.add(n.toJson());
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("workflow", workflow);
+        out.put("version", version);
+        out.put("since", since);
+        out.put("nodes", nodes);
+        json(res, 200, out);
+    }
+
+    /** Where observed runs departed from their topology; see DashboardData#anomalies. */
+    private void anomalies(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        int limit = parseInt(req.getParameter("limit"), 200);
+        List<Object> list = new ArrayList<>();
+        for (com.wiggle.core.AnomalyView a : data.anomalies(trimToNull(req.getParameter("workflow")),
+                trimToNull(req.getParameter("instance")), limit)) {
+            list.add(a.toJson());
+        }
+        json(res, 200, Map.of("anomalies", list));
+    }
+
     private void signals(HttpServletRequest req, HttpServletResponse res) throws IOException {
         int limit = parseInt(req.getParameter("limit"), 200);
         List<Object> list = new ArrayList<>();
@@ -268,6 +300,11 @@ public final class DashboardServlet extends HttpServlet {
     private static int parseInt(String s, int def) {
         if (s == null || s.isBlank()) return def;
         try { return Integer.parseInt(s.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    private static long parseLong(String s, long def) {
+        try { return s == null || s.isBlank() ? def : Long.parseLong(s.trim()); }
+        catch (NumberFormatException e) { return def; }
     }
 
     private static byte[] resource(String name) throws IOException {

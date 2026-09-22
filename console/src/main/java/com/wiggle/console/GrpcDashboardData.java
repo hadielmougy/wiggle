@@ -2,7 +2,9 @@ package com.wiggle.console;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
+import com.wiggle.core.AnomalyView;
 import com.wiggle.core.InstanceView;
+import com.wiggle.core.NodeStats;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -99,6 +101,38 @@ public final class GrpcDashboardData implements DashboardData {
             return Integer.compare(b.readyCount(), a.readyCount());
         });
         return merged.size() > limit ? merged.subList(0, limit) : merged;
+    }
+
+    /**
+     * Every cell keeps its own timed steps, so ask each and merge per node. Percentiles cannot be
+     * recombined from summaries: a merged row keeps the WORST cell's p50 and p95 (the bottleneck
+     * view is a pessimistic one by design), sums the counts, and weights the mean by them.
+     */
+    @Override public List<NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
+        Map<String, NodeStats> merged = new java.util.LinkedHashMap<>();
+        for (WiggleClient c : backend.cells()) {
+            for (NodeStats n : c.stepStats(workflow, version, since, sample)) {
+                merged.merge(n.nodeId(), n, (a, b) -> new NodeStats(a.nodeId(), a.name() != null ? a.name() : b.name(),
+                        a.count() + b.count(),
+                        (a.meanMillis() * a.count() + b.meanMillis() * b.count()) / Math.max(1, a.count() + b.count()),
+                        Math.max(a.p50Millis(), b.p50Millis()), Math.max(a.p95Millis(), b.p95Millis()),
+                        Math.max(a.maxMillis(), b.maxMillis())));
+            }
+        }
+        List<NodeStats> out = new ArrayList<>(merged.values());
+        out.sort(Comparator.comparingLong(NodeStats::p95Millis).reversed());
+        return out;
+    }
+
+    @Override public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
+        List<AnomalyView> merged = new ArrayList<>();
+        if (instanceId != null) {
+            merged.addAll(backend.forInstance(instanceId).anomalies(workflow, instanceId, limit));
+        } else {
+            for (WiggleClient c : backend.cells()) merged.addAll(c.anomalies(workflow, null, limit));
+        }
+        merged.sort(Comparator.comparingLong(AnomalyView::at).reversed());
+        return merged.size() > limit ? new ArrayList<>(merged.subList(0, limit)) : merged;
     }
 
     @Override public List<SignalView> pendingSignals(int limit) {
