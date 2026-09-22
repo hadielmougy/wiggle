@@ -502,6 +502,46 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         });
     }
 
+    @Override
+    public void pollEvents(PollEventsRequest req, StreamObserver<EventList> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollEvents consumer=" + req.getConsumer()
+                + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
+        run(resp, () -> {
+            if (memory.rejectPoll()) {
+                long retryAfter = memory.retryAfterMillis();
+                LOG.log(System.Logger.Level.WARNING, () -> "memory pressure: rejecting event poll from "
+                        + req.getConsumer() + ", retry after " + retryAfter + "ms");
+                return EventList.newBuilder().setRetryAfterMillis(retryAfter).build();
+            }
+            long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
+            io.grpc.Context ctx = io.grpc.Context.current();
+            List<com.wiggle.core.EventView> events =
+                    engine.pollEvents(req.getConsumer(), req.getMax(), req.getStartFrom(), deadline, ctx::isCancelled);
+            EventList.Builder out = EventList.newBuilder();
+            for (com.wiggle.core.EventView e : events) out.addEvents(eventProto(e));
+            return out.build();
+        });
+    }
+
+    @Override
+    public void ackEvents(AckEventsRequest req, StreamObserver<Ack> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AckEvents consumer=" + req.getConsumer()
+                + " ackedSeq=" + req.getAckedSeq());
+        run(resp, () -> {
+            engine.ackEvents(req.getConsumer(), req.getAckedSeq());
+            return Ack.newBuilder().setOk(true).build();
+        });
+    }
+
+    private static EventView eventProto(com.wiggle.core.EventView e) {
+        EventView.Builder b = EventView.newBuilder()
+                .setSeq(e.seq()).setInstanceId(e.instanceId()).setWorkflow(e.workflow())
+                .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt());
+        if (e.correlationId() != null) b.setCorrelationId(e.correlationId());
+        if (e.payload() != null && !e.payload().isEmpty()) b.setPayload(ProtoJson.toValue(e.payload()));
+        return b.build();
+    }
+
     private ClusterView clusterView() {
         ClusterView.Builder out = ClusterView.newBuilder().setSelf(cluster.nodeId()).setLeader(cluster.isLeader());
         long now = System.currentTimeMillis();

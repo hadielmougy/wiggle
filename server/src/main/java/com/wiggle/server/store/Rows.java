@@ -189,6 +189,12 @@ public final class Rows {
     public record Event(long seq, String instanceId, String workflow, int version, String correlationId,
                         String type, int payloadVer, String payload, long createdAt) { }
 
+    /**
+     * One consumer's place in the event log: every event with seq at or below {@code ackedSeq}
+     * has been acknowledged and may be trimmed. {@code lastSeen} is when the consumer last polled.
+     */
+    public record EventCursor(String consumer, long ackedSeq, long lastSeen, long createdAt) { }
+
     /** One settled, timed step: how long it ran, and how long it waited to be claimed (zero for a
      *  step reported after the fact, which was never queued). What the statistics are computed from. */
     public record StepDuration(String nodeId, long millis, long waitMillis) { }

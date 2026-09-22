@@ -164,7 +164,29 @@ public interface Tx extends GraphStore {
     long appendEvent(Rows.Event event);
 
     /** Up to {@code max} events with seq greater than {@code afterSeq}, ascending. */
-    List<Rows.Event> eventsAfter(long afterSeq, int max);
+    default List<Rows.Event> eventsAfter(long afterSeq, int max) {
+        return eventsAfter(afterSeq, Long.MAX_VALUE, max);
+    }
+
+    /**
+     * {@link #eventsAfter(long, int)} restricted to events appended before {@code createdBefore}.
+     * The feed holds this line back from now: seq is store-assigned, so an uncommitted append may
+     * still hold a seq below one already visible, and a consumer that read past it would never be
+     * offered it. Waiting out the window costs latency, not correctness.
+     */
+    List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max);
+
+    /** The highest seq the log has assigned, or 0 when it is empty. */
+    long latestEventSeq();
+
+    /** One consumer's cursor, or null when it has never polled. */
+    Rows.EventCursor eventCursor(String consumer);
+
+    /** Registers {@code cursor} if that consumer has none; leaves an existing one untouched. */
+    void createEventCursorIfAbsent(Rows.EventCursor cursor);
+
+    /** Moves the consumer's cursor to {@code ackedSeq}, never backwards, and stamps {@code now}. */
+    void advanceEventCursor(String consumer, long ackedSeq, long now);
 
     /** The lowest seq any consumer cursor has acknowledged, or null when no cursor exists. */
     Long oldestAckedSeq();

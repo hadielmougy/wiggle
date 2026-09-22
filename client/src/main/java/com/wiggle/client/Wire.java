@@ -77,6 +77,17 @@ final class Wire {
         return out;
     }
 
+    static List<com.wiggle.core.EventView> events(com.wiggle.proto.EventList res) {
+        List<com.wiggle.core.EventView> out = new ArrayList<>(res.getEventsCount());
+        for (com.wiggle.proto.EventView e : res.getEventsList()) {
+            Object payload = e.hasPayload() ? com.wiggle.proto.ProtoJson.fromValue(e.getPayload()) : null;
+            out.add(new com.wiggle.core.EventView(e.getSeq(), e.getInstanceId(), e.getWorkflow(), e.getVersion(),
+                    e.getCorrelationId().isEmpty() ? null : e.getCorrelationId(), e.getType(), e.getCreatedAt(),
+                    payload instanceof Map<?, ?> m ? com.wiggle.core.Json.asObject(m) : Map.of()));
+        }
+        return out;
+    }
+
     static Map<String, Object> clusterMap(ClusterView v) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("self", v.getSelf());

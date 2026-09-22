@@ -1516,11 +1516,11 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException ex) { throw wrap(ex); }
         }
 
-        @Override public List<Rows.Event> eventsAfter(long afterSeq, int max) {
+        @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
             List<Rows.Event> out = new ArrayList<>();
             try (PreparedStatement p = ps("SELECT seq,instance_id,workflow,version,correlation_id,type,payload_ver,"
-                    + "payload,created_at FROM wf_event WHERE seq>? ORDER BY seq LIMIT ?")) {
-                p.setLong(1, afterSeq); p.setInt(2, max);
+                    + "payload,created_at FROM wf_event WHERE seq>? AND created_at<? ORDER BY seq LIMIT ?")) {
+                p.setLong(1, afterSeq); p.setLong(2, createdBefore); p.setInt(3, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
                         out.add(new Rows.Event(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getInt(4),
@@ -1529,6 +1529,50 @@ public final class JdbcStorage implements Storage {
                 }
             } catch (SQLException ex) { throw wrap(ex); }
             return out;
+        }
+
+        @Override public long latestEventSeq() {
+            try (PreparedStatement p = ps("SELECT COALESCE(MAX(seq),0) FROM wf_event");
+                 ResultSet rs = p.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            } catch (SQLException ex) { throw wrap(ex); }
+        }
+
+        @Override public Rows.EventCursor eventCursor(String consumer) {
+            try (PreparedStatement p = ps("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor WHERE consumer=?")) {
+                p.setString(1, consumer);
+                try (ResultSet rs = p.executeQuery()) {
+                    if (!rs.next()) return null;
+                    return new Rows.EventCursor(rs.getString(1), rs.getLong(2), rs.getLong(3), rs.getLong(4));
+                }
+            } catch (SQLException ex) { throw wrap(ex); }
+        }
+
+        @Override public void createEventCursorIfAbsent(Rows.EventCursor c) {
+            try (PreparedStatement p = ps(dialect.insertIgnore(
+                    "INSERT INTO wf_event_cursor (consumer,acked_seq,last_seen,created_at) VALUES (?,?,?,?)"))) {
+                p.setString(1, c.consumer()); p.setLong(2, c.ackedSeq());
+                p.setLong(3, c.lastSeen()); p.setLong(4, c.createdAt());
+                p.executeUpdate();
+            } catch (SQLException ex) { throw wrap(ex); }
+        }
+
+        @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) {
+            // Update-then-insert rather than an upsert: only PostgreSQL takes ON CONFLICT DO UPDATE,
+            // and the two statements are portable. The trailing update covers the race where another
+            // ack inserted the row between ours: it folds our seq into the row that won.
+            if (moveCursor(consumer, ackedSeq, now) > 0) return;
+            createEventCursorIfAbsent(new Rows.EventCursor(consumer, ackedSeq, now, now));
+            moveCursor(consumer, ackedSeq, now);
+        }
+
+        /** Moves an existing cursor forward (never back) and stamps it; 0 when the consumer has none. */
+        private int moveCursor(String consumer, long ackedSeq, long now) {
+            try (PreparedStatement p = ps("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<? THEN ? "
+                    + "ELSE acked_seq END, last_seen=? WHERE consumer=?")) {
+                p.setLong(1, ackedSeq); p.setLong(2, ackedSeq); p.setLong(3, now); p.setString(4, consumer);
+                return p.executeUpdate();
+            } catch (SQLException ex) { throw wrap(ex); }
         }
 
         @Override public Long oldestAckedSeq() {

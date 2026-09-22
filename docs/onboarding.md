@@ -406,6 +406,8 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_HEARTBEAT_INTERVAL_MILLIS` | `wiggle.heartbeat.intervalMillis` | `5000` | cluster heartbeat/election interval |
 | `WIGGLE_MISSED_HEARTBEATS` | `wiggle.heartbeat.missedBeforeDead` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `wiggle.retention.millis` | `86400000` | how long finished instances are kept before purge |
+| `WIGGLE_EVENTS_RETENTION_MILLIS` | `wiggle.events.retentionMillis` | `604800000` | how long an acknowledged [event-log](event-log.md) entry is kept |
+| `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed, covering appends still in flight |
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `false` | a sweep that fills its batch runs again immediately (drain mode) — removes the batch÷tick promotion ceiling under backlog (measured: 100 → ~1,700 timers/sec at defaults); idle cost unchanged |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
