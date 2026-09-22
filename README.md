@@ -582,7 +582,7 @@ Suggestions and PRs welcome — open an issue.
 | 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
-| 🔍 **[Observed execution](docs/observed-execution.md)** | `OBSERVED` mode: conformance + bottlenecks for steps you run yourself |
+| 🔍 **[Observed execution](docs/observed-execution.md)** | `OBSERVED` mode + the `wiggle-observe` module: conformance + bottlenecks for steps you run yourself |
 | 📽 **[Slide deck](https://hadielmougy.github.io/wiggle/presentation.html)** | the 5-minute tour |
 | 🐍 **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** · 🐹 **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** | idiomatic clients, same control plane |
 

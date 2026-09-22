@@ -1,6 +1,6 @@
 # Observed execution (`OBSERVED` mode)
 
-Status: **server side implemented** (this document) · client instrumentation: separate module, separate PR
+Status: **implemented** -- server side (§2-5) and the `observe` reporting module (§6)
 
 ## 1. What it is
 
@@ -31,7 +31,8 @@ server to run it, and there is no server-side run for something that already hap
 A spec never declares this mode: the DSL offers `executeInServer()`, `executeInLocalSync()` and
 `executeInLocalAsync()`, and nothing else. OBSERVED is stamped on the definition by the observer
 that publishes it, so a spec cannot be handed to a worker by mistake with a mode no worker
-serves. Like the others, the mode is part of the version's fingerprint:
+serves. A spec that names one of the worker modes is refused by the observer. Like the others,
+the mode is part of the version's fingerprint:
 
 <!-- snippet: observed/topology -->
 ```java
@@ -113,10 +114,41 @@ sample, and `wf_anomaly` (instance, workflow, version, kind, expected/reported n
 time). Migration 16: `wf_instance.settle_at` (nullable, observed runs only) and its index. Duration statistics are computed in the server over the newest N timed `DONE` tokens of
 a version (default 10 000), so no percentile SQL has to be portable.
 
-## 6. Reporting side
+## 6. Reporting side: the `observe` module
 
-Lives in its own module so the existing client API is untouched. The plan: a proxy over the
-flow's step interface that records entry/exit per call, a thread-scoped run opened explicitly or
-implicitly at the start node, fire-and-forget flushing through a bounded queue on `END`, a size
-threshold or a short linger, and context capture off by default (a `null` merge leaves the
-context untouched).
+`sh.wiggle:wiggle-observe` is its own module so the client API stays as it is: an observed
+application publishes a topology and reports against it, and needs neither a worker nor the
+instance API. It depends on `wiggle-client` for the flow DSL and owns its own connection.
+
+<!-- snippet: observed/usage -->
+```java
+try (Observer observer = Observer.connect("localhost:8080")) {
+    Observed<CheckoutSteps> checkout = observer.observe(spec, CheckoutSteps.class, new Checkout());
+    CheckoutSteps s = checkout.steps();          // the application's own object, wrapped
+
+    try (Run run = checkout.begin(orderId)) {    // a run under a business key
+        Order o = s.validate(order);
+        if (s.inStock(o)) s.charge(o);
+    }
+}
+```
+
+- **Wrapping.** `steps()` is a proxy over the flow's step interface around the application's
+  implementation (which therefore implements that interface). Every call on a method that names
+  a step is timed and recorded; a method that names no step passes straight through. The
+  application sees its own return values and its own exceptions, unwrapped.
+- **Runs.** `begin(correlationId)` opens a run on the calling thread; a step called with no run
+  open opens one implicitly. A run ends when a step's successor is `END`, when a step throws, or
+  when its `Run` is closed (closing before `END` is reported, and recorded as `INCOMPLETE`).
+  Runs are per thread: a hand-off to another thread mid-run is not followed in this version.
+- **Reporting.** Steps buffer per run and flush when the buffer reaches `batchSize` (64), when
+  it has waited `linger` (1 s), or when the run ends. One daemon thread sends them in
+  `ObserveMany` calls, at most one batch per run per call so the second batch of a run can name
+  the instance its first minted. The application never waits on the network: a full queue
+  (`queueCapacity`, 10 000) or a failed call drops the report, marks the run lost, and counts it
+  in `Observer.dropped()`.
+- **Timing.** `started_at` is wall-clock at entry; `finished_at` is that plus the monotonic
+  elapsed time, so a duration is never skewed by a clock adjustment mid-step.
+- **Context.** Off by default. `withCaptureContext(true)` ships each task step's return value as
+  the instance's context, through the same record-to-JSON mapping the client uses.
+- **TLS.** `ObserverOptions.withTls(Tls.Options)` / `withRequireTls`, the client's semantics.

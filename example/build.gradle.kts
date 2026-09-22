@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     implementation(project(":client"))
+    implementation(project(":observe"))
     // Only the single-JVM Demo needs the server on its classpath.
     implementation(project(":server"))
     // So the benchmark can run against a real database (WIGGLE_JDBC_URL) to show LOCAL_ASYNC's
