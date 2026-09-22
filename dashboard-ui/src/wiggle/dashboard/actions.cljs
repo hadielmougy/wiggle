@@ -4,6 +4,8 @@
   (:require [wiggle.dashboard.api :as api]
             [wiggle.dashboard.state :as st :refer [db]]))
 
+(declare load-graph!)
+
 (defn- store! [k] (fn [v] (swap! db assoc k v)))
 
 (defn load-auth! []
@@ -36,6 +38,33 @@
   (-> (api/schedules)
       (.then #(swap! db assoc :schedules (:schedules %)))
       (.catch st/on-error)))
+
+(def ^:private window-millis
+  {"15m" (* 15 60000) "1h" 3600000 "24h" 86400000 "7d" (* 7 86400000) "all" nil})
+
+(defn load-stats!
+  "Per-step durations of the performance tab's workflow over its window, plus that workflow's
+   graph for the heat map. Nothing to ask for until a workflow is chosen."
+  []
+  (let [{:keys [workflow window]} (:perf @db)
+        span (get window-millis window 3600000)
+        since (when span (- (js/Date.now) span))]
+    (if (empty? workflow)
+      (swap! db assoc :stats nil)
+      (do
+        (when (not= workflow (:graph-for @db)) (load-graph! workflow))
+        (-> (api/stats workflow since)
+            (.then #(swap! db assoc :stats %))
+            (.catch st/on-error))))))
+
+(defn load-anomalies! []
+  (-> (api/anomalies (get-in @db [:perf :workflow]) 200)
+      (.then #(swap! db assoc :anomalies (:anomalies %)))
+      (.catch st/on-error)))
+
+(defn load-perf! []
+  (load-stats!)
+  (load-anomalies!))
 
 (defn load-graph! [name]
   (-> (api/workflow-graph name)
