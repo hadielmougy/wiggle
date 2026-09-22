@@ -63,6 +63,10 @@ abstract class BaseRunningMode implements RunningMode {
         Node node = def.node(t.nodeId);
         Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
         NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
+        if (ctx.startedAt() != null && ctx.finishedAt() != null) {   // the handler's clock beats claim-to-settle
+            t.startedAt = ctx.startedAt();
+            t.finishedAt = ctx.finishedAt();
+        }
         StepReport report = StepReport.of(ctx.result());
         String next = behaviour.route(inst, t, node, report);
         if (node.compensable()) Sagas.capture(tx, inst, t, node, compInput, now);

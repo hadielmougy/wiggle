@@ -255,10 +255,17 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public void complete(String taskId, String leaseOwner, Object result) {
+        complete(taskId, leaseOwner, result, null, null);
+    }
+
+    /** {@link #complete(String, String, Object)} with the handler's own start and finish (epoch
+     *  millis), so the server keeps the step's duration rather than the round trip's. */
+    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt) {
         TaskResultRequest.Builder req = TaskResultRequest.newBuilder()
                 .setTaskId(taskId)
                 .setLeaseOwner(leaseOwner);
         if (result != null) req.setResult(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(result)));
+        if (startedAt != null && finishedAt != null) req.setStartedAt(startedAt).setFinishedAt(finishedAt);
         call(() -> stub.completeTask(req.build()));
     }
 
@@ -329,7 +336,12 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
-    public record StepReport(String nodeId, Object merge, Boolean predicateValue) {}
+    public record StepReport(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt) {
+
+        public StepReport(String nodeId, Object merge, Boolean predicateValue) {
+            this(nodeId, merge, predicateValue, null, null);
+        }
+    }
 
     /** One run of a cross-instance batch: exactly the arguments of {@link #advanceRun}. */
     public record RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback) {}
