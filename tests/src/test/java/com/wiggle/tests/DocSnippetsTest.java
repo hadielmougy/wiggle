@@ -64,7 +64,7 @@ class DocSnippetsTest {
         EXPECTED.put("QueuesSnippet.java", List.of("topology", "specialised-worker", "general-worker"));
         EXPECTED.put("LocalExecutionSnippet.java", List.of("execution-mode"));
         EXPECTED.put("ObservedSnippet.java", List.of("topology", "report"));
-        EXPECTED.put("EventLogSnippet.java", List.of("consume"));
+        EXPECTED.put("EventLogSnippet.java", List.of("consume", "emit"));
         EXPECTED.put("onboarding/OnboardingSnippet.java",
                 List.of("contract", "register-line", "topology", "client-lifecycle",
                         "start-by-name", "version-pinning", "worker-options"));

@@ -281,11 +281,19 @@ public final class WiggleClient implements AutoCloseable {
     /** {@link #complete(String, String, Object)} with the handler's own start and finish (epoch
      *  millis), so the server keeps the step's duration rather than the round trip's. */
     public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt) {
+        complete(taskId, leaseOwner, result, startedAt, finishedAt, java.util.List.of());
+    }
+
+    /** {@link #complete(String, String, Object, Long, Long)} with the events the handler emitted,
+     *  which the server appends to the log in the transaction that settles the step. */
+    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt,
+                         java.util.List<com.wiggle.core.EmittedEvent> events) {
         TaskResultRequest.Builder req = TaskResultRequest.newBuilder()
                 .setTaskId(taskId)
                 .setLeaseOwner(leaseOwner);
         if (result != null) req.setResult(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(result)));
         if (startedAt != null && finishedAt != null) req.setStartedAt(startedAt).setFinishedAt(finishedAt);
+        for (com.wiggle.core.EmittedEvent e : events) req.addEvents(Wire.emitted(e));
         call(() -> stub.completeTask(req.build()));
     }
 
@@ -356,10 +364,19 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
-    public record StepReport(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt) {
+    public record StepReport(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt,
+                             java.util.List<com.wiggle.core.EmittedEvent> events) {
+
+        public StepReport {
+            events = events == null ? java.util.List.of() : java.util.List.copyOf(events);
+        }
 
         public StepReport(String nodeId, Object merge, Boolean predicateValue) {
-            this(nodeId, merge, predicateValue, null, null);
+            this(nodeId, merge, predicateValue, null, null, java.util.List.of());
+        }
+
+        public StepReport(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt) {
+            this(nodeId, merge, predicateValue, startedAt, finishedAt, java.util.List.of());
         }
     }
 

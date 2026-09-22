@@ -332,6 +332,12 @@ public final class JdbcStorage implements Storage {
               last_seen      BIGINT       NOT NULL,
               created_at     BIGINT       NOT NULL
             );
+            """),
+            // Which step emitted an event. Null for the engine's own lifecycle entries, and for
+            // emitted ones it is the only way a consumer can tell: a retry or a batch makes the
+            // step ambiguous from the outside.
+            new Migration(17, "event-node", """
+            ALTER TABLE wf_event ADD COLUMN IF NOT EXISTS node_id VARCHAR(64);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -1503,11 +1509,11 @@ public final class JdbcStorage implements Storage {
 
         @Override public long appendEvent(Rows.Event e) {
             try (PreparedStatement p = c.prepareStatement("INSERT INTO wf_event (instance_id,workflow,version,"
-                    + "correlation_id,type,payload_ver,payload,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                    + "correlation_id,type,node_id,payload_ver,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                     Statement.RETURN_GENERATED_KEYS)) {
                 p.setString(1, e.instanceId()); p.setString(2, e.workflow()); p.setInt(3, e.version());
-                p.setString(4, e.correlationId()); p.setString(5, e.type()); p.setInt(6, e.payloadVer());
-                p.setString(7, e.payload()); p.setLong(8, e.createdAt());
+                p.setString(4, e.correlationId()); p.setString(5, e.type()); p.setString(6, e.nodeId());
+                p.setInt(7, e.payloadVer()); p.setString(8, e.payload()); p.setLong(9, e.createdAt());
                 p.executeUpdate();
                 try (ResultSet keys = p.getGeneratedKeys()) {
                     if (!keys.next()) throw new StorageException("wf_event insert returned no seq", null);
@@ -1518,13 +1524,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
             List<Rows.Event> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT seq,instance_id,workflow,version,correlation_id,type,payload_ver,"
-                    + "payload,created_at FROM wf_event WHERE seq>? AND created_at<? ORDER BY seq LIMIT ?")) {
+            try (PreparedStatement p = ps("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
+                    + "payload_ver,payload,created_at FROM wf_event WHERE seq>? AND created_at<? ORDER BY seq LIMIT ?")) {
                 p.setLong(1, afterSeq); p.setLong(2, createdBefore); p.setInt(3, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
                         out.add(new Rows.Event(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getInt(4),
-                                rs.getString(5), rs.getString(6), rs.getInt(7), rs.getString(8), rs.getLong(9)));
+                                rs.getString(5), rs.getString(6), rs.getString(7), rs.getInt(8), rs.getString(9),
+                                rs.getLong(10)));
                     }
                 }
             } catch (SQLException ex) { throw wrap(ex); }

@@ -77,12 +77,19 @@ final class Wire {
         return out;
     }
 
+    static com.wiggle.proto.EmittedEvent emitted(com.wiggle.core.EmittedEvent e) {
+        com.wiggle.proto.EmittedEvent.Builder b = com.wiggle.proto.EmittedEvent.newBuilder().setType(e.type());
+        if (e.payload() != null) b.setPayload(com.wiggle.proto.ProtoJson.toValue(e.payload()));
+        return b.build();
+    }
+
     static List<com.wiggle.core.EventView> events(com.wiggle.proto.EventList res) {
         List<com.wiggle.core.EventView> out = new ArrayList<>(res.getEventsCount());
         for (com.wiggle.proto.EventView e : res.getEventsList()) {
             Object payload = e.hasPayload() ? com.wiggle.proto.ProtoJson.fromValue(e.getPayload()) : null;
             out.add(new com.wiggle.core.EventView(e.getSeq(), e.getInstanceId(), e.getWorkflow(), e.getVersion(),
-                    e.getCorrelationId().isEmpty() ? null : e.getCorrelationId(), e.getType(), e.getCreatedAt(),
+                    e.getCorrelationId().isEmpty() ? null : e.getCorrelationId(), e.getType(),
+                    e.getNodeId().isEmpty() ? null : e.getNodeId(), e.getCreatedAt(),
                     payload instanceof Map<?, ?> m ? com.wiggle.core.Json.asObject(m) : Map.of()));
         }
         return out;
@@ -121,6 +128,7 @@ final class Wire {
     /** One reported step on the wire: exactly one of merge (task) or predicateValue (predicate). */
     static StepResult stepResult(WiggleClient.StepReport s) {
         StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId());
+        for (com.wiggle.core.EmittedEvent e : s.events()) sr.addEvents(emitted(e));
         if (s.startedAt() != null && s.finishedAt() != null) sr.setStartedAt(s.startedAt()).setFinishedAt(s.finishedAt());
         if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
         else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(s.merge()));

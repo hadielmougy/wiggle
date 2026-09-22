@@ -61,6 +61,7 @@ abstract class BaseRunningMode implements RunningMode {
         Instances.requireRunning(inst);
         LazyGraph def = definitions.graph(tx, t.workflow, t.version);
         Node node = def.node(t.nodeId);
+        Events.emitted(tx, inst, node.id(), ctx.events(), now);   // committed with the settle below, or not at all
         Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, t) : null;
         NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
         if (ctx.startedAt() != null && ctx.finishedAt() != null) {   // the handler's clock beats claim-to-settle
@@ -105,6 +106,7 @@ abstract class BaseRunningMode implements RunningMode {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
             requireMatchingNode(current, step);
+            Events.emitted(tx, inst, node.id(), step.events(), now);   // committed with this step, or not at all
             // A step flushed together with others ran somewhere inside the batch: the server's
             // stamps would say it took no time at all, so without the worker's own clock it is untimed.
             if (steps.size() > 1 && (step.startedAt() == null || step.finishedAt() == null)) {

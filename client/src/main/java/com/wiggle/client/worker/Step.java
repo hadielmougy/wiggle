@@ -1,8 +1,11 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.core.EmittedEvent;
 import com.wiggle.core.Json;
 import com.wiggle.core.RecordMapper;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,6 +18,9 @@ import java.util.Map;
  * (read-only — items can never write it; only the combine can), and {@link #itemIndex()} /
  * {@link #itemMapKey()} locate the element in its input collection. The handler's parameter is the
  * item itself.
+ *
+ * <p>An activity can also {@link #emit} domain events onto the instance's event log; they ride
+ * the step's completion report and are committed with it.
  *
  * <p>Only valid inside an activity body; calling these anywhere else throws.
  */
@@ -29,8 +35,44 @@ public final class Step {
     }
 
     private static final ThreadLocal<Info> CURRENT = new ThreadLocal<>();
+    /** What this step has emitted so far; the worker drains it when it reports the step. */
+    private static final ThreadLocal<List<EmittedEvent>> EMITTED = new ThreadLocal<>();
 
     private Step() {}
+
+    /**
+     * Emits a domain event onto the instance's event log. It is buffered here and rides the
+     * step's completion report, where the server appends it in the transaction that settles the
+     * token: committed if and only if this attempt completes. An attempt that throws after
+     * emitting leaves nothing behind, and its retry emits fresh. Consumers see it when the step
+     * completes -- for {@code LOCAL_ASYNC}, at the next batch flush -- not at this call.
+     *
+     * <p>{@code type} names the fact for consumers; the {@code wf.} prefix is reserved for the
+     * engine's own lifecycle entries. {@code payload} is a record or map, versioned by whatever
+     * convention the emitter and its consumers share.
+     */
+    public static void emit(String type, Object payload) {
+        current();
+        Object json = RecordMapper.toJson(payload);
+        if (!(json instanceof Map)) {
+            throw new IllegalArgumentException("event '" + type + "' carries a "
+                    + (payload == null ? "null" : payload.getClass().getSimpleName())
+                    + " payload; an event's payload is a record or a map, so a consumer can read a field from it");
+        }
+        List<EmittedEvent> buffer = EMITTED.get();
+        if (buffer == null) {
+            buffer = new ArrayList<>(4);
+            EMITTED.set(buffer);
+        }
+        buffer.add(new EmittedEvent(type, json));
+    }
+
+    /** Takes (and clears) what this step emitted; the worker ships them with its report. */
+    static List<EmittedEvent> drainEmitted() {
+        List<EmittedEvent> buffer = EMITTED.get();
+        EMITTED.remove();
+        return buffer == null ? List.of() : List.copyOf(buffer);
+    }
 
     /** The engine-global attempt number: 1 on the first try, incremented on every retry. */
     public static int attempt() { return current().attempt(); }
@@ -105,5 +147,8 @@ public final class Step {
 
     static void begin(Info info) { CURRENT.set(info); }
 
-    static void end() { CURRENT.remove(); }
+    static void end() {
+        CURRENT.remove();
+        EMITTED.remove();   // an attempt that failed before its drain must not leak into the next task
+    }
 }

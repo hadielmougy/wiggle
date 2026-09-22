@@ -287,6 +287,15 @@ message TaskList {
     int64 retry_after_millis = 2;
 }
 
+// A domain event a handler emitted while running its step. The server appends it to the event
+// log in the transaction that settles the token, so an attempt that threw leaves none behind and
+// its retry emits fresh. instance, workflow, correlation, node and seq are filled in server-side
+// from the token; a handler supplies only these two fields.
+message EmittedEvent {
+    string type = 1;                       // handler-chosen; "wf." is reserved for lifecycle events
+    google.protobuf.Value payload = 2;     // a JSON object
+}
+
 // One locally-executed step reported back to the server (LOCAL_SYNC/LOCAL_ASYNC).
 message StepResult {
     string node_id = 1;
@@ -298,6 +307,7 @@ message StepResult {
     // When the step ran, epoch millis; 0 = not reported. Kept on the token for duration stats.
     int64 started_at = 5;
     int64 finished_at = 6;
+    repeated EmittedEvent events = 7;      // emitted while this step ran, in emission order
 }
 
 message AdvanceRunRequest {
@@ -417,6 +427,7 @@ message TaskResultRequest {
     // own stamps (claimed, settled) stand. Reported times exclude transport and queueing.
     int64 started_at = 4;
     int64 finished_at = 5;
+    repeated EmittedEvent events = 6;      // emitted while this step ran, in emission order
 }
 
 message TaskFailureRequest {
@@ -457,6 +468,7 @@ message EventView {
     string type = 6;
     int64 created_at = 7;
     google.protobuf.Value payload = 8;
+    string node_id = 9;           // the step that emitted it; empty for a lifecycle entry
 }
 
 message EventList {

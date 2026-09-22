@@ -185,9 +185,11 @@ public final class Rows {
     /**
      * One entry of the event log. {@code seq} is assigned by the store on append (0 before);
      * {@code payloadVer} is the persisted envelope version of {@code payload}, a JSON object.
+     * {@code nodeId} names the step a handler emitted the event from, and is null for the
+     * engine's own lifecycle entries.
      */
     public record Event(long seq, String instanceId, String workflow, int version, String correlationId,
-                        String type, int payloadVer, String payload, long createdAt) { }
+                        String type, String nodeId, int payloadVer, String payload, long createdAt) { }
 
     /**
      * One consumer's place in the event log: every event with seq at or below {@code ackedSeq}
