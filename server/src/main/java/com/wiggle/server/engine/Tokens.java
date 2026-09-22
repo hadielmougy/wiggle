@@ -119,6 +119,7 @@ final class Tokens {
         cont.leaseOwner = leaseOwner;
         cont.leaseExpiresAt = lease;
         cont.availableAt = now;
+        cont.startedAt = now;   // handed straight to the worker: no wait, and its clock starts now
         cont.updatedAt = now;
         tx.insertToken(cont);
     }
@@ -152,6 +153,7 @@ final class Tokens {
 
     static void settle(Tx tx, Token t, long now) {
         TokenState.of(t.status).releaseLease(t);
+        if (t.startedAt != null && t.finishedAt == null) t.finishedAt = now;   // a clock the server started, it closes
         move(tx, t, TokenStatus.DONE, now);
     }
 

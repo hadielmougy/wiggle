@@ -116,7 +116,8 @@ public final class GrpcDashboardData implements DashboardData {
                         a.count() + b.count(),
                         (a.meanMillis() * a.count() + b.meanMillis() * b.count()) / Math.max(1, a.count() + b.count()),
                         Math.max(a.p50Millis(), b.p50Millis()), Math.max(a.p95Millis(), b.p95Millis()),
-                        Math.max(a.maxMillis(), b.maxMillis())));
+                        Math.max(a.maxMillis(), b.maxMillis()),
+                        Math.max(a.waitP50Millis(), b.waitP50Millis()), Math.max(a.waitP95Millis(), b.waitP95Millis())));
             }
         }
         List<NodeStats> out = new ArrayList<>(merged.values());

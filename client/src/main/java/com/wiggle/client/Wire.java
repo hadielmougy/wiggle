@@ -61,7 +61,8 @@ final class Wire {
         List<com.wiggle.core.NodeStats> out = new ArrayList<>(res.getNodesCount());
         for (com.wiggle.proto.NodeStats n : res.getNodesList()) {
             out.add(new com.wiggle.core.NodeStats(n.getNodeId(), n.getName().isEmpty() ? null : n.getName(),
-                    n.getCount(), n.getMeanMillis(), n.getP50Millis(), n.getP95Millis(), n.getMaxMillis()));
+                    n.getCount(), n.getMeanMillis(), n.getP50Millis(), n.getP95Millis(), n.getMaxMillis(),
+                    n.getWaitP50Millis(), n.getWaitP95Millis()));
         }
         return out;
     }

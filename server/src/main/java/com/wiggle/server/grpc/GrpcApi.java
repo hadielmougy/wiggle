@@ -473,7 +473,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 out.addNodes(NodeStats.newBuilder()
                         .setNodeId(n.nodeId()).setName(n.name() == null ? "" : n.name())
                         .setCount(n.count()).setMeanMillis(n.meanMillis())
-                        .setP50Millis(n.p50Millis()).setP95Millis(n.p95Millis()).setMaxMillis(n.maxMillis()));
+                        .setP50Millis(n.p50Millis()).setP95Millis(n.p95Millis()).setMaxMillis(n.maxMillis())
+                        .setWaitP50Millis(n.waitP50Millis()).setWaitP95Millis(n.waitP95Millis()));
             }
             return out.build();
         });

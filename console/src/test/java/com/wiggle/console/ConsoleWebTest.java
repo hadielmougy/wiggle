@@ -275,6 +275,7 @@ class ConsoleWebTest {
                 assertTrue(more >= 0 && work >= 0, "both steps have stats: " + stats);
                 assertTrue(more < work, "slowest p95 first: " + stats);
                 assertTrue(stats.contains("\"p95Millis\":40"), "more's p95 over its two runs: " + stats);
+                assertTrue(stats.contains("\"waitP95Millis\":0"), "an observed step never queued: " + stats);
                 assertTrue(stats.contains("\"count\":2"), "more ran twice: " + stats);
                 assertEquals(400, get(http, base + "/api/stats", null).statusCode(), "a workflow is required");
 

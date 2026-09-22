@@ -371,6 +371,9 @@ message NodeStats {
     int64 p50_millis = 5;
     int64 p95_millis = 6;
     int64 max_millis = 7;
+    // How long the step waited to be claimed by a worker (ready -> claimed); 0 for observed steps.
+    int64 wait_p50_millis = 8;
+    int64 wait_p95_millis = 9;
 }
 
 message StepStats {

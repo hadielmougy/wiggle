@@ -28,6 +28,12 @@ public final class InMemoryStorage implements Storage {
     private final NavigableSet<Token> readyTasks = new TreeSet<>(
             Comparator.comparingLong((Token t) -> t.availableAt).thenComparing(t -> t.id));
 
+    /** A worker-run step's queue wait: ready to claimed. An observed step (reported, with a seq)
+     *  was never queued, so it waited for nothing. */
+    private static long waitOf(Token t) {
+        return t.seq != null ? 0 : Math.max(0, t.startedAt - t.availableAt);
+    }
+
     private static boolean claimable(Token t) {
         return t.status == TokenStatus.READY && (t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE);
     }
@@ -276,6 +282,8 @@ public final class InMemoryStorage implements Storage {
                 live.status = TokenStatus.RUNNING;
                 live.leaseOwner = workerId;
                 live.leaseExpiresAt = leaseUntil;
+                live.startedAt = now;        // the step's clock starts when a worker takes it
+                live.finishedAt = null;
                 live.updatedAt = now;
                 claimed.add(live.clone());
             }
@@ -489,7 +497,7 @@ public final class InMemoryStorage implements Storage {
                     .filter(t -> workflow.equals(t.workflow) && t.version == version && t.finishedAt > since)
                     .sorted(Comparator.comparingLong((Token t) -> t.finishedAt).reversed())
                     .limit(max)
-                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt)))
+                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt), waitOf(t)))
                     .toList();
         }
 
