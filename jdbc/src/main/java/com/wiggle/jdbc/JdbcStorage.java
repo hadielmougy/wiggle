@@ -306,6 +306,11 @@ public final class JdbcStorage implements Storage {
             ALTER TABLE wf_instance ADD COLUMN IF NOT EXISTS settle_at BIGINT;
             CREATE INDEX IF NOT EXISTS ix_instance_settle ON wf_instance (status, settle_at);
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS seq BIGINT;
+            """),
+            // The step an observed step named as its cause, carried across a message boundary so
+            // the judge can order two services' steps without trusting their clocks. Nullable.
+            new Migration(17, "observed-causal-hint", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS after_node VARCHAR(64);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -905,8 +910,8 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version," +
                 "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack," +
-                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,after_node) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
         @Override public void insertToken(Token t) {
             try (PreparedStatement p = ps(INSERT_TOKEN)) {
@@ -923,7 +928,7 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException e) { throw wrap(e); }
         }
 
-        /** Binds parameters 1..22 in wf_token insert column order. */
+        /** Binds parameters 1..23 in wf_token insert column order. */
         private void bindToken(PreparedStatement p, Token t) throws SQLException {
             p.setString(1, t.id);
             p.setString(2, t.instanceId);
@@ -947,6 +952,7 @@ public final class JdbcStorage implements Storage {
             setNullableLong(p, 20, t.startedAt);
             setNullableLong(p, 21, t.finishedAt);
             setNullableLong(p, 22, t.seq);
+            p.setString(23, t.afterNode);
         }
 
         private static String placeholders(int n) {
@@ -1001,7 +1007,7 @@ public final class JdbcStorage implements Storage {
 
         private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=?,kind=?,status=?," +
                 "activity=?,queue=?,attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?," +
-                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=? WHERE id=?";
+                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=?,after_node=? WHERE id=?";
 
         @Override
         public void updateToken(Token t) {
@@ -1026,7 +1032,8 @@ public final class JdbcStorage implements Storage {
             p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
             p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
             setNullableLong(p, 14, t.compSeq); setNullableLong(p, 15, t.startedAt);
-            setNullableLong(p, 16, t.finishedAt); setNullableLong(p, 17, t.seq); p.setString(18, t.id);
+            setNullableLong(p, 16, t.finishedAt); setNullableLong(p, 17, t.seq); p.setString(18, t.afterNode);
+            p.setString(19, t.id);
         }
 
         /** A count that is not one row means a buffered write ran out of order (an update flushed
@@ -1554,6 +1561,7 @@ public final class JdbcStorage implements Storage {
             t.finishedAt = rs.wasNull() ? null : finishedAt;
             long seq = rs.getLong("seq");
             t.seq = rs.wasNull() ? null : seq;
+            t.afterNode = rs.getString("after_node");
             t.createdAt = rs.getLong("created_at");
             t.updatedAt = rs.getLong("updated_at");
             return t;

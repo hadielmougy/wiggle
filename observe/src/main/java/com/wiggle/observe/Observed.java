@@ -86,7 +86,7 @@ public final class Observed<S> {
             throw new IllegalArgumentException("run context is for " + context.workflow() + " v" + context.version()
                     + ", this observes v" + def.version());
         }
-        return join(context.correlationId());
+        return openJoined(context.correlationId(), context.after());
     }
 
     /** Binds an open run to this thread, for a hand-off {@link Run#wrap} cannot express. */
@@ -106,9 +106,17 @@ public final class Observed<S> {
     }
 
     private Run open(Run.Kind kind, String correlationId) {
+        return open(kind, correlationId, null);
+    }
+
+    private Run openJoined(String correlationId, String after) {
+        return open(Run.Kind.JOINED, correlationId, after);
+    }
+
+    private Run open(Run.Kind kind, String correlationId, String after) {
         Run open = Observation.current();
         if (open != null && open.owner() == this) open.end();
-        Run run = new Run(this, kind, correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId);
+        Run run = new Run(this, kind, correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId, after);
         Observation.attach(run);
         return run;
     }
@@ -130,6 +138,7 @@ public final class Observed<S> {
             run = new Run(this, Run.Kind.IMPLICIT, Ids.token());
             Observation.attach(run);
         }
+        String after = run.lastCompleted();
         long startedAt = System.currentTimeMillis();
         long t0 = System.nanoTime();
         Object result;
@@ -137,7 +146,7 @@ public final class Observed<S> {
             result = call(impl, method, args);
         } catch (Throwable t) {
             long finishedAt = startedAt + (System.nanoTime() - t0) / 1_000_000;
-            run.record(new StepRecord(node.id(), null, null, describe(t), startedAt, finishedAt), false);
+            run.record(new StepRecord(node.id(), null, null, describe(t), startedAt, finishedAt, after), false);
             run.failed();
             throw t;
         }
@@ -147,7 +156,8 @@ public final class Observed<S> {
         Object merge = !predicate && options().captureContext() ? result : null;
         Node next = def.nodes().get(GraphTraversal.successor(node, value != null && value));
         boolean atEnd = next == null || next.kind() == NodeKind.END;
-        run.record(new StepRecord(node.id(), merge, value, null, startedAt, finishedAt), atEnd);
+        run.completed(node.id());
+        run.record(new StepRecord(node.id(), merge, value, null, startedAt, finishedAt, after), atEnd);
         return result;
     }
 

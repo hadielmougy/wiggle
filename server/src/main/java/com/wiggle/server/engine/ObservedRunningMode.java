@@ -136,8 +136,9 @@ public class ObservedRunningMode extends BaseRunningMode {
     }
 
     /**
-     * Judges a settled run: sorts its steps by their own clock (arrival order breaks ties), asks
-     * {@link Conformance}, writes the findings, and closes the instance. {@code idle} says the run
+     * Judges a settled run: sorts its steps by their own clock (arrival order breaks ties), lets
+     * {@link Conformance} reorder by causal hints where the graph agrees, writes the findings, and
+     * closes the instance. {@code idle} says the run
      * settled by going quiet rather than by reaching END or being reported final.
      */
     void settle(Tx tx, Instance inst, WorkflowDefinition def, boolean idle, long now) {
@@ -153,7 +154,7 @@ public class ObservedRunningMode extends BaseRunningMode {
         for (Token t : reported) {
             Object pv = t.payload.staged().get(PREDICATE_KEY);
             steps.add(new Conformance.Step(t.nodeId, pv instanceof Boolean b ? b : null,
-                    t.startedAt != null ? t.startedAt : t.createdAt));
+                    t.startedAt != null ? t.startedAt : t.createdAt, t.seq != null ? t.seq : 0, t.afterNode));
         }
         Conformance.Verdict verdict = Conformance.judge(def, steps);
         for (Conformance.Finding f : verdict.findings()) {

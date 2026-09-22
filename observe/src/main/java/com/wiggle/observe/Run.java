@@ -30,6 +30,9 @@ public final class Run implements AutoCloseable {
     private final List<StepRecord> buffer = new ArrayList<>();
     private volatile String instanceId;
     private volatile String lastStatus;
+    /** The last step this run completed, as this side saw it: the next step's cause, and what a
+     *  message sent now carries. Seeded from the sender's context when the run was joined. */
+    private volatile String lastCompleted;
     private long firstBufferedAt;
     private boolean reachedEnd;
     private boolean ended;
@@ -37,9 +40,14 @@ public final class Run implements AutoCloseable {
     private volatile boolean dead;
 
     Run(Observed<?> owner, Kind kind, String correlationId) {
+        this(owner, kind, correlationId, null);
+    }
+
+    Run(Observed<?> owner, Kind kind, String correlationId, String after) {
         this.owner = owner;
         this.kind = kind;
         this.correlationId = correlationId;
+        this.lastCompleted = after;
     }
 
     /** The server's id for the run once a report has landed; null before that. */
@@ -57,9 +65,22 @@ public final class Run implements AutoCloseable {
         return correlationId;
     }
 
-    /** What to send along with a message so the receiving service can {@link Observed#join} this run. */
+    /**
+     * What to send along with a message so the receiving service can {@link Observed#join} this
+     * run: its identity, and the step completed last on this side, which the receiver's first step
+     * will name as its cause.
+     */
     public RunContext context() {
-        return new RunContext(owner.name(), owner.version(), correlationId);
+        return new RunContext(owner.name(), owner.version(), correlationId, lastCompleted);
+    }
+
+    /** The node of the step this run last completed on this side, or null. */
+    public String lastCompleted() {
+        return lastCompleted;
+    }
+
+    void completed(String nodeId) {
+        lastCompleted = nodeId;
     }
 
     /** {@code task}, bound to this run while it executes on whatever thread runs it. */

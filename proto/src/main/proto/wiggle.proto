@@ -292,6 +292,9 @@ message StepResult {
     // When the step ran, epoch millis; 0 = not reported. Kept on the token for duration stats.
     int64 started_at = 5;
     int64 finished_at = 6;
+    // The step that caused this one (OBSERVED): the run's last completed step as the reporter
+    // saw it, carried across a message boundary. The judge orders by it where the graph agrees.
+    string after_node = 7;
 }
 
 message AdvanceRunRequest {

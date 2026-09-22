@@ -102,6 +102,7 @@ final class Tokens {
             t.startedAt = step.startedAt();
             t.finishedAt = step.finishedAt();
             t.lastError = step.error();
+            t.afterNode = step.afterNode();
             if (step.error() != null) t.attempt = 1;
         }
         // What happened, in the state machine's terms: the step ran, then settled or failed.

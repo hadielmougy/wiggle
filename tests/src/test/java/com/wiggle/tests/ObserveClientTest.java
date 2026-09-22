@@ -320,6 +320,9 @@ class ObserveClientTest {
             }
             assertEquals(spec.name(), ctx.workflow());
             assertEquals("order-7", ctx.correlationId());
+            String bNode = spec.definition().node(spec.definition().startNode()).next();
+            assertEquals(bNode, ctx.after(), "the context names the step completed last before the hand-off");
+            assertEquals(4, ctx.toHeaders().size());
             RunContext received = RunContext.fromHeaders(ctx.toHeaders());
             assertEquals(ctx, received, "the context survives a header round trip");
             assertNull(RunContext.fromHeaders(Map.of()), "no run header, no context");
@@ -337,6 +340,9 @@ class ObserveClientTest {
             assertEquals(Set.of("gateway", "payments"), server.engine().tokens(v.id()).stream()
                     .map(t -> t.leaseOwner).filter(o -> o != null).collect(java.util.stream.Collectors.toSet()));
             assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty(), server.engine().anomalies(null, v.id(), 10).toString());
+            String keepNode = spec.definition().node(bNode).next();
+            assertEquals(bNode, server.engine().tokens(v.id()).stream().filter(t -> t.nodeId.equals(keepNode))
+                    .findFirst().orElseThrow().afterNode, "the participant's first step names the sender's last as its cause");
 
             FlowSpec other = spec("obsc-other");
             Observed<Steps> elsewhere = gateway.observe(other, Steps.class, impl);

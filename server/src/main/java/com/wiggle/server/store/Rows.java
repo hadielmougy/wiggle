@@ -80,6 +80,8 @@ public final class Rows {
         /** Observed steps only: the order they were reported in, which breaks ties between steps
          *  whose clocks agree to the millisecond. Null elsewhere. */
         public Long seq;
+        /** Observed steps only: the node this step named as its cause, if any. */
+        public String afterNode;
         public long createdAt;
         public long updatedAt;
 

@@ -234,10 +234,14 @@ public final class WorkflowEngine {
      * clock in epoch millis, or null when the reporter did not time it.
      */
     public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
-                            Long startedAt, Long finishedAt) {
+                            Long startedAt, Long finishedAt, String afterNode) {
 
         public StepInput(String nodeId, Object merge, Boolean predicateValue) {
-            this(nodeId, merge, predicateValue, null, null, null);
+            this(nodeId, merge, predicateValue, null, null, null, null);
+        }
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue, String error, Long startedAt, Long finishedAt) {
+            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, null);
         }
     }
 

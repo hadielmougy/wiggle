@@ -419,7 +419,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             String error = s.getOutcomeCase() == StepResult.OutcomeCase.ERROR ? s.getError() : null;
             steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate, error,
                     s.getStartedAt() == 0 ? null : s.getStartedAt(),
-                    s.getFinishedAt() == 0 ? null : s.getFinishedAt()));
+                    s.getFinishedAt() == 0 ? null : s.getFinishedAt(),
+                    s.getAfterNode().isEmpty() ? null : s.getAfterNode()));
         }
         return steps;
     }

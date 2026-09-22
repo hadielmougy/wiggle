@@ -108,6 +108,13 @@ any order.
 | `INCOMPLETE` | judged without END reached | instance `FAILED` ("run ended before END, at …") |
 | `STALLED` | judged because the run went quiet, not because END or `final` arrived | with `INCOMPLETE` |
 
+- **Causal hints.** A step may name the step that caused it (`after_node`). Within a service
+  that is the previous step, which arrival order already covers; at a message boundary the
+  sender's last completed step travels in the message (`wiggle-after`) and becomes the
+  receiver's first step's cause. Before the frontier walk the judge orders by clock, then moves a
+  step after its named cause where the graph agrees the cause precedes it -- a hint naming a
+  sibling branch, an unknown node, or a step never reported is ignored, so a lost report never
+  blocks judgement. Two services with disagreeing clocks then judge clean.
 - **Verdict.** A successful END reached means `COMPLETED`, whatever was recorded along the way;
   anomalies are findings, not failures. A failing END fails with its reason. No END fails as
   incomplete.
@@ -118,7 +125,8 @@ any order.
 
 Migration 15: `wf_token.started_at` / `finished_at` (nullable), an index for the duration
 sample, and `wf_anomaly` (instance, workflow, version, kind, expected/reported node, detail,
-time). Migration 16: `wf_instance.settle_at` (nullable, observed runs only) and its index. Duration statistics are computed in the server over the newest N timed `DONE` tokens of
+time). Migration 16: `wf_instance.settle_at` (nullable, observed runs only) and its index; migration 17:
+`wf_token.after_node` (nullable), the causal hint. Duration statistics are computed in the server over the newest N timed `DONE` tokens of
 a version (default 10 000), so no percentile SQL has to be portable.
 
 ## 6. Reporting side: the `observe` module
@@ -152,8 +160,8 @@ try (Observer observer = Observer.connect("localhost:8080")) {
   an originator closing before `END` reports the run as over (`INCOMPLETE` if nothing reached
   `END`); a participant's close only flushes. A step that throws ends its run.
 - **Across services.** `Observation.context()` (or `run.context()`) is what to send along with
-  a message: three headers, `wiggle-workflow`, `wiggle-version`, `wiggle-run`, via
-  `RunContext.toHeaders()`. The receiving service reads them back with
+  a message: `wiggle-workflow`, `wiggle-version`, `wiggle-run`, and `wiggle-after` (the step
+  completed last on this side, the receiver's first step's cause), via `RunContext.toHeaders()`. The receiving service reads them back with
   `RunContext.fromHeaders(...)` and joins. The Kafka adapter does both for you.
 - **Across threads.** `run.wrap(runnable)` / `run.wrap(callable)` bind the run on whatever
   thread executes the task; `attach(run)` / `detach()` cover hand-offs those cannot express.

@@ -31,8 +31,17 @@ final class Conformance {
 
     private Conformance() {}
 
-    /** One reported step, in judging order. */
-    record Step(String nodeId, Boolean predicateValue, long at) {}
+    /**
+     * One reported step. {@code at} is its clock and {@code seq} its arrival order, the priority
+     * when nothing causal separates two steps; {@code after} is the node it named as its cause,
+     * or null.
+     */
+    record Step(String nodeId, Boolean predicateValue, long at, long seq, String after) {
+
+        Step(String nodeId, Boolean predicateValue, long at) {
+            this(nodeId, predicateValue, at, 0, null);
+        }
+    }
 
     record Finding(String kind, String expected, String reported, String detail) {}
 
@@ -49,8 +58,83 @@ final class Conformance {
 
     static Verdict judge(WorkflowDefinition def, List<Step> steps) {
         Walk w = new Walk(def);
-        for (Step s : steps) w.take(s);
+        for (Step s : order(def, steps)) w.take(s);
         return w.verdict();
+    }
+
+    /**
+     * The steps in judging order: by clock, then arrival, except where a step names its cause and
+     * the graph agrees that cause precedes it -- then the cause goes first whatever the clocks
+     * said. That is what lets two services' steps order correctly across a message boundary when
+     * their clocks disagree.
+     *
+     * <p>A hint is honoured only when the named node is a predecessor of the step's node in the
+     * topology; it resolves to the latest reported occurrence of that node up to the step's own
+     * clock (or the earliest after it, when clocks are what is wrong). A hint that resolves to
+     * nothing is ignored, so a lost report never blocks judgement, and a cycle -- which only a
+     * bug can produce -- is broken by the clock.
+     */
+    static List<Step> order(WorkflowDefinition def, List<Step> steps) {
+        List<Step> byClock = new ArrayList<>(steps);
+        byClock.sort(java.util.Comparator.comparingLong(Step::at).thenComparingLong(Step::seq));
+        if (byClock.stream().noneMatch(s -> s.after() != null)) return byClock;
+
+        Map<String, Set<String>> before = predecessors(def);
+        int n = byClock.size();
+        List<List<Integer>> successors = new ArrayList<>(n);
+        int[] unmet = new int[n];
+        for (int i = 0; i < n; i++) successors.add(new ArrayList<>());
+        for (int i = 0; i < n; i++) {
+            Step s = byClock.get(i);
+            if (s.after() == null || s.after().equals(s.nodeId())) continue;
+            Set<String> preds = before.get(s.nodeId());
+            if (preds == null || !preds.contains(s.after())) continue;
+            int cause = resolveCause(byClock, i, s.after());
+            if (cause < 0 || cause == i) continue;
+            successors.get(cause).add(i);
+            unmet[i]++;
+        }
+        List<Step> out = new ArrayList<>(n);
+        boolean[] done = new boolean[n];
+        java.util.PriorityQueue<Integer> ready = new java.util.PriorityQueue<>();   // index = clock order
+        for (int i = 0; i < n; i++) if (unmet[i] == 0) ready.add(i);
+        while (out.size() < n) {
+            if (ready.isEmpty()) {
+                for (int i = 0; i < n; i++) if (!done[i]) { ready.add(i); unmet[i] = 0; break; }   // cycle: clock wins
+            }
+            int i = ready.poll();
+            if (done[i]) continue;
+            done[i] = true;
+            out.add(byClock.get(i));
+            for (int j : successors.get(i)) if (--unmet[j] == 0 && !done[j]) ready.add(j);
+        }
+        return out;
+    }
+
+    /** The latest occurrence of {@code node} at or before step {@code i} in clock order, else the earliest after it. */
+    private static int resolveCause(List<Step> byClock, int i, String node) {
+        for (int k = i - 1; k >= 0; k--) if (node.equals(byClock.get(k).nodeId())) return k;
+        for (int k = i + 1; k < byClock.size(); k++) if (node.equals(byClock.get(k).nodeId())) return k;
+        return -1;
+    }
+
+    /** For every worker step, the worker steps that can reach it: what a causal hint may name. */
+    static Map<String, Set<String>> predecessors(WorkflowDefinition def) {
+        Map<String, Set<String>> out = new HashMap<>();
+        for (Node from : def.nodes().values()) {
+            if (!from.isWorkerDispatched()) continue;
+            Set<String> seen = new HashSet<>();
+            Deque<String> work = new ArrayDeque<>(successors(from));
+            while (!work.isEmpty()) {
+                String id = work.pop();
+                if (id == null || !seen.add(id)) continue;
+                Node to = def.nodes().get(id);
+                if (to == null) continue;
+                if (to.isWorkerDispatched()) out.computeIfAbsent(id, k -> new HashSet<>()).add(from.id());
+                work.addAll(successors(to));
+            }
+        }
+        return out;
     }
 
     private static final class Walk {

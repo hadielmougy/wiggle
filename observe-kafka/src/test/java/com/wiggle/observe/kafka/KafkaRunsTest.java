@@ -97,7 +97,9 @@ class KafkaRunsTest {
 
             // warehouse: consume, join, run its steps inside the handler
             ConsumerRecord<String, String> record = delivered(sent, 0);
-            assertEquals(new RunContext(spec.name(), 1, "order-11"), KafkaRuns.read(record));
+            RunContext carried = KafkaRuns.read(record);
+            assertEquals(new RunContext(spec.name(), 1, "order-11", spec.definition().startNode()), carried,
+                    "the record names accept, the sender's last completed step, as the cause of what follows");
             KafkaRuns.handle(back, record, r -> {
                 assertEquals("order-11", Observation.correlationId(), "the handler runs inside the joined run");
                 back.steps().reserve(Map.of());

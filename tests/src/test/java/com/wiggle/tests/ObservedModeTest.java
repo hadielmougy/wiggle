@@ -185,6 +185,32 @@ class ObservedModeTest {
         }
     }
 
+    private static StepInput stepAfter(String nodeId, long offset, long millis, String cause) {
+        return new StepInput(nodeId, null, null, null, T0 + offset, T0 + offset + millis, cause);
+    }
+
+    @Test @DisplayName("a second service whose clock runs early is ordered by the causal hint it carried")
+    void causalHintOrdersAcrossServices() {
+        try (Fixture f = Fixture.inMemory("obs-causal")) {
+            // app-1 ran a, b, keep with a true clock; app-2's clock is 40ms behind, but its step names keep
+            f.report(APP1, "k", false, step(f.a(), 0, 10), step(f.b(), 10, 10), predicate(f.keep(), true, 20, 1));
+            ObserveResult r = f.report(APP2, "k", false, stepAfter(f.c(), -19, 5, f.keep()));
+            f.settle();
+            assertEquals("COMPLETED", f.status(r.instanceId()));
+            assertTrue(f.anomalies(r.instanceId()).isEmpty(), f.anomalies(r.instanceId()).toString());
+            Token c = f.engine.tokens(r.instanceId()).stream().filter(t -> t.nodeId.equals(f.c())).findFirst().orElseThrow();
+            assertEquals(f.keep(), c.afterNode, "the hint is kept on the token");
+        }
+        try (Fixture f = Fixture.inMemory("obs-causal-none")) {
+            f.report(APP1, "k", false, step(f.a(), 0, 10), step(f.b(), 10, 10), predicate(f.keep(), true, 20, 1));
+            ObserveResult r = f.report(APP2, "k", false, step(f.c(), -19, 5));
+            f.settle();
+            List<String> kinds = f.anomalies(r.instanceId()).stream().map(AnomalyView::kind).toList();
+            assertFalse(kinds.isEmpty(), "without the hint, the early clock reads as out of order");
+            assertTrue(kinds.stream().allMatch("OUT_OF_ORDER"::equals), kinds.toString());
+        }
+    }
+
     @Test @DisplayName("steps whose clocks agree to the millisecond keep their reported order")
     void sameMillisecondKeepsReportOrder() {
         try (Fixture f = Fixture.inMemory("obs-tie")) {
@@ -426,6 +452,10 @@ class ObservedModeTest {
             Token c = f.engine.tokens(r1.instanceId()).stream().filter(t -> t.nodeId.equals(f.c())).findFirst().orElseThrow();
             assertEquals(T0 + 10, c.startedAt);
             assertEquals(APP2, c.leaseOwner);
+            assertNull(c.afterNode);
+            ObserveResult r3 = f.report(APP1, "k2", false, stepAfter(f.a(), 0, 1, null), stepAfter(f.b(), 1, 1, f.a()));
+            assertEquals(f.a(), f.engine.tokens(r3.instanceId()).stream().filter(t -> t.nodeId.equals(f.b()))
+                    .findFirst().orElseThrow().afterNode, "the hint round-trips through the store");
             assertNull(f.engine.instance(r1.instanceId()).orElseThrow().error());
             assertTrue(f.engine.poll("w1", f.queues(), 10, null).isEmpty());
         }

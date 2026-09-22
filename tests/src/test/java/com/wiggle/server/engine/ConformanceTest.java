@@ -143,4 +143,59 @@ class ConformanceTest {
         assertEquals(Set.of(), Conformance.cyclicNodes(linear()));
         assertEquals(Set.of(), Conformance.cyclicNodes(forked()));
     }
+
+    private static Step after(String node, long t, long seq, String cause) { return new Step(node, null, t, seq, cause); }
+
+    @Test @DisplayName("a causal hint orders a receiver's early-clocked step after its cause")
+    void hintBeatsSkewedClock() {
+        // service B's clock runs 50ms early: c is stamped before b, but names b as its cause
+        List<Step> steps = List.of(at("a", 100), at("b", 200), pred("keep", true, 210), after("c", 160, 9, "keep"));
+        List<String> unhinted = kinds(Conformance.judge(linear(), List.of(at("a", 100), at("b", 200),
+                pred("keep", true, 210), at("c", 160))));
+        assertFalse(unhinted.isEmpty(), "without the hint the clock misleads");
+        assertTrue(unhinted.stream().allMatch("OUT_OF_ORDER"::equals), unhinted.toString());
+        Verdict v = Conformance.judge(linear(), steps);
+        assertTrue(v.completed());
+        assertEquals(List.of(), v.findings(), "with the hint, c follows keep whatever its clock said");
+    }
+
+    @Test @DisplayName("a hint the graph disagrees with is ignored: a sibling branch is no cause")
+    void hintMustBeAPredecessor() {
+        // x names y as its cause; they are sibling fork branches, so the clock stays in charge
+        Verdict v = Conformance.judge(forked(), List.of(at("a", 1), after("x", 2, 1, "y"), at("y", 3), at("z", 4)));
+        assertTrue(v.completed());
+        assertEquals(List.of(), v.findings());
+        assertEquals(List.of("a", "x", "y", "z"), Conformance.order(forked(),
+                List.of(at("a", 1), after("x", 2, 1, "y"), at("y", 3), at("z", 4))).stream().map(Step::nodeId).toList());
+    }
+
+    @Test @DisplayName("a hint to a step never reported falls back to the clock rather than blocking")
+    void hintToMissingCauseFallsBack() {
+        Verdict v = Conformance.judge(linear(), List.of(at("a", 1), after("c", 2, 1, "keep")));
+        assertEquals(List.of("OUT_OF_ORDER"), kinds(v), "b and keep are missing; c is judged where its clock puts it");
+        assertTrue(v.completed());
+    }
+
+    @Test @DisplayName("a hint names a node, not an occurrence: it resolves to the latest one by clock, or the next when clocks skew")
+    void hintResolvesByClock() {
+        // clean loop: the hint names an occurrence already before the step; nothing moves
+        List<Step> clean = List.of(at("a", 1), pred("again", true, 2), after("a", 5, 1, "again"), pred("again", false, 6));
+        assertEquals(List.of("a", "again", "a", "again"), Conformance.order(looped(), clean).stream().map(Step::nodeId).toList());
+        assertTrue(Conformance.judge(looped(), clean).completed());
+        // skewed: the second 'a' is clocked before the 'again' that caused it; the hint pins it after
+        List<Step> skewed = List.of(at("a", 1), after("a", 4, 1, "again"), pred("again", true, 6), pred("again", false, 8));
+        assertEquals(List.of("a", "again", "a", "again"), Conformance.order(looped(), skewed).stream().map(Step::nodeId).toList());
+        assertEquals(List.of(), Conformance.judge(looped(), skewed).findings());
+    }
+
+    @Test @DisplayName("predecessors: what a hint may legitimately name")
+    void predecessors() {
+        Map<String, Set<String>> p = Conformance.predecessors(forked());
+        assertEquals(Set.of("a"), p.get("x"));
+        assertEquals(Set.of("a"), p.get("y"));
+        assertEquals(Set.of("a", "x", "y"), p.get("z"));
+        assertNull(p.get("a"), "the start has no predecessor");
+        assertEquals(Set.of("a", "b", "keep"), Conformance.predecessors(linear()).get("c"));
+        assertEquals(Set.of("a", "again"), Conformance.predecessors(looped()).get("a"), "a loop makes a step its own predecessor");
+    }
 }
