@@ -88,7 +88,7 @@ final class Tokens {
      * node (an END) with no timing. The status still goes through the state machine.
      */
     static Token insertSettled(Tx tx, Instance inst, Node node, TokenStatus status, String reporter,
-                               WorkflowEngine.StepInput step, long now) {
+                               WorkflowEngine.StepInput step, long seq, long now) {
         TokenPayload payload = step != null && step.predicateValue() != null
                 ? new TokenPayload(List.of(), java.util.Map.of(), java.util.Map.of(ObservedRunningMode.PREDICATE_KEY, step.predicateValue()))
                 : TokenPayload.EMPTY;
@@ -97,6 +97,7 @@ final class Tokens {
         t.activity = node.activity();
         t.queue = node.queue();
         t.leaseOwner = reporter;
+        t.seq = seq;
         if (step != null) {
             t.startedAt = step.startedAt();
             t.finishedAt = step.finishedAt();

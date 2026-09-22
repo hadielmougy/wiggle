@@ -98,7 +98,11 @@ public class ObservedRunningMode extends BaseRunningMode {
                     ctx.steps().size() + " step(s) reported after the instance " + inst.status, now);
             anomalies++;
         }
+        // Arrival order within a report is the reporter's causal order: it breaks ties between
+        // steps whose clocks agree to the millisecond. Later reports sort after earlier ones.
+        long seq = now * 1000;
         for (StepInput step : ctx.steps()) {
+            seq++;
             Optional<Node> reported = def.find(step.nodeId()).filter(Node::isWorkerDispatched);
             if (reported.isEmpty()) {
                 record(tx, inst, UNKNOWN_NODE, null, step.nodeId(), "no step '" + step.nodeId() + "' in " + def.key(), now);
@@ -107,20 +111,20 @@ public class ObservedRunningMode extends BaseRunningMode {
             }
             Node node = reported.get();
             if (step.error() != null) {
-                Tokens.insertSettled(tx, inst, node, TokenStatus.FAILED, ctx.reporter(), step, now);
+                Tokens.insertSettled(tx, inst, node, TokenStatus.FAILED, ctx.reporter(), step, seq, now);
                 if (InstanceState.of(inst.status).running()) {
                     instances().fail(tx, inst, node.name() + ": " + step.error(), now);
                 }
                 continue;
             }
-            Token t = Tokens.insertSettled(tx, inst, node, TokenStatus.DONE, ctx.reporter(), step, now);
+            Token t = Tokens.insertSettled(tx, inst, node, TokenStatus.DONE, ctx.reporter(), step, seq, now);
             if (step.merge() != null) Scopes.applyStepResult(inst, t, step.merge());
             String next = node.kind() == NodeKind.PREDICATE
                     ? (step.predicateValue() != null && step.predicateValue() ? node.next() : node.altNext())
                     : node.next();
             Node nextNode = next == null ? null : def.find(next).orElse(null);
             if (nextNode != null && nextNode.kind() == NodeKind.END) {
-                Tokens.insertSettled(tx, inst, nextNode, TokenStatus.DONE, ctx.reporter(), null, now);
+                Tokens.insertSettled(tx, inst, nextNode, TokenStatus.DONE, ctx.reporter(), null, seq, now);
                 closing = true;
             }
         }
@@ -138,15 +142,19 @@ public class ObservedRunningMode extends BaseRunningMode {
      */
     void settle(Tx tx, Instance inst, WorkflowDefinition def, boolean idle, long now) {
         List<Token> tokens = tx.tokensOf(inst.id);
-        List<Conformance.Step> steps = new ArrayList<>();
+        List<Token> reported = new ArrayList<>();
         for (Token t : tokens) {
-            if (!t.isActive() && t.kind != NodeKind.END && t.status != TokenStatus.CANCELLED) {
-                Object pv = t.payload.staged().get(PREDICATE_KEY);
-                steps.add(new Conformance.Step(t.nodeId, pv instanceof Boolean b ? b : null,
-                        t.startedAt != null ? t.startedAt : t.createdAt));
-            }
+            if (!t.isActive() && t.kind != NodeKind.END && t.status != TokenStatus.CANCELLED) reported.add(t);
         }
-        steps.sort(Comparator.comparingLong(Conformance.Step::at));
+        reported.sort(Comparator.comparingLong((Token t) -> t.startedAt != null ? t.startedAt : t.createdAt)
+                .thenComparingLong(t -> t.seq != null ? t.seq : 0)
+                .thenComparing(t -> t.id));
+        List<Conformance.Step> steps = new ArrayList<>(reported.size());
+        for (Token t : reported) {
+            Object pv = t.payload.staged().get(PREDICATE_KEY);
+            steps.add(new Conformance.Step(t.nodeId, pv instanceof Boolean b ? b : null,
+                    t.startedAt != null ? t.startedAt : t.createdAt));
+        }
         Conformance.Verdict verdict = Conformance.judge(def, steps);
         for (Conformance.Finding f : verdict.findings()) {
             record(tx, inst, f.kind(), f.expected(), f.reported(), f.detail(), now);

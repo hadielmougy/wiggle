@@ -77,6 +77,9 @@ public final class Rows {
          *  the step was not timed. */
         public Long startedAt;
         public Long finishedAt;
+        /** Observed steps only: the order they were reported in, which breaks ties between steps
+         *  whose clocks agree to the millisecond. Null elsewhere. */
+        public Long seq;
         public long createdAt;
         public long updatedAt;
 

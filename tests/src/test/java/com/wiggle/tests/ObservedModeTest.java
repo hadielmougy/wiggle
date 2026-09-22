@@ -185,6 +185,17 @@ class ObservedModeTest {
         }
     }
 
+    @Test @DisplayName("steps whose clocks agree to the millisecond keep their reported order")
+    void sameMillisecondKeepsReportOrder() {
+        try (Fixture f = Fixture.inMemory("obs-tie")) {
+            ObserveResult r = f.report(APP1, "k", false, step(f.a(), 0, 0), step(f.b(), 0, 0),
+                    predicate(f.keep(), true, 0, 0), step(f.c(), 0, 0));
+            f.settle();
+            assertEquals("COMPLETED", f.status(r.instanceId()));
+            assertTrue(f.anomalies(r.instanceId()).isEmpty(), "arrival order broke the tie, not token ids");
+        }
+    }
+
     @Test @DisplayName("a step timed out of order is recorded at settle, and the run still completes")
     void outOfOrderIsJudged() {
         try (Fixture f = Fixture.inMemory("obs-order")) {
