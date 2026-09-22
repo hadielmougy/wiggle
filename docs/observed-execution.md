@@ -137,10 +137,21 @@ try (Observer observer = Observer.connect("localhost:8080")) {
   implementation (which therefore implements that interface). Every call on a method that names
   a step is timed and recorded; a method that names no step passes straight through. The
   application sees its own return values and its own exceptions, unwrapped.
-- **Runs.** `begin(correlationId)` opens a run on the calling thread; a step called with no run
-  open opens one implicitly. A run ends when a step's successor is `END`, when a step throws, or
-  when its `Run` is closed (closing before `END` is reported, and recorded as `INCOMPLETE`).
-  Runs are per thread: a hand-off to another thread mid-run is not followed in this version.
+- **Runs.** `begin(correlationId)` opens a run on the calling thread as its originator;
+  `join(correlationId)` or `join(RunContext)` opens one as a participant in a run another
+  service started; a step called with no run open opens an implicit one. Every run has a key
+  (a blank one is minted), and every report names it, so all reporters of a run land on the
+  same instance. An implicit run ends at `END`. A begun or joined run lives until it is closed:
+  an originator closing before `END` reports the run as over (`INCOMPLETE` if nothing reached
+  `END`); a participant's close only flushes. A step that throws ends its run.
+- **Across services.** `Observation.context()` (or `run.context()`) is what to send along with
+  a message: three headers, `wiggle-workflow`, `wiggle-version`, `wiggle-run`, via
+  `RunContext.toHeaders()`. The receiving service reads them back with
+  `RunContext.fromHeaders(...)` and joins. The Kafka adapter does both for you.
+- **Across threads.** `run.wrap(runnable)` / `run.wrap(callable)` bind the run on whatever
+  thread executes the task; `attach(run)` / `detach()` cover hand-offs those cannot express.
+- **Inside a step.** `Observation.correlationId()`, `instanceId()` and `context()` read the
+  current thread's run, the way a worker reads `Step`; outside a run they throw.
 - **Reporting.** Steps buffer per run and flush when the buffer reaches `batchSize` (64), when
   it has waited `linger` (1 s), or when the run ends. One daemon thread sends them in
   `ObserveMany` calls, at most one batch per run per call so the second batch of a run can name

@@ -6,10 +6,12 @@ import com.wiggle.core.AnomalyView;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.NodeStats;
+import com.wiggle.observe.Observation;
 import com.wiggle.observe.Observed;
 import com.wiggle.observe.Observer;
 import com.wiggle.observe.ObserverOptions;
 import com.wiggle.observe.Run;
+import com.wiggle.observe.RunContext;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -22,6 +24,9 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -54,6 +59,8 @@ class ObserveClientTest {
         final AtomicInteger calls = new AtomicInteger();
         volatile boolean keep = true;
         volatile RuntimeException failB;
+        /** What the step saw as its run's key, through the ambient accessor. */
+        volatile String keyInA;
 
         private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {
             Map<String, Object> n = new LinkedHashMap<>(ctx);
@@ -61,7 +68,11 @@ class ObserveClientTest {
             return n;
         }
 
-        public Map<String, Object> a(Map<String, Object> ctx) { calls.incrementAndGet(); return put(ctx, "a", 1L); }
+        public Map<String, Object> a(Map<String, Object> ctx) {
+            calls.incrementAndGet();
+            keyInA = Observation.correlationId();
+            return put(ctx, "a", 1L);
+        }
         public Map<String, Object> b(Map<String, Object> ctx) {
             calls.incrementAndGet();
             if (failB != null) throw failB;
@@ -120,8 +131,11 @@ class ObserveClientTest {
             assertTrue(s.keep(ctx));
             ctx = s.c(ctx);
             assertEquals(3L, ctx.get("c"), "the application sees its own results, unchanged");
-            assertNull(flow.current(), "reaching END closed the run");
+            assertSame(run, flow.current(), "a begun run stays open past END until it is closed");
+            assertEquals("order-1", impl.keyInA, "a step reads its run's key ambiently");
             run.close();
+            assertNull(flow.current());
+            assertThrows(IllegalStateException.class, Observation::run, "nothing is open on this thread now");
             assertEquals(4, impl.calls.get());
 
             InstanceView v = awaitTerminal(server.engine(), spec.name(), "order-1");
@@ -285,6 +299,74 @@ class ObserveClientTest {
              WiggleClient client = new WiggleClient(srv.baseUrl())) {
             assertThrows(IllegalArgumentException.class, () -> observer.observe(server, Steps.class, new Impl()));
             assertFalse(client.workflowNames().contains("obsc-srv"));
+        }
+    }
+
+    @Test @DisplayName("two services join one run by key and the server completes one instance with both reporters")
+    void twoServicesJoinOneRun() throws Exception {
+        FlowSpec spec = spec("obsc-join");
+        Impl impl = new Impl();
+        try (WiggleServer server = new WiggleServer(config()).start();
+             Observer gateway = Observer.connect(server.baseUrl(), ObserverOptions.defaults().withReporter("gateway"));
+             Observer payments = Observer.connect(server.baseUrl(), ObserverOptions.defaults().withReporter("payments"))) {
+            Observed<Steps> front = gateway.observe(spec, Steps.class, impl);
+            Observed<Steps> back = payments.observe(spec, Steps.class, impl);
+
+            // the originator runs a and b, then hands the run's context on (a header, in real life)
+            RunContext ctx;
+            try (Run run = front.begin("order-7")) {
+                front.steps().b(front.steps().a(Map.of()));
+                ctx = Observation.context();
+            }
+            assertEquals(spec.name(), ctx.workflow());
+            assertEquals("order-7", ctx.correlationId());
+            RunContext received = RunContext.fromHeaders(ctx.toHeaders());
+            assertEquals(ctx, received, "the context survives a header round trip");
+            assertNull(RunContext.fromHeaders(Map.of()), "no run header, no context");
+
+            // the participant joins by that context and runs the rest
+            try (Run run = back.join(received)) {
+                back.steps().keep(Map.of());
+                back.steps().c(Map.of());
+                assertEquals("order-7", run.correlationId());
+            }
+
+            InstanceView v = awaitTerminal(server.engine(), spec.name(), "order-7");
+            assertEquals("COMPLETED", v.status(), "the originator's early close did not fail the run: END was seen");
+            assertEquals(1, server.engine().findByCorrelation("order-7", 10).size(), "one instance for the key");
+            assertEquals(Set.of("gateway", "payments"), server.engine().tokens(v.id()).stream()
+                    .map(t -> t.leaseOwner).filter(o -> o != null).collect(java.util.stream.Collectors.toSet()));
+            assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty(), server.engine().anomalies(null, v.id(), 10).toString());
+
+            FlowSpec other = spec("obsc-other");
+            Observed<Steps> elsewhere = gateway.observe(other, Steps.class, impl);
+            assertThrows(IllegalArgumentException.class, () -> elsewhere.join(received), "a context names its flow");
+        }
+    }
+
+    @Test @DisplayName("a run carried to another thread with wrap reports as one run")
+    void runCarriedAcrossThreads() throws Exception {
+        FlowSpec spec = spec("obsc-thread");
+        Impl impl = new Impl();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try (WiggleServer server = new WiggleServer(config()).start();
+             Observer observer = Observer.connect(server.baseUrl())) {
+            Observed<Steps> flow = observer.observe(spec, Steps.class, impl);
+            Steps s = flow.steps();
+            try (Run run = flow.begin("order-8")) {
+                s.a(Map.of());
+                pool.submit(run.wrap(() -> { s.b(Map.of()); s.keep(Map.of()); })).get();
+                assertEquals("order-8", pool.submit(run.wrap(() -> Observation.correlationId())).get(),
+                        "the wrapped task sees the run ambiently");
+                assertThrows(java.util.concurrent.ExecutionException.class,
+                        () -> pool.submit(() -> Observation.run()).get(), "an unwrapped task sees no run");
+                s.c(Map.of());
+            }
+            InstanceView v = awaitTerminal(server.engine(), spec.name(), "order-8");
+            assertEquals("COMPLETED", v.status());
+            assertTrue(server.engine().anomalies(null, v.id(), 10).isEmpty(), "one run, in order, across two threads");
+        } finally {
+            pool.shutdownNow();
         }
     }
 }

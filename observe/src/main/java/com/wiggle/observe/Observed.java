@@ -7,6 +7,8 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
 
+import com.wiggle.core.Ids;
+
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -19,9 +21,10 @@ import java.util.Map;
  * exactly as you would the original. A method of the interface that names no step of the graph
  * passes straight through.
  *
- * <p>Calls are grouped into runs per thread: {@link #begin} opens one explicitly, and a step
- * called with none open opens one implicitly. A run ends when a step's successor is END, when the
- * step throws, or when its {@link Run} is closed.
+ * <p>Calls are grouped into runs per thread. {@link #begin} opens one as the originator,
+ * {@link #join} opens one as a participant in a run another service started, and a step called
+ * with none open opens an implicit one that ends at END. A run also ends when its step throws or
+ * its {@link Run} is closed; see {@link Run} for what each kind's close means.
  */
 public final class Observed<S> {
 
@@ -29,7 +32,6 @@ public final class Observed<S> {
     private final WorkflowDefinition def;
     private final S steps;
     private final Map<String, Node> byName = new HashMap<>();
-    private final ThreadLocal<Run> current = new ThreadLocal<>();
 
     Observed(Observer observer, FlowSpec spec, Class<S> contract, S impl) {
         this.observer = observer;
@@ -53,18 +55,62 @@ public final class Observed<S> {
         return def.version();
     }
 
-    /** Opens a run on this thread under a business key; the thread's later step calls belong to it. */
+    /**
+     * Opens a run on this thread as its originator, under a business key (a blank key mints one).
+     * The thread's later step calls belong to it until it is closed; closing it before END
+     * reports the run as over.
+     */
     public Run begin(String correlationId) {
-        Run open = current.get();
-        if (open != null) open.end();
-        Run run = new Run(this, correlationId);
-        current.set(run);
-        return run;
+        return open(Run.Kind.BEGUN, correlationId);
+    }
+
+    /**
+     * Opens a run on this thread as a participant: the run was started elsewhere, under this key,
+     * and this service runs some of its steps. Closing it flushes what it holds and says nothing
+     * about the whole.
+     */
+    public Run join(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            throw new IllegalArgumentException("joining a run needs its key");
+        }
+        return open(Run.Kind.JOINED, correlationId);
+    }
+
+    /** {@link #join(String)} from a context another service sent, which must name this flow. */
+    public Run join(RunContext context) {
+        if (!def.name().equals(context.workflow())) {
+            throw new IllegalArgumentException("run context is for workflow '" + context.workflow()
+                    + "', this observes '" + def.name() + "'");
+        }
+        if (context.version() != 0 && context.version() != def.version()) {
+            throw new IllegalArgumentException("run context is for " + context.workflow() + " v" + context.version()
+                    + ", this observes v" + def.version());
+        }
+        return join(context.correlationId());
+    }
+
+    /** Binds an open run to this thread, for a hand-off {@link Run#wrap} cannot express. */
+    public void attach(Run run) {
+        Observation.attach(run);
+    }
+
+    /** Unbinds this thread's run without closing it. */
+    public void detach() {
+        Run r = Observation.current();
+        if (r != null) Observation.detach(r);
     }
 
     /** The run this thread's step calls currently belong to, or null. */
     public Run current() {
-        return current.get();
+        return Observation.current();
+    }
+
+    private Run open(Run.Kind kind, String correlationId) {
+        Run open = Observation.current();
+        if (open != null && open.owner() == this) open.end();
+        Run run = new Run(this, kind, correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId);
+        Observation.attach(run);
+        return run;
     }
 
     ObserverOptions options() {
@@ -75,18 +121,14 @@ public final class Observed<S> {
         return observer.reporter();
     }
 
-    void detach(Run run) {
-        if (current.get() == run) current.remove();
-    }
-
     private Object invoke(S impl, Method method, Object[] args) throws Throwable {
         if (method.getDeclaringClass() == Object.class) return objectMethod(method, args);
         Node node = byName.get(stepName(method));
         if (node == null) return call(impl, method, args);
-        Run run = current.get();
-        if (run == null) {
-            run = new Run(this, null);
-            current.set(run);
+        Run run = Observation.current();
+        if (run == null || run.owner() != this) {
+            run = new Run(this, Run.Kind.IMPLICIT, Ids.token());
+            Observation.attach(run);
         }
         long startedAt = System.currentTimeMillis();
         long t0 = System.nanoTime();
@@ -95,7 +137,8 @@ public final class Observed<S> {
             result = call(impl, method, args);
         } catch (Throwable t) {
             long finishedAt = startedAt + (System.nanoTime() - t0) / 1_000_000;
-            run.record(new StepRecord(node.id(), null, null, describe(t), startedAt, finishedAt), true);
+            run.record(new StepRecord(node.id(), null, null, describe(t), startedAt, finishedAt), false);
+            run.failed();
             throw t;
         }
         long finishedAt = startedAt + (System.nanoTime() - t0) / 1_000_000;

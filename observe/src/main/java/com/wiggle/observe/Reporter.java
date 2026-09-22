@@ -146,13 +146,15 @@ final class Reporter implements AutoCloseable {
 
     private ObserveRunRequest request(Batch b) {
         Run run = b.run();
+        // Every report names the key: that is what lets a service that never saw the first report
+        // land on the same instance. The instance id, once known, only spares the server a lookup.
         ObserveRunRequest.Builder req = ObserveRunRequest.newBuilder()
                 .setWorkflow(run.owner().name())
                 .setVersion(run.owner().version())
                 .setReporter(options.reporter())
+                .setCorrelationId(run.correlationId())
                 .setFinal(b.fin());
         if (run.instanceId() != null) req.setInstanceId(run.instanceId());
-        else if (run.correlationId() != null) req.setCorrelationId(run.correlationId());
         for (StepRecord s : b.steps()) {
             StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId())
                     .setStartedAt(s.startedAt()).setFinishedAt(s.finishedAt());
