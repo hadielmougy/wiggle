@@ -15,7 +15,12 @@ and never blocks a service. What it does instead is:
 - **Timing.** Each step carries its own `started_at` / `finished_at`, measured where it ran.
   The server keeps them on the token and answers per-node duration statistics (count, mean,
   p50, p95, max) over a bounded sample, slowest p95 first, so the head of the list is the
-  bottleneck.
+  bottleneck. Worker-run steps (`SERVER`, `LOCAL_*`) are timed by the server, claimed to
+  settled, and also carry their queue wait (ready to claimed) as p50/p95, so the same view
+  tells a slow step from a starved one; an observed step was never queued and waits for nothing.
+  Steps a worker chains and flushes together (`LOCAL_ASYNC`) ran somewhere inside the batch, so
+  the server leaves them untimed rather than record zeros; timing them takes the worker's own
+  clock on the report, which is the next step.
 
 The unique value over a tracer is the first point: a declared model to check runs against.
 

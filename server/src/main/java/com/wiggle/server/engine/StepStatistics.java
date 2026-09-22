@@ -17,14 +17,21 @@ final class StepStatistics {
 
     static List<NodeStats> summarise(List<StepDuration> sample, Function<String, String> nameOf) {
         Map<String, List<Long>> byNode = new LinkedHashMap<>();
-        for (StepDuration d : sample) byNode.computeIfAbsent(d.nodeId(), k -> new ArrayList<>()).add(d.millis());
+        Map<String, List<Long>> waits = new LinkedHashMap<>();
+        for (StepDuration d : sample) {
+            byNode.computeIfAbsent(d.nodeId(), k -> new ArrayList<>()).add(d.millis());
+            waits.computeIfAbsent(d.nodeId(), k -> new ArrayList<>()).add(d.waitMillis());
+        }
         List<NodeStats> out = new ArrayList<>(byNode.size());
         byNode.forEach((nodeId, millis) -> {
             millis.sort(null);
+            List<Long> wait = waits.get(nodeId);
+            wait.sort(null);
             long sum = 0;
             for (long m : millis) sum += m;
             out.add(new NodeStats(nodeId, nameOf.apply(nodeId), millis.size(), (double) sum / millis.size(),
-                    percentile(millis, 50), percentile(millis, 95), millis.getLast()));
+                    percentile(millis, 50), percentile(millis, 95), millis.getLast(),
+                    percentile(wait, 50), percentile(wait, 95)));
         });
         out.sort(Comparator.comparingLong(NodeStats::p95Millis).reversed());
         return out;

@@ -1104,13 +1104,14 @@ public final class JdbcStorage implements Storage {
             }
             appendVersions(pick, versions);
             pick.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
-            String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=? " +
-                    "WHERE id IN (" + pick + ") RETURNING *";
+            String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=?," +
+                    "started_at=?,finished_at=NULL WHERE id IN (" + pick + ") RETURNING *";
             try (PreparedStatement p = ps(sql)) {
                 int idx = 1;
                 p.setString(idx++, workerId);   // SET lease_owner
                 p.setLong(idx++, leaseUntil);   // SET lease_expires
                 p.setLong(idx++, now);          // SET updated_at
+                p.setLong(idx++, now);          // SET started_at: the step's clock starts when a worker takes it
                 p.setLong(idx++, now);          // WHERE available_at<=?
                 if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
                 idx = bindVersions(p, idx, versions);
@@ -1148,17 +1149,20 @@ public final class JdbcStorage implements Storage {
 
             List<Token> claimed = new ArrayList<>();
             try (PreparedStatement upd = ps("UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?," +
-                    "updated_at=? WHERE id=? AND status='READY'")) {
+                    "updated_at=?,started_at=?,finished_at=NULL WHERE id=? AND status='READY'")) {
                 for (Token t : candidates) {
                     if (claimed.size() >= max) break;
                     upd.setString(1, workerId);
                     upd.setLong(2, leaseUntil);
                     upd.setLong(3, now);
-                    upd.setString(4, t.id);
+                    upd.setLong(4, now);
+                    upd.setString(5, t.id);
                     if (upd.executeUpdate() == 1) {
                         t.status = TokenStatus.RUNNING;
                         t.leaseOwner = workerId;
                         t.leaseExpiresAt = leaseUntil;
+                        t.startedAt = now;
+                        t.finishedAt = null;
                         t.updatedAt = now;
                         claimed.add(t);
                     }
@@ -1470,13 +1474,16 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
             List<Rows.StepDuration> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at FROM wf_token "
+            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
                     + "WHERE workflow=? AND version=? AND status='DONE' AND finished_at > ? AND started_at IS NOT NULL "
                     + "ORDER BY finished_at DESC LIMIT ?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setLong(3, since); p.setInt(4, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
-                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2))));
+                        long seq = rs.getLong(5);
+                        boolean observed = !rs.wasNull();
+                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2)),
+                                observed ? 0 : Math.max(0, rs.getLong(2) - rs.getLong(4))));
                     }
                 }
             } catch (SQLException ex) { throw wrap(ex); }

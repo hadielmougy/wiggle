@@ -43,8 +43,10 @@ abstract class BaseRunningMode implements RunningMode {
         return nodeBehaviourFactory;
     }
 
-    /** The step's own clock, when its reporter sent one; a step reported untimed leaves both null. */
+    /** The step's own clock, when its reporter sent one; a step reported untimed keeps the
+     *  server's stamps (claimed, then settled). */
     static void stamp(Token t, StepInput step) {
+        if (step.startedAt() == null || step.finishedAt() == null) return;
         t.startedAt = step.startedAt();
         t.finishedAt = step.finishedAt();
     }
@@ -99,6 +101,13 @@ abstract class BaseRunningMode implements RunningMode {
             StepInput step = steps.get(i);
             Node node = def.node(current.nodeId);
             requireMatchingNode(current, step);
+            // A step flushed together with others ran somewhere inside the batch: the server's
+            // stamps would say it took no time at all, so without the worker's own clock it is untimed.
+            if (steps.size() > 1 && (step.startedAt() == null || step.finishedAt() == null)) {
+                current.startedAt = null;
+                current.finishedAt = null;
+            }
+            stamp(current, step);
             NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
             Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
             StepReport report = StepReport.of(step);

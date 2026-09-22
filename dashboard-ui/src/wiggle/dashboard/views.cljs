@@ -408,9 +408,11 @@
     [:section.panel
      [:h2 "Step durations" [:span.count (count nodes)]]
      [:p.muted
-      "How long each step takes where it runs, over the newest timed steps in the window: observed"
-      " runs and locally-chained workers report a step's own clock. Slowest p95 first, so the top"
-      " row is the bottleneck; the diagram rings each step by its share of that p95."]
+      "How long each step takes, over the newest timed steps in the window: a worker-run step is"
+      " timed by the server from claim to completion and also shows how long it waited to be claimed,"
+      " so a slow step and a starved one read differently; an observed step carries its own clock and"
+      " waits for nothing. Slowest p95 first, so the top row is the bottleneck; the diagram rings each"
+      " step by its share of that p95."]
      (cond
        (empty? (:workflow perf)) [:div.empty "choose a workflow to see its step durations"]
        (nil? stats) [:div.empty "loading…"]
@@ -420,6 +422,7 @@
         (when graph-ok [diagram/diagram graph {:heat heat :subs subs}])
         [:table
          [:thead [:tr [:th "step"] [:th "runs"] [:th "mean"] [:th "p50"] [:th "p95"] [:th "max"]
+                  [:th {:title "time from ready to claimed by a worker"} "wait p50 / p95"]
                   [:th {:style {:width 180}} "share of slowest p95"]]]
          [:tbody
           (for [n nodes]
@@ -431,6 +434,9 @@
              [:td (ms (:p50Millis n))]
              [:td {:style {:color (diagram/heat-colour (get heat (:nodeId n)))}} (ms (:p95Millis n))]
              [:td.muted (ms (:maxMillis n))]
+             [:td.muted (if (pos? (or (:waitP95Millis n) 0))
+                          (str (ms (:waitP50Millis n)) " / " (ms (:waitP95Millis n)))
+                          "—")]
              [:td {:style {:width 180 :min-width 180}}
               [:div.bar [:span {:style {:width (str (* 100 (get heat (:nodeId n) 0)) "%")
                                         :background (diagram/heat-colour (get heat (:nodeId n)))}}]]]])]]])]))

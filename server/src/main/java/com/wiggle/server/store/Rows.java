@@ -72,9 +72,9 @@ public final class Rows {
          *  which is what tells the two apart. */
         public Long compSeq;
         public String lastError;
-        /** When the step ran where it ran, as its reporter measured it: a locally-chained or
-         *  observed step carries its own clock, since the server only sees the flush. Null when
-         *  the step was not timed. */
+        /** When the step ran. A worker-run step is stamped by the server: claimed, then settled.
+         *  A locally-chained or observed step carries its own clock instead, since the server only
+         *  sees the flush. Null when the step was not timed. */
         public Long startedAt;
         public Long finishedAt;
         /** Observed steps only: the order they were reported in, which breaks ties between steps
@@ -182,6 +182,7 @@ public final class Rows {
     public record Anomaly(String id, String instanceId, String workflow, int version, String kind,
                           String expectedNode, String reportedNode, String detail, long at) { }
 
-    /** One settled, timed step: what the duration statistics are computed from. */
-    public record StepDuration(String nodeId, long millis) { }
+    /** One settled, timed step: how long it ran, and how long it waited to be claimed (zero for a
+     *  step reported after the fact, which was never queued). What the statistics are computed from. */
+    public record StepDuration(String nodeId, long millis, long waitMillis) { }
 }
