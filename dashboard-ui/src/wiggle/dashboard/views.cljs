@@ -48,7 +48,7 @@
      [:div.tabs
       (for [[k label] [[:instances "Instances"] [:workflows "Workflows"]
                        [:schedules "Schedules"] [:signals "Signals"]
-                       [:backlog "Backlog"]]]
+                       [:backlog "Backlog"] [:performance "Performance"]]]
         ^{:key k}
         [:button {:class (when (= k tab) "active")
                   :on-click #(st/set-tab! k)} label])]
@@ -376,6 +376,114 @@
                    ^{:key (str (:workflow s) ":" (:version s) ":" (:queue s))}
                    [backlog-row s])]]])]))
 
+;; ---------------------------------------------------------------- performance tab
+
+(defn- ms [n]
+  (cond (nil? n) "—"
+        (>= n 1000) (str (.toFixed (/ n 1000) 2) " s")
+        :else (str (Math/round n) " ms")))
+
+(defn perf-toolbar []
+  (let [{:keys [workflow window]} (:perf @db)]
+    [:div.toolbar
+     [:select {:value workflow
+               :on-change #(do (st/set-perf! :workflow (.. % -target -value)) (act/load-perf!))}
+      [:option {:value ""} "choose a workflow…"]
+      (for [w (:workflows @db)] ^{:key w} [:option {:value w} w])]
+     [:select {:value window :title "window"
+               :on-change #(do (st/set-perf! :window (.. % -target -value)) (act/load-stats!))}
+      (for [[v label] [["15m" "last 15 minutes"] ["1h" "last hour"] ["24h" "last 24 hours"]
+                       ["7d" "last 7 days"] ["all" "everything sampled"]]]
+        ^{:key v} [:option {:value v} label])]
+     [:span.spacer]
+     [:button.ghost {:on-click act/load-perf! :title "refresh"} "↻"]]))
+
+(defn stats-panel []
+  (let [{:keys [stats graph graph-for perf]} @db
+        nodes (:nodes stats)
+        top (or (:p95Millis (first nodes)) 0)
+        heat (into {} (for [n nodes] [(:nodeId n) (if (pos? top) (/ (:p95Millis n) top) 0)]))
+        subs (into {} (for [n nodes] [(:nodeId n) (str "p95 " (ms (:p95Millis n)) " · n=" (:count n))]))
+        graph-ok (and graph (= graph-for (:workflow perf)))]
+    [:section.panel
+     [:h2 "Step durations" [:span.count (count nodes)]]
+     [:p.muted
+      "How long each step takes where it runs, over the newest timed steps in the window: observed"
+      " runs and locally-chained workers report a step's own clock. Slowest p95 first, so the top"
+      " row is the bottleneck; the diagram rings each step by its share of that p95."]
+     (cond
+       (empty? (:workflow perf)) [:div.empty "choose a workflow to see its step durations"]
+       (nil? stats) [:div.empty "loading…"]
+       (empty? nodes) [:div.empty "no timed steps in this window"]
+       :else
+       [:<>
+        (when graph-ok [diagram/diagram graph {:heat heat :subs subs}])
+        [:table
+         [:thead [:tr [:th "step"] [:th "runs"] [:th "mean"] [:th "p50"] [:th "p95"] [:th "max"]
+                  [:th {:style {:width 180}} "share of slowest p95"]]]
+         [:tbody
+          (for [n nodes]
+            ^{:key (:nodeId n)}
+            [:tr {:style {:cursor "default"}}
+             [:td [:strong (or (:name n) (:nodeId n))] " " [:code (:nodeId n)]]
+             [:td (:count n)]
+             [:td.muted (ms (:meanMillis n))]
+             [:td (ms (:p50Millis n))]
+             [:td {:style {:color (diagram/heat-colour (get heat (:nodeId n)))}} (ms (:p95Millis n))]
+             [:td.muted (ms (:maxMillis n))]
+             [:td {:style {:width 180 :min-width 180}}
+              [:div.bar [:span {:style {:width (str (* 100 (get heat (:nodeId n) 0)) "%")
+                                        :background (diagram/heat-colour (get heat (:nodeId n)))}}]]]])]]])]))
+
+(def ^:private anomaly-hint
+  {"OUT_OF_ORDER" "a step ran where another was due; the run was resynchronised at the reported step"
+   "UNKNOWN_NODE" "a step the graph has no node for; skipped"
+   "AFTER_END"    "steps reported after the instance had already ended"
+   "INCOMPLETE"   "the run closed before reaching END; the instance was failed"
+   "DUPLICATE"    "a step already run ran again outside any loop: at-least-once delivery, most likely; ignored"
+   "STALLED"      "no report arrived for longer than the stall threshold; judged as it stood and failed"})
+
+(defn anomalies-panel []
+  (let [{:keys [anomalies perf]} @db]
+    [:section.panel
+     [:h2 "Anomalies" [:span.count (count anomalies)]]
+     [:p.muted
+      "Where an observed run departed from its declared topology. The server records these instead"
+      " of refusing the report, so the rest of the run still yields its timings."]
+     (if-not (seq anomalies)
+       [:div.empty (if (empty? (:workflow perf))
+                     "no anomalies recorded"
+                     (str "no anomalies recorded for " (:workflow perf)))]
+       [:table
+        [:thead [:tr [:th "kind"] [:th "workflow"] [:th "instance"] [:th "expected"] [:th "reported"]
+                 [:th "detail"] [:th "when"]]]
+        [:tbody
+         (for [a anomalies]
+           ^{:key (str (:instanceId a) ":" (:at a) ":" (:kind a))}
+           [:tr {:title (get anomaly-hint (:kind a))
+                 :on-click #(do (act/load-detail! (:instanceId a)) (st/open-window! :detail))}
+            [:td [:span.badge.FAILED (:kind a)]]
+            [:td (:workflow a) [:span.muted " v" (:version a)]]
+            [:td [:code (:instanceId a)]]
+            [:td [:code (:expectedNode a)]]
+            [:td [:code (:reportedNode a)]]
+            [:td.muted {:title (:detail a)} (:detail a)]
+            [:td.muted (u/ago (:at a)) " ago"]])]])]))
+
+(defn performance-tab []
+  [:div
+   [:section.panel
+    [:h2 "Performance"]
+    [perf-toolbar]]
+   [stats-panel]
+   [anomalies-panel]
+   (when (= :detail (get-in @db [:window :kind]))
+     (let [i (get-in @db [:detail :instance])]
+       [floating-window {:title [:span "Detail"
+                                 (when i [:span.muted {:style {:fontWeight 400}} " · " [:code (:id i)]])]
+                         :on-close st/close-window!}
+        [detail-body]]))])
+
 ;; ---------------------------------------------------------------- root
 
 (defn toast []
@@ -391,5 +499,6 @@
       :workflows [workflows-tab]
       :schedules [schedules-tab]
       :signals   [signals-tab]
-      :backlog   [backlog-tab])]
+      :backlog   [backlog-tab]
+      :performance [performance-tab])]
    [toast]])

@@ -50,6 +50,13 @@
 
 (defn instance [id] (GET (str "/api/instances/" (enc id))))
 
+(defn stats [workflow since]
+  (GET (str "/api/stats?workflow=" (enc workflow) "&since=" (or since 0))))
+
+(defn anomalies [workflow limit]
+  (GET (str "/api/anomalies?limit=" (or limit 200)
+            (when (seq workflow) (str "&workflow=" (enc workflow))))))
+
 (defn cancel-instance [id reason]
   (POST (str "/api/instances/" (enc id) "/cancel"
              (when (seq reason) (str "?reason=" (enc reason)))) nil))

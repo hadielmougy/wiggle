@@ -1,6 +1,8 @@
 package com.wiggle.console;
 
+import com.wiggle.core.AnomalyView;
 import com.wiggle.core.InstanceView;
+import com.wiggle.core.NodeStats;
 
 import java.time.Duration;
 import java.util.List;
@@ -41,6 +43,16 @@ public interface DashboardData {
      * else: the instance reads RUNNING and the token reads READY, which is what healthy looks like.
      */
     List<BacklogView> backlogCoverage(int limit);
+
+    /**
+     * Per-node duration statistics for a workflow (null or zero version = latest) over its newest
+     * {@code sample} timed steps finished after {@code since}; slowest p95 first. Steps are timed
+     * where they ran, so this covers OBSERVED workflows and locally-chained runs alike.
+     */
+    List<NodeStats> stepStats(String workflow, Integer version, long since, int sample);
+
+    /** Departures of observed runs from their topology, newest first; either filter may be null. */
+    List<AnomalyView> anomalies(String workflow, String instanceId, int limit);
 
     List<ScheduleView> schedules();
 

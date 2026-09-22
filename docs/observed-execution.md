@@ -106,7 +106,28 @@ duration sample, `wf_instance.settle_at` (nullable, observed runs only) with its
 statistics are computed in the server over the newest N timed `DONE` tokens of a version
 (default 10 000), so no percentile SQL has to be portable.
 
-## 6. Reporting side: the `observe` module
+## 6. Console
+
+The ops console's **Performance** tab reads both RPCs. Pick a workflow and a window (last 15
+minutes to everything sampled): the diagram rings each step by its share of the slowest p95 and
+labels it with p95 and run count, the table below ranks steps by p95 with a share bar, and the
+anomaly list shows every departure newest first; clicking one opens the instance. Under a
+coordinator the console asks every cell and merges: counts add up, means are weighted, and a
+merged row keeps the worst cell's p50 and p95, since percentiles cannot be recombined exactly.
+
+### Try it
+
+```sh
+./gradlew :example:seedObserved                                          # terminal 1: a server + sixty reported runs
+WIGGLE_URL=localhost:8080 ./gradlew :console:run                         # terminal 2, then http://localhost:8090
+```
+
+Pick `checkout` on the Performance tab: `reserve` rings red as the slowest step, and the
+anomaly list shows an out-of-order run, a run ended before END, a duplicated step and a step
+that threw. On the Instances tab, search the correlation id `order-2000` to trace the
+out-of-order run.
+
+## 7. Reporting side: the `observe` module
 
 `sh.wiggle:wiggle-observe` is its own module so the client API stays as it is: an observed
 service publishes a topology and reports against it, and needs neither a worker nor the
