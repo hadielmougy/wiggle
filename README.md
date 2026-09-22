@@ -91,8 +91,12 @@ inspected, traced and versioned like any other row in your database.
   (PostgreSQL, or in-memory for dev). Embed the server in your JVM for tests, or run it as one
   process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
 - 🖥 **Operable from day one** — a web **ops console** (live trace of every instance over the
-  workflow diagram, cancel, deliver signals, schedules, search by instance or correlation id),
-  `/healthz` probes, queue-lag monitoring, memory admission control.
+  workflow diagram, cancel, deliver signals, schedules, search by instance or correlation id,
+  per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
+- 🔍 **Governs steps you run yourself, too** — `OBSERVED` mode: your services report the steps
+  they completed against a published topology, and the server checks every run for conformance
+  (out of order, duplicate, incomplete, stalled) and ranks the bottlenecks — no worker, no
+  dispatch, nothing waits on the server.
 
 In one picture — a single `orders` instance whose steps run on **different microservices**,
 routed by each step's **queue**. The server keeps the durable state; each service just pulls the
@@ -188,9 +192,49 @@ Live instance trace over the workflow diagram, cancel, deliver signals, schedule
 **instance id or correlation id**. Optional login with an operator account and a **read-only
 viewer** account. Server nodes themselves serve no UI — just a `/healthz` probe for Kubernetes.
 
+![The console's instance detail: an onboarding run traced over its own diagram — fork, join, a sub-workflow, and a signal step waiting on manager approval, with the token table and an inline deliver button.](docs/img/console-instance-trace.png)
+
+The **Performance** tab reads the same timings for every execution mode: each step's p50/p95
+by the handler's own clock, how long it waited to be claimed, the slowest step ringed on the
+diagram, and the anomalies of observed runs ([§2.4](#24-observed-execution--governing-steps-you-run-yourself)).
+
+![The console's Performance tab for the checkout flow: the diagram rings reserve red as the slowest p95, the table ranks the five steps by p95 with mean, p50, max and queue wait, and the anomaly list below names a stalled run, two incomplete runs, an out-of-order run and a duplicated step.](docs/img/console-performance.png)
+
 ```bash
 WIGGLE_URL=localhost:8080 ./gradlew :console:run    # → http://localhost:8090
+./gradlew :example:seedDashboard                    # a seeded server to point it at (:8080)
+./gradlew :example:seedObserved                     # …or one with sixty observed checkout runs
 ```
+
+### 2.4 Observed execution — governing steps you run yourself
+
+Not every process wants a workflow engine in its call path. In **`OBSERVED`** mode the server
+dispatches nothing: your services run their own steps, on their own threads, and report each
+completed step with a **correlation key** and its **start and finish**. The server appends
+reports to the run the key names, and once the run settles it judges it against the declared
+topology, records every departure as an **anomaly** rather than refusing it, and keeps the
+timings that feed the Performance tab.
+
+```java
+FlowSpec spec = FlowSpec.define("checkout", 1, Order.class, CheckoutSteps.class, (f, s) -> f
+        .thenApply(s::validate)
+        .thenFilter(s::inStock)
+        .thenApply(s::charge));   // no execution mode: an observer stamps OBSERVED when it publishes
+
+try (Observer observer = Observer.connect("localhost:8080")) {
+    ObservedFlow checkout = observer.publish(spec);        // stamps OBSERVED, registers, validates names
+
+    checkout.record(orderId, "validate", startedAt, finishedAt);
+    checkout.recordPredicate(orderId, "inStock", true, startedAt, finishedAt);
+    checkout.recordError(orderId, "charge", "CardDeclined", startedAt, finishedAt);
+}
+```
+
+The reporter lives in its own module, `sh.wiggle:wiggle-observe`, and never blocks the caller:
+reports queue on one flusher thread and travel in batches. Several services can report steps of
+the same run, keyed by the same correlation id, and the server pieces the run together.
+
+<sub>Anomaly kinds, settle rules, and the wire protocol → **[docs/observed-execution.md](docs/observed-execution.md)**</sub>
 
 ---
 
@@ -567,6 +611,14 @@ Where it's going — the honest list:
       separation on the control plane itself; SSO for the console.
 - [x] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
       stops; it does not roll back).
+- [x] **Observed execution** — a published topology your services report against; conformance
+      anomalies and per-step latency without a worker in the path.
+- [x] **Worker-reported timings** — every execution mode lands in the same Performance view,
+      by the handler's own clock, with queue wait.
+- [ ] **Observed-run ingest beyond the API** — event-broker adapters (correlation in Kafka
+      headers), method instrumentation, and OpenTelemetry spans as reports.
+- [ ] **Worker-mode anomalies** — retry exhausted, lease reclaimed, and loop budget hit,
+      recorded next to the observed kinds.
 - [ ] **Buffered signals** — deliver-before-wait semantics as an option (today a signal is
       rejected unless the instance is already waiting on it).
 - [ ] **Richer wire tokens** — queue / lease-expiry / updated-at on the gRPC token detail.

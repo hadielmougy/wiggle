@@ -408,11 +408,10 @@
     [:section.panel
      [:h2 "Step durations" [:span.count (count nodes)]]
      [:p.muted
-      "How long each step takes, over the newest timed steps in the window: a worker-run step is"
-      " timed by the server from claim to completion and also shows how long it waited to be claimed,"
-      " so a slow step and a starved one read differently; an observed step carries its own clock and"
-      " waits for nothing. Slowest p95 first, so the top row is the bottleneck; the diagram rings each"
-      " step by its share of that p95."]
+      "How long each step takes by the handler's own clock, over the newest timed steps in the"
+      " window. A worker-run step also shows how long it waited to be claimed, so a slow step and a"
+      " starved one read differently; an observed step waits for nothing. Slowest p95 first, so the"
+      " top row is the bottleneck; the diagram rings each step by its share of that p95."]
      (cond
        (empty? (:workflow perf)) [:div.empty "choose a workflow to see its step durations"]
        (nil? stats) [:div.empty "loading…"]
