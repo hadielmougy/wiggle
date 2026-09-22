@@ -540,9 +540,19 @@ public final class WiggleFlow<T> {
         return record(null, b -> b.defaultQueue(queue));
     }
 
-    /** Sets how this workflow's steps are driven. Part of the definition's content hash. */
-    public WiggleFlow<T> execution(ExecutionMode mode) {
-        return record(null, b -> b.execution(mode));
+    /** The server advances one node per worker claim; see {@link GraphBuilder#executeInServer}. */
+    public WiggleFlow<T> executeInServer() {
+        return record(null, GraphBuilder::executeInServer);
+    }
+
+    /** A worker chains steps locally, committing each; see {@link GraphBuilder#executeInLocalSync}. */
+    public WiggleFlow<T> executeInLocalSync() {
+        return record(null, GraphBuilder::executeInLocalSync);
+    }
+
+    /** A worker chains and batches steps locally; see {@link GraphBuilder#executeInLocalAsync}. */
+    public WiggleFlow<T> executeInLocalAsync() {
+        return record(null, GraphBuilder::executeInLocalAsync);
     }
 
     /**

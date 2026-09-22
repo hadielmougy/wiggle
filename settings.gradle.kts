@@ -10,6 +10,7 @@ include(
     "jdbc",
     "postgres",
     "client",
+    "observe",
     "client-all",
     "bom",
     "dist",

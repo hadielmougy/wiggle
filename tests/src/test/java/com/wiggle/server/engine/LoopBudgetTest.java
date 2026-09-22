@@ -98,7 +98,7 @@ class LoopBudgetTest {
         FlowSpec bp = FlowSpec.define("loop-wf", 1, Map.class, LoopSteps.class, (f, s) -> f
                 .repeatWhile(s::forever, 7, b -> b.thenApply(s::spin))
                 .thenApply(s::after)
-                .execution(ExecutionMode.LOCAL_ASYNC));
+                .executeInLocalAsync());
         InstanceView v = run(bp, Duration.ofSeconds(20));
         assertEquals("FAILED", v.status());
         assertTrue(v.error().contains("exceeded its budget"), v.error());

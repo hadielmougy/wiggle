@@ -87,7 +87,7 @@ class CheckpointTest {
         CountDownLatch releaseB = new CountDownLatch(1);
 
         FlowSpec bp = FlowSpec.define("cp-flush", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_ASYNC)
+                .executeInLocalAsync()
                 .thenApply(s::a)
                 .checkpoint()
                 .thenApply(s::b)
@@ -122,7 +122,7 @@ class CheckpointTest {
         CountDownLatch releaseB = new CountDownLatch(1);
 
         FlowSpec bp = FlowSpec.define("cp-nobuf", 1, Map.class, OneStep.class, (f, s) -> f
-                .execution(ExecutionMode.LOCAL_ASYNC)
+                .executeInLocalAsync()
                 .thenApply(s::a)   // no checkpoint
                 .thenApply(s::b)
                 .thenApply(s::c));

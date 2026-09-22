@@ -72,7 +72,7 @@ class AdvanceManyBench {
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 60_000);
             FlowSpec bp = FlowSpec.define("amb-chain", 1, Map.class, ThreeSteps.class, (f, s) -> f
-                    .execution(ExecutionMode.LOCAL_ASYNC)
+                    .executeInLocalAsync()
                     .thenApply(s::x)
                     .thenApply(s::y)
                     .thenApply(s::z));

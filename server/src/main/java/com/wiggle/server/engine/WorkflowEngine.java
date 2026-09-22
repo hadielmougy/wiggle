@@ -7,6 +7,7 @@ import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Rows.TokenStatus;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -227,8 +228,18 @@ public final class WorkflowEngine {
         return false;
     }
 
-    /** One locally-executed step reported by a worker: a task merge, or a predicate value. */
-    public record StepInput(String nodeId, Object merge, Boolean predicateValue) {}
+    /**
+     * One step reported after it ran: a task's complete next context, a predicate's value, or the
+     * error it threw (observed runs only). {@code startedAt}/{@code finishedAt} are the step's own
+     * clock in epoch millis, or null when the reporter did not time it.
+     */
+    public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
+                            Long startedAt, Long finishedAt) {
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue) {
+            this(nodeId, merge, predicateValue, null, null, null);
+        }
+    }
 
     /** The result of applying a reported run: the instance's status, renewed lease, and next token. */
     public record AdvanceOutcome(String instanceStatus, long leaseExpiresAt, String nextTaskId) {}
@@ -329,6 +340,121 @@ public final class WorkflowEngine {
             }
         }
         return results;
+    }
+
+    /** How long after END, or a final report, an observed run waits for stragglers before it is judged. */
+    private final long observeSettleMillis = ServerEnv.envLong("wiggle.observe.settleMillis", "WIGGLE_OBSERVE_SETTLE_MILLIS", 5_000);
+    /** How long an observed run may go without a report before it is judged as stalled. */
+    private final long observeStallMillis = ServerEnv.envLong("wiggle.observe.stallMillis", "WIGGLE_OBSERVE_STALL_MILLIS", 600_000);
+
+    /**
+     * Appends a run of steps an instrumented application already executed (OBSERVED execution)
+     * to the run {@code correlationId} names, creating it on first sight; a blank key mints one,
+     * for a run only this reporter will ever report. Nothing is judged here -- the settle sweep
+     * does that once the run has gone quiet -- so the only refusals are a workflow that is not
+     * OBSERVED or does not exist.
+     */
+    public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
+                                 String reporter, List<StepInput> steps, boolean fin) {
+        if (steps.isEmpty() && !fin) throw EngineException.badRequest("observe requires at least one step");
+        if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
+        String key = correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId;
+        return transactions.inTx(tx -> {
+            Instance inst;
+            if (instanceId != null && !instanceId.isBlank()) {
+                inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+                ObservedRunningMode.requireObserved(
+                        definitions.executionMode(tx, inst.workflow, inst.version), inst.workflow + ":" + inst.version);
+            } else {
+                inst = instances.observedRun(tx, workflow, version, key);
+            }
+            return modeFactory.observed().observe(new ObserveRunContext(inst, reporter, steps, fin, tx),
+                    observeSettleMillis, observeStallMillis);
+        });
+    }
+
+    /** Leader duty: judge observed runs whose settle time has passed. */
+    public int settleObservedRuns(int max) {
+        List<Instance> due = transactions.read(tx -> tx.dueSettle(System.currentTimeMillis(), max));
+        int done = 0;
+        for (Instance probe : due) {
+            try {
+                transactions.inTxVoid(tx -> settleObservedRun(tx, probe.id));
+                done++;
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "settle of observed run " + probe.id + " failed: " + e);
+            }
+        }
+        return done;
+    }
+
+    private void settleObservedRun(Tx tx, String id) {
+        Instance inst = tx.lockInstance(id).orElse(null);
+        long now = System.currentTimeMillis();
+        if (inst == null || !InstanceState.of(inst.status).running() || inst.settleAt == null || inst.settleAt > now) return;
+        WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
+                .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
+        boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
+        modeFactory.observed().settle(tx, inst, def, idle, now);
+        LOG.log(System.Logger.Level.DEBUG, () -> "settled observed run " + inst.id + " -> " + inst.status
+                + (idle ? " (idle)" : ""));
+    }
+
+    /** One run of an observe batch: exactly the arguments of {@link #observe}. */
+    public record ObservedRun(String workflow, Integer version, String instanceId, String correlationId,
+                              String reporter, List<StepInput> steps, boolean fin) {}
+
+    /** A run's fate in an observe batch: its result, or the status and message it would have thrown. */
+    public record ObserveOutcome(ObserveResult result, Integer errorStatus, String error) {
+
+        public boolean ok() {
+            return result != null;
+        }
+    }
+
+    /**
+     * Applies N observed runs, each in its own transaction, and answers every one in submission
+     * order. Observation needs no atomicity across runs: a run that is refused is refused alone,
+     * and the ones around it stand.
+     */
+    public List<ObserveOutcome> observeMany(List<ObservedRun> runs) {
+        List<ObserveOutcome> out = new ArrayList<>(runs.size());
+        for (ObservedRun r : runs) {
+            try {
+                out.add(new ObserveOutcome(observe(r.workflow(), r.version(), r.instanceId(), r.correlationId(),
+                        r.reporter(), r.steps(), r.fin()), null, null));
+            } catch (EngineException e) {
+                out.add(new ObserveOutcome(null, e.statusCode(), e.getMessage()));
+            } catch (RuntimeException e) {
+                out.add(new ObserveOutcome(null, 500, e.toString()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Per-node duration statistics for one workflow version over its newest {@code sample} timed
+     * steps that finished after {@code since}; a null or zero version means the latest. Slowest
+     * 95th percentile first, so the head of the list is the bottleneck.
+     */
+    public List<NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
+        WorkflowDefinition def = (version == null || version <= 0
+                ? definitions.latest(workflow) : definitions.lookup(workflow, version))
+                .orElseThrow(() -> EngineException.notFound("workflow '" + workflow + "'"));
+        List<Rows.StepDuration> durations = transactions.read(
+                tx -> tx.stepDurations(def.name(), def.version(), since, sample));
+        return StepStatistics.summarise(durations, id -> {
+            Node n = def.nodes().get(id);
+            return n == null ? id : n.name();
+        });
+    }
+
+    /** Departures of observed runs from their topology, newest first; either filter may be null. */
+    public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
+        return transactions.read(tx -> tx.anomalies(workflow, instanceId, limit)).stream()
+                .map(a -> new AnomalyView(a.instanceId(), a.workflow(), a.version(), a.kind(),
+                        a.expectedNode(), a.reportedNode(), a.detail(), a.at()))
+                .toList();
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */

@@ -442,10 +442,29 @@ final class GraphBuilder {
     }
 
     /**
-     * Sets how this workflow's steps are driven (default {@link ExecutionMode#DEFAULT}). The mode is
-     * part of the definition's content hash, so an in-flight instance keeps the mode it started on.
+     * The server advances one node per worker claim: one step, one commit, the reference behaviour.
+     * A definition that names no mode defers to the server's default, which is this unless
+     * configured otherwise. The mode is part of the definition's content hash, so an in-flight
+     * instance keeps the mode it started on.
      */
-    public GraphBuilder execution(ExecutionMode mode) {
+    public GraphBuilder executeInServer() {
+        return mode(ExecutionMode.SERVER);
+    }
+
+    /** A worker chains consecutive same-queue steps locally, committing each before the next. */
+    public GraphBuilder executeInLocalSync() {
+        return mode(ExecutionMode.LOCAL_SYNC);
+    }
+
+    /**
+     * A worker chains steps locally and commits them in batches at handback. Highest throughput;
+     * a buffered step may re-run after a crash, so steps must be idempotent (see {@link #checkpoint}).
+     */
+    public GraphBuilder executeInLocalAsync() {
+        return mode(ExecutionMode.LOCAL_ASYNC);
+    }
+
+    GraphBuilder mode(ExecutionMode mode) {
         pipeline.executionMode(mode);
         return this;
     }

@@ -1,5 +1,6 @@
 package com.wiggle.order;
 
+
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
@@ -151,7 +152,11 @@ public final class Benchmark {
         }
         return FlowSpec.define(name, 1, Map.class, BenchSteps.class, (f, s) -> {
             List<FlowFn<Map, Map>> hops = hops(s);
-            WiggleFlow<Map> chain = f.execution(mode);
+            WiggleFlow<Map> chain = switch (mode) {
+                case LOCAL_SYNC  -> f.executeInLocalSync();
+                case LOCAL_ASYNC -> f.executeInLocalAsync();
+                default          -> f.executeInServer();
+            };
             for (int i = 0; i < steps - 1; i++) {
                 chain = chain.thenApply(hops.get(i));
             }

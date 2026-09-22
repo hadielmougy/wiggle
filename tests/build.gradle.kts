@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":server"))
 
     testImplementation(project(":client"))
+    testImplementation(project(":observe"))
     testImplementation(project(":server"))
     // The coordinator control plane (moved out of :server): its runtime + SPI (spi comes transitively).
     testImplementation(project(":coordinator"))

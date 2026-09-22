@@ -61,13 +61,15 @@ configure(subprojects.filter { it.name != "bom" }) {
 // pointing at sh.wiggle:election, which was never uploaded -- so every consumer of
 // wiggle-server (and of wiggle-jdbc / wiggle-postgres, which bring it transitively) failed to
 // resolve. An unpublished project dependency of a published module is always a broken POM.
-val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postgres", "bom",
+val publishedModules = setOf("core", "proto", "client", "observe", "server", "jdbc", "postgres", "bom",
         "election", "placement")
 
 val moduleDescriptions = mapOf(
     "core" to "Wiggle shared model: JSON, the compiled state-machine graph, retry policy, wire records.",
     "proto" to "Wiggle gRPC/protobuf stubs for the control-plane wire protocol.",
     "client" to "Wiggle client: the flow-authoring DSL, imperative builder, worker runtime, and cell resolver.",
+    "observe" to "Wiggle observe: reports the steps a service ran, by run key, step name and times, to a server "
+            + "running the workflow in OBSERVED mode.",
     "server" to "Wiggle server: the durable state-machine engine, cluster manager, cell coordinator, and control-plane API.",
     "jdbc" to "Wiggle JDBC storage core: the dialect-aware, HikariCP-pooled store shared by every database module.",
     "postgres" to "Wiggle PostgreSQL storage: PostgreSQL and H2 dialects for multi-node clustering.",

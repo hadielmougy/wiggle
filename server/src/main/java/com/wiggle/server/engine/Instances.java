@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.Doc;
-
+import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.server.store.Rows.Instance;
@@ -71,6 +71,38 @@ final class Instances {
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
         pump.drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
         return inst.id;
+    }
+
+    /**
+     * The observed run {@code key} names, locked: found when any reporter has reported it before,
+     * created otherwise. The id is derived from the workflow and the key -- a key names one run of
+     * a workflow, across its versions -- so two reporters creating it at once collide on the primary
+     * key and the loser reads the winner's row. The definition must be {@link ExecutionMode#OBSERVED}.
+     */
+    Instance observedRun(Tx tx, String workflow, Integer version, String key) {
+        int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
+                () -> EngineException.notFound("workflow '" + workflow + "'"));
+        ObservedRunningMode.requireObserved(definitions.executionMode(tx, workflow, v), workflow + ":" + v);
+        String id = idMinter.forKey(workflow, key);
+        Instance found = tx.lockInstance(id).orElse(null);
+        if (found != null) return found;
+        long now = System.currentTimeMillis();
+        Instance inst = new Instance();
+        inst.id = id;
+        inst.workflow = workflow;
+        inst.version = v;
+        inst.correlationId = key;
+        inst.status = InstanceStatus.RUNNING;
+        inst.context = Doc.EMPTY;
+        inst.createdAt = now;
+        inst.updatedAt = now;
+        if (!tx.insertInstanceIfAbsent(inst)) {
+            return tx.lockInstance(id).orElseThrow(() -> EngineException.conflict("observed run " + id
+                    + " was created concurrently and is not yet visible; report it again"));
+        }
+        LOG.log(System.Logger.Level.DEBUG, () -> "observe: instance " + id + " of " + workflow + ":" + v
+                + " keyed by " + key);
+        return tx.lockInstance(id).orElse(inst);
     }
 
     /**

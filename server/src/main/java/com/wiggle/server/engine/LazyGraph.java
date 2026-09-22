@@ -2,6 +2,8 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Node;
 
+import java.util.Optional;
+
 public interface LazyGraph {
     String name();
 
@@ -12,4 +14,7 @@ public interface LazyGraph {
     String startNode();
 
     Node node(String id);
+
+    /** {@link #node}, for an id that may not be in the graph. */
+    Optional<Node> find(String id);
 }

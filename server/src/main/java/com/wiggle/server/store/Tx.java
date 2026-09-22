@@ -27,6 +27,12 @@ public interface Tx extends GraphStore {
     default boolean transactional() { return true; }
 
     void insertInstance(Instance instance);
+
+    /**
+     * {@code insertInstance} that leaves an existing row alone: false when the id was already
+     * taken. Two reporters can create the same keyed observed run at once; the loser re-reads.
+     */
+    boolean insertInstanceIfAbsent(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
 
@@ -115,6 +121,9 @@ public interface Tx extends GraphStore {
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
 
+    /** RUNNING observed runs whose settle time has passed, soonest first. */
+    List<Instance> dueSettle(long now, int max);
+
     /** Snapshot of the dispatchable backlog, for lag monitoring. */
     Rows.QueueDepth queueDepth(long now);
 
@@ -145,4 +154,16 @@ public interface Tx extends GraphStore {
 
     /** Cancels every active token of an instance, stamping {@code now} as their update time. */
     void cancelActiveTokens(String instanceId, long now);
+
+    void insertAnomaly(Rows.Anomaly anomaly);
+
+    /** Anomalies newest first, narrowed by workflow and/or instance when either is non-null. */
+    List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit);
+
+    /**
+     * The durations of the newest {@code max} settled, timed steps of one workflow version that
+     * finished after {@code since}. Bounded so the percentiles are computed over a sample the
+     * server can hold, not a table scan the console waits on.
+     */
+    List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max);
 }
