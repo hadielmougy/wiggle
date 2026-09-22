@@ -119,7 +119,8 @@ class ConformanceTest {
         assertEquals("keep", v.stoppedAt());
         Verdict failed = Conformance.judge(linear(), List.of(at("a", 1), at("b", 2), pred("keep", true, 3), threw("c", 4)));
         assertFalse(failed.completed(), "c threw: END was not reached");
-        assertEquals(List.of("INCOMPLETE"), kinds(failed));
+        assertEquals("c", failed.failedAt());
+        assertEquals(List.of(), kinds(failed), "a thrown step is the run's outcome, not a departure from its topology");
     }
 
     @Test @DisplayName("unknown steps are the arrival path's business: the judge skips them")

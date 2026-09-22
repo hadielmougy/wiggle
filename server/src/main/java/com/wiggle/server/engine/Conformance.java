@@ -45,7 +45,7 @@ final class Conformance {
      * The verdict: findings in order, whether a successful END was reached, the reason if an END
      * was reached that terminates the run as failed, and where the run stopped if it never got there.
      */
-    record Verdict(List<Finding> findings, boolean completed, String endReason, String stoppedAt) {
+    record Verdict(List<Finding> findings, boolean completed, String endReason, String stoppedAt, String failedAt) {
 
         boolean reachedEnd() {
             return completed || endReason != null;
@@ -67,6 +67,8 @@ final class Conformance {
         private final List<Finding> findings = new ArrayList<>();
         private boolean completed;
         private String endReason;
+        /** The first step that threw: the run's outcome, not a departure from its topology. */
+        private String failedAt;
 
         Walk(WorkflowDefinition def) {
             this.def = def;
@@ -79,7 +81,8 @@ final class Conformance {
             if (node == null || !node.isWorkerDispatched()) return;   // recorded at arrival as UNKNOWN_NODE
             if (frontier.remove(node.id())) {
                 consumed.add(node.id());
-                if (!s.failed()) release(successorOf(node, s.predicateValue()));   // a step that threw leads nowhere
+                if (s.failed()) { if (failedAt == null) failedAt = node.id(); }   // a step that threw leads nowhere
+                else release(successorOf(node, s.predicateValue()));
                 return;
             }
             String expected = expectation();
@@ -92,17 +95,18 @@ final class Conformance {
                     "expected " + expectedNames() + ", got " + node.name()));
             frontier.clear();
             consumed.add(node.id());
-            if (!s.failed()) release(successorOf(node, s.predicateValue()));
+            if (s.failed()) { if (failedAt == null) failedAt = node.id(); }
+            else release(successorOf(node, s.predicateValue()));
         }
 
         Verdict verdict() {
             String stoppedAt = null;
-            if (!completed && endReason == null) {
+            if (!completed && endReason == null && failedAt == null) {
                 stoppedAt = expectedNames();
                 findings.add(new Finding(ObservedRunningMode.INCOMPLETE, expectation(), null,
                         "run ended before END, at " + stoppedAt));
             }
-            return new Verdict(List.copyOf(findings), completed, endReason, stoppedAt);
+            return new Verdict(List.copyOf(findings), completed, endReason, stoppedAt, failedAt);
         }
 
         private static String successorOf(Node node, Boolean predicateValue) {

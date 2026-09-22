@@ -74,7 +74,9 @@ any order.
   the order it was reported in, which breaks ties between steps whose clocks agree to the
   millisecond. A step whose successor is END also writes the END token, which marks the run as
   closing. A step the graph does not know is recorded as `UNKNOWN_NODE` at once. A step reported
-  with an error fails the run on the spot (`<step>: <error>`).
+  with an error also marks the run closing; once it settles, the run fails with that step's error
+  (`<step>: <error>`), so another service's earlier steps that land a moment later still belong
+  to the run rather than reading as `AFTER_END`.
 - **Settling.** Every report pushes the run's settle time out by the stall threshold
   (`WIGGLE_OBSERVE_STALL_MILLIS`, default 10 min). Reaching END, or a report marked `final`,
   pulls it in to a short grace (`WIGGLE_OBSERVE_SETTLE_MILLIS`, default 5 s) so stragglers from
