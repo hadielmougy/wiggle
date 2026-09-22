@@ -338,7 +338,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 + " leaseOwner=" + req.getLeaseOwner());
         run(resp, () -> {
             Object result = req.hasResult() ? ProtoJson.fromValue(req.getResult()) : null;
-            engine.complete(req.getTaskId(), req.getLeaseOwner(), result);
+            engine.complete(req.getTaskId(), req.getLeaseOwner(), result,
+                    req.getStartedAt() == 0 ? null : req.getStartedAt(),
+                    req.getFinishedAt() == 0 ? null : req.getFinishedAt());
             return Ack.newBuilder().setOk(true).build();
         });
     }

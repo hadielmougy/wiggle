@@ -110,6 +110,7 @@ final class Wire {
     /** One reported step on the wire: exactly one of merge (task) or predicateValue (predicate). */
     static StepResult stepResult(WiggleClient.StepReport s) {
         StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId());
+        if (s.startedAt() != null && s.finishedAt() != null) sr.setStartedAt(s.startedAt()).setFinishedAt(s.finishedAt());
         if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
         else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(s.merge()));
         return sr.build();

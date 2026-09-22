@@ -23,9 +23,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Worker-run steps get the same performance model as observed ones: the server stamps a step
- * when a worker claims it and when its completion lands, and keeps how long it waited to be
- * claimed, so the Performance view covers every execution mode.
+ * Worker-run steps get the same performance model as observed ones: the worker reports the
+ * handler's own start and finish with every completion, in every mode, and the server keeps how
+ * long the step waited to be claimed, so the Performance view covers every execution mode.
  */
 class StepTimingTest {
 
@@ -54,7 +54,7 @@ class StepTimingTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Test @DisplayName("every worker-run step is timed claim-to-settle and carries its queue wait, in every mode")
+    @Test @DisplayName("every worker-run step carries the handler's own times and its queue wait, in every mode")
     void workerStepsAreTimed() throws Exception {
         for (ExecutionMode mode : List.of(ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
             FlowSpec spec = FlowSpec.define("timed", 1, Map.class, Steps.class, (f, s) -> Modes.in(f, mode)
@@ -72,23 +72,22 @@ class StepTimingTest {
                         .filter(t -> t.status == TokenStatus.DONE && (t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE))
                         .toList();
                 assertEquals(4, steps.size(), mode + ": four worker steps settled");
-                if (mode == ExecutionMode.LOCAL_ASYNC) {
-                    // The whole run travelled in one flush: the server cannot tell the steps' times apart,
-                    // so rather than record zeros it leaves them untimed until the worker reports its own clock.
-                    assertTrue(steps.stream().allMatch(t -> t.startedAt == null && t.finishedAt == null),
-                            "a batched step is untimed, not timed at zero");
-                    assertTrue(server.engine().stepStats("timed", null, 0, 100).isEmpty(), "nothing misleading in the stats");
-                    continue;
-                }
                 for (Token t : steps) {
                     assertNotNull(t.startedAt, mode + ": " + t.nodeId + " stamped at claim");
                     assertNotNull(t.finishedAt, mode + ": " + t.nodeId + " stamped at settle");
                     assertTrue(t.finishedAt >= t.startedAt, mode + ": " + t.nodeId);
-                    assertTrue(t.startedAt >= t.availableAt, mode + ": claimed after it was ready");
+                }
+                if (mode == ExecutionMode.SERVER) {
+                    // A local worker chains a step before the server holds its token, so only a
+                    // dispatched step was ready before it started; a chained one waited for nothing.
+                    assertTrue(steps.stream().allMatch(t -> t.startedAt >= t.availableAt), "claimed after it was ready");
                 }
                 String slowNode = spec.definition().node(spec.definition().startNode()).next();
                 Token slow = steps.stream().filter(t -> t.nodeId.equals(slowNode)).findFirst().orElseThrow();
                 assertTrue(slow.finishedAt - slow.startedAt >= 40, mode + ": slow ran 40ms, measured " + (slow.finishedAt - slow.startedAt));
+                assertTrue(slow.finishedAt - slow.startedAt < 1_000, mode + ": the handler's own clock, not a round trip or a whole batch");
+                Token quick = steps.stream().filter(t -> t.nodeId.equals(spec.definition().startNode())).findFirst().orElseThrow();
+                assertTrue(quick.finishedAt - quick.startedAt < 40, mode + ": quick is quick by the handler's clock, not the flush's");
 
                 List<NodeStats> stats = server.engine().stepStats("timed", null, 0, 100);
                 assertEquals(4, stats.size(), mode + ": every step has stats");

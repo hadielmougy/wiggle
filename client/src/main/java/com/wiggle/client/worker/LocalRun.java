@@ -109,14 +109,17 @@ final class LocalRun {
             failRun("predicate '" + node.name() + "' returned " + Worker.typeName(outcome.result()), false);
             return false;
         }
-        return advance(outcome.result());
+        return advance(outcome.result(), outcome.startedAt(), outcome.finishedAt());
     }
 
     private Invocation invoke(ActivityHandler handler) {
         Step.begin(new Step.Info(attempt, node.name(), instanceId,
                 baseContext, baseContext != null, itemIndex, itemMapKey));
+        long startedAt = System.currentTimeMillis();
+        long t0 = System.nanoTime();
         try {
-            return Invocation.ok(handler.invoke(ctx));
+            Object result = handler.invoke(ctx);
+            return Invocation.ok(result, startedAt, startedAt + (System.nanoTime() - t0) / 1_000_000);
         } catch (PermanentActivityException e) {
             failRun(Worker.describe(e), false);
             return Invocation.failed();
@@ -132,14 +135,14 @@ final class LocalRun {
     }
 
     /** Records the step, flushes when due, and moves to the successor; false = run is over. */
-    private boolean advance(Object result) {
+    private boolean advance(Object result, long startedAt, long finishedAt) {
         boolean isPredicate = node.kind() == NodeKind.PREDICATE;
         boolean predicateValue = isPredicate && (Boolean) result;
         Node next = def.node(GraphTraversal.successor(node, predicateValue));
         boolean handback = GraphTraversal.classify(next, w.servedQueues()) != null;
         buffer.add(isPredicate
-                ? new WiggleClient.StepReport(node.id(), null, predicateValue)
-                : new WiggleClient.StepReport(node.id(), result, null));
+                ? new WiggleClient.StepReport(node.id(), null, predicateValue, startedAt, finishedAt)
+                : new WiggleClient.StepReport(node.id(), result, null, startedAt, finishedAt));
         if (!isPredicate) ctx = applyReplace(ctx, result);
         if (shouldFlush(handback) && !flushAndContinue(handback)) return false;
         node = next;
@@ -192,9 +195,9 @@ final class LocalRun {
     }
 
     /** The outcome of invoking a handler: a result, or "already reported as failed". */
-    private record Invocation(boolean ok, Object result) {
-        static Invocation ok(Object result) { return new Invocation(true, result); }
-        static Invocation failed() { return new Invocation(false, null); }
+    private record Invocation(boolean ok, Object result, long startedAt, long finishedAt) {
+        static Invocation ok(Object result, long startedAt, long finishedAt) { return new Invocation(true, result, startedAt, finishedAt); }
+        static Invocation failed() { return new Invocation(false, null, 0, 0); }
     }
 
     /** Mirrors the server: a step's return REPLACES the context (null = unchanged, no merge). */

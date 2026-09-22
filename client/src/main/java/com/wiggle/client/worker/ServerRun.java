@@ -28,10 +28,13 @@ final class ServerRun {
         lease.start();
         Step.begin(new Step.Info(task.attempt(), task.stepName(), task.instanceId(),
                 task.baseContext(), task.baseContext() != null, task.itemIndex(), task.itemMapKey()));
+        long startedAt = System.currentTimeMillis();
+        long t0 = System.nanoTime();
         try {
             Object result = handler.invoke(task.context());
+            long finishedAt = startedAt + (System.nanoTime() - t0) / 1_000_000;
             lease.stop();   // the handler is done: no extension may race or trail the settle below
-            settle(result);
+            settle(result, startedAt, finishedAt);
         } catch (PermanentActivityException e) {
             lease.stop();
             reportFailure(Worker.describe(e), false);
@@ -51,13 +54,13 @@ final class ServerRun {
     }
 
     /** Reports a finished step: a predicate must have produced a boolean, a task merges its result. */
-    private void settle(Object result) {
+    private void settle(Object result, long startedAt, long finishedAt) {
         if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
             reportFailure("predicate '" + task.stepName() + "' returned " + Worker.typeName(result), false);
             return;
         }
         w.client().complete(task.taskId(), task.leaseOwner(),
-                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result);
+                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result, startedAt, finishedAt);
     }
 
     private void reportFailure(String message, boolean retryable) {

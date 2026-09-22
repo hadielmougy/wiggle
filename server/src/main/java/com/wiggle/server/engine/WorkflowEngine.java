@@ -209,13 +209,19 @@ public final class WorkflowEngine {
      * {@code "value"}.
      */
     public void complete(String taskId, String leaseOwner, Object result) {
+        complete(taskId, leaseOwner, result, null, null);
+    }
+
+    /** {@link #complete(String, String, Object)} with the handler's own start and finish, which
+     *  replace the server's claimed-to-settled stamps on the token. */
+    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt) {
         transactions.inTxVoid(tx -> {
             Tokens.LockedTask task = Tokens.lock(tx, taskId);
             Tokens.requireLease(task.token(), leaseOwner);
             if (completeCompensation(tx, task)) return;
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             modeFactory.create(mode)
-                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations));
+                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt));
         });
     }
 

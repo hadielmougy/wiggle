@@ -407,6 +407,10 @@ message TaskResultRequest {
     string task_id = 1;
     string lease_owner = 2;
     google.protobuf.Value result = 3;
+    // When the handler ran, epoch millis by the worker's clock; 0 = not reported, and the server's
+    // own stamps (claimed, settled) stand. Reported times exclude transport and queueing.
+    int64 started_at = 4;
+    int64 finished_at = 5;
 }
 
 message TaskFailureRequest {
