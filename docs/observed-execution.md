@@ -115,6 +115,18 @@ anomaly list shows every departure newest first; clicking one opens the instance
 coordinator the console asks every cell and merges: counts add up, means are weighted, and a
 merged row keeps the worst cell's p50 and p95, since percentiles cannot be recombined exactly.
 
+### Try it
+
+```sh
+./gradlew :example:seedObserved                                          # terminal 1: a server + sixty reported runs
+WIGGLE_URL=localhost:8080 ./gradlew :console:run                         # terminal 2, then http://localhost:8090
+```
+
+Pick `checkout` on the Performance tab: `reserve` rings red as the slowest step, and the
+anomaly list shows an out-of-order run, a run ended before END, a duplicated step and a step
+that threw. On the Instances tab, search the correlation id `order-2000` to trace the
+out-of-order run.
+
 ## 7. Reporting side: the `observe` module
 
 `sh.wiggle:wiggle-observe` is its own module so the client API stays as it is: an observed

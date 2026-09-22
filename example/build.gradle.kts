@@ -28,6 +28,13 @@ tasks.register<JavaExec>("seedDashboard") {
             ?: System.getenv("WIGGLE_DASHBOARD_PORT") ?: "8090")
 }
 
+tasks.register<JavaExec>("seedObserved") {
+    group = "application"
+    description = "Starts a server, publishes a checkout flow as OBSERVED and reports sixty runs to it; explore in the console."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.order.ObservedSeed")
+}
+
 tasks.register<JavaExec>("runWorker") {
     group = "application"
     description = "Runs a standalone worker against WIGGLE_URL (default localhost:8080)."
