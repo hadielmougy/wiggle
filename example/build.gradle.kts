@@ -20,12 +20,9 @@ application {
 
 tasks.register<JavaExec>("seedDashboard") {
     group = "application"
-    description = "Starts a dashboard-enabled server (:8090) seeded with data across every tab."
+    description = "Starts a server (:8080) seeded with data across every console tab; explore with :console:run."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.DashboardSeed")
-    systemProperty("wiggle.dashboard.port",
-        project.findProperty("port")?.toString()
-            ?: System.getenv("WIGGLE_DASHBOARD_PORT") ?: "8090")
 }
 
 tasks.register<JavaExec>("seedObserved") {

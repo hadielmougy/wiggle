@@ -3,6 +3,7 @@ package com.wiggle.order;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -11,18 +12,18 @@ import java.time.Duration;
 import java.util.Map;
 
 /**
- * A single-JVM playground for the web dashboard: it starts a server with the dashboard on
- * :8090, registers workflows that exercise every node kind, seeds a completed run, two runs
- * parked on a signal, and a couple of schedules, then idles so you can explore the UI.
+ * A single-JVM playground for the ops console: starts a server on :8080, registers workflows
+ * that exercise every node kind, seeds a completed run, two runs parked on a signal, and a
+ * couple of schedules, then idles so you can explore them in the console.
  *
- * <pre>WIGGLE_DASHBOARD_PORT=8090 ./gradlew :example:seedDashboard   →   http://localhost:8090</pre>
+ * <pre>./gradlew :example:seedDashboard                                       # terminal 1
+ * WIGGLE_URL=localhost:8080 ./gradlew :console:run   ->   http://localhost:8090   # terminal 2</pre>
  *
  * Every tab has something to see: Instances (with a live trace), Workflows (diagrams),
  * Signals (two pending approvals), Schedules (one cron, one interval).
  *
  * <p>Config comes from the environment ({@link ServerConfig#fromEnvironment()}), so the same
- * playground can run in-memory (the default) or against a database ({@code WIGGLE_JDBC_URL}),
- * and can be secured with {@code WIGGLE_DASHBOARD_PASSWORD} / TLS just like a real deployment.
+ * playground can run in-memory (the default) or against a database ({@code WIGGLE_JDBC_URL}).
  */
 public final class DashboardSeed {
 
@@ -36,7 +37,7 @@ public final class DashboardSeed {
         Map<String, Object> welcome(Map<String, Object> ctx);
         Map<String, Object> provisionHw(Map<String, Object> ctx);
         // the handler wants the pre-fork context too, so this is a combineWithContext shape
-        Map<String, Object> merge(Map<String, Object> base,
+        Map<String, Object> merge(@Context Map<String, Object> base,
                                   Map<String, Object> welcome, Map<String, Object> provisioned);
         Map<String, Object> autoEscalate(Map<String, Object> ctx);
         Map<String, Object> activate(Map<String, Object> ctx);
@@ -48,10 +49,6 @@ public final class DashboardSeed {
     }
 
     public static void main(String[] args) throws Exception {
-        // Default the dashboard on (the whole point of this tool) unless the caller set a port.
-        if (System.getProperty("wiggle.dashboard.port") == null && System.getenv("WIGGLE_DASHBOARD_PORT") == null) {
-            System.setProperty("wiggle.dashboard.port", "8090");
-        }
         ServerConfig config = ServerConfig.fromEnvironment();
 
         FlowSpec kyc = FlowSpec.define("kyc-checks", 1, Map.class, KycSteps.class, (f, s) -> f

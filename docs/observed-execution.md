@@ -123,6 +123,8 @@ anomaly list shows every departure newest first; clicking one opens the instance
 coordinator the console asks every cell and merges: counts add up, means are weighted, and a
 merged row keeps the worst cell's p50 and p95, since percentiles cannot be recombined exactly.
 
+![The Performance tab for the checkout flow: reserve ringed red as the slowest p95, the step table ranked by p95, and the anomaly list naming a stalled, two incomplete, an out-of-order and a duplicated run.](img/console-performance.png)
+
 ### Try it
 
 ```sh

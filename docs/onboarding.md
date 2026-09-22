@@ -510,18 +510,28 @@ One binary, two modes, chosen by env:
 # direct mode: one cluster
 WIGGLE_URL=localhost:8080 ./gradlew :console:run          # → http://localhost:8090
 
+# something to look at: a seeded server on :8080 (a completed run, two runs parked on a
+# signal, two schedules), or one with sixty observed checkout runs for the Performance tab
+./gradlew :example:seedDashboard
+./gradlew :example:seedObserved
+
 
 # or via the Docker image
 WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
 ```
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
-has five tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
+has six tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
 overlaying token status onto the workflow diagram, cancel, inline signal delivery), **Workflows**
 (render any compiled graph), **Schedules** (create/delete interval and cron schedules), **Signals**,
-and **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)). `./gradlew :console:build` compiles the bundle automatically (needs Node;
+**Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
+and **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
+execution mode, the slowest step ringed on the diagram, and the anomalies of observed runs —
+[observed-execution.md](observed-execution.md)). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
+
+![The console's instance detail: an onboarding run traced over its own diagram, with its tokens and an inline signal form.](img/console-instance-trace.png)
 
 **Auth.** Set `WIGGLE_DASHBOARD_PASSWORD` to require login as the **operator** account
 (`WIGGLE_DASHBOARD_USER`, default `admin`). Optionally also set
