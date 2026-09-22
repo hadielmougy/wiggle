@@ -59,6 +59,21 @@ public final class Housekeeper implements AutoCloseable {
         scheduler.scheduleAtFixedRate(this::tick, period, period, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::retain, retention.toMillis() / 4 + 1000,
                 Math.max(60_000, retention.toMillis() / 4), TimeUnit.MILLISECONDS);
+        long drift = Math.max(5_000, Long.getLong("wiggle.observe.drift.intervalMillis",
+                Long.parseLong(System.getenv().getOrDefault("WIGGLE_OBSERVE_DRIFT_INTERVAL_MILLIS", "60000"))));
+        scheduler.scheduleAtFixedRate(this::drift, drift, drift, TimeUnit.MILLISECONDS);
+    }
+
+    /** Package-visible so tests can drive a sweep deterministically. */
+    void drift() {
+        if (!cluster.isLeader()) return;
+        try {
+            int found = engine.detectDegradation();
+            if (found > 0) LOG.log(System.Logger.Level.INFO, () -> "drift sweep: " + found + " degrading step(s)");
+            else LOG.log(System.Logger.Level.DEBUG, "drift sweep: nothing degrading");
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.WARNING, "drift sweep failed: " + e);
+        }
     }
 
     /** Package-visible so tests can drive a tick deterministically. */

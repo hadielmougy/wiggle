@@ -560,4 +560,34 @@ class ObservedModeTest {
             assertTrue(s.kinds(r.instanceId()).contains("UNDO_WITHOUT_STEP"), "ship declares no undo: " + s.kinds(r.instanceId()));
         }
     }
+
+    @Test @DisplayName("a step getting slower over its runs is a DEGRADING anomaly, once per cooldown, naming the run that tipped it")
+    void degradingStep() {
+        System.setProperty("wiggle.observe.drift.window", "5");
+        System.setProperty("wiggle.observe.drift.baseline", "10");
+        try (Fixture f = Fixture.inMemory("obs-drift")) {
+            assertEquals(0, f.engine.detectDegradation(), "nothing timed yet");
+            // 10 runs where b takes ~10 ms, then 5 where it takes ~60 ms; a takes 5 ms throughout
+            String tipping = null;
+            for (int i = 0; i < 15; i++) {
+                long bMillis = i < 10 ? 10 + (i % 3) : 60 + (i % 3);
+                long base = i * 1000L;
+                ObserveResult r = f.report(APP1, "run-" + i, false, step(f.a(), base, 5), step(f.b(), base + 5, bMillis),
+                        predicate(f.keep(), true, base + 100, 1), step(f.c(), base + 101, 1));
+                tipping = r.instanceId();
+            }
+            f.settle();
+            assertEquals(1, f.engine.detectDegradation(), "b drifted; a, keep and c did not");
+            List<AnomalyView> found = f.engine.anomalies(f.spec.name(), null, 50).stream()
+                    .filter(a -> a.kind().equals("DEGRADING")).toList();
+            assertEquals(1, found.size());
+            assertEquals(f.b(), found.getFirst().reportedNode());
+            assertEquals(tipping, found.getFirst().instanceId(), "linked to the newest run of the step");
+            assertTrue(found.getFirst().detail().startsWith("b: p50 61 ms over the last 5 runs, 11 ms over the 10 before"), found.getFirst().detail());
+            assertEquals(0, f.engine.detectDegradation(), "silenced for the cooldown");
+        } finally {
+            System.clearProperty("wiggle.observe.drift.window");
+            System.clearProperty("wiggle.observe.drift.baseline");
+        }
+    }
 }

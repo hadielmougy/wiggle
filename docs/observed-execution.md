@@ -112,6 +112,7 @@ any order.
 | `UNDO_WITHOUT_FAILURE` | an undo in a run that was never declared failed | recorded; the run still completes |
 | `UNDO_OUT_OF_ORDER` | undos must run newest first; this one came out of turn | recorded; still counts |
 | `MISSING_UNDO` | the run failed and a completed step's undo never arrived | `COMPENSATION_FAILED` |
+| `DEGRADING` | a step's recent runs are markedly slower than the runs before them (a leader sweep, not a judgement) | recorded against the run that tipped it; silenced for a cooldown |
 
 - **Failure and compensation.** A run is declared failed by a step that threw, or explicitly
   with a reason (`ObserveRunRequest.failure`, `run.fail`, `flow.fail`). With anything compensable
@@ -129,6 +130,15 @@ any order.
   step after its named cause where the graph agrees the cause precedes it -- a hint naming a
   sibling branch, an unknown node, or a step never reported is ignored, so a lost report never
   blocks judgement. Two services with disagreeing clocks then judge clean.
+- **Getting slower.** A leader sweep (every `WIGGLE_OBSERVE_DRIFT_INTERVAL_MILLIS`, default one
+  minute) compares each timed step's recent runs with the runs before them, on the median, which
+  one slow run cannot move: the last `WIGGLE_OBSERVE_DRIFT_WINDOW` (20) runs against at least
+  `WIGGLE_OBSERVE_DRIFT_BASELINE` (30) earlier ones; a recent median `WIGGLE_OBSERVE_DRIFT_PERCENT`
+  (100, i.e. twice) slower and at least `WIGGLE_OBSERVE_DRIFT_MIN_MILLIS` (5) slower is a
+  `DEGRADING` anomaly naming the run that tipped it, then silence for
+  `WIGGLE_OBSERVE_DRIFT_COOLDOWN_MILLIS` (one hour) so a slow week is one finding, not one per
+  run. Undos are judged apart from the steps they reverse. This covers every workflow with timed
+  steps, locally-chained ones included.
 - **Verdict.** A successful END reached means `COMPLETED`, whatever was recorded along the way;
   anomalies are findings, not failures. A failing END fails with its reason. No END fails as
   incomplete.

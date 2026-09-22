@@ -1485,14 +1485,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
             List<Rows.StepDuration> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, undo_of FROM wf_token "
+            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, undo_of, instance_id FROM wf_token "
                     + "WHERE workflow=? AND version=? AND status='DONE' AND finished_at > ? AND started_at IS NOT NULL "
                     + "ORDER BY finished_at DESC LIMIT ?")) {
                 p.setString(1, workflow); p.setInt(2, version); p.setLong(3, since); p.setInt(4, max);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
                         out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2)),
-                                rs.getString(4) != null));
+                                rs.getString(4) != null, rs.getString(5)));
                     }
                 }
             } catch (SQLException ex) { throw wrap(ex); }

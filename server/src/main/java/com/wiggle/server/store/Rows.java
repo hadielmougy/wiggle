@@ -187,5 +187,5 @@ public final class Rows {
                           String expectedNode, String reportedNode, String detail, long at) { }
 
     /** One settled, timed step: what the duration statistics are computed from. */
-    public record StepDuration(String nodeId, long millis, boolean undo) { }
+    public record StepDuration(String nodeId, long millis, boolean undo, String instanceId) { }
 }

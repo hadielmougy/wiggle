@@ -490,7 +490,7 @@ public final class InMemoryStorage implements Storage {
                     .filter(t -> workflow.equals(t.workflow) && t.version == version && t.finishedAt > since)
                     .sorted(Comparator.comparingLong((Token t) -> t.finishedAt).reversed())
                     .limit(max)
-                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt), t.undoOf != null))
+                    .map(t -> new Rows.StepDuration(t.nodeId, Math.max(0, t.finishedAt - t.startedAt), t.undoOf != null, t.instanceId))
                     .toList();
         }
 

@@ -445,7 +445,8 @@
    "UNDO_WITHOUT_STEP"    "an undo for a step this run never completed"
    "UNDO_WITHOUT_FAILURE" "an undo in a run that was never declared failed"
    "UNDO_OUT_OF_ORDER"    "undos must run newest first; this one came out of turn"
-   "MISSING_UNDO"         "the run failed and this completed step's undo never arrived; compensation failed"})
+   "MISSING_UNDO"         "the run failed and this completed step's undo never arrived; compensation failed"
+   "DEGRADING"            "this step's recent runs are markedly slower than the runs before them"})
 
 (defn anomalies-panel []
   (let [{:keys [anomalies perf]} @db]

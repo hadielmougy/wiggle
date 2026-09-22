@@ -51,6 +51,8 @@ public class ObservedRunningMode extends BaseRunningMode {
     static final String UNDO_WITHOUT_FAILURE = "UNDO_WITHOUT_FAILURE";
     static final String UNDO_OUT_OF_ORDER = "UNDO_OUT_OF_ORDER";
     static final String MISSING_UNDO = "MISSING_UNDO";
+    /** A step's recent runs are markedly slower than the runs before them. */
+    static final String DEGRADING = "DEGRADING";
     /** Where a reported predicate's value rides on its token, for the judge to read back. */
     static final String PREDICATE_KEY = "__observed.predicate";
 

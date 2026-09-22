@@ -394,6 +394,64 @@ public final class WorkflowEngine {
         });
     }
 
+    /** Drift detection: how many recent runs of a step form "now", how many earlier ones "before"
+     *  needs, how many times slower "now" must be (as a percentage over "before"), by how much at
+     *  least, and how long one finding silences the next for the same step. */
+    private final int driftWindow = (int) ServerEnv.envLong("wiggle.observe.drift.window", "WIGGLE_OBSERVE_DRIFT_WINDOW", 20);
+    private final int driftBaseline = (int) ServerEnv.envLong("wiggle.observe.drift.baseline", "WIGGLE_OBSERVE_DRIFT_BASELINE", 30);
+    private final long driftPercent = ServerEnv.envLong("wiggle.observe.drift.percent", "WIGGLE_OBSERVE_DRIFT_PERCENT", 100);
+    private final long driftMinMillis = ServerEnv.envLong("wiggle.observe.drift.minMillis", "WIGGLE_OBSERVE_DRIFT_MIN_MILLIS", 5);
+    private final long driftCooldownMillis = ServerEnv.envLong("wiggle.observe.drift.cooldownMillis", "WIGGLE_OBSERVE_DRIFT_COOLDOWN_MILLIS", 3_600_000);
+
+    /**
+     * Leader duty: records a DEGRADING anomaly for every timed step whose recent runs are markedly
+     * slower than the runs before them -- the latest version of every workflow with timed steps,
+     * undos judged apart from the steps they reverse. A finding names the run that tipped it and
+     * silences the same step for the cooldown, so a slow week reads as one finding, not one per run.
+     */
+    public int detectDegradation() {
+        long now = System.currentTimeMillis();
+        int found = 0;
+        for (String name : definitions.names()) {
+            WorkflowDefinition def = definitions.latest(name).orElse(null);
+            if (def == null) continue;
+            found += transactions.inTx(tx -> detectDegradation(tx, def, now));
+        }
+        return found;
+    }
+
+    private int detectDegradation(Tx tx, WorkflowDefinition def, long now) {
+        List<Rows.StepDuration> sample = tx.stepDurations(def.name(), def.version(), 0, driftWindow + Math.max(driftBaseline, 1000));
+        if (sample.size() < driftWindow + driftBaseline) return 0;
+        Map<String, List<Rows.StepDuration>> byStep = new LinkedHashMap<>();
+        for (Rows.StepDuration d : sample) {
+            byStep.computeIfAbsent(d.undo() ? d.nodeId() + StepStatistics.UNDO_SUFFIX : d.nodeId(), k -> new ArrayList<>()).add(d);
+        }
+        Set<String> recentlyFound = new HashSet<>();
+        for (Rows.Anomaly a : tx.anomalies(def.name(), null, 500)) {
+            if (ObservedRunningMode.DEGRADING.equals(a.kind()) && a.at() > now - driftCooldownMillis) recentlyFound.add(a.reportedNode());
+        }
+        int found = 0;
+        for (Map.Entry<String, List<Rows.StepDuration>> e : byStep.entrySet()) {
+            if (recentlyFound.contains(e.getKey())) continue;
+            List<Long> newestFirst = e.getValue().stream().map(Rows.StepDuration::millis).toList();
+            Degradation.Drift drift = Degradation.detect(newestFirst, driftWindow, driftBaseline,
+                    1.0 + driftPercent / 100.0, driftMinMillis).orElse(null);
+            if (drift == null) continue;
+            String nodeId = e.getKey().endsWith(StepStatistics.UNDO_SUFFIX)
+                    ? e.getKey().substring(0, e.getKey().length() - StepStatistics.UNDO_SUFFIX.length()) : e.getKey();
+            Node node = def.nodes().get(nodeId);
+            String label = (node == null ? nodeId : node.name()) + (e.getKey().endsWith(StepStatistics.UNDO_SUFFIX) ? " (undo)" : "");
+            String detail = String.format("%s: p50 %d ms over the last %d runs, %d ms over the %d before (%.1fx)",
+                    label, drift.recentP50(), drift.recent(), drift.baselineP50(), drift.baseline(), drift.factor());
+            tx.insertAnomaly(new Rows.Anomaly(Ids.next("anm"), e.getValue().getFirst().instanceId(), def.name(), def.version(),
+                    ObservedRunningMode.DEGRADING, drift.baselineP50() + "ms", e.getKey(), detail, now));
+            LOG.log(System.Logger.Level.INFO, () -> "degrading step in " + def.key() + ": " + detail);
+            found++;
+        }
+        return found;
+    }
+
     /** Leader duty: judge observed runs whose settle time has passed. */
     public int settleObservedRuns(int max) {
         List<Instance> due = transactions.read(tx -> tx.dueSettle(System.currentTimeMillis(), max));
