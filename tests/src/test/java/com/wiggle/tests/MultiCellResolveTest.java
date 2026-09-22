@@ -7,6 +7,7 @@ import com.wiggle.proto.RegisteredNode;
 import com.wiggle.proto.ResolveRequest;
 import com.wiggle.proto.ResolveResponse;
 import com.wiggle.proto.RingSlot;
+import com.wiggle.proto.RunKey;
 import com.wiggle.server.coord.CoordinatorService;
 import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import com.wiggle.server.coord.NamespaceNotReadyException;
@@ -201,6 +202,42 @@ class MultiCellResolveTest {
             String s1 = IdCodec.format("orders", 0, 1, Ids.token());
             assertThrows(IllegalStateException.class,
                     () -> api.doResolve(ResolveRequest.newBuilder().setInstanceId(s1).build()));
+        }
+    }
+
+    @Test @DisplayName("an observed run's key resolves to the cell owning its shard, the same cell for every reporter")
+    void resolveByRunKey() throws Exception {
+        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
+        try (CoordinatorService api = new CoordinatorService(store)) {
+            twoCellNamespace(api);
+            ResolveResponse first = api.doResolve(ResolveRequest.newBuilder()
+                    .setRunKey(RunKey.newBuilder().setNamespace("orders").setWorkflow("checkout").setKey("order-1")).build());
+            ResolveResponse again = api.doResolve(ResolveRequest.newBuilder()
+                    .setRunKey(RunKey.newBuilder().setNamespace("orders").setWorkflow("checkout").setKey("order-1")).build());
+            assertEquals(first.getEndpoint().getAddressesList(), again.getEndpoint().getAddressesList(),
+                    "one key, one cell, whoever asks");
+
+            // the id every cell derives for that run names the same shard the coordinator routed by
+            String id = IdCodec.runKeyId("orders", first.getEpoch(), "checkout", "order-1");
+            IdCodec.Placement p = IdCodec.parse(id).orElseThrow();
+            assertEquals("orders", p.namespace());
+            assertTrue(!p.hasCell(), "no cell label: the ring decides");
+            assertEquals(IdCodec.runKeyShard("checkout", "order-1"), p.shard());
+            ResolveResponse byId = api.doResolve(ResolveRequest.newBuilder().setInstanceId(id).build());
+            assertEquals(first.getEndpoint().getAddressesList(), byId.getEndpoint().getAddressesList(),
+                    "resolving the derived id lands on the same cell as resolving the key");
+
+            // keys spread: over the shard space some land on each cell
+            java.util.Set<String> cells = new java.util.HashSet<>();
+            for (int i = 0; i < 40; i++) {
+                ResolveResponse r = api.doResolve(ResolveRequest.newBuilder()
+                        .setRunKey(RunKey.newBuilder().setNamespace("orders").setWorkflow("checkout").setKey("k" + i)).build());
+                cells.add(r.getEndpoint().getAddressesList().toString());
+            }
+            assertEquals(2, cells.size(), "both cells own some keys");
+
+            assertThrows(NamespaceNotReadyException.class, () -> api.doResolve(ResolveRequest.newBuilder()
+                    .setRunKey(RunKey.newBuilder().setNamespace("nope").setWorkflow("w").setKey("k")).build()));
         }
     }
 }

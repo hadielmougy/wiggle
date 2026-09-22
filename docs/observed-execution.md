@@ -74,10 +74,17 @@ the difference between the two fields, never their agreement with the server's c
 Reports append; judgement happens later. That is what lets several services report one run in
 any order.
 
-- **A run is keyed.** The instance id is derived from `(workflow, version, correlation id)`, so
-  every reporter of a run lands on the same instance whether it reports first or last. Two
-  reporters creating it at once collide on the primary key and the loser reads the winner's row.
-  A blank key mints a random one: that run is single-reporter by construction.
+- **A run is keyed.** The instance id is derived from `(workflow, correlation id)` -- a key
+  names one run of a workflow, across its versions -- so every reporter of a run lands on the
+  same instance whether it reports first or last. Two reporters creating it at once collide on
+  the primary key and the loser reads the winner's row. A blank key mints a random one: that run
+  is single-reporter by construction.
+- **Across cells.** Under a coordinator the derived id is `namespace.e<epoch>.s<shard>.<digest>`
+  with no cell label: the key hashes into a fixed shard space (4096) that the epoch's ring wraps
+  by modulo, so every cell derives the same id and the coordinator resolves the key
+  (`Resolve` by `run_key`) to the one cell that owns that shard. A reporter under a coordinator
+  sends each run there. Known limit: a reshard between two services' first reports of one run
+  splits that run across epochs.
 - **A report only appends.** Each step becomes a settled, timed token carrying its reporter. A
   step whose successor is END also writes the END token, which marks the run as closing. A step
   the graph does not know is recorded as `UNKNOWN_NODE` at once. A step reported with an error

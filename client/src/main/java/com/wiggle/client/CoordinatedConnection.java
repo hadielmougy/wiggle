@@ -73,6 +73,25 @@ public final class CoordinatedConnection implements AutoCloseable {
         return clientFor(resolveInstance(instanceId).getTarget());
     }
 
+    /**
+     * The address of the cell that owns the observed run of {@code workflow} keyed by {@code key}:
+     * where every reporter of that run must send its steps, so they land on one instance. Cached
+     * by the key's shard for the coordinator's TTL, like instances are. The observe module opens
+     * its own channel to it; this connection's clients are not involved.
+     */
+    public String targetForRunKey(String namespace, String workflow, String key) {
+        String cacheKey = namespace + "|k" + IdCodec.runKeyShard(workflow, key);
+        Cached c = byShard.get(cacheKey);
+        if (c != null && System.nanoTime() < c.expiryNanos()) return rewriteTarget(c.endpoint().getTarget());
+        ResolveResponse r = coordCall(() -> coord.resolve(ResolveRequest.newBuilder()
+                .setRunKey(RunKey.newBuilder().setNamespace(namespace).setWorkflow(workflow).setKey(key))
+                .setCallerRegion(nz(callerRegion)).build()));
+        Endpoint e = r.getEndpoint();
+        long ttlNanos = Math.max(1, e.getTtlSeconds()) * 1_000_000_000L;
+        byShard.put(cacheKey, new Cached(e, System.nanoTime() + ttlNanos));
+        return rewriteTarget(e.getTarget());
+    }
+
     /** Registers a workflow for a namespace: the coordinator fans the definition out to every cell of
      *  the namespace (R23). */
     public void registerWorkflow(String namespace, FlowSpec flowSpec) {

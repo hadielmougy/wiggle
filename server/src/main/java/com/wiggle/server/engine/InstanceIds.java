@@ -1,16 +1,16 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.core.Ids;
+import com.wiggle.placement.IdCodec;
 
-/** Mints instance ids. {@link #forKey} derives one from a business key instead, so every
- *  reporter of one observed run lands on the same instance. */
+/** Mints instance ids. {@link #forKey} derives one from a run's key instead, so every reporter
+ *  of one observed run lands on the same instance. */
 @FunctionalInterface
 public interface InstanceIds {
 
     String next();
 
-    /** The id an observed run keyed by {@code key} has on this cell; the same key always yields it. */
-    default String forKey(String key) {
-        return "wfo_" + Ids.digest(key);
+    /** The id the observed run of {@code workflow} keyed by {@code key} has; the same key always yields it. */
+    default String forKey(String workflow, String key) {
+        return "wfo_" + IdCodec.runKeyDigest(workflow, key);
     }
 }

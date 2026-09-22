@@ -191,8 +191,17 @@ message ResolveRequest {
     oneof by {
         string instance_id = 1;   // route a specific instance (parsed ns.epoch.shard)
         string namespace = 2;     // resolve the CURRENT epoch for a new start
+        RunKey run_key = 4;       // route an observed run by its key: the cell every reporter of it must use
     }
     string caller_region = 3;     // region-appropriate address, never a different cell (R24)
+}
+
+// An observed run's identity: its key hashes to a shard of the namespace's current ring, the same
+// way every cell derives the run's instance id, so resolve-by-key and the id agree on the owner.
+message RunKey {
+    string namespace = 1;
+    string workflow = 2;
+    string key = 3;
 }
 
 message ResolveResponse {

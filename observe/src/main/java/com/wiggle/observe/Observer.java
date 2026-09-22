@@ -1,5 +1,6 @@
 package com.wiggle.observe;
 
+import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Tls;
@@ -13,7 +14,11 @@ import io.grpc.ManagedChannel;
 import io.grpc.StatusRuntimeException;
 import io.grpc.TlsChannelCredentials;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Reports flows that run inside this process to a Wiggle server, which checks them against their
@@ -36,25 +41,57 @@ import java.util.concurrent.TimeUnit;
  */
 public final class Observer implements AutoCloseable {
 
-    private final ManagedChannel channel;
-    private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
     private final ObserverOptions options;
     private final Reporter reporter;
+    private final Map<String, ManagedChannel> channels = new ConcurrentHashMap<>();
+    private final Map<String, WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub> stubs = new ConcurrentHashMap<>();
+    /** Publishes a definition wherever this observer's runs will be reported. */
+    private final Consumer<com.wiggle.core.WorkflowDefinition> publisher;
 
-    private Observer(String target, ObserverOptions options) {
+    private Observer(ObserverOptions options, Function<Run, String> targetOf,
+                     Consumer<com.wiggle.core.WorkflowDefinition> publisher) {
         this.options = options;
-        this.channel = Grpc.newChannelBuilder(stripScheme(target),
-                credentials(options.tls(), options.requireTls())).build();
-        this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
-        this.reporter = new Reporter(stub, options);
+        this.publisher = publisher;
+        this.reporter = new Reporter(targetOf, this::stubFor, options);
     }
 
+    /** Connects to one server (or one cell). Every run is reported there. */
     public static Observer connect(String target) {
         return connect(target, ObserverOptions.defaults());
     }
 
     public static Observer connect(String target, ObserverOptions options) {
-        return new Observer(target, options);
+        Observer[] self = new Observer[1];
+        self[0] = new Observer(options, run -> target, def -> self[0].publish(target, def));
+        return self[0];
+    }
+
+    /**
+     * Connects through a coordinator: each run is reported to the cell that owns its key, which
+     * the coordinator resolves ({@code targetForRunKey}), so every service reporting one run lands
+     * on one instance whichever cell it would otherwise talk to. Definitions are fanned out to
+     * every cell of the namespace through the coordinator.
+     */
+    public static Observer connect(CoordinatedConnection coordinator, String namespace) {
+        return connect(coordinator, namespace, ObserverOptions.defaults());
+    }
+
+    public static Observer connect(CoordinatedConnection coordinator, String namespace, ObserverOptions options) {
+        return new Observer(options,
+                run -> coordinator.targetForRunKey(namespace, run.owner().name(), run.correlationId()),
+                def -> coordinator.registerWorkflow(namespace, new FlowSpec(def)));
+    }
+
+    private WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stubFor(String target) {
+        return stubs.computeIfAbsent(target, t -> WiggleControlPlaneGrpc.newBlockingStub(
+                channels.computeIfAbsent(t, u -> Grpc.newChannelBuilder(stripScheme(u),
+                        credentials(options.tls(), options.requireTls())).build())));
+    }
+
+    private void publish(String target, com.wiggle.core.WorkflowDefinition def) {
+        stubFor(target).registerWorkflow(WorkflowDefinition.newBuilder()
+                .setDefinition(ProtoJson.toStruct(def.toJson()))
+                .build());
     }
 
     /**
@@ -74,9 +111,7 @@ public final class Observer implements AutoCloseable {
         }
         FlowSpec observed = new FlowSpec(observedCopy(spec.definition()));
         try {
-            stub.registerWorkflow(WorkflowDefinition.newBuilder()
-                    .setDefinition(ProtoJson.toStruct(observed.definition().toJson()))
-                    .build());
+            publisher.accept(observed.definition());
         } catch (StatusRuntimeException e) {
             throw new IllegalStateException("could not publish '" + spec.definition().key() + "': "
                     + e.getStatus().getCode() + " " + e.getStatus().getDescription(), e);
@@ -102,17 +137,19 @@ public final class Observer implements AutoCloseable {
         return reporter;
     }
 
-    /** Sends what is still queued, then closes the connection. */
+    /** Sends what is still queued, then closes every connection it opened. */
     @Override
     public void close() {
         reporter.close();
-        channel.shutdown();
-        try {
-            channel.awaitTermination(2, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        for (ManagedChannel channel : channels.values()) {
+            channel.shutdown();
+            try {
+                channel.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            channel.shutdownNow();
         }
-        channel.shutdownNow();
     }
 
     private static ChannelCredentials credentials(Tls.Options tls, boolean requireTls) {

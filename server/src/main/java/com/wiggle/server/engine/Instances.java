@@ -75,15 +75,15 @@ final class Instances {
 
     /**
      * The observed run {@code key} names, locked: found when any reporter has reported it before,
-     * created otherwise. The id is derived from the key, so two reporters creating it at once
-     * collide on the primary key and the loser reads the winner's row. The definition must be
-     * {@link ExecutionMode#OBSERVED}.
+     * created otherwise. The id is derived from the workflow and the key -- a key names one run of
+     * a workflow, across its versions -- so two reporters creating it at once collide on the primary
+     * key and the loser reads the winner's row. The definition must be {@link ExecutionMode#OBSERVED}.
      */
     Instance observedRun(Tx tx, String workflow, Integer version, String key) {
         int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         ObservedRunningMode.requireObserved(definitions.executionMode(tx, workflow, v), workflow + ":" + v);
-        String id = idMinter.forKey(workflow + ":" + v + ":" + key);
+        String id = idMinter.forKey(workflow, key);
         Instance found = tx.lockInstance(id).orElse(null);
         if (found != null) return found;
         long now = System.currentTimeMillis();

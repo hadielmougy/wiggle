@@ -40,6 +40,33 @@ public final class IdCodec {
         public boolean hasCell() { return cellId != null; }
     }
 
+    /**
+     * The shard space a run key hashes into. A ring smaller than this wraps a shard into itself
+     * by modulo ({@code Placements.cellFor}), so any ring size spreads keys evenly, and no side
+     * needs to know the ring size to agree on a key's shard.
+     */
+    public static final int KEY_SHARD_SPACE = 4096;
+
+    /** The digest an observed run's key becomes: what stands in for the ulid in its id. */
+    public static String runKeyDigest(String workflow, String key) {
+        return com.wiggle.core.Ids.digest(workflow + ":" + key);
+    }
+
+    /** The shard a run key lands on, the same on every side that computes it. */
+    public static long runKeyShard(String workflow, String key) {
+        return shardFor(runKeyDigest(workflow, key), KEY_SHARD_SPACE);
+    }
+
+    /**
+     * The id an observed run keyed by {@code key} has in {@code epoch}: derived, never minted, and
+     * carrying no cell label, so every cell of the namespace names the same instance for one key
+     * and resolves it by the epoch's ring.
+     */
+    public static String runKeyId(String namespace, long epoch, String workflow, String key) {
+        String digest = runKeyDigest(workflow, key);
+        return format(namespace, null, epoch, shardFor(digest, KEY_SHARD_SPACE), digest);
+    }
+
     /** Builds an id with no cell label, for a cell that has no id configured. */
     public static String format(String namespace, long epoch, long shard, String ulid) {
         return format(namespace, null, epoch, shard, ulid);

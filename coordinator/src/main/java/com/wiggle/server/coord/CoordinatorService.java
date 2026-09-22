@@ -25,6 +25,7 @@ import com.wiggle.proto.RegisterWorkflowResponse;
 import com.wiggle.proto.RegisterWorkflowResult;
 import com.wiggle.proto.RegisteredNode;
 import com.wiggle.proto.ResolveRequest;
+import com.wiggle.proto.RunKey;
 import com.wiggle.proto.ResolveResponse;
 import com.wiggle.proto.RingSlot;
 import com.wiggle.proto.WiggleControlPlaneGrpc;
@@ -209,6 +210,16 @@ public final class CoordinatorService implements AutoCloseable {
                     c -> endpointForCellOrNull(namespace, c, region) != null).orElse(null);
             if (cellId == null) throw new NamespaceNotReadyException(namespace);
             return resolved(namespace, p.epoch(), endpointForCell(namespace, cellId, region));
+        }
+
+        if (req.getByCase() == ResolveRequest.ByCase.RUN_KEY) {
+            RunKey rk = req.getRunKey();
+            String namespace = rk.getNamespace();
+            long epoch = store.getPolicy(namespace).map(CoordPolicy::currentEpoch).orElse(0L);
+            int shard = (int) IdCodec.runKeyShard(rk.getWorkflow(), rk.getKey());
+            String cellId = cellFor(namespace, epoch, shard);
+            if (cellId == null) throw new NamespaceNotReadyException(namespace);
+            return resolved(namespace, epoch, endpointForCell(namespace, cellId, region));
         }
 
         String namespace = req.getNamespace();

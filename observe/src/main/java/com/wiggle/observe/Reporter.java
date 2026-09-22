@@ -12,8 +12,11 @@ import com.wiggle.proto.WiggleControlPlaneGrpc;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -29,7 +32,9 @@ final class Reporter implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(Reporter.class.getName());
     private static final int MAX_PER_CALL = 256;
 
-    private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
+    /** Where a run's reports go: one address in direct mode, the owner cell of the run's key under a coordinator. */
+    private final Function<Run, String> targetOf;
+    private final Function<String, WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub> stubFor;
     private final ObserverOptions options;
     private final LinkedBlockingQueue<Batch> queue;
     private final Set<Run> pending = new HashSet<>();
@@ -38,8 +43,10 @@ final class Reporter implements AutoCloseable {
     private volatile boolean closing;
     private boolean warned;
 
-    Reporter(WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub, ObserverOptions options) {
-        this.stub = stub;
+    Reporter(Function<Run, String> targetOf,
+             Function<String, WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub> stubFor, ObserverOptions options) {
+        this.targetOf = targetOf;
+        this.stubFor = stubFor;
         this.options = options;
         this.queue = new LinkedBlockingQueue<>(options.queueCapacity());
         this.flusher = Thread.ofPlatform().name("wiggle-observe-flusher").daemon(true).start(this::loop);
@@ -113,12 +120,31 @@ final class Reporter implements AutoCloseable {
         return call;
     }
 
-    private void send(List<Batch> call) {
+    /** One call per target: under a coordinator the runs in a drain may live on different cells. */
+    private void send(List<Batch> drained) {
+        Map<String, List<Batch>> byTarget = new LinkedHashMap<>();
+        for (Batch b : drained) {
+            String target;
+            try {
+                target = targetOf.apply(b.run());
+            } catch (RuntimeException e) {
+                dropped.addAndGet(b.steps().size());
+                b.run().lost();
+                LOG.log(System.Logger.Level.WARNING, () -> "observe: cannot resolve where run '"
+                        + b.run().correlationId() + "' of " + b.run().owner().name() + " lives: " + e);
+                continue;
+            }
+            byTarget.computeIfAbsent(target, t -> new ArrayList<>()).add(b);
+        }
+        byTarget.forEach(this::sendTo);
+    }
+
+    private void sendTo(String target, List<Batch> call) {
         ObserveManyRequest.Builder req = ObserveManyRequest.newBuilder();
         for (Batch b : call) req.addRuns(request(b));
         ObserveManyResult res;
         try {
-            res = stub.observeMany(req.build());
+            res = stubFor.apply(target).observeMany(req.build());
             warned = false;
         } catch (RuntimeException e) {
             long lost = 0;

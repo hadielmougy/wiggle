@@ -86,11 +86,11 @@ final class ServerBundle {
         return new InstanceIds() {
             @Override public String next() { return minted.get(); }
 
-            /** Stamped like a minted id, from the key's digest in place of a fresh ulid, so the
-             *  same key on this cell always names one instance. Routing a key to its cell across
-             *  cells is the reporter's job. */
-            @Override public String forKey(String key) {
-                return live.minter(ns, cellId, () -> Ids.digest(key)).get();
+            /** Derived from the key in the live epoch, with no cell label: the same id on every
+             *  cell of the namespace, resolvable by the epoch's ring. A reporter routes a key to
+             *  its owner cell before reporting ({@code CoordinatedConnection.targetForRunKey}). */
+            @Override public String forKey(String workflow, String key) {
+                return com.wiggle.placement.IdCodec.runKeyId(ns, live.epoch(), workflow, key);
             }
         };
     }
