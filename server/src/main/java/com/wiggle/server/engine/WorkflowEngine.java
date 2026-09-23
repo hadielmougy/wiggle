@@ -225,14 +225,14 @@ public final class WorkflowEngine {
         transactions.inTxVoid(tx -> {
             Tokens.LockedTask task = Tokens.lock(tx, taskId);
             Tokens.requireLease(task.token(), leaseOwner);
-            if (completeCompensation(tx, task, events)) return;
+            if (compensated(tx, task, events)) return;
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
-            modeFactory.create(mode).complete(new CompleteRunContext(task, leaseOwner, result, tx,
-                    loopMaxIterations, startedAt, finishedAt, events));
+            modeFactory.create(mode)
+                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt, events));
         });
     }
 
-    private boolean completeCompensation(Tx tx, Tokens.LockedTask task, List<EmittedEvent> events) {
+    private boolean compensated(Tx tx, Tokens.LockedTask task, List<EmittedEvent> events) {
         Long compSeq = Sagas.seqOf(task.token());
         if (compSeq != null) {
             long now = System.currentTimeMillis();
@@ -291,42 +291,20 @@ public final class WorkflowEngine {
         }
     }
 
-    /**
-     * Applies an ordered run of locally-executed steps (LOCAL_SYNC/LOCAL_ASYNC) atomically under
-     * the instance lock. For each step it does exactly what {@link #complete} would: merge the
-     * task result or route the predicate, advance the token. Between steps the continuation is
-     * leased straight back to the same worker (never exposed to {@code poll}); at the final step
-     * (or a boundary) it is driven normally, releasing the worker.
-     */
-    public AdvanceOutcome advance(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
-        if (steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
+    public AdvanceOutcome advance(Run run) {
+        if (run.steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
         return transactions.inTx(tx -> {
-            Tokens.LockedTask task = Tokens.lock(tx, startTaskId);
+            Tokens.LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             return modeFactory.create(mode)
-                    .advance(new AdvanceRunContext(task, leaseOwner, steps, finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+                    .advance(new AdvanceRunContext(task, run.leaseOwner, run.steps, run.finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
         });
     }
 
-    /**
-     * Applies N independent single-instance runs in one call and one commit. Every run is exactly
-     * an {@link #advance}; the batch changes how many transactions and RPCs the same work costs,
-     * never any instance's semantics. Runs the single-run path would have refused are answered per
-     * run without writing, so one bad run cannot roll back its batch-mates. If apply still throws
-     * -- a later step's node mismatch, a storage failure -- the batch rolls back whole and each
-     * run is replayed in its own transaction, so only the genuinely broken run fails.
-     *
-     * <p>Structural defects -- an empty batch, a run with no steps, the same task twice -- refuse
-     * the whole call before the transaction opens: they are caller bugs, not instance state.
-     *
-     * <p>The rollback the replay path relies on is the storage's. On the in-memory backend a
-     * transaction cannot roll back, so a batch that throws mid-apply leaves its earlier writes
-     * standing -- exactly the property the single-run path already has there.
-     */
     public Map<String, RunResult> advanceMany(List<Run> runs) {
         requireWellFormed(runs);
         try {
-            return transactions.inTx(tx -> modeFactory.localAsync().advanceMany(
+            return transactions.inTx(tx -> modeFactory.create(ExecutionMode.LOCAL_ASYNC).advanceMany(
                     new AdvanceBatchContext(runs, tx, loopMaxIterations, defaultLeaseMillis)));
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, () -> "advanceMany: batch of " + runs.size()
@@ -355,8 +333,7 @@ public final class WorkflowEngine {
         Map<String, RunResult> results = new LinkedHashMap<>();
         for (Run run : runs) {
             try {
-                results.put(run.startTaskId(), RunResult.of(
-                        advance(run.startTaskId(), run.leaseOwner(), run.steps(), run.finalHandback())));
+                results.put(run.startTaskId(), RunResult.of(advance(run)));
             } catch (EngineException e) {
                 results.put(run.startTaskId(), RunResult.reject(e));
             } catch (RuntimeException e) {

@@ -87,11 +87,11 @@ class LocalBatchBench {
             counts.clear();
             total.set(0);   // measure the advance alone, not the start or the claim
 
-            List<WorkflowEngine.StepInput> run = new ArrayList<>(steps);
+            List<WorkflowEngine.StepInput> stepInputs = new ArrayList<>(steps);
             for (int i = 0; i < steps; i++) {
-                run.add(new WorkflowEngine.StepInput("n" + i, Map.of("n", (long) i + 1), null));
+                stepInputs.add(new WorkflowEngine.StepInput("n" + i, Map.of("n", (long) i + 1), null));
             }
-            engine.advance(head.taskId(), head.leaseOwner(), run, false);
+            engine.advance(new WorkflowEngine.Run(head.taskId(), head.leaseOwner(), stepInputs, false));
         }
         return new Tally(steps, Map.copyOf(counts), total.get());
     }
