@@ -228,7 +228,7 @@ public final class WorkflowEngine {
             if (compensated(tx, task, events)) return;
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             modeFactory.create(mode)
-                    .complete(new CompleteRunContext(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt, events));
+                    .execute(new CompleteExecutionContext(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt, events));
         });
     }
 
@@ -297,15 +297,15 @@ public final class WorkflowEngine {
             Tokens.LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             return modeFactory.create(mode)
-                    .advance(new AdvanceRunContext(task, run.leaseOwner, run.steps, run.finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+                    .execute(new AdvanceRunContext(task, run.leaseOwner, run.steps, run.finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
         });
     }
 
     public Map<String, RunResult> advanceMany(List<Run> runs) {
         requireWellFormed(runs);
         try {
-            return transactions.inTx(tx -> modeFactory.create(ExecutionMode.LOCAL_ASYNC).advanceMany(
-                    new AdvanceBatchContext(runs, tx, loopMaxIterations, defaultLeaseMillis)));
+            return transactions.inTx(tx -> modeFactory.create(ExecutionMode.LOCAL_ASYNC)
+                    .execute(new AdvanceBatchContext(runs, tx, loopMaxIterations, defaultLeaseMillis)));
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, () -> "advanceMany: batch of " + runs.size()
                     + " rolled back (" + e + "); replaying each run in its own transaction");
@@ -373,8 +373,8 @@ public final class WorkflowEngine {
             } else {
                 inst = instances.observedRun(tx, workflow, version, key);
             }
-            return modeFactory.observed().observe(new ObserveRunContext(inst, reporter, steps, fin, tx),
-                    observeSettleMillis, observeStallMillis);
+            return modeFactory.create(ExecutionMode.OBSERVED).execute(
+                    new ObserveRunContext(inst, reporter, steps, fin, tx, observeSettleMillis, observeStallMillis));
         });
     }
 
@@ -400,7 +400,7 @@ public final class WorkflowEngine {
         WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
                 .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
         boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
-        modeFactory.observed().settle(tx, inst, def, idle, now);
+        modeFactory.create(ExecutionMode.OBSERVED).execute(new SettleContext(tx, inst, def, idle, now));
         LOG.log(System.Logger.Level.DEBUG, () -> "settled observed run " + inst.id + " -> " + inst.status
                 + (idle ? " (idle)" : ""));
     }

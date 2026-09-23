@@ -1,7 +1,5 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.server.engine.WorkflowEngine.AdvanceOutcome;
-
 /**
  * The worker runs a chain of steps locally and reports each one as it finishes, so a run arrives
  * a step at a time and the continuation is leased straight back. Nothing accumulates on the
@@ -11,15 +9,5 @@ public class LocalSyncRunningMode extends BaseRunningMode {
 
     LocalSyncRunningMode(Instances instances, NodeBehaviourFactory nodeBehaviourFactory, DefinitionRegistry definitions) {
         super(instances, nodeBehaviourFactory, definitions);
-    }
-
-    @Override
-    public void complete(CompleteRunContext ctx) {
-        completeStep(ctx);
-    }
-
-    @Override
-    public AdvanceOutcome advance(AdvanceRunContext ctx) {
-        return chainSteps(ctx);
     }
 }
