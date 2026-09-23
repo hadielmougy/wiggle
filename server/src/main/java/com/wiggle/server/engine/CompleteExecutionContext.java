@@ -11,20 +11,17 @@ import java.util.List;
  * else null and the server's stamps stand; {@code events} are what the handler emitted while it
  * ran, appended to the event log in this same transaction.
  */
-public record CompleteRunContext(
+public record CompleteExecutionContext(
         Tokens.LockedTask task, String leaseOwner, Object result, Tx tx, long loopMaxIterations,
-        Long startedAt, Long finishedAt, List<EmittedEvent> events) {
+        Long startedAt, Long finishedAt, List<EmittedEvent> events) implements ExecutionContext<Void> {
 
-    public CompleteRunContext {
+    public CompleteExecutionContext {
         events = events == null ? List.of() : List.copyOf(events);
     }
 
-    public CompleteRunContext(Tokens.LockedTask task, String leaseOwner, Object result, Tx tx, long loopMaxIterations) {
-        this(task, leaseOwner, result, tx, loopMaxIterations, null, null, List.of());
-    }
-
-    public CompleteRunContext(Tokens.LockedTask task, String leaseOwner, Object result, Tx tx,
-                              long loopMaxIterations, Long startedAt, Long finishedAt) {
-        this(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt, List.of());
+    @Override
+    public Void runOn(BaseRunningMode mode) {
+        mode.completeStep(this);
+        return null;
     }
 }

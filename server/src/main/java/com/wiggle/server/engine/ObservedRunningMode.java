@@ -6,7 +6,6 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.ObserveResult;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.engine.WorkflowEngine.AdvanceOutcome;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
@@ -45,16 +44,6 @@ public class ObservedRunningMode extends BaseRunningMode {
         super(instances, nodeBehaviourFactory, definitions);
     }
 
-    @Override
-    public void complete(CompleteRunContext ctx) {
-        completeStep(ctx);
-    }
-
-    @Override
-    public AdvanceOutcome advance(AdvanceRunContext ctx) {
-        return chainSteps(ctx);
-    }
-
     /** What an observed graph may contain: what the judge can walk. */
     static void requireObservable(WorkflowDefinition def) {
         for (Node n : def.nodes().values()) {
@@ -84,9 +73,12 @@ public class ObservedRunningMode extends BaseRunningMode {
      * for its timing and recorded as AFTER_END; a step that threw marks the run closing, and the
      * judge fails it with that step's error once the run has settled.
      */
-    ObserveResult observe(ObserveRunContext ctx, long settleMillis, long stallMillis) {
+    @Override
+    ObserveResult observe(ObserveRunContext ctx) {
         Tx tx = ctx.tx();
         Instance inst = ctx.inst();
+        long settleMillis = ctx.settleMillis();
+        long stallMillis = ctx.stallMillis();
         long now = System.currentTimeMillis();
         LazyGraph def = definitions().graph(tx, inst.workflow, inst.version);
         int anomalies = 0;
@@ -140,7 +132,13 @@ public class ObservedRunningMode extends BaseRunningMode {
      * {@link Conformance}, writes the findings, and closes the instance. {@code idle} says the run
      * settled by going quiet rather than by reaching END or being reported final.
      */
-    void settle(Tx tx, Instance inst, WorkflowDefinition def, boolean idle, long now) {
+    @Override
+    void settle(SettleContext ctx) {
+        Tx tx = ctx.tx();
+        Instance inst = ctx.inst();
+        WorkflowDefinition def = ctx.def();
+        boolean idle = ctx.idle();
+        long now = ctx.now();
         List<Token> reported = new ArrayList<>();
         for (Token t : tx.tokensOf(inst.id)) {
             if (!t.isActive() && t.kind != NodeKind.END && t.status != TokenStatus.CANCELLED) reported.add(t);

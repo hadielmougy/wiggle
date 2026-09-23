@@ -372,8 +372,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceRun taskId=" + req.getTaskId()
                 + " leaseOwner=" + req.getLeaseOwner() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
         run(resp, () -> {
-            WorkflowEngine.AdvanceOutcome out =
-                    engine.advance(req.getTaskId(), req.getLeaseOwner(), stepInputs(req), req.getFinal());
+            WorkflowEngine.Run run = new WorkflowEngine.Run(req.getTaskId(), req.getLeaseOwner(), stepInputs(req), req.getFinal());
+            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
             return AdvanceRunResult.newBuilder()
                     .setInstanceStatus(out.instanceStatus())
                     .setLeaseExpiresAt(out.leaseExpiresAt())

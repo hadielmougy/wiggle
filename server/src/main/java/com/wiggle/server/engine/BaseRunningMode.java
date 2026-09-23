@@ -2,7 +2,9 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Doc;
 import com.wiggle.core.Node;
+import com.wiggle.core.ObserveResult;
 import com.wiggle.server.engine.WorkflowEngine.AdvanceOutcome;
+import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
@@ -10,12 +12,16 @@ import com.wiggle.server.store.Tx;
 
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Map;
 
 /**
- * The step machinery every {@link RunningMode} is built from. Subclasses choose the procedure --
- * how many steps they apply under one lock and when the worker is released -- and share the work
- * of applying a step, so the saga capture, the loop guard and the runaway guard cannot drift
- * between modes.
+ * The step machinery every {@link RunningMode} is built from. Every mode reaches this through the
+ * same {@code execute}, one implementation for all of them: {@link ExecutionContext#runOn} decides
+ * which procedure runs, not a switch. {@link #completeStep}/{@link #chainSteps} are genuinely
+ * shared and every mode gets them; {@link #advanceMany}/{@link #observe}/{@link #settle} are
+ * mode-specific and default to refusing the call, overridden only by the one mode that supports
+ * each (LOCAL_ASYNC, OBSERVED, OBSERVED respectively) -- the same shape {@code advanceMany} always
+ * had as a default interface method, now reached by context dispatch instead.
  */
 abstract class BaseRunningMode implements RunningMode {
 
@@ -31,16 +37,32 @@ abstract class BaseRunningMode implements RunningMode {
         this.definitions = definitions;
     }
 
+    @Override
+    public final <T> T execute(ExecutionContext<T> ctx) {
+        return ctx.runOn(this);
+    }
+
+    /** Applies a cross-instance batch under one transaction. Only {@link LocalAsyncRunningMode} does this. */
+    Map<String, RunResult> advanceMany(AdvanceBatchContext ctx) {
+        throw new UnsupportedOperationException("advanceMany is not supported by this mode");
+    }
+
+    /** Appends a run an instrumented application already executed. Only {@link ObservedRunningMode} does this. */
+    ObserveResult observe(ObserveRunContext ctx) {
+        throw new UnsupportedOperationException("observe is not supported by this mode");
+    }
+
+    /** Judges one settled observed run. Only {@link ObservedRunningMode} does this. */
+    void settle(SettleContext ctx) {
+        throw new UnsupportedOperationException("settle is not supported by this mode");
+    }
+
     final DefinitionRegistry definitions() {
         return definitions;
     }
 
     final Instances instances() {
         return instances;
-    }
-
-    final NodeBehaviourFactory behaviours() {
-        return nodeBehaviourFactory;
     }
 
     /** The step's own clock, when its reporter sent one; a step reported untimed keeps the
@@ -52,7 +74,7 @@ abstract class BaseRunningMode implements RunningMode {
     }
 
     /** Applies one reported result to the task token, then drives the continuation to its park. */
-    final void completeStep(CompleteRunContext ctx) {
+    final void completeStep(CompleteExecutionContext ctx) {
         Tx tx           = ctx.tx();
         Instance inst   = ctx.task().inst();
         Token t         = ctx.task().token();

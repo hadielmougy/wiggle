@@ -12,5 +12,11 @@ import java.util.List;
  */
 public record AdvanceRunContext(
         Tokens.LockedTask task, String leaseOwner, List<StepInput> steps,
-        boolean finalHandback, Tx tx, long loopMaxIterations, long leaseMillis) {
+        boolean finalHandback, Tx tx, long loopMaxIterations, long leaseMillis)
+        implements ExecutionContext<WorkflowEngine.AdvanceOutcome> {
+
+    @Override
+    public WorkflowEngine.AdvanceOutcome runOn(BaseRunningMode mode) {
+        return mode.chainSteps(this);
+    }
 }

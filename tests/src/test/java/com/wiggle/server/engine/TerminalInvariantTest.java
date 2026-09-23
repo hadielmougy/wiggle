@@ -133,8 +133,8 @@ class TerminalInvariantTest {
             TaskActivation right = claim(engine);
             engine.fail(right.taskId(), right.leaseOwner(), "boom", false);
 
-            WorkflowEngine.AdvanceOutcome out = engine.advance(left.taskId(), left.leaseOwner(),
-                    List.of(new WorkflowEngine.StepInput("left", null, null)), false);
+            WorkflowEngine.AdvanceOutcome out = engine.advance(new WorkflowEngine.Run(left.taskId(), left.leaseOwner(),
+                    List.of(new WorkflowEngine.StepInput("left", null, null)), false));
             assertEquals(InstanceStatus.COMPENSATING.name(), out.instanceStatus(),
                     "a worker mid-run must be told the saga took the instance over");
         });

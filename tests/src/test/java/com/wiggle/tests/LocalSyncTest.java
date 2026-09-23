@@ -117,8 +117,8 @@ class LocalSyncTest {
             assertEquals(ExecutionMode.LOCAL_SYNC, first.executionMode(), "mode stamped on the activation");
 
             // w1 reports step 'a' as non-final; the continuation ('b') is leased straight back to w1.
-            WorkflowEngine.AdvanceOutcome out = engine.advance(first.taskId(), "w1",
-                    List.of(new WorkflowEngine.StepInput(first.nodeId(), Map.of("a", 1L), null)), false);
+            WorkflowEngine.Run run = new WorkflowEngine.Run(first.taskId(), "w1", List.of(new WorkflowEngine.StepInput(first.nodeId(), Map.of("a", 1L), null)), false);
+            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
             assertEquals("RUNNING", out.instanceStatus(), "instance still running");
             assertNotNull(out.nextTaskId(), "a continuation token was leased back");
 
@@ -139,8 +139,9 @@ class LocalSyncTest {
             engine.start(bp.name(), bp.version(), Map.of(), null);
             TaskActivation first = engine.poll("w1", bp.definition().queues(), 10, null).getFirst();
 
+            WorkflowEngine.Run run = new WorkflowEngine.Run(first.taskId(), "w1", List.of(), false);
             EngineException e = assertThrows(EngineException.class,
-                    () -> engine.advance(first.taskId(), "w1", List.of(), false));
+                    () -> engine.advance(run));
             assertEquals(400, e.statusCode());
         }
     }
@@ -163,12 +164,12 @@ class LocalSyncTest {
             String xNode = first.nodeId();
             String yNode = bp.definition().node(xNode).next();
 
-            // The worker buffered both steps and flushes them in a single final batch. Each report
-            // carries the step's COMPLETE next context (a return replaces, never merges).
-            WorkflowEngine.AdvanceOutcome out = engine.advance(first.taskId(), "w1", List.of(
+            WorkflowEngine.Run run = new WorkflowEngine.Run(
+                    first.taskId(), "w1", List.of(
                     new WorkflowEngine.StepInput(xNode, Map.of("x", 1L), null),
-                    new WorkflowEngine.StepInput(yNode, Map.of("x", 1L, "y", 2L), null)), true);
-
+                    new WorkflowEngine.StepInput(yNode, Map.of("x", 1L, "y", 2L), null)), true
+            );
+            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
             assertEquals("COMPLETED", out.instanceStatus(), "the batch drove the instance to completion");
             Map<String, Object> ctx = Json.asObject(engine.instance(id).orElseThrow().context());
             assertEquals(1L, ctx.get("x"));

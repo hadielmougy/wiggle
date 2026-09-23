@@ -26,16 +26,7 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
     }
 
     @Override
-    public void complete(CompleteRunContext ctx) {
-        completeStep(ctx);
-    }
-
-    @Override
-    public AdvanceOutcome advance(AdvanceRunContext ctx) {
-        return chainSteps(ctx);
-    }
-
-    Map<String, RunResult> advanceMany(AdvanceBatchContext ctx) {
+    public Map<String, RunResult> advanceMany(AdvanceBatchContext ctx) {
         Tx tx = ctx.tx();
         Map<String, RunResult> results = new LinkedHashMap<>();
 
