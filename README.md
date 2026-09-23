@@ -5,7 +5,7 @@
   <img alt="Wiggle" src="docs/img/wiggle-logo.svg" width="360">
 </picture>
 
-### Durable workflows, in a JAR and a database.
+### Durable workflows. 
 
 **Describe a process as a graph. Wiggle runs it as a durable state machine that survives
 crashes, waits for humans, and retries failures — with a server you can embed, and workers in
