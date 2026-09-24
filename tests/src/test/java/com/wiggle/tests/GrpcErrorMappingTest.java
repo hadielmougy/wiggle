@@ -6,6 +6,7 @@ import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.server.store.Rows.Token;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -43,7 +44,8 @@ class GrpcErrorMappingTest {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             WiggleApiException noTask = assertThrows(WiggleApiException.class,
-                    () -> client.complete("tok_nope", "w", Map.of()));
+                    () -> client.reportSteps("tok_nope", "w",
+                            List.of(new WiggleClient.StepReport("any", Map.of(), null)), true));
             assertEquals(404, noTask.status());
             assertTrue(noTask.isClientError());
 
@@ -61,15 +63,16 @@ class GrpcErrorMappingTest {
             client.register(bp);
             String id = client.start(bp, Map.of());
             // No worker ever polls, so the token is READY (unleased); settling it must conflict.
-            String tokenId = server.engine().tokens(id).get(0).id;
+            Token token = server.engine().tokens(id).get(0);
             WiggleApiException e = assertThrows(WiggleApiException.class,
-                    () -> client.complete(tokenId, "impostor", Map.of()));
+                    () -> client.reportSteps(token.id, "impostor",
+                            List.of(new WiggleClient.StepReport(token.nodeId, Map.of(), null)), true));
             assertEquals(409, e.status());
             assertTrue(e.getMessage().contains("not RUNNING"), "carries the engine's description");
         }
     }
 
-    @Test @DisplayName("a non-boolean predicate result surfaces as 400 over gRPC")
+    @Test @DisplayName("a predicate step reported without a branch surfaces as 400 over gRPC")
     void badRequest() throws Exception {
         FlowSpec bp = FlowSpec.define("err-bad", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenFilter(s::check)
@@ -84,7 +87,8 @@ class GrpcErrorMappingTest {
             TaskActivation gate = claimed.get(0);
 
             WiggleApiException e = assertThrows(WiggleApiException.class,
-                    () -> client.complete(gate.taskId(), gate.leaseOwner(), Map.of("value", "not-a-boolean")));
+                    () -> client.reportSteps(gate.taskId(), gate.leaseOwner(),
+                            List.of(new WiggleClient.StepReport(gate.nodeId(), Map.of("value", "not-a-boolean"), null)), true));
             assertEquals(400, e.status());
             assertTrue(e.getMessage().contains("predicate result must be a boolean"));
         }

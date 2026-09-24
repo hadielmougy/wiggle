@@ -1,5 +1,6 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.tests.Reports;
 import com.wiggle.core.Json;
 import com.wiggle.core.ScratchKeys;
 import com.wiggle.core.TaskActivation;
@@ -56,7 +57,7 @@ class DeepNestingTest {
             while (engine.instance(id).orElseThrow().status().equals("RUNNING")) {
                 if (System.nanoTime() > deadline) throw new AssertionError("not terminal after 60s");
                 for (TaskActivation t : engine.poll("w", queues, 32, null)) {
-                    engine.complete(t.taskId(), "w", resultFor(t));
+                    Reports.one(engine, t, "w", resultFor(t));
                 }
             }
 
@@ -89,7 +90,7 @@ class DeepNestingTest {
             while (engine.instance(id).orElseThrow().status().equals("RUNNING")) {
                 if (System.nanoTime() > deadline) throw new AssertionError("not terminal after 120s");
                 for (TaskActivation t : engine.poll("w", queues, 32, null)) {
-                    engine.complete(t.taskId(), "w", resultFor(t));
+                    Reports.one(engine, t, "w", resultFor(t));
                 }
             }
             assertEquals("COMPLETED", engine.instance(id).orElseThrow().status());
@@ -138,7 +139,7 @@ class DeepNestingTest {
         }
         if (a.startsWith("g")) {                                          // loop guard: designated ones pass once
             int n = guardEvals.merge(a, 1, Integer::sum);
-            return Map.of("value", LOOPED.contains(a) && n % 2 == 1);
+            return LOOPED.contains(a) && n % 2 == 1;
         }
         throw new AssertionError("unexpected activity " + a);
     }

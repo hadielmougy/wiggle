@@ -203,44 +203,23 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Completes a task. For TASK nodes (combines included) {@code result} REPLACES the context —
-     * the handler's return is the complete next context, sent whole by the worker; a null result
-     * leaves the context untouched. For PREDICATE nodes it must carry a boolean under
-     * {@code "value"}.
+     * A compensator reports through the same call as any other step, but it is not a step of the
+     * flow: it closes one entry of the reverse pass, and its instance is COMPENSATING rather than
+     * RUNNING, so it never reaches a running mode.
      */
-    public void complete(String taskId, String leaseOwner, Object result) {
-        complete(taskId, leaseOwner, result, null, null, List.of());
-    }
-
-    /** {@link #complete(String, String, Object)} with the handler's own start and finish, which
-     *  replace the server's claimed-to-settled stamps on the token. */
-    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt) {
-        complete(taskId, leaseOwner, result, startedAt, finishedAt, List.of());
-    }
-
-    /** {@link #complete(String, String, Object, Long, Long)} with the events the handler emitted,
-     *  appended to the log in the transaction that settles the step. */
-    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt,
-                         List<EmittedEvent> events) {
-        transactions.inTxVoid(tx -> {
-            Tokens.LockedTask task = Tokens.lock(tx, taskId);
-            Tokens.requireLease(task.token(), leaseOwner);
-            if (compensated(tx, task, events)) return;
-            ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
-            modeFactory.create(mode)
-                    .execute(new CompleteExecutionContext(task, leaseOwner, result, tx, loopMaxIterations, startedAt, finishedAt, events));
-        });
-    }
-
-    private boolean compensated(Tx tx, Tokens.LockedTask task, List<EmittedEvent> events) {
+    private boolean compensated(Tx tx, Tokens.LockedTask task, Run run) {
         Long compSeq = Sagas.seqOf(task.token());
-        if (compSeq != null) {
-            long now = System.currentTimeMillis();
-            Events.emitted(tx, task.inst(), task.token().nodeId, events, now);
-            instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, now);
-            return true;
+        if (compSeq == null) return false;
+        if (run.steps().size() != 1) {
+            throw EngineException.badRequest("a compensator reports exactly one step");
         }
-        return false;
+        StepInput step = run.steps().getFirst();
+        Tokens.requireLease(task.token(), run.leaseOwner());
+        BaseRunningMode.requireMatchingNode(task.token(), step);
+        long now = System.currentTimeMillis();
+        Events.emitted(tx, task.inst(), task.token().nodeId, step.events(), now);
+        instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, now);
+        return true;
     }
 
     /**
@@ -265,24 +244,21 @@ public final class WorkflowEngine {
         }
     }
 
-    /** The result of applying a reported run: the instance's status, renewed lease, and next token. */
-    public record AdvanceOutcome(String instanceStatus, long leaseExpiresAt, String nextTaskId) {}
-
-    /** One run of a cross-instance batch: exactly the arguments of {@link #advance}. */
+    /** One run of a cross-instance batch: exactly the arguments of {@link #report}. */
     public record Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {}
 
     /**
-     * A run's fate in a batch: the {@link AdvanceOutcome} the single-run path would have
+     * A run's fate in a batch: the {@link ReportOutcome} the single-run path would have
      * returned, or the status and message it would have thrown. A rejected run wrote nothing
      * and may be reported again.
      */
-    public record RunResult(AdvanceOutcome outcome, Integer errorStatus, String error) {
+    public record RunResult(ReportOutcome outcome, Integer errorStatus, String error) {
 
         public boolean ok() {
             return outcome != null;
         }
 
-        static RunResult of(AdvanceOutcome outcome) {
+        static RunResult of(ReportOutcome outcome) {
             return new RunResult(outcome, null, null);
         }
 
@@ -291,13 +267,26 @@ public final class WorkflowEngine {
         }
     }
 
-    public AdvanceOutcome advance(Run run) {
-        if (run.steps.isEmpty()) throw EngineException.badRequest("advance requires at least one step");
+    /**
+     * The one way a worker reports finished work: one step, or the ordered run of steps it chained
+     * locally. The workflow's declared mode decides whether the continuation is leased back to this
+     * worker or released, so the caller cannot choose it and cannot choose it wrong. A mode that
+     * never chains applies every reported step in order and then hands the continuation back.
+     */
+    public ReportOutcome report(Run run) {
+        if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
         return transactions.inTx(tx -> {
             Tokens.LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
+            if (mode == ExecutionMode.OBSERVED) {
+                throw EngineException.conflict("workflow " + task.inst().workflow
+                        + " runs OBSERVED; its steps are reported through observe, not by a worker");
+            }
+            if (compensated(tx, task, run)) {
+                return new ReportOutcome(task.inst().status.name(), 0, null);
+            }
             return modeFactory.create(mode)
-                    .execute(new AdvanceRunContext(task, run.leaseOwner, run.steps, run.finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+                    .execute(new ReportStepsContext(task, run.leaseOwner, run.steps, run.finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
         });
     }
 
@@ -317,7 +306,7 @@ public final class WorkflowEngine {
         if (runs.isEmpty()) throw EngineException.badRequest("advanceMany requires at least one run");
         Set<String> ids = new HashSet<>();
         for (Run run : runs) {
-            if (run.steps().isEmpty()) throw EngineException.badRequest("advance requires at least one step");
+            if (run.steps().isEmpty()) throw EngineException.badRequest("report requires at least one step");
             if (!ids.add(run.startTaskId())) {
                 throw EngineException.badRequest("task " + run.startTaskId() + " appears twice in the batch");
             }
@@ -333,7 +322,7 @@ public final class WorkflowEngine {
         Map<String, RunResult> results = new LinkedHashMap<>();
         for (Run run : runs) {
             try {
-                results.put(run.startTaskId(), RunResult.of(advance(run)));
+                results.put(run.startTaskId(), RunResult.of(report(run)));
             } catch (EngineException e) {
                 results.put(run.startTaskId(), RunResult.reject(e));
             } catch (RuntimeException e) {

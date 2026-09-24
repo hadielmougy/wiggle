@@ -274,29 +274,6 @@ public final class WiggleClient implements AutoCloseable {
         return new PollResult(out, res.getRetryAfterMillis());
     }
 
-    public void complete(String taskId, String leaseOwner, Object result) {
-        complete(taskId, leaseOwner, result, null, null);
-    }
-
-    /** {@link #complete(String, String, Object)} with the handler's own start and finish (epoch
-     *  millis), so the server keeps the step's duration rather than the round trip's. */
-    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt) {
-        complete(taskId, leaseOwner, result, startedAt, finishedAt, java.util.List.of());
-    }
-
-    /** {@link #complete(String, String, Object, Long, Long)} with the events the handler emitted,
-     *  which the server appends to the log in the transaction that settles the step. */
-    public void complete(String taskId, String leaseOwner, Object result, Long startedAt, Long finishedAt,
-                         java.util.List<com.wiggle.core.EmittedEvent> events) {
-        TaskResultRequest.Builder req = TaskResultRequest.newBuilder()
-                .setTaskId(taskId)
-                .setLeaseOwner(leaseOwner);
-        if (result != null) req.setResult(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(result)));
-        if (startedAt != null && finishedAt != null) req.setStartedAt(startedAt).setFinishedAt(finishedAt);
-        for (com.wiggle.core.EmittedEvent e : events) req.addEvents(Wire.emitted(e));
-        call(() -> stub.completeTask(req.build()));
-    }
-
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
         call(() -> stub.failTask(TaskFailureRequest.newBuilder()
                 .setTaskId(taskId)
@@ -352,15 +329,17 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     /**
-     * Reports a locally-executed run (LOCAL_SYNC/LOCAL_ASYNC) and returns whether to keep going.
-     * {@code steps} carries, per node, either a task merge (Object) or a predicate value (Boolean).
+     * Reports finished work: one step, or the ordered run of steps this worker chained locally.
+     * The server decides from the workflow's mode whether the continuation comes back leased to
+     * this worker ({@code nextTaskId}) or is released. {@code finalHandback} says this worker will
+     * not take another step whatever the mode allows.
      */
-    public com.wiggle.core.AdvanceResult advanceRun(String taskId, String leaseOwner,
+    public com.wiggle.core.ReportResult reportSteps(String taskId, String leaseOwner,
                                                     List<StepReport> steps, boolean finalHandback) {
-        AdvanceRunRequest.Builder req = AdvanceRunRequest.newBuilder()
+        ReportStepsRequest.Builder req = ReportStepsRequest.newBuilder()
                 .setTaskId(taskId).setLeaseOwner(leaseOwner).setFinal(finalHandback);
         for (StepReport s : steps) req.addSteps(Wire.stepResult(s));
-        return Wire.advanceResult(call(() -> stub.advanceRun(req.build())));
+        return Wire.reportResult(call(() -> stub.reportSteps(req.build())));
     }
 
     /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
@@ -380,23 +359,23 @@ public final class WiggleClient implements AutoCloseable {
         }
     }
 
-    /** One run of a cross-instance batch: exactly the arguments of {@link #advanceRun}. */
+    /** One run of a cross-instance batch: exactly the arguments of {@link #reportSteps}. */
     public record RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback) {}
 
     /** A run's fate in a batch: the single-run result, or the status and message it would have
      *  thrown. A rejected run wrote nothing and may be reported again -- singly, per the message. */
-    public record RunOutcome(com.wiggle.core.AdvanceResult outcome, int errorStatus, String error) {
+    public record RunOutcome(com.wiggle.core.ReportResult outcome, int errorStatus, String error) {
         public boolean ok() { return outcome != null; }
     }
 
     /**
-     * Reports N independent runs in one call and one server-side commit. Every run is exactly an
-     * {@link #advanceRun}; answers are keyed by task id, one per submitted run.
+     * Reports N independent runs in one call and one server-side commit. Every run is exactly a
+     * {@link #reportSteps}; answers are keyed by task id, one per submitted run.
      */
     public Map<String, RunOutcome> advanceMany(List<RunSubmission> runs) {
         AdvanceManyRequest.Builder req = AdvanceManyRequest.newBuilder();
         for (RunSubmission run : runs) {
-            AdvanceRunRequest.Builder one = AdvanceRunRequest.newBuilder()
+            ReportStepsRequest.Builder one = ReportStepsRequest.newBuilder()
                     .setTaskId(run.taskId()).setLeaseOwner(run.leaseOwner()).setFinal(run.finalHandback());
             for (StepReport s : run.steps()) one.addSteps(Wire.stepResult(s));
             req.addRuns(one);
@@ -405,7 +384,7 @@ public final class WiggleClient implements AutoCloseable {
         Map<String, RunOutcome> out = new java.util.LinkedHashMap<>();
         for (com.wiggle.proto.RunOutcome r : res.getResultsList()) {
             out.put(r.getTaskId(), r.getErrorStatus() == 0 && r.hasOutcome()
-                    ? new RunOutcome(Wire.advanceResult(r.getOutcome()), 0, null)
+                    ? new RunOutcome(Wire.reportResult(r.getOutcome()), 0, null)
                     : new RunOutcome(null, r.getErrorStatus(), r.getError()));
         }
         return out;

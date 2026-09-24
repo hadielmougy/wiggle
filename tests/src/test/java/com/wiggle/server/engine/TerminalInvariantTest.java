@@ -1,9 +1,7 @@
 package com.wiggle.server.engine;
 
-import com.wiggle.core.Node;
-import com.wiggle.core.RetryPolicy;
-import com.wiggle.core.TaskActivation;
-import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.tests.Reports;
+import com.wiggle.core.*;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
@@ -45,8 +43,8 @@ class TerminalInvariantTest {
     void completed() {
         drive(linear(), engine -> {
             String id = engine.start("linear", 1, Map.of(), null);
-            complete(engine, "one");
-            complete(engine, "two");
+            report(engine, "one");
+            report(engine, "two");
             assertTerminalAndQuiet(engine, id, InstanceStatus.COMPLETED);
         });
     }
@@ -65,7 +63,7 @@ class TerminalInvariantTest {
     void failedAtUnsuccessfulEnd() {
         drive(unsuccessfulEnd(), engine -> {
             String id = engine.start("dead-end", 1, Map.of(), null);
-            complete(engine, "one");
+            report(engine, "one");
             assertTerminalAndQuiet(engine, id, InstanceStatus.FAILED);
         });
     }
@@ -94,14 +92,14 @@ class TerminalInvariantTest {
     void compensated() {
         drive(saga(), engine -> {
             String id = engine.start("saga", 1, Map.of(), null);
-            complete(engine, "one");                       // compensable, now in the comp-log
+            report(engine, "one");                       // compensable, now in the comp-log
             TaskActivation two = claim(engine);
             engine.fail(two.taskId(), two.leaseOwner(), "boom", false);
             assertEquals(InstanceStatus.COMPENSATING.name(), status(engine, id),
                     "the reverse pass should have taken the instance over");
             assertEquals(1, active(engine, id).size(), "exactly one undo task is in flight");
             TaskActivation undo = claim(engine);           // the compensator
-            engine.complete(undo.taskId(), undo.leaseOwner(), null);
+            Reports.one(engine, undo, null);
             assertTerminalAndQuiet(engine, id, InstanceStatus.COMPENSATED);
         });
     }
@@ -110,7 +108,7 @@ class TerminalInvariantTest {
     void compensationFailed() {
         drive(saga(), engine -> {
             String id = engine.start("saga", 1, Map.of(), null);
-            complete(engine, "one");
+            report(engine, "one");
             TaskActivation two = claim(engine);
             engine.fail(two.taskId(), two.leaseOwner(), "boom", false);
             TaskActivation undo = claim(engine);
@@ -120,20 +118,20 @@ class TerminalInvariantTest {
     }
 
     /**
-     * AdvanceRunResult.instance_status is not limited to the terminal four: a concurrent failure
+     * ReportStepsResult.instance_status is not limited to the terminal four: a concurrent failure
      * can leave the instance COMPENSATING between a worker's local steps, and the worker is told
      * so. This is what {@code proto/src/main/proto/wiggle.proto} documents on that field.
      */
-    @Test @DisplayName("advance reports COMPENSATING when the saga took over mid-run")
-    void advanceReportsANonTerminalNonRunningState() {
+    @Test @DisplayName("a report answers COMPENSATING when the saga took over mid-run")
+    void reportAnswersANonTerminalNonRunningState() {
         drive(sagaFork(), engine -> {
             engine.start("saga-fork", 1, Map.of(), null);
-            complete(engine, "one");                       // compensable, now in the comp-log
+            report(engine, "one");                       // compensable, now in the comp-log
             TaskActivation left = claim(engine);           // leased, still in flight
             TaskActivation right = claim(engine);
             engine.fail(right.taskId(), right.leaseOwner(), "boom", false);
 
-            WorkflowEngine.AdvanceOutcome out = engine.advance(new WorkflowEngine.Run(left.taskId(), left.leaseOwner(),
+            ReportOutcome out = engine.report(new WorkflowEngine.Run(left.taskId(), left.leaseOwner(),
                     List.of(new WorkflowEngine.StepInput("left", null, null)), false));
             assertEquals(InstanceStatus.COMPENSATING.name(), out.instanceStatus(),
                     "a worker mid-run must be told the saga took the instance over");
@@ -177,10 +175,10 @@ class TerminalInvariantTest {
         return claimed.getFirst();
     }
 
-    private static void complete(WorkflowEngine engine, String expectedNode) {
+    private static void report(WorkflowEngine engine, String expectedNode) {
         TaskActivation t = claim(engine);
         assertEquals(expectedNode, t.nodeId(), "dispatched the wrong node");
-        engine.complete(t.taskId(), t.leaseOwner(), null);
+        Reports.one(engine, t, null);
     }
 
     private static void drive(WorkflowDefinition def, Consumer<WorkflowEngine> body) {
@@ -233,7 +231,7 @@ class TerminalInvariantTest {
         n.put("right", task("right").withNext("join"));
         n.put("join", Node.join("join", "join", 2).withNext("end"));
         n.put("end", Node.end("end", true, null));
-        return new WorkflowDefinition("saga-fork", 1, "one", n, Set.of(QUEUE));
+        return new WorkflowDefinition("saga-fork", 1, "one", n, Set.of(QUEUE), ExecutionMode.LOCAL_SYNC);
     }
 
     /** One attempt, so a reported failure is terminal for the token immediately. */

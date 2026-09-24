@@ -5,7 +5,7 @@ package com.wiggle.core;
  * not {@code RUNNING}), the renewed lease expiry, and the token to reference for the next local
  * step ({@code null} once control has been handed back).
  */
-public record AdvanceResult(String instanceStatus, long leaseExpiresAt, String nextTaskId) {
+public record ReportResult(String instanceStatus, long leaseExpiresAt, String nextTaskId) {
 
     public boolean running() {
         return "RUNNING".equals(instanceStatus);

@@ -25,7 +25,7 @@ import java.util.function.Function;
 /**
  * What a LOCAL_ASYNC batch costs the DATABASE, as distinct from what it saves on the wire.
  *
- * <p>A worker buffers up to {@code localBatchSize} steps and reports them in one {@code advanceRun}
+ * <p>A worker buffers up to {@code localBatchSize} steps and reports them in one {@code reportSteps}
  * call, so the client-to-server round trips collapse from K to 1. The question this asks is what
  * happens next: {@code doAdvance} walks the batch a step at a time, and the engine never reads
  * {@link ExecutionMode} at all -- LOCAL_SYNC and LOCAL_ASYNC take byte-for-byte the same server
@@ -91,7 +91,7 @@ class LocalBatchBench {
             for (int i = 0; i < steps; i++) {
                 stepInputs.add(new WorkflowEngine.StepInput("n" + i, Map.of("n", (long) i + 1), null));
             }
-            engine.advance(new WorkflowEngine.Run(head.taskId(), head.leaseOwner(), stepInputs, false));
+            engine.report(new WorkflowEngine.Run(head.taskId(), head.leaseOwner(), stepInputs, false));
         }
         return new Tally(steps, Map.copyOf(counts), total.get());
     }

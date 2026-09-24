@@ -115,8 +115,8 @@ final class Wire {
         return m;
     }
 
-    static com.wiggle.core.AdvanceResult advanceResult(AdvanceRunResult res) {
-        return new com.wiggle.core.AdvanceResult(res.getInstanceStatus(), res.getLeaseExpiresAt(),
+    static com.wiggle.core.ReportResult reportResult(ReportStepsResult res) {
+        return new com.wiggle.core.ReportResult(res.getInstanceStatus(), res.getLeaseExpiresAt(),
                 res.getNextTaskId().isEmpty() ? null : res.getNextTaskId());
     }
 
@@ -131,7 +131,7 @@ final class Wire {
         for (com.wiggle.core.EmittedEvent e : s.events()) sr.addEvents(emitted(e));
         if (s.startedAt() != null && s.finishedAt() != null) sr.setStartedAt(s.startedAt()).setFinishedAt(s.finishedAt());
         if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
-        else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(s.merge()));
+        else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(s.merge())));
         return sr.build();
     }
 }

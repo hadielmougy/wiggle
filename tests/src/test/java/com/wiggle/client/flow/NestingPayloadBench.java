@@ -1,5 +1,6 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.tests.Reports;
 import com.wiggle.core.Json;
 import com.wiggle.core.ScratchKeys;
 import com.wiggle.core.TaskActivation;
@@ -183,7 +184,7 @@ class NestingPayloadBench {
                             continue;
                         }
                         for (TaskActivation t : batch) {
-                            engine.complete(t.taskId(), worker, resultFor(t));
+                            Reports.one(engine, t, worker, resultFor(t));
                             completions.incrementAndGet();
                         }
                     }
@@ -278,7 +279,7 @@ class NestingPayloadBench {
             Object collected = Json.asObject(t.context()).get(ScratchKeys.forEach("fe" + a.substring(3)));
             return Map.of("items", List.of(Json.asArray(collected).getFirst()));
         }
-        if (a.startsWith("g")) return Map.of("value", false);    // loop guards: one pass (see class doc)
+        if (a.startsWith("g")) return false;                     // loop guards: one pass (see class doc)
         throw new AssertionError("unexpected activity " + a);
     }
 

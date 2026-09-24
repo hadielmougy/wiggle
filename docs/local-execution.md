@@ -2,6 +2,11 @@
 
 Status: **Phase 0–2 implemented + `.checkpoint()` + graceful-shutdown drain** · Target: post-2.0 · Owner: TBD
 
+> **The wire surface below has since been superseded.** `AdvanceRun` and `CompleteTask` were
+> collapsed into one `ReportSteps` RPC, so a worker no longer picks its call by execution mode.
+> The mechanism is unchanged -- only which RPC carries it. See
+> [unified-reporting.md](unified-reporting.md).
+
 > **Benchmark (linear 20-step pipeline, 1000 instances, 4 workers × 16, Postgres):**
 > SERVER 15 inst/s · LOCAL_SYNC 102 inst/s · **LOCAL_ASYNC 213 inst/s**. Async is ~2× sync on a
 > real DB because a 20-step run commits once (≈20× fewer WAL fsyncs) rather than per step; on the
@@ -10,7 +15,7 @@ Status: **Phase 0–2 implemented + `.checkpoint()` + graceful-shutdown drain** 
 
 > **Implemented:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition (in the
 > fingerprint) with the `.executeInLocalSync()` / `.executeInLocalAsync()` DSL calls, the `AdvanceRun` wire RPC + `execution_mode`
-> on `TaskActivation`, `WorkflowEngine.advanceRun` (which already applies multi-step batches
+> on `TaskActivation`, `WorkflowEngine.report` (which already applies multi-step batches
 > atomically), and the worker's unified local loop: `LOCAL_SYNC` flushes every step, `LOCAL_ASYNC`
 > buffers up to `WorkerOptions.localBatchSize` (default 64) and flushes the run in one call. A
 > mid-run failure flushes the successful prefix then fails the offending step's token.

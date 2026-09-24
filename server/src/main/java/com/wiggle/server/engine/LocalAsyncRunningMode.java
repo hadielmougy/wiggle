@@ -1,7 +1,6 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.ExecutionMode;
-import com.wiggle.server.engine.WorkflowEngine.AdvanceOutcome;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.store.Rows.Instance;
@@ -19,7 +18,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 
-public class LocalAsyncRunningMode extends BaseRunningMode {
+public class LocalAsyncRunningMode extends LocalSyncRunningMode {
 
     LocalAsyncRunningMode(Instances instances, NodeBehaviourFactory nodeBehaviourFactory, DefinitionRegistry definitions) {
         super(instances, nodeBehaviourFactory, definitions);
@@ -71,7 +70,7 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
         }
         Tx applyTx = tx.transactional() ? BufferedTx.of(tx) : tx;
         for (Run run : survivors) {
-            results.put(run.startTaskId(), RunResult.of(chainSteps(new AdvanceRunContext(
+            results.put(run.startTaskId(), RunResult.of(chainSteps(new ReportStepsContext(
                     tasks.get(run.startTaskId()), run.leaseOwner(), run.steps(), run.finalHandback(),
                     applyTx, ctx.loopMaxIterations(), ctx.leaseMillis()))));
         }
@@ -94,7 +93,7 @@ public class LocalAsyncRunningMode extends BaseRunningMode {
             return RunResult.reject(EngineException.notFound("task"));
         }
         if (!InstanceState.of(inst.status).running()) {
-            return RunResult.of(new AdvanceOutcome(inst.status.name(), 0, null));
+            return RunResult.of(new ReportOutcome(inst.status.name(), 0, null));
         }
         try {
             Tokens.requireLease(t, run.leaseOwner());

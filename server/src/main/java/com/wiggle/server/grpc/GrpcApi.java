@@ -4,6 +4,7 @@ import com.wiggle.core.Tls;
 import com.wiggle.proto.*;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.cluster.ClusterManager;
+import com.wiggle.server.engine.ReportOutcome;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows.ServerNode;
@@ -333,20 +334,6 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void completeTask(TaskResultRequest req, StreamObserver<Ack> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CompleteTask taskId=" + req.getTaskId()
-                + " leaseOwner=" + req.getLeaseOwner());
-        run(resp, () -> {
-            Object result = req.hasResult() ? ProtoJson.fromValue(req.getResult()) : null;
-            engine.complete(req.getTaskId(), req.getLeaseOwner(), result,
-                    req.getStartedAt() == 0 ? null : req.getStartedAt(),
-                    req.getFinishedAt() == 0 ? null : req.getFinishedAt(),
-                    emitted(req.getEventsList()));
-            return Ack.newBuilder().setOk(true).build();
-        });
-    }
-
-    @Override
     public void failTask(TaskFailureRequest req, StreamObserver<Ack> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc FailTask taskId=" + req.getTaskId()
                 + " leaseOwner=" + req.getLeaseOwner() + " retryable=" + req.getRetryable()
@@ -368,18 +355,18 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void advanceRun(AdvanceRunRequest req, StreamObserver<AdvanceRunResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceRun taskId=" + req.getTaskId()
+    public void reportSteps(ReportStepsRequest req, StreamObserver<ReportStepsResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ReportSteps taskId=" + req.getTaskId()
                 + " leaseOwner=" + req.getLeaseOwner() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
-        run(resp, () -> {
-            WorkflowEngine.Run run = new WorkflowEngine.Run(req.getTaskId(), req.getLeaseOwner(), stepInputs(req), req.getFinal());
-            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
-            return AdvanceRunResult.newBuilder()
-                    .setInstanceStatus(out.instanceStatus())
-                    .setLeaseExpiresAt(out.leaseExpiresAt())
-                    .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId())
-                    .build();
-        });
+        run(resp, () -> reportResult(engine.report(new WorkflowEngine.Run(
+                req.getTaskId(), req.getLeaseOwner(), stepInputs(req), req.getFinal()))).build());
+    }
+
+    private static ReportStepsResult.Builder reportResult(ReportOutcome out) {
+        return ReportStepsResult.newBuilder()
+                .setInstanceStatus(out.instanceStatus())
+                .setLeaseExpiresAt(out.leaseExpiresAt())
+                .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId());
     }
 
     @Override
@@ -387,7 +374,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceMany runs=" + req.getRunsCount());
         run(resp, () -> {
             List<WorkflowEngine.Run> runs = new ArrayList<>(req.getRunsCount());
-            for (AdvanceRunRequest r : req.getRunsList()) {
+            for (ReportStepsRequest r : req.getRunsList()) {
                 runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), stepInputs(r), r.getFinal()));
             }
             Map<String, WorkflowEngine.RunResult> results = engine.advanceMany(runs);
@@ -395,10 +382,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             results.forEach((taskId, r) -> {
                 RunOutcome.Builder one = RunOutcome.newBuilder().setTaskId(taskId);
                 if (r.ok()) {
-                    one.setOutcome(AdvanceRunResult.newBuilder()
-                            .setInstanceStatus(r.outcome().instanceStatus())
-                            .setLeaseExpiresAt(r.outcome().leaseExpiresAt())
-                            .setNextTaskId(r.outcome().nextTaskId() == null ? "" : r.outcome().nextTaskId()));
+                    one.setOutcome(reportResult(r.outcome()));
                 } else {
                     one.setErrorStatus(r.errorStatus()).setError(r.error() == null ? "" : r.error());
                 }
@@ -408,7 +392,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         });
     }
 
-    private static List<WorkflowEngine.StepInput> stepInputs(AdvanceRunRequest req) {
+    private static List<WorkflowEngine.StepInput> stepInputs(ReportStepsRequest req) {
         return stepInputs(req.getStepsList());
     }
 

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.tests.Reports;
 import com.wiggle.core.Node;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowDefinition;
@@ -93,7 +94,7 @@ class ForkWidthBench {
                 List<TaskActivation> claimed = engine.poll("w", Set.of(QUEUE), 1, 60_000L);
                 if (claimed.isEmpty()) throw new IllegalStateException("nothing dispatchable at branch " + i);
                 TaskActivation t = claimed.getFirst();
-                engine.complete(t.taskId(), t.leaseOwner(), ballast());
+                Reports.one(engine, t, ballast());
             }
         }
         return new Tally(width, calls.get(), rows.get(), bytes.get());

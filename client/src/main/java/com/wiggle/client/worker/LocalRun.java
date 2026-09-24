@@ -1,7 +1,7 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
-import com.wiggle.core.AdvanceResult;
+import com.wiggle.core.ReportResult;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.GraphTraversal;
 import com.wiggle.core.Node;
@@ -83,7 +83,7 @@ final class LocalRun {
     private void drainOnShutdown() {
         if (buffer.isEmpty()) return;   // nothing computed yet; the claimed lease simply expires and is reclaimed
         try {
-            w.client().advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), true);
+            w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), true);
             int drained = buffer.size();
             buffer.clear();
             LOG.log(System.Logger.Level.DEBUG, () -> "drained " + drained
@@ -169,9 +169,9 @@ final class LocalRun {
         // A final handback needs nothing back but durability, so LOCAL_ASYNC routes it through
         // the worker's batcher -- concurrent runs land in one AdvanceMany call. A mid-chain flush
         // needs the leased continuation id synchronously and stays a single call.
-        AdvanceResult advanced = handback && maxBatch > 1 && w.options().crossInstanceBatching()
+        ReportResult advanced = handback && maxBatch > 1 && w.options().crossInstanceBatching()
                 ? w.handbacks().handback(instanceId, serverTaskId, leaseOwner, List.copyOf(buffer))
-                : w.client().advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), handback);
+                : w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), handback);
         buffer.clear();
         if (!advanced.running() || handback || advanced.nextTaskId() == null) return false;
         serverTaskId = advanced.nextTaskId();
@@ -190,7 +190,7 @@ final class LocalRun {
     /** @return true if the instance is still running (safe to report a failure) */
     private boolean flushBeforeFailure() {
         if (buffer.isEmpty()) return true;
-        AdvanceResult advanced = w.client().advanceRun(serverTaskId, leaseOwner, List.copyOf(buffer), false);
+        ReportResult advanced = w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), false);
         buffer.clear();
         if (advanced.nextTaskId() != null) serverTaskId = advanced.nextTaskId();
         return advanced.running();

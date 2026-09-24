@@ -118,6 +118,12 @@ public final class Scenarios {
         }
     }
 
+    /** Reports a task the case claimed by hand, the way a server-mode worker would. */
+    private static void report(WiggleClient client, TaskActivation task, String leaseOwner, Object merge) {
+        client.reportSteps(task.taskId(), leaseOwner,
+                List.of(new WiggleClient.StepReport(task.nodeId(), merge, null)), true);
+    }
+
     /** Publishes the topology (the author's job), then starts a worker that binds it by name. */
     private static Worker startWorker(WiggleClient client, FlowSpec bp, Object handlers) {
         client.register(bp);
@@ -464,7 +470,7 @@ public final class Scenarios {
             Check.equal(reclaimed.get().nodeId(), leased.get(0).nodeId(), "same step redelivered");
             Check.isTrue(reclaimed.get().attempt() > leased.get(0).attempt(), "attempt counter advanced");
 
-            client.complete(reclaimed.get().taskId(), "survivor", Map.of("done", true));
+            report(client, reclaimed.get(), "survivor", Map.of("done", true));
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
             Check.equal(v.status(), "COMPLETED", "status");
             Check.equal(Json.asObject(v.context()).get("done"), true, "work eventually done");
@@ -483,7 +489,7 @@ public final class Scenarios {
 
             boolean rejected = false;
             try {
-                client.complete(leased.get(0).taskId(), "impostor", Map.of("done", true));
+                report(client, leased.get(0), "impostor", Map.of("done", true));
             } catch (WiggleClient.WiggleApiException e) {
                 rejected = e.status() == 409;
             }

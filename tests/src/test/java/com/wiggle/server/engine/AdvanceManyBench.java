@@ -123,7 +123,7 @@ class AdvanceManyBench {
         int completed = 0;
         if (batch == 1) {
             for (Run run : runs) {
-                if ("COMPLETED".equals(engine.advance(run).instanceStatus())) completed++;
+                if ("COMPLETED".equals(engine.report(run).instanceStatus())) completed++;
             }
         } else {
             for (int i = 0; i < runs.size(); i += batch) {

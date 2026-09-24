@@ -140,7 +140,6 @@ Migration 17 adds `node_id`, the step an emitted event came from.
 the worker poll surface: the same long-poll clamping, the same backpressure hint on
 `EventList.retry_after_millis` when the server is shedding load under memory pressure.
 
-Emitted events travel on the completion a worker already sends: `repeated EmittedEvent events`
-on `TaskResultRequest` (one step) and on `StepResult` (each step of a chained run), carrying
-only a type and a payload. Instance, workflow, correlation, node and seq are filled in
+Emitted events travel on the report a worker already sends: `repeated EmittedEvent events`
+on `StepResult`, one entry per reported step, carrying only a type and a payload. Instance, workflow, correlation, node and seq are filled in
 server-side from the token, so a worker cannot claim an event belongs to another run.

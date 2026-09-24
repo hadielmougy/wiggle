@@ -8,6 +8,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.server.engine.ReportOutcome;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -118,7 +119,7 @@ class LocalSyncTest {
 
             // w1 reports step 'a' as non-final; the continuation ('b') is leased straight back to w1.
             WorkflowEngine.Run run = new WorkflowEngine.Run(first.taskId(), "w1", List.of(new WorkflowEngine.StepInput(first.nodeId(), Map.of("a", 1L), null)), false);
-            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
+            ReportOutcome out = engine.report(run);
             assertEquals("RUNNING", out.instanceStatus(), "instance still running");
             assertNotNull(out.nextTaskId(), "a continuation token was leased back");
 
@@ -128,7 +129,7 @@ class LocalSyncTest {
         }
     }
 
-    @Test @DisplayName("an empty AdvanceRun batch is rejected, not acked with a lease that was never written")
+    @Test @DisplayName("an empty report is rejected, not acked with a lease that was never written")
     void emptyBatchIsRejected() {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
@@ -141,12 +142,12 @@ class LocalSyncTest {
 
             WorkflowEngine.Run run = new WorkflowEngine.Run(first.taskId(), "w1", List.of(), false);
             EngineException e = assertThrows(EngineException.class,
-                    () -> engine.advance(run));
+                    () -> engine.report(run));
             assertEquals(400, e.statusCode());
         }
     }
 
-    @Test @DisplayName("LOCAL_ASYNC: a whole run is applied atomically in one AdvanceRun batch")
+    @Test @DisplayName("LOCAL_ASYNC: a whole run is applied atomically in one report")
     void batchAppliesAtomically() {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
@@ -169,7 +170,7 @@ class LocalSyncTest {
                     new WorkflowEngine.StepInput(xNode, Map.of("x", 1L), null),
                     new WorkflowEngine.StepInput(yNode, Map.of("x", 1L, "y", 2L), null)), true
             );
-            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
+            ReportOutcome out = engine.report(run);
             assertEquals("COMPLETED", out.instanceStatus(), "the batch drove the instance to completion");
             Map<String, Object> ctx = Json.asObject(engine.instance(id).orElseThrow().context());
             assertEquals(1L, ctx.get("x"));
@@ -180,13 +181,13 @@ class LocalSyncTest {
 
     /**
      * A local mode still has to honour a plain single-step report. Workers in LOCAL_SYNC and
-     * LOCAL_ASYNC normally chain and call AdvanceRun, but {@code complete} stays reachable -- the
-     * saga reverse pass dispatches compensators as SERVER whatever the definition declares, and a
-     * client may report a lone step at any time. A mode that ignores it settles nothing and the
-     * instance silently stalls, which no end-to-end test would catch.
+     * LOCAL_ASYNC normally chain, but a lone final step is reportable at any time -- the saga
+     * reverse pass dispatches compensators as SERVER whatever the definition declares, and a
+     * worker may be draining. A mode that ignores it settles nothing and the instance silently
+     * stalls, which no end-to-end test would catch.
      */
-    @Test @DisplayName("every local mode advances a single step reported through complete")
-    void completeAdvancesUnderLocalModes() {
+    @Test @DisplayName("every local mode advances a single step reported on its own")
+    void singleStepAdvancesUnderLocalModes() {
         for (ExecutionMode mode : List.of(ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
             try (Storage storage = new InMemoryStorage()) {
                 storage.migrate();
@@ -202,13 +203,13 @@ class LocalSyncTest {
                 TaskActivation first = engine.poll("w1", queues, 10, null).getFirst();
                 String yNode = bp.definition().node(first.nodeId()).next();
 
-                engine.complete(first.taskId(), "w1", Map.of("x", 1L));
+                Reports.one(engine, first, "w1", Map.of("x", 1L));
 
                 List<TaskActivation> next = engine.poll("w2", queues, 10, null);
                 assertEquals(1, next.size(), mode + ": the continuation must be dispatchable");
                 assertEquals(yNode, next.getFirst().nodeId(), mode + ": advanced to the next node");
 
-                engine.complete(next.getFirst().taskId(), "w2", Map.of("x", 1L, "y", 2L));
+                Reports.one(engine, next.getFirst(), "w2", Map.of("x", 1L, "y", 2L));
                 assertEquals("COMPLETED", engine.instance(id).orElseThrow().status(), mode + ": reached the end");
             }
         }

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.tests.Reports;
 import com.wiggle.tests.Modes;
 
 import com.wiggle.client.flow.FlowSpec;
@@ -11,7 +12,6 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.TaskActivation;
-import com.wiggle.server.engine.WorkflowEngine.AdvanceOutcome;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
@@ -133,7 +133,7 @@ class AdvanceManyTest {
             assertEquals(409, refused.errorStatus());
 
             WorkflowEngine.Run run = new WorkflowEngine.Run(b.taskId(), "w1", fullRun(bp, b, "w1").steps(), true);
-            AdvanceOutcome retry = engine.advance(run);
+            ReportOutcome retry = engine.report(run);
             assertEquals("COMPLETED", retry.instanceStatus(), "the refused run wrote nothing and lands on retry");
         }
     }
@@ -167,11 +167,11 @@ class AdvanceManyTest {
 
             // The losing arm is untouched: reported singly, the join fires and the combine runs.
             WorkflowEngine.Run run = new WorkflowEngine.Run(second.startTaskId(), "w1", second.steps(), true);
-            engine.advance(run);
+            engine.report(run);
             TaskActivation combine = engine.poll("w2", queues, 10, null).getFirst();
             WorkflowEngine.Run run2 = new WorkflowEngine.Run(combine.taskId(), "w2",
                     List.of(new StepInput(combine.nodeId(), Map.of("picked", true), null)), true);
-            AdvanceOutcome done = engine.advance(run2);
+            ReportOutcome done = engine.report(run2);
             assertEquals("COMPLETED", done.instanceStatus());
         }
     }
@@ -202,7 +202,7 @@ class AdvanceManyTest {
             assertEquals(409, refused.errorStatus());
             assertTrue(refused.error().contains("report this run singly"), refused.error());
             WorkflowEngine.Run run = new WorkflowEngine.Run(syncTask.taskId(), "w1", fullRun(sync, syncTask, "w1").steps(), true);
-            AdvanceOutcome retry = engine.advance(run);
+            ReportOutcome retry = engine.report(run);
             assertEquals("COMPLETED", retry.instanceStatus(), "the single-run path still takes it");
         }
     }
@@ -239,7 +239,7 @@ class AdvanceManyTest {
 
             // The broken run's own replay rolled back whole: still at the first step, lease intact.
             WorkflowEngine.Run run = new WorkflowEngine.Run(b.taskId(), "w1", fullRun(bp, b, "w1").steps(), true);
-            AdvanceOutcome retry = engine.advance(run);
+            ReportOutcome retry = engine.report(run);
             assertEquals("COMPLETED", retry.instanceStatus());
         }
     }
@@ -301,7 +301,7 @@ class AdvanceManyTest {
             String id = engine.start(bp.name(), bp.version(), Map.of(), null);
 
             TaskActivation reserve = engine.poll("w1", queues, 10, null).getFirst();
-            engine.complete(reserve.taskId(), "w1", Map.of("reserved", true));
+            Reports.one(engine, reserve, "w1", Map.of("reserved", true));
             TaskActivation boom = engine.poll("w1", queues, 10, null).getFirst();
             engine.fail(boom.taskId(), "w1", "kaboom", false);
             assertEquals("COMPENSATING", engine.instance(id).orElseThrow().status());
@@ -313,9 +313,9 @@ class AdvanceManyTest {
             RunResult r = results.get(comp.taskId());
             assertTrue(r.ok());
             assertEquals("COMPENSATING", r.outcome().instanceStatus(), "answered with the status, nothing written");
-            engine.complete(comp.taskId(), "w1", null);
+            Reports.one(engine, comp, "w1", null);
             assertEquals("COMPENSATED", engine.instance(id).orElseThrow().status(),
-                    "the reverse pass still completes through complete");
+                    "the reverse pass still completes through a single-step report");
         }
     }
 
@@ -371,7 +371,7 @@ class AdvanceManyTest {
                 String yNode = bp.definition().node(t.nodeId()).next();
                 WorkflowEngine.Run run = new WorkflowEngine.Run(r.outcome().nextTaskId(), "w1",
                         List.of(new StepInput(yNode, Map.of("x", 1L, "y", 2L), null)), true);
-                AdvanceOutcome done = engine.advance(run);
+                ReportOutcome done = engine.report(run);
                 assertEquals("COMPLETED", done.instanceStatus());
             }
         }
@@ -403,7 +403,7 @@ class AdvanceManyTest {
             assertTrue(refused.error().contains("sub-workflow"), refused.error());
 
             WorkflowEngine.Run run = new WorkflowEngine.Run(task.taskId(), "w1", fullRun(child, task, "w1").steps(), true);
-            AdvanceOutcome retry = engine.advance(run);
+            ReportOutcome retry = engine.report(run);
             assertEquals("COMPLETED", retry.instanceStatus(), "the single-run path still takes it");
             assertEquals("COMPLETED", engine.instance(parentId).orElseThrow().status(),
                     "and the child's completion resumed the parent");
@@ -448,7 +448,7 @@ class AdvanceManyTest {
             assertTrue(dead.error().contains("simulated"), dead.error());
 
             WorkflowEngine.Run run = new WorkflowEngine.Run(c.taskId(), "w1", fullRun(bp, c, "w1").steps(), true);
-            AdvanceOutcome retry = engine.advance(run);
+            ReportOutcome retry = engine.report(run);
             assertEquals("COMPLETED", retry.instanceStatus(), "the failed replay wrote nothing");
         }
     }
