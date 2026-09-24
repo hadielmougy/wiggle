@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Collapses concurrent final handbacks into one {@code AdvanceMany} call. A LOCAL_ASYNC run that
+ * Collapses concurrent final handbacks into one {@code ReportSteps} call. A LOCAL_ASYNC run that
  * ends at a boundary needs nothing back but durability, so those flushes -- unlike mid-chain
  * ones, which need the leased continuation id synchronously -- can travel together.
  *
@@ -104,7 +104,7 @@ final class HandbackBatcher {
             return;
         }
         try {
-            Map<String, RunOutcome> results = client.advanceMany(
+            Map<String, RunOutcome> results = client.reportSteps(
                     batch.stream().map(Pending::run).toList());
             for (Pending b : batch) {
                 RunOutcome r = results.get(b.run().taskId());

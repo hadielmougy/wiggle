@@ -53,7 +53,7 @@ public final class Worker implements AutoCloseable {
         this(client, workerId, WorkerOptions.defaults());
     }
 
-    /** Collapses concurrent LOCAL_ASYNC final handbacks into one AdvanceMany call. */
+    /** Collapses concurrent LOCAL_ASYNC final handbacks into one ReportSteps call. */
     private final HandbackBatcher handbacks;
 
     public Worker(WiggleClient client, String workerId, WorkerOptions options) {

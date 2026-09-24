@@ -333,13 +333,17 @@ public final class WiggleClient implements AutoCloseable {
      * The server decides from the workflow's mode whether the continuation comes back leased to
      * this worker ({@code nextTaskId}) or is released. {@code finalHandback} says this worker will
      * not take another step whatever the mode allows.
+     *
+     * <p>One run, so its refusal is this call's failure: it raises {@link WiggleApiException} with
+     * the status the run was refused under, the same as any other single-instance operation.
      */
     public com.wiggle.core.ReportResult reportSteps(String taskId, String leaseOwner,
                                                     List<StepReport> steps, boolean finalHandback) {
-        ReportStepsRequest.Builder req = ReportStepsRequest.newBuilder()
-                .setTaskId(taskId).setLeaseOwner(leaseOwner).setFinal(finalHandback);
-        for (StepReport s : steps) req.addSteps(Wire.stepResult(s));
-        return Wire.reportResult(call(() -> stub.reportSteps(req.build())));
+        RunSubmission run = new RunSubmission(taskId, leaseOwner, steps, finalHandback);
+        RunOutcome only = reportSteps(List.of(run)).get(taskId);
+        if (only == null) throw new WiggleApiException(500, "no answer for run " + taskId, null);
+        if (!only.ok()) throw new WiggleApiException(only.errorStatus(), only.error(), null);
+        return only.outcome();
     }
 
     /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
@@ -359,32 +363,33 @@ public final class WiggleClient implements AutoCloseable {
         }
     }
 
-    /** One run of a cross-instance batch: exactly the arguments of {@link #reportSteps}. */
+    /** One instance's worth of a report: exactly the arguments of the single-run {@link #reportSteps}. */
     public record RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback) {}
 
-    /** A run's fate in a batch: the single-run result, or the status and message it would have
-     *  thrown. A rejected run wrote nothing and may be reported again -- singly, per the message. */
+    /** A run's fate: what it applied to, or the status and message it was refused under. A refused
+     *  run wrote nothing and may be reported again in a call of its own. */
     public record RunOutcome(com.wiggle.core.ReportResult outcome, int errorStatus, String error) {
         public boolean ok() { return outcome != null; }
     }
 
     /**
-     * Reports N independent runs in one call and one server-side commit. Every run is exactly a
-     * {@link #reportSteps}; answers are keyed by task id, one per submitted run.
+     * The same report for several independent runs, applied in one server-side commit where
+     * batching is sound. Answers are keyed by task id, one per submitted run, and a refused run
+     * carries the status it was refused under rather than failing the call.
      */
-    public Map<String, RunOutcome> advanceMany(List<RunSubmission> runs) {
-        AdvanceManyRequest.Builder req = AdvanceManyRequest.newBuilder();
+    public Map<String, RunOutcome> reportSteps(List<RunSubmission> runs) {
+        ReportStepsRequest.Builder req = ReportStepsRequest.newBuilder();
         for (RunSubmission run : runs) {
-            ReportStepsRequest.Builder one = ReportStepsRequest.newBuilder()
+            ReportedRun.Builder one = ReportedRun.newBuilder()
                     .setTaskId(run.taskId()).setLeaseOwner(run.leaseOwner()).setFinal(run.finalHandback());
             for (StepReport s : run.steps()) one.addSteps(Wire.stepResult(s));
             req.addRuns(one);
         }
-        AdvanceManyResult res = call(() -> stub.advanceMany(req.build()));
+        ReportStepsResult res = call(() -> stub.reportSteps(req.build()));
         Map<String, RunOutcome> out = new java.util.LinkedHashMap<>();
         for (com.wiggle.proto.RunOutcome r : res.getResultsList()) {
-            out.put(r.getTaskId(), r.getErrorStatus() == 0 && r.hasOutcome()
-                    ? new RunOutcome(Wire.reportResult(r.getOutcome()), 0, null)
+            out.put(r.getTaskId(), r.getErrorStatus() == 0 && r.hasApplied()
+                    ? new RunOutcome(Wire.reportResult(r.getApplied()), 0, null)
                     : new RunOutcome(null, r.getErrorStatus(), r.getError()));
         }
         return out;

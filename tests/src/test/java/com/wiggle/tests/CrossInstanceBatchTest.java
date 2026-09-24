@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The worker's handback batcher, end to end: a LOCAL_ASYNC fork gives one worker two runs of the
- * SAME instance, and under concurrency their final handbacks land in the same AdvanceMany
+ * SAME instance, and under concurrency their final handbacks land in the same ReportSteps
  * window -- the batch keeps the first and refuses the second, whose submitting thread falls back
  * to the single-run path. Every instance must still complete with the combine's exact context;
  * a lost fallback shows up here as a stuck join.
@@ -89,12 +89,12 @@ class CrossInstanceBatchTest {
 
     /**
      * The wire itself, no batcher in between: two claimed tasks reported through one
-     * client.advanceMany call. The batcher falls back to singles when this RPC breaks, so the
+     * client.reportSteps call. The batcher falls back to singles when this RPC breaks, so the
      * end-to-end test above stays green through a dead wire -- this one does not.
      */
     @Test @Timeout(30)
-    @DisplayName("client.advanceMany carries two runs over the wire and both commit")
-    void advanceManyOverTheWire() throws Exception {
+    @DisplayName("one reportSteps call carries two runs over the wire and both commit")
+    void manyRunsOverTheWire() throws Exception {
         interface TwoSteps {
             Map<String, Object> x(Map<String, Object> ctx);
             Map<String, Object> y(Map<String, Object> ctx);
@@ -119,7 +119,7 @@ class CrossInstanceBatchTest {
                         new WiggleClient.StepReport(t.nodeId(), Map.of("x", 1L), null),
                         new WiggleClient.StepReport(yNode, Map.of("x", 1L, "y", 2L), null)), true));
             }
-            Map<String, WiggleClient.RunOutcome> results = client.advanceMany(runs);
+            Map<String, WiggleClient.RunOutcome> results = client.reportSteps(runs);
 
             assertEquals(2, results.size());
             for (com.wiggle.core.TaskActivation t : claimed) {

@@ -290,20 +290,27 @@ public final class WorkflowEngine {
         });
     }
 
-    public Map<String, RunResult> advanceMany(List<Run> runs) {
+    /**
+     * The same report, for one run or several. A lone run is applied on its own and carries no
+     * batching restrictions, since there is nothing to batch it with; several are admitted only
+     * where batching is sound and commit together. Either way every submitted run gets an answer,
+     * and a refused one wrote nothing and may be reported again in a call of its own.
+     */
+    public Map<String, RunResult> report(List<Run> runs) {
         requireWellFormed(runs);
+        if (runs.size() == 1) return replaySingly(runs);
         try {
             return transactions.inTx(tx -> modeFactory.create(ExecutionMode.LOCAL_ASYNC)
                     .execute(new AdvanceBatchContext(runs, tx, loopMaxIterations, defaultLeaseMillis)));
         } catch (RuntimeException e) {
-            LOG.log(System.Logger.Level.WARNING, () -> "advanceMany: batch of " + runs.size()
+            LOG.log(System.Logger.Level.WARNING, () -> "reportSteps: batch of " + runs.size()
                     + " rolled back (" + e + "); replaying each run in its own transaction");
             return replaySingly(runs);
         }
     }
 
     private static void requireWellFormed(List<Run> runs) {
-        if (runs.isEmpty()) throw EngineException.badRequest("advanceMany requires at least one run");
+        if (runs.isEmpty()) throw EngineException.badRequest("report requires at least one run");
         Set<String> ids = new HashSet<>();
         for (Run run : runs) {
             if (run.steps().isEmpty()) throw EngineException.badRequest("report requires at least one step");

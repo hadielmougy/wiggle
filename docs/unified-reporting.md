@@ -44,12 +44,12 @@ goes away is using that same field to pick a wire call.
 ## 3. The one RPC
 
 ```proto
-// Reports finished work: one step, or an ordered run of locally-chained steps. The server
-// decides from the workflow's mode whether the continuation is leased back to this worker or
-// released; the client never chooses that.
+// Reports finished work: one run of steps, or several independent runs applied in a single
+// commit. The server decides from each workflow's mode whether the continuation is leased back
+// to this worker or released; the client never chooses that.
 rpc ReportSteps(ReportStepsRequest) returns (ReportStepsResult);
 
-message ReportStepsRequest {
+message ReportedRun {
     string task_id = 1;                 // the currently-leased token these steps start at
     string lease_owner = 2;
     repeated StepResult steps = 3;      // ordered, at least one; one step is the ordinary case
@@ -59,12 +59,33 @@ message ReportStepsRequest {
     bool final = 4;
 }
 
-message ReportStepsResult {
+message ReportStepsRequest {
+    repeated ReportedRun runs = 1;      // at least one, each naming a different instance
+}
+
+message RunApplied {
     string instance_status = 1;         // any InstanceStatus; anything but RUNNING means stop
     int64 lease_expires_at = 2;         // renewed lease, when the continuation was leased back
     string next_task_id = 3;            // blank when nothing was leased back to this worker
 }
+
+message RunOutcome {
+    string task_id = 1;
+    RunApplied applied = 2;             // set when the run applied (error_status == 0)
+    int32 error_status = 3;             // 0 ok; else the status this run was refused under
+    string error = 4;
+}
+
+message ReportStepsResult {
+    repeated RunOutcome results = 1;    // one per submitted run, in submission order
+}
 ```
+
+The reply is always a list, so one shape covers a lone run and a batch. A refused run carries the
+status it was refused under instead of failing the call, which is the only way a batch can say
+"A applied, B did not". The Java client keeps a single-run `reportSteps(...)` that reads the one
+answer and raises `WiggleApiException` with that status, so the ordinary one-step report reads
+exactly as it did before.
 
 `StepResult` is reused unchanged, and that is an improvement in itself. It carries `node_id` and a
 proper `oneof outcome { merge | predicate_value | error }`. `TaskResultRequest` carried neither: it
@@ -141,17 +162,24 @@ proto and move their reporting call.
 
 ## 7. Scope
 
-**In:** `CompleteTask` and `AdvanceRun` collapse into `ReportSteps`.
+**In:** `CompleteTask`, `AdvanceRun` and `AdvanceMany` collapse into `ReportSteps`.
 
 **Out, deliberately:**
 
-- `AdvanceMany` stays its own RPC. It is not "report N steps", it is "report N runs across N
-  instances in one commit", with per-run rejection (`RunResult`) and cross-instance lock ordering.
-  That is genuinely different semantics, not a wider arity.
 - `FailTask` stays for now. A thrown step is already expressible as `StepResult.error`, so folding
   it in is possible, but it carries `retryable`, which has no `StepResult` equivalent, and retry
   policy is a separate concern from reporting. Worth revisiting once `ReportSteps` has landed.
 - `HeartbeatTask` is unrelated.
+
+## 7b. Batching
+
+Several runs are admitted only where batching is sound: `LOCAL_ASYNC`, one run per instance, no
+sub-workflow child. Those are properties of batching them together, not of reporting, so a lone
+run carries none of them -- there is nothing to batch it with. A run the batch will not take is
+refused on its own with a remedy, and reporting it again in a call of its own applies it.
+
+The engine already treated the two as one operation: when a batched commit rolls back it replays
+each run through the single-run path. That is now the same method at a different length.
 
 ## 8. Decisions taken
 

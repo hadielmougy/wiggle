@@ -32,10 +32,10 @@ service WiggleControlPlane {
     rpc DeleteSchedule(ScheduleIdRequest) returns (Ack);
 
     rpc PollTasks(PollRequest) returns (TaskList);
-    // The one way a worker reports finished work: one step, or an ordered run of steps it chained
-    // locally. The server resolves the workflow's execution mode and decides from it whether the
-    // continuation is leased back to this worker or released -- the client never chooses that, so
-    // it cannot choose wrong.
+    // The one way a worker reports finished work: one run of steps, or several independent runs
+    // applied in a single commit. The server resolves each workflow's execution mode and decides
+    // from it whether the continuation is leased back to this worker or released -- the client
+    // never chooses that, so it cannot choose wrong. Answers are per run, keyed by task id.
     rpc ReportSteps(ReportStepsRequest) returns (ReportStepsResult);
     rpc FailTask(TaskFailureRequest) returns (Ack);
     rpc HeartbeatTask(HeartbeatRequest) returns (HeartbeatResult);
@@ -45,11 +45,6 @@ service WiggleControlPlane {
     // the server serves it: a call today answers UNIMPLEMENTED.
     rpc PollEvents(PollEventsRequest) returns (EventList);
     rpc AckEvents(AckEventsRequest) returns (Ack);
-    // Applies N independent single-instance runs in one call and one commit (LOCAL_ASYNC final
-    // handbacks). Every run is exactly a ReportSteps; a rejected run wrote nothing and carries
-    // the status and message the single-run path would have thrown, so the caller can retry it
-    // singly. Answers are keyed by task id, one per submitted run.
-    rpc AdvanceMany(AdvanceManyRequest) returns (AdvanceManyResult);
 
     // Reports steps an instrumented application already ran (OBSERVED execution). The server
     // never dispatches such a workflow: the first report of a run mints its instance, later
@@ -311,7 +306,8 @@ message StepResult {
     repeated EmittedEvent events = 7;      // emitted while this step ran, in emission order
 }
 
-message ReportStepsRequest {
+// One instance's worth of a report: the ordered steps one worker ran from one leased token.
+message ReportedRun {
     string task_id = 1;                    // the currently-leased token these steps start at
     string lease_owner = 2;
     repeated StepResult steps = 3;         // ordered, at least one; one step is the ordinary case
@@ -321,7 +317,15 @@ message ReportStepsRequest {
     bool final = 4;
 }
 
-message ReportStepsResult {
+// One run, or several across different instances. Several are admitted only where batching is
+// sound (LOCAL_ASYNC, one run per instance, no sub-workflow) and commit together; a run the batch
+// will not take is refused on its own and may be reported again in a call of its own. A single
+// run carries no batching restrictions -- there is nothing to batch it with.
+message ReportStepsRequest {
+    repeated ReportedRun runs = 1;         // at least one, each naming a different instance
+}
+
+message RunApplied {
     // Any InstanceStatus, not just the terminal four: a concurrent failure can leave the
     // instance COMPENSATING between a worker's local steps. Clients treat anything but
     // RUNNING as "stop here". See docs/state-machines.md.
@@ -331,19 +335,17 @@ message ReportStepsResult {
     string next_task_id = 3;              // token to reference for the next local step (blank if handed back)
 }
 
-message AdvanceManyRequest {
-    repeated ReportStepsRequest runs = 1;
-}
-
+// A run's fate. A refused run wrote nothing and may be reported again; error_status carries the
+// status the call would have raised, so a client reporting a lone run can raise it as before.
 message RunOutcome {
     string task_id = 1;
-    ReportStepsResult outcome = 2;         // set when the run applied (error_status == 0)
-    int32 error_status = 3;                // 0 ok; else the status the single path would throw
+    RunApplied applied = 2;                // set when the run applied (error_status == 0)
+    int32 error_status = 3;                // 0 ok; else the status this run would have thrown
     string error = 4;
 }
 
-message AdvanceManyResult {
-    repeated RunOutcome results = 1;
+message ReportStepsResult {
+    repeated RunOutcome results = 1;       // one per submitted run, in submission order
 }
 
 message ObserveRunRequest {

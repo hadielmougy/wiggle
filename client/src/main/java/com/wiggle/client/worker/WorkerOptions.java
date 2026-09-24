@@ -22,7 +22,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
     }
 
     /**
-     * Ships LOCAL_ASYNC final handbacks for DIFFERENT instances in one AdvanceMany call
+     * Ships LOCAL_ASYNC final handbacks for DIFFERENT instances in one ReportSteps call
      * (default off). Pays where the server is a real network hop away -- N report RPCs
      * become one -- and measurably costs where it is not: on a local or same-host deployment
      * the RPCs it collapses are nearly free, while the batch couples instances into shared

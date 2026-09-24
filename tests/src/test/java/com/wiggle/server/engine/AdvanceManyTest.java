@@ -90,7 +90,7 @@ class AdvanceManyTest {
             List<TaskActivation> claimed = engine.poll("w1", queues, 10, null);
             assertEquals(3, claimed.size());
 
-            Map<String, RunResult> results = engine.advanceMany(
+            Map<String, RunResult> results = engine.report(
                     claimed.stream().map(t -> fullRun(bp, t, "w1")).toList());
 
             assertEquals(3, results.size());
@@ -122,7 +122,7 @@ class AdvanceManyTest {
             TaskActivation b = claimed.get(1);
 
             long before = storage.transactions.get();
-            Map<String, RunResult> results = engine.advanceMany(List.of(
+            Map<String, RunResult> results = engine.report(List.of(
                     fullRun(bp, a, "w1"), fullRun(bp, b, "intruder")));
             assertEquals(1, storage.transactions.get() - before,
                     "validate refuses without burning the batch: one transaction, no replay");
@@ -158,7 +158,7 @@ class AdvanceManyTest {
                     List.of(new StepInput(arms.get(0).nodeId(), Map.of("a", 1L), null)), true);
             Run second = new Run(arms.get(1).taskId(), "w1",
                     List.of(new StepInput(arms.get(1).nodeId(), Map.of("b", 2L), null)), true);
-            Map<String, RunResult> results = engine.advanceMany(List.of(first, second));
+            Map<String, RunResult> results = engine.report(List.of(first, second));
 
             assertTrue(results.get(first.startTaskId()).ok());
             RunResult loser = results.get(second.startTaskId());
@@ -194,7 +194,7 @@ class AdvanceManyTest {
             TaskActivation asyncTask = claimed.stream().filter(t -> t.workflow().equals(async.name())).findFirst().orElseThrow();
             TaskActivation syncTask = claimed.stream().filter(t -> t.workflow().equals(sync.name())).findFirst().orElseThrow();
 
-            Map<String, RunResult> results = engine.advanceMany(List.of(
+            Map<String, RunResult> results = engine.report(List.of(
                     fullRun(async, asyncTask, "w1"), fullRun(sync, syncTask, "w1")));
 
             assertEquals("COMPLETED", results.get(asyncTask.taskId()).outcome().instanceStatus());
@@ -228,7 +228,7 @@ class AdvanceManyTest {
             Run broken = new Run(b.taskId(), "w1", List.of(
                     new StepInput(b.nodeId(), Map.of("x", 1L), null),
                     new StepInput("no-such-node", Map.of(), null)), true);
-            Map<String, RunResult> results = engine.advanceMany(List.of(fullRun(bp, a, "w1"), broken));
+            Map<String, RunResult> results = engine.report(List.of(fullRun(bp, a, "w1"), broken));
 
             assertEquals("COMPLETED", results.get(a.taskId()).outcome().instanceStatus(),
                     "the innocent run committed on replay");
@@ -273,7 +273,7 @@ class AdvanceManyTest {
                 steps.add(new StepInput(spinNode, Map.of("n", n), null));
                 steps.add(new StepInput(pred.id(), null, true));
             }
-            Map<String, RunResult> results = engine.advanceMany(List.of(
+            Map<String, RunResult> results = engine.report(List.of(
                     new Run(loopTask.taskId(), "w1", steps, true), fullRun(line, lineTask, "w1")));
 
             assertEquals("FAILED", results.get(loopTask.taskId()).outcome().instanceStatus(),
@@ -307,12 +307,20 @@ class AdvanceManyTest {
             assertEquals("COMPENSATING", engine.instance(id).orElseThrow().status());
             TaskActivation comp = engine.poll("w1", queues, 10, null).getFirst();
 
-            Map<String, RunResult> results = engine.advanceMany(List.of(new Run(comp.taskId(), "w1",
-                    List.of(new StepInput(comp.nodeId(), Map.of(), null)), true)));
+            // A second instance makes this a real batch: the compensator must be answered on its
+            // own without taking the healthy run down with it.
+            engine.start(bp.name(), bp.version(), Map.of(), null);
+            TaskActivation healthy = engine.poll("w1", queues, 10, null).getFirst();
+
+            Map<String, RunResult> results = engine.report(List.of(
+                    new Run(comp.taskId(), "w1", List.of(new StepInput(comp.nodeId(), Map.of(), null)), true),
+                    new Run(healthy.taskId(), "w1",
+                            List.of(new StepInput(healthy.nodeId(), Map.of("reserved", true), null)), true)));
 
             RunResult r = results.get(comp.taskId());
             assertTrue(r.ok());
             assertEquals("COMPENSATING", r.outcome().instanceStatus(), "answered with the status, nothing written");
+            assertTrue(results.get(healthy.taskId()).ok(), "the healthy run in the same batch still applied");
             Reports.one(engine, comp, "w1", null);
             assertEquals("COMPENSATED", engine.instance(id).orElseThrow().status(),
                     "the reverse pass still completes through a single-step report");
@@ -325,13 +333,13 @@ class AdvanceManyTest {
             storage.migrate();
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
             assertEquals(400, assertThrows(EngineException.class,
-                    () -> engine.advanceMany(List.of())).statusCode());
+                    () -> engine.report(List.of())).statusCode());
             Run noSteps = new Run("t1", "w1", List.of(), true);
             assertEquals(400, assertThrows(EngineException.class,
-                    () -> engine.advanceMany(List.of(noSteps))).statusCode());
+                    () -> engine.report(List.of(noSteps))).statusCode());
             Run twice = new Run("t1", "w1", List.of(new StepInput("n", null, null)), true);
             assertEquals(400, assertThrows(EngineException.class,
-                    () -> engine.advanceMany(List.of(twice, twice))).statusCode());
+                    () -> engine.report(List.of(twice, twice))).statusCode());
         }
     }
 
@@ -357,7 +365,7 @@ class AdvanceManyTest {
             List<TaskActivation> claimed = engine.poll("w1", bp.definition().queues(), 10, null);
 
             long before = storage.transactions.get();
-            Map<String, RunResult> results = engine.advanceMany(claimed.stream()
+            Map<String, RunResult> results = engine.report(claimed.stream()
                     .map(t -> new Run(t.taskId(), "w1",
                             List.of(new StepInput(t.nodeId(), Map.of("x", 1L), null)), false))
                     .toList());
@@ -396,11 +404,19 @@ class AdvanceManyTest {
             String parentId = engine.start(parent.name(), parent.version(), Map.of(), null);
 
             TaskActivation task = engine.poll("w1", child.definition().queues(), 10, null).getFirst();
-            Map<String, RunResult> results = engine.advanceMany(List.of(fullRun(child, task, "w1")));
+
+            // A standalone instance of the same workflow makes this a real batch: the child must
+            // be refused on its own, not fail the call for its sibling.
+            engine.start(child.name(), child.version(), Map.of(), null);
+            TaskActivation solo = engine.poll("w1", child.definition().queues(), 10, null).getFirst();
+
+            Map<String, RunResult> results = engine.report(
+                    List.of(fullRun(child, task, "w1"), fullRun(child, solo, "w1")));
 
             RunResult refused = results.get(task.taskId());
             assertEquals(409, refused.errorStatus());
             assertTrue(refused.error().contains("sub-workflow"), refused.error());
+            assertTrue(results.get(solo.taskId()).ok(), "the standalone run in the same batch still applied");
 
             WorkflowEngine.Run run = new WorkflowEngine.Run(task.taskId(), "w1", fullRun(child, task, "w1").steps(), true);
             ReportOutcome retry = engine.report(run);
@@ -437,7 +453,7 @@ class AdvanceManyTest {
                     new StepInput(b.nodeId(), Map.of("x", 1L), null),
                     new StepInput("no-such-node", Map.of(), null)), true);
             storage.failOnTx.set(storage.seen.get() + 4);
-            Map<String, RunResult> results = engine.advanceMany(List.of(
+            Map<String, RunResult> results = engine.report(List.of(
                     fullRun(bp, a, "w1"), broken, fullRun(bp, c, "w1")));
 
             assertEquals(3, results.size(), "every run is answered");
@@ -476,7 +492,7 @@ class AdvanceManyTest {
             assertEquals(3, claimed.size());
 
             long before = storage.transactions.get();
-            Map<String, RunResult> results = engine.advanceMany(
+            Map<String, RunResult> results = engine.report(
                     claimed.stream().map(t -> fullRun(bp, t, "w1")).toList());
             assertEquals(1, storage.transactions.get() - before,
                     "the whole batch is one transaction -- a replay here means a buffered write misfired");
@@ -558,7 +574,7 @@ class AdvanceManyTest {
             TaskActivation a = engine.poll("w1", bp.definition().queues(), 10, null).getFirst();
 
             // The compensable first step succeeds; the second step lies about its node.
-            Map<String, RunResult> results = engine.advanceMany(List.of(new Run(a.taskId(), "w1",
+            Map<String, RunResult> results = engine.report(List.of(new Run(a.taskId(), "w1",
                     List.of(new StepInput(a.nodeId(), Map.of("reserved", true), null),
                             new StepInput("no-such-node", Map.of(), null)), true)));
 

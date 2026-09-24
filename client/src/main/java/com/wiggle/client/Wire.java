@@ -115,7 +115,7 @@ final class Wire {
         return m;
     }
 
-    static com.wiggle.core.ReportResult reportResult(ReportStepsResult res) {
+    static com.wiggle.core.ReportResult reportResult(RunApplied res) {
         return new com.wiggle.core.ReportResult(res.getInstanceStatus(), res.getLeaseExpiresAt(),
                 res.getNextTaskId().isEmpty() ? null : res.getNextTaskId());
     }
