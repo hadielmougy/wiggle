@@ -8,6 +8,6 @@ package com.wiggle.core;
 public record ObserveResult(String instanceId, String instanceStatus, int anomalies) {
 
     public boolean running() {
-        return "RUNNING".equals(instanceStatus);
+        return InstanceStatus.runningByName(instanceStatus);
     }
 }

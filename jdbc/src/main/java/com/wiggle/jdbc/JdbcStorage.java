@@ -5,6 +5,8 @@ import com.zaxxer.hikari.HikariDataSource;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
+import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
 import com.wiggle.server.store.Storage;

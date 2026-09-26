@@ -10,7 +10,7 @@ import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
 import com.wiggle.server.store.Tx;
 

@@ -7,8 +7,7 @@ public record InstanceView(String id, String workflow, int version, String statu
                            long createdAt, long updatedAt) {
 
     public boolean isTerminal() {
-        // COMPENSATING is in-flight: the reverse pass is still running its compensators.
-        return !"RUNNING".equals(status) && !"COMPENSATING".equals(status);
+        return !InstanceStatus.liveByName(status);
     }
 
     public static InstanceView fromJson(Object o) {

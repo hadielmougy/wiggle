@@ -3,7 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.tests.Reports;
 import com.wiggle.core.*;
 import com.wiggle.server.store.InMemoryStorage;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.AfterAll;

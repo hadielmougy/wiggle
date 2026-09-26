@@ -176,7 +176,7 @@ abstract class NodeBehaviour {
 
         private static List<Rows.Token> joinedAtBarrier(Tx tx, Rows.Instance inst, Node node, String group) {
             return tx.tokensOf(inst.id).stream()
-                    .filter(x -> x.status == Rows.TokenStatus.JOINED)
+                    .filter(x -> x.status == TokenStatus.JOINED)
                     .filter(x -> node.id().equals(x.nodeId))
                     .filter(x -> Objects.equals(group, x.currentJoinGroup()))
                     .toList();

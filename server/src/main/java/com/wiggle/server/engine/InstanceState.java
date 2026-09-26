@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 
 
 import java.util.Collections;
@@ -25,10 +25,8 @@ import java.util.Set;
 enum InstanceState {
 
     /** The normal life of an instance: tokens moving over the graph. */
-    RUNNING(Liveness.LIVE, InstanceStatus.COMPLETED, InstanceStatus.FAILED,
+    RUNNING(InstanceStatus.COMPLETED, InstanceStatus.FAILED,
             InstanceStatus.CANCELLED, InstanceStatus.COMPENSATING) {
-        @Override boolean running() { return true; }
-
         @Override boolean cancellable() { return true; }
 
         @Override boolean dispatches(boolean compensation) { return !compensation; }
@@ -37,34 +35,28 @@ enum InstanceState {
     },
 
     /** The saga reverse pass owns it: forward work has stopped, undo tasks are in flight. */
-    COMPENSATING(Liveness.LIVE, InstanceStatus.COMPENSATED, InstanceStatus.COMPENSATION_FAILED) {
-        @Override boolean compensating() { return true; }
-
+    COMPENSATING(InstanceStatus.COMPENSATED, InstanceStatus.COMPENSATION_FAILED) {
         @Override boolean dispatches(boolean compensation) { return compensation; }
     },
 
     /** A token reached a successful END and nothing was left running. */
-    COMPLETED(Liveness.TERMINAL),
+    COMPLETED(),
 
     /** Something unrecoverable, with nothing recorded to undo. */
-    FAILED(Liveness.TERMINAL),
+    FAILED(),
 
     /** Cancelled by a caller. Never compensates: only a failure starts the reverse pass. */
-    CANCELLED(Liveness.TERMINAL),
+    CANCELLED(),
 
     /** The reverse pass undid every recorded step. */
-    COMPENSATED(Liveness.TERMINAL),
+    COMPENSATED(),
 
     /** A compensator ran out of retries. Stuck, and deliberately loud. */
-    COMPENSATION_FAILED(Liveness.TERMINAL);
+    COMPENSATION_FAILED();
 
-    private enum Liveness { LIVE, TERMINAL }
-
-    private final Liveness liveness;
     private final Set<InstanceStatus> successors;
 
-    InstanceState(Liveness liveness, InstanceStatus... successors) {
-        this.liveness = liveness;
+    InstanceState(InstanceStatus... successors) {
         this.successors = successors.length == 0
                 ? Collections.unmodifiableSet(EnumSet.noneOf(InstanceStatus.class))
                 : Collections.unmodifiableSet(EnumSet.copyOf(Set.of(successors)));
@@ -76,15 +68,16 @@ enum InstanceState {
 
     static { for (InstanceStatus s : InstanceStatus.values()) of(s); }   // every status has a state
 
-    /** Not finished: either running forward, or undoing. Mirrors {@code InstanceView.isTerminal}. */
+    /** Not finished: either running forward, or undoing. The persisted status owns this
+     *  classification, so the engine, the stores and {@code InstanceView} cannot disagree. */
     boolean live() {
-        return liveness == Liveness.LIVE;
+        return InstanceStatus.valueOf(name()).live();
     }
 
     /** The forward flow is live: work may be reported against it, and a finished sub-workflow
      *  may resume its parent's token here. Only RUNNING -- COMPENSATING is going backwards. */
     boolean running() {
-        return false;
+        return InstanceStatus.valueOf(name()).running();
     }
 
     /** A cancel request is honoured here; anywhere else it is ignored as already-decided. */
@@ -95,7 +88,7 @@ enum InstanceState {
     /** The reverse pass owns the instance: an undo may settle its comp-log entry here, and only
      *  here. The mirror of {@link #running}, which is the forward pass. */
     boolean compensating() {
-        return false;
+        return InstanceStatus.valueOf(name()).compensating();
     }
 
     /** Whether a token of this instance may be handed to a worker. RUNNING dispatches the forward

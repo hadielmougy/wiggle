@@ -25,7 +25,7 @@ import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Storage;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;

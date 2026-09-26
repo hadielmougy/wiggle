@@ -4,7 +4,7 @@ import com.wiggle.core.*;
 import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;

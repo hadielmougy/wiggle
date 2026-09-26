@@ -4,7 +4,7 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.placement.IdCodec;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
 

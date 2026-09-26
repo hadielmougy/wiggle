@@ -10,7 +10,7 @@ import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;

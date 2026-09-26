@@ -1,25 +1,13 @@
 package com.wiggle.server.store;
 
 import com.wiggle.core.Doc;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.TokenStatus;
 
 /** Mutable storage rows. Deliberately dumb structs -- all invariants live in the engine. */
 public final class Rows {
     private Rows() {}
-
-    public enum InstanceStatus { RUNNING, COMPLETED, FAILED, CANCELLED,
-        COMPENSATING, COMPENSATED, COMPENSATION_FAILED }
-
-    public enum TokenStatus {
-        /** Dispatchable to a worker. */           READY,
-        /** Leased by a worker. */                 RUNNING,
-        /** Sleeping until availableAt. */         WAITING,
-        /** Awaiting an external/user completion. */ AWAITING,
-        /** Parked at a join barrier. */           JOINED,
-        /** Consumed. */                           DONE,
-        /** Terminally failed. */                  FAILED,
-        /** Abandoned because a sibling failed. */ CANCELLED
-    }
 
     public static final class Instance implements Cloneable {
         public String id;
@@ -118,9 +106,7 @@ public final class Rows {
         }
 
         public boolean isActive() {
-            return status == TokenStatus.READY || status == TokenStatus.RUNNING
-                    || status == TokenStatus.WAITING || status == TokenStatus.AWAITING
-                    || status == TokenStatus.JOINED;
+            return status.active();
         }
 
         @Override public Token clone() {
