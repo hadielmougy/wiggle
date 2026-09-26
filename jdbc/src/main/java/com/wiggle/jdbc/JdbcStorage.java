@@ -945,16 +945,11 @@ public final class JdbcStorage implements Storage {
             // would otherwise convoy, each batch serialising behind the other's whole commit. A
             // skipped instance is simply absent from the result; the caller answers its run as
             // retryable and the worker reports it singly.
-            String sql = "SELECT * FROM wf_instance WHERE id IN (" + placeholders(ids.size())
-                    + ") ORDER BY id FOR UPDATE" + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : "");
-            try (PreparedStatement p = ps(sql)) {
-                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Instance> out = new ArrayList<>(ids.size());
-                    while (rs.next()) out.add(readInstance(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_instance WHERE id IN (<ids>) ORDER BY id FOR UPDATE"
+                            + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : ""))
+                    .bindList("ids", ids)
+                    .mapTo(Instance.class)
+                    .list();
         }
 
         @Override public void updateInstances(List<Instance> instances) {
@@ -1049,10 +1044,6 @@ public final class JdbcStorage implements Storage {
                     .bindByType("seq", t.seq, Long.class);
         }
 
-        private static String placeholders(int n) {
-            return "?,".repeat(n - 1) + "?";
-        }
-
         @Override public Optional<Token> findToken(String id) {
             return h.createQuery("SELECT * FROM wf_token WHERE id=:id")
                     .bind("id", id)
@@ -1062,15 +1053,10 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Token> findTokens(List<String> ids) {
             if (ids.isEmpty()) return List.of();
-            String sql = "SELECT * FROM wf_token WHERE id IN (" + placeholders(ids.size()) + ")";
-            try (PreparedStatement p = ps(sql)) {
-                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>(ids.size());
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE id IN (<ids>)")
+                    .bindList("ids", ids)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override public List<Token> tokensOf(String instanceId) {
@@ -1466,15 +1452,18 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void appendCompensation(Rows.CompLog e) {
-            try (PreparedStatement p = ps("INSERT INTO wf_comp_log "
-                    + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
-                    + "VALUES (?,?,?,?,?,?,?,?)")) {
-                p.setString(1, e.instanceId); p.setLong(2, e.seq); p.setString(3, e.nodeId);
-                p.setString(4, e.activity); p.setString(5, e.queue);
-                p.setString(6, e.input == null ? null : e.input.json()); p.setString(7, e.result == null ? null : e.result.json());
-                p.setInt(8, e.compensated ? 1 : 0);
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("INSERT INTO wf_comp_log "
+                            + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
+                            + "VALUES (:instanceId,:seq,:nodeId,:activity,:queue,:input,:result,:compensated)")
+                    .bind("instanceId", e.instanceId)
+                    .bind("seq", e.seq)
+                    .bind("nodeId", e.nodeId)
+                    .bind("activity", e.activity)
+                    .bind("queue", e.queue)
+                    .bind("input", e.input == null ? null : e.input.json())
+                    .bind("result", e.result == null ? null : e.result.json())
+                    .bind("compensated", e.compensated ? 1 : 0)
+                    .execute();
         }
 
         @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
@@ -1649,23 +1638,23 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void markCompensated(String instanceId, long seq) {
-            try (PreparedStatement p = ps("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=? AND seq=?")) {
-                p.setString(1, instanceId); p.setLong(2, seq);
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=:id AND seq=:seq")
+                    .bind("id", instanceId)
+                    .bind("seq", seq)
+                    .execute();
         }
 
         @Override
         public void cancelActiveTokens(String instanceId, long now) {
-            try (PreparedStatement p = ps("""
-                    UPDATE wf_token
-                       SET status='CANCELLED', lease_owner=NULL, lease_expires=0, updated_at=?
-                     WHERE instance_id=? AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED')
-                    """)) {
-                p.setLong(1, now);
-                p.setString(2, instanceId);
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("""
+                            UPDATE wf_token
+                               SET status='CANCELLED', lease_owner=NULL, lease_expires=0, updated_at=:now
+                             WHERE instance_id=:id
+                               AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED')
+                            """)
+                    .bind("now", now)
+                    .bind("id", instanceId)
+                    .execute();
         }
 
 
