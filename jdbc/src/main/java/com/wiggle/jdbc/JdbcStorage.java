@@ -871,24 +871,18 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<Integer> latestVersion(String name) {
-            try (PreparedStatement p = ps(
-                    "SELECT MAX(version) FROM wf_definition WHERE name=?")) {
-                p.setString(1, name);
-                try (ResultSet rs = p.executeQuery()) {
-                    if (!rs.next()) return Optional.empty();
-                    int v = rs.getInt(1);
-                    return rs.wasNull() ? Optional.empty() : Optional.of(v);
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            // MAX over no rows is a row holding NULL, not an empty result: findFirst would see
+            // one row either way, so the Optional has to come from the value.
+            return h.createQuery("SELECT MAX(version) FROM wf_definition WHERE name=:name")
+                    .bind("name", name)
+                    .mapTo(Integer.class)
+                    .findOne();
         }
 
         @Override public List<String> definitionNames() {
-            try (PreparedStatement p = ps("SELECT DISTINCT name FROM wf_definition ORDER BY name");
-                 ResultSet rs = p.executeQuery()) {
-                List<String> out = new ArrayList<>();
-                while (rs.next()) out.add(rs.getString(1));
-                return out;
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT DISTINCT name FROM wf_definition ORDER BY name")
+                    .mapTo(String.class)
+                    .list();
         }
 
         private static final String INSERT_INSTANCE = "INSERT INTO wf_instance " +
@@ -1088,10 +1082,12 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public boolean hasActiveTokens(String instanceId) {
-            try (PreparedStatement p = ps("SELECT 1 FROM wf_token WHERE instance_id=? AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1")) {
-                p.setString(1, instanceId);
-                try (ResultSet rs = p.executeQuery()) { return rs.next(); }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT 1 FROM wf_token WHERE instance_id=:id "
+                            + "AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1")
+                    .bind("id", instanceId)
+                    .mapTo(Integer.class)
+                    .findFirst()
+                    .isPresent();
         }
 
         private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=?,kind=?,status=?," +
@@ -1138,15 +1134,12 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public List<String> joinStacksAt(String instanceId, String nodeId) {
-            try (PreparedStatement p = ps("SELECT join_stack FROM wf_token WHERE instance_id=? AND node_id=? AND status='JOINED'")) {
-                p.setString(1, instanceId);
-                p.setString(2, nodeId);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<String> out = new ArrayList<>();
-                    while (rs.next()) out.add(rs.getString(1));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT join_stack FROM wf_token "
+                            + "WHERE instance_id=:id AND node_id=:node AND status='JOINED'")
+                    .bind("id", instanceId)
+                    .bind("node", nodeId)
+                    .mapTo(String.class)
+                    .list();
         }
 
         @Override public List<Token> claimTasks(String workerId, Set<String> queues,
@@ -1275,13 +1268,12 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Instance> dueSettle(long now, int max) {
-            List<Instance> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
-                    + "AND settle_at <= ? ORDER BY settle_at LIMIT ?")) {
-                p.setLong(1, now); p.setInt(2, max);
-                try (ResultSet rs = p.executeQuery()) { while (rs.next()) out.add(readInstance(rs)); }
-            } catch (SQLException e) { throw wrap(e); }
-            return out;
+            return h.createQuery("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
+                            + "AND settle_at <= :now ORDER BY settle_at LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .mapTo(Instance.class)
+                    .list();
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {
@@ -1307,15 +1299,11 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<String> childInstanceIds(String parentInstanceId) {
-            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE parent_token_id IN " +
-                    "(SELECT id FROM wf_token WHERE instance_id=?) ORDER BY id")) {
-                p.setString(1, parentInstanceId);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<String> out = new ArrayList<>();
-                    while (rs.next()) out.add(rs.getString(1));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT id FROM wf_instance WHERE parent_token_id IN "
+                            + "(SELECT id FROM wf_token WHERE instance_id=:id) ORDER BY id")
+                    .bind("id", parentInstanceId)
+                    .mapTo(String.class)
+                    .list();
         }
 
         @Override public void putSchedule(Rows.Schedule s) {
@@ -1415,26 +1403,20 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public int countProcessedSince(long since) {
-            try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_token " +
-                    "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>?")) {
-                p.setLong(1, since);
-                try (ResultSet rs = p.executeQuery()) {
-                    rs.next();
-                    return rs.getInt(1);
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT COUNT(*) FROM wf_token "
+                            + "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>:since")
+                    .bind("since", since)
+                    .mapTo(Integer.class)
+                    .one();
         }
 
+        /** The token sweeps: one bound time and a cap, in that order. */
         private List<Token> query(String sql, long arg, int limit) {
-            try (PreparedStatement p = ps(sql)) {
-                p.setLong(1, arg);
-                p.setInt(2, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery(sql)
+                    .bind(0, arg)
+                    .bind(1, limit)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override public void upsertNode(ServerNode n) {
