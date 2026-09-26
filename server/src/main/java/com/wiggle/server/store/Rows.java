@@ -111,6 +111,12 @@ public final class Rows {
             return attempt + 1;
         }
 
+        /** The lease this token holds has run out: it is leased, the lease had an expiry, and that
+         *  expiry has passed. A zero expiry means no lease was ever taken, not one long overdue. */
+        public boolean hasExpiredLeaseAt(long now) {
+            return status == TokenStatus.RUNNING && leaseExpiresAt > 0 && leaseExpiresAt < now;
+        }
+
         public boolean isActive() {
             return status == TokenStatus.READY || status == TokenStatus.RUNNING
                     || status == TokenStatus.WAITING || status == TokenStatus.AWAITING

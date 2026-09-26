@@ -57,6 +57,33 @@ class RowsTest {
         }
 
         @Test
+        @DisplayName("a lease has expired only when it was taken, had an expiry, and it has passed")
+        void expiredLeaseNeedsAllThree() {
+            long now = 1_000L;
+            for (TokenStatus s : TokenStatus.values()) {
+                Token t = new Token();
+                t.status = s;
+                t.leaseExpiresAt = now - 1;
+                assertEquals(s == TokenStatus.RUNNING, t.hasExpiredLeaseAt(now),
+                        s + " with a past expiry");
+            }
+            Token never = new Token();
+            never.status = TokenStatus.RUNNING;
+            never.leaseExpiresAt = 0;
+            assertFalse(never.hasExpiredLeaseAt(now), "no expiry means no lease, not an overdue one");
+
+            Token live = new Token();
+            live.status = TokenStatus.RUNNING;
+            live.leaseExpiresAt = now + 1;
+            assertFalse(live.hasExpiredLeaseAt(now), "a future expiry is still held");
+
+            Token exact = new Token();
+            exact.status = TokenStatus.RUNNING;
+            exact.leaseExpiresAt = now;
+            assertFalse(exact.hasExpiredLeaseAt(now), "expiry is exclusive: equal is not yet expired");
+        }
+
+        @Test
         @DisplayName("nextAttempt is the try about to run, one past the finished ones")
         void nextAttemptIsOnePastFinished() {
             Token t = new Token();

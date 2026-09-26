@@ -381,7 +381,7 @@ public final class InMemoryStorage implements Storage {
 
         @Override public List<Token> expiredLeases(long now, int max) {
             return tokens.values().stream()
-                    .filter(t -> t.status == TokenStatus.RUNNING && t.leaseExpiresAt > 0 && t.leaseExpiresAt < now)
+                    .filter(t -> t.hasExpiredLeaseAt(now))
                     .limit(max)
                     .map(Token::clone)
                     .toList();

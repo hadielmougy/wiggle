@@ -670,7 +670,7 @@ public final class WorkflowEngine {
         Instance inst = tx.lockInstance(orphan.instanceId).orElse(null);
         if (inst == null) return;
         Token t = tx.findToken(orphan.id).orElse(null);
-        if (t == null || t.status != TokenStatus.RUNNING || t.leaseExpiresAt >= System.currentTimeMillis()) return;
+        if (t == null || !t.hasExpiredLeaseAt(System.currentTimeMillis())) return;
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         long ts = System.currentTimeMillis();
         LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
