@@ -681,6 +681,15 @@ public final class JdbcStorage implements Storage {
 
         private static StorageException wrap(SQLException e) { return new StorageException(e.getMessage(), e); }
 
+        /** JDBI reports a failed statement as an unchecked exception carrying the driver's
+         *  SQLException somewhere in its cause chain; the dialect still decides what counts. */
+        private boolean isDuplicateKey(RuntimeException e) {
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                if (t instanceof SQLException sql && dialect.isDuplicateKey(sql)) return true;
+            }
+            return false;
+        }
+
         private record Edge(String to, String condition, int ordinal) { }
 
         /** Flattens a node's typed successors into ordered edge rows; the inverse of {@link #assemble}. */
@@ -715,120 +724,145 @@ public final class JdbcStorage implements Storage {
             // insertIgnore rather than DELETE-then-INSERT: it leaves no window in which two nodes
             // registering the same new version collide on the primary key. The isDuplicateKey catch
             // covers a backend whose ignore is not inline.
-            try (PreparedStatement ins = ps(dialect.insertIgnore("INSERT INTO wf_definition " +
-                    "(name,version,body,registered_at,fingerprint,fingerprint_algo) VALUES (?,?,?,?,?,?)"))) {
-                ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
-                ins.setLong(4, System.currentTimeMillis());
-                ins.setString(5, fingerprint); ins.setString(6, fingerprintAlgo);
-                ins.executeUpdate();
-            } catch (SQLException e) {
-                if (!dialect.isDuplicateKey(e)) throw wrap(e);
+            try {
+                h.createUpdate(dialect.insertIgnore("INSERT INTO wf_definition "
+                                + "(name,version,body,registered_at,fingerprint,fingerprint_algo) VALUES "
+                                + "(:name,:version,:body,:registeredAt,:fingerprint,:algo)"))
+                        .bind("name", name)
+                        .bind("version", version)
+                        .bind("body", json)
+                        .bind("registeredAt", System.currentTimeMillis())
+                        .bind("fingerprint", fingerprint)
+                        .bind("algo", fingerprintAlgo)
+                        .execute();
+            } catch (RuntimeException e) {
+                if (!isDuplicateKey(e)) throw e;
             }
         }
 
         @Override public void replaceDefinition(String name, int version, String json,
                                                 String fingerprint, String fingerprintAlgo) {
-            try (PreparedStatement p = ps("UPDATE wf_definition SET body=?, registered_at=?, " +
-                    "fingerprint=?, fingerprint_algo=? WHERE name=? AND version=?")) {
-                p.setString(1, json); p.setLong(2, System.currentTimeMillis());
-                p.setString(3, fingerprint); p.setString(4, fingerprintAlgo);
-                p.setString(5, name); p.setInt(6, version);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("UPDATE wf_definition SET body=:body, registered_at=:registeredAt, "
+                            + "fingerprint=:fingerprint, fingerprint_algo=:algo "
+                            + "WHERE name=:name AND version=:version")
+                    .bind("body", json)
+                    .bind("registeredAt", System.currentTimeMillis())
+                    .bind("fingerprint", fingerprint)
+                    .bind("algo", fingerprintAlgo)
+                    .bind("name", name)
+                    .bind("version", version)
+                    .execute();
         }
 
         @Override public Optional<StoredFingerprint> definitionFingerprint(String name, int version) {
-            try (PreparedStatement p = ps(
-                    "SELECT fingerprint, fingerprint_algo FROM wf_definition WHERE name=? AND version=? FOR UPDATE")) {
-                p.setString(1, name); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next()
-                            ? Optional.of(new StoredFingerprint(rs.getString(1), rs.getString(2)))
-                            : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT fingerprint, fingerprint_algo FROM wf_definition "
+                            + "WHERE name=:name AND version=:version FOR UPDATE")
+                    .bind("name", name)
+                    .bind("version", version)
+                    .map((rs, ctx) -> new StoredFingerprint(rs.getString("fingerprint"),
+                            rs.getString("fingerprint_algo")))
+                    .findFirst();
         }
 
         @Override public void putGraph(WorkflowDefinition def) {
             // The registry deletes these rows before a replacement, so anything still here is the
             // same graph: a no-op, even when two nodes register it at once.
             if (graphExists(def.name(), def.version())) return;
-            try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
-                    "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key,loop_budget,compensable,arm_names,collect_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
-                 PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
-                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)"))) {
-                for (Node n : def.nodes().values()) {
-                    node.setString(1, def.name()); node.setInt(2, def.version()); node.setString(3, n.id());
-                    node.setString(4, n.kind().name()); node.setString(5, n.name()); node.setString(6, n.activity());
-                    node.setString(7, n.queue());
-                    node.setString(8, n.retry() == null ? null : Json.write(n.retry().toJson()));
-                    node.setLong(9, n.sleepMillis()); node.setInt(10, n.expected());
-                    node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
-                    node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
-                    node.setString(14, n.itemsKey()); node.setString(15, n.itemKey()); node.setInt(16, n.loopBudget());
-                    node.setString(18, n.armNames().isEmpty() ? null : Json.write(n.armNames()));
-                    node.setString(19, n.collectKey());
-                    node.setInt(17, n.compensable() ? 1 : 0);
-                    node.addBatch();
-                    for (Edge e : edgesOf(n)) {
-                        edge.setString(1, def.name()); edge.setInt(2, def.version()); edge.setString(3, n.id());
-                        edge.setString(4, e.to); edge.setString(5, e.condition); edge.setInt(6, e.ordinal);
-                        edge.addBatch();
-                    }
+            PreparedBatch nodes = h.prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_node "
+                    + "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,"
+                    + "success,reason,is_start,items_key,item_key,loop_budget,compensable,arm_names,collect_key) "
+                    + "VALUES (:workflow,:version,:nodeId,:kind,:name,:activity,:queue,:retry,:sleepMillis,"
+                    + ":expected,:success,:reason,:isStart,:itemsKey,:itemKey,:loopBudget,:compensable,"
+                    + ":armNames,:collectKey)"));
+            PreparedBatch edges = h.prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_edge "
+                    + "(workflow,version,from_node,to_node,cond,ordinal) "
+                    + "VALUES (:workflow,:version,:from,:to,:cond,:ordinal)"));
+            for (Node n : def.nodes().values()) {
+                nodes.bind("workflow", def.name())
+                        .bind("version", def.version())
+                        .bind("nodeId", n.id())
+                        .bind("kind", n.kind().name())
+                        .bind("name", n.name())
+                        .bind("activity", n.activity())
+                        .bind("queue", n.queue())
+                        .bind("retry", n.retry() == null ? null : Json.write(n.retry().toJson()))
+                        .bind("sleepMillis", n.sleepMillis())
+                        .bind("expected", n.expected())
+                        .bind("success", n.success() ? 1 : 0)
+                        .bind("reason", n.reason())
+                        .bind("isStart", n.id().equals(def.startNode()) ? 1 : 0)
+                        .bind("itemsKey", n.itemsKey())
+                        .bind("itemKey", n.itemKey())
+                        .bind("loopBudget", n.loopBudget())
+                        .bind("compensable", n.compensable() ? 1 : 0)
+                        .bind("armNames", n.armNames().isEmpty() ? null : Json.write(n.armNames()))
+                        .bind("collectKey", n.collectKey())
+                        .add();
+                for (Edge e : edgesOf(n)) {
+                    edges.bind("workflow", def.name())
+                            .bind("version", def.version())
+                            .bind("from", n.id())
+                            .bind("to", e.to)
+                            .bind("cond", e.condition)
+                            .bind("ordinal", e.ordinal)
+                            .add();
                 }
-                node.executeBatch();
-                edge.executeBatch();
-            } catch (SQLException e) {
-                if (!dialect.isDuplicateKey(e)) throw wrap(e);
+            }
+            try {
+                nodes.execute();
+                if (edges.size() > 0) edges.execute();
+            } catch (RuntimeException e) {
+                if (!isDuplicateKey(e)) throw e;
             }
         }
 
         private boolean graphExists(String workflow, int version) {
-            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? LIMIT 1")) {
-                p.setString(1, workflow); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) { return rs.next(); }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT 1 FROM wf_graph_node "
+                            + "WHERE workflow=:workflow AND version=:version LIMIT 1")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .mapTo(Integer.class)
+                    .findFirst()
+                    .isPresent();
         }
 
         @Override public void deleteGraph(String workflow, int version) {
-            deleteGraphRows("DELETE FROM wf_graph_edge WHERE workflow=? AND version=?", workflow, version);
-            deleteGraphRows("DELETE FROM wf_graph_node WHERE workflow=? AND version=?", workflow, version);
+            deleteGraphRows("wf_graph_edge", workflow, version);
+            deleteGraphRows("wf_graph_node", workflow, version);
         }
 
-        private void deleteGraphRows(String sql, String workflow, int version) {
-            try (PreparedStatement p = ps(sql)) {
-                p.setString(1, workflow);
-                p.setInt(2, version);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+        /** Edges before nodes: an edge pointing at a node that is gone is worse than neither. */
+        private void deleteGraphRows(String table, String workflow, int version) {
+            h.createUpdate("DELETE FROM " + table + " WHERE workflow=:workflow AND version=:version")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .execute();
         }
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
-            try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason," +
-                    "items_key,item_key,loop_budget,compensable,arm_names,collect_key " +
-                    "FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
-                p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
-                try (ResultSet rs = p.executeQuery()) {
-                    if (!rs.next()) return Optional.empty();
-                    NodeKind kind = NodeKind.valueOf(rs.getString(1));
-                    String name = rs.getString(2), activity = rs.getString(3), queue = rs.getString(4);
-                    String retryJson = rs.getString(5);
-                    RetryPolicy retry = retryJson == null ? null : RetryPolicy.fromJson(Json.parse(retryJson));
-                    long sleep = rs.getLong(6);
-                    int expected = rs.getInt(7);
-                    boolean success = rs.getInt(8) != 0;
-                    String reason = rs.getString(9);
-                    String itemsKey = rs.getString(10);
-                    String itemKey = rs.getString(11);
-                    int loopBudget = rs.getInt(12);   // NULL -> 0 (not a loop)
-                    boolean compensable = rs.getInt(13) != 0;
-                    Combine combine = Combine.of(kind, itemsKey, rs.getString(14), rs.getString(15));
-                    return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
-                            retry, sleep, expected, success, reason, combine.itemsKey(), itemKey,
-                            loopBudget, compensable, combine));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,"
+                            + "reason,items_key,item_key,loop_budget,compensable,arm_names,collect_key "
+                            + "FROM wf_graph_node WHERE workflow=:workflow AND version=:version "
+                            + "AND node_id=:nodeId")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .bind("nodeId", nodeId)
+                    .map((rs, ctx) -> {
+                        NodeKind kind = NodeKind.valueOf(rs.getString("kind"));
+                        String retryJson = rs.getString("retry_json");
+                        RetryPolicy retry = retryJson == null ? null : RetryPolicy.fromJson(Json.parse(retryJson));
+                        String itemsKey = rs.getString("items_key");
+                        Combine combine = Combine.of(kind, itemsKey, rs.getString("arm_names"),
+                                rs.getString("collect_key"));
+                        return assemble(workflow, version, nodeId, kind, rs.getString("name"),
+                                rs.getString("activity"), rs.getString("queue"), retry,
+                                rs.getLong("sleep_millis"), rs.getInt("expected"),
+                                rs.getInt("success") != 0, rs.getString("reason"), combine.itemsKey(),
+                                rs.getString("item_key"),
+                                rs.getInt("loop_budget"),   // NULL -> 0 (not a loop)
+                                rs.getInt("compensable") != 0, combine);
+                    })
+                    .findFirst();
         }
 
         /**
@@ -854,13 +888,14 @@ public final class JdbcStorage implements Storage {
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
                               String itemsKey, String itemKey, int loopBudget, boolean compensable, Combine combine) {
             EdgeTargets targets = new EdgeTargets(kind);
-            try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
-                    "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
-                p.setString(1, workflow); p.setInt(2, version); p.setString(3, id);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) targets.absorb(rs.getString(1), rs.getString(2));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            h.createQuery("SELECT to_node,cond FROM wf_graph_edge "
+                            + "WHERE workflow=:workflow AND version=:version AND from_node=:from "
+                            + "ORDER BY ordinal")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .bind("from", id)
+                    .map((rs, ctx) -> new String[] {rs.getString("to_node"), rs.getString("cond")})
+                    .forEach(e -> targets.absorb(e[0], e[1]));
             Node n = new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
                     List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget, false,
                     combine.armNames(), combine.collectKey());
@@ -893,22 +928,20 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<String> graphStartNode(String workflow, int version) {
-            try (PreparedStatement p = ps("SELECT node_id FROM wf_graph_node " +
-                    "WHERE workflow=? AND version=? AND is_start=1")) {
-                p.setString(1, workflow); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT node_id FROM wf_graph_node "
+                            + "WHERE workflow=:workflow AND version=:version AND is_start=1")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .mapTo(String.class)
+                    .findFirst();
         }
 
         @Override public Optional<String> definition(String name, int version) {
-            try (PreparedStatement p = ps("SELECT body FROM wf_definition WHERE name=? AND version=?")) {
-                p.setString(1, name); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT body FROM wf_definition WHERE name=:name AND version=:version")
+                    .bind("name", name)
+                    .bind("version", version)
+                    .mapTo(String.class)
+                    .findFirst();
         }
 
         @Override public Optional<Integer> latestVersion(String name) {
