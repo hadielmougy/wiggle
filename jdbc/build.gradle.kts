@@ -6,4 +6,9 @@ dependencies {
     // Connection pooling for every dialect. Exposed as `api` so the per-database modules
     // (postgres/mysql/oracle) inherit it without re-declaring it.
     api("com.zaxxer:HikariCP:${property("hikariVersion")}")
+
+    // Row mapping and statement binding over the store's own connections. Deliberately
+    // `implementation`: no JDBI type appears on the Storage/Tx API, so it stays off a consumer's
+    // compile classpath.
+    implementation("org.jdbi:jdbi3-core:${property("jdbiVersion")}")
 }

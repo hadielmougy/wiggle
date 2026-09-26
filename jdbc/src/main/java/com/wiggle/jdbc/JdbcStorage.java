@@ -2,6 +2,8 @@ package com.wiggle.jdbc;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.Jdbi;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
@@ -32,6 +34,7 @@ public final class JdbcStorage implements Storage {
 
     private final Dialect dialect;
     private final HikariDataSource ds;
+    private final Jdbi jdbi;
     private final String fingerprint;
 
     /** Explicit-dialect constructor used by the per-database modules. */
@@ -49,6 +52,9 @@ public final class JdbcStorage implements Storage {
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
         cfg.setPoolName("wiggle-" + dialect.id());
         this.ds = new HikariDataSource(cfg);
+        this.jdbi = Jdbi.create(this.ds)
+                .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
+                .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs));
     }
 
     private Connection borrow() {
@@ -526,20 +532,25 @@ public final class JdbcStorage implements Storage {
         st.execute(sql);
     }
 
+    /**
+     * JDBI borrows the connection and hands it back to the pool when the handle closes; the
+     * transaction stays this store's own, as it always was. Nothing calls {@code handle.begin()},
+     * so there is one owner of the commit boundary and not two.
+     */
     @Override public <R> R inTx(Function<Tx, R> work) {
-        Connection c = borrow();
-        try {
-            R r = work.apply(new JdbcTx(c, dialect));
-            c.commit();
-            return r;
-        } catch (SQLException e) {
-            rollback(c);
-            throw new StorageException("commit failed", e);
-        } catch (RuntimeException e) {
-            rollback(c);
-            throw e;
-        } finally {
-            release(c);
+        try (Handle h = jdbi.open()) {
+            Connection c = h.getConnection();
+            try {
+                R r = work.apply(new JdbcTx(h, dialect));
+                c.commit();
+                return r;
+            } catch (SQLException e) {
+                rollback(c);
+                throw new StorageException("commit failed", e);
+            } catch (RuntimeException e) {
+                rollback(c);
+                throw e;
+            }
         }
     }
 
@@ -551,6 +562,62 @@ public final class JdbcStorage implements Storage {
         ds.close();
     }
 
+
+    /** Row readers, shared by the registered JDBI mappers and by the statements not yet
+     *  converted. Unchanged from when they lived inside the transaction. */
+    static Instance readInstance(ResultSet rs) throws SQLException {
+        Instance i = new Instance();
+        i.id = rs.getString("id");
+        i.workflow = rs.getString("workflow");
+        i.version = rs.getInt("version");
+        i.correlationId = rs.getString("correlation_id");
+        i.status = InstanceStatus.valueOf(rs.getString("status"));
+        i.terminationReason = rs.getString("term_reason");
+        i.error = rs.getString("error");
+        i.context = Doc.parse(rs.getString("context"));
+        i.parentTokenId = rs.getString("parent_token_id");
+        i.createdAt = rs.getLong("created_at");
+        i.updatedAt = rs.getLong("updated_at");
+        i.revision = rs.getLong("revision");
+        long settleAt = rs.getLong("settle_at");
+        i.settleAt = rs.wasNull() ? null : settleAt;
+        return i;
+    }
+
+    static Token readToken(ResultSet rs) throws SQLException {
+        Token t = new Token();
+        t.id = rs.getString("id");
+        t.instanceId = rs.getString("instance_id");
+        t.workflow = rs.getString("workflow");
+        t.version = rs.getInt("version");
+        t.nodeId = rs.getString("node_id");
+        t.kind = NodeKind.valueOf(rs.getString("kind"));
+        t.status = TokenStatus.valueOf(rs.getString("status"));
+        t.activity = rs.getString("activity");
+        t.queue = rs.getString("queue");
+        t.attempt = rs.getInt("attempt");
+        t.availableAt = rs.getLong("available_at");
+        t.leaseOwner = rs.getString("lease_owner");
+        t.leaseExpiresAt = rs.getLong("lease_expires");
+        // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
+        // normalise it here so the engine always sees a non-null join stack.
+        String joinStack = rs.getString("join_stack");
+        t.joinStack = joinStack == null ? "" : joinStack;
+        t.lastError = rs.getString("last_error");
+        t.payload = PayloadCodec.decode(rs.getString("payload"));
+        long compSeq = rs.getLong("comp_seq");
+        t.compSeq = rs.wasNull() ? null : compSeq;
+        long startedAt = rs.getLong("started_at");
+        t.startedAt = rs.wasNull() ? null : startedAt;
+        long finishedAt = rs.getLong("finished_at");
+        t.finishedAt = rs.wasNull() ? null : finishedAt;
+        long seq = rs.getLong("seq");
+        t.seq = rs.wasNull() ? null : seq;
+        t.createdAt = rs.getLong("created_at");
+        t.updatedAt = rs.getLong("updated_at");
+        return t;
+    }
+
     public static final class StorageException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
@@ -558,10 +625,15 @@ public final class JdbcStorage implements Storage {
     }
 
     private static final class JdbcTx implements Tx {
+        private final Handle h;
         private final Connection c;
         private final Dialect dialect;
 
-        JdbcTx(Connection c, Dialect dialect) { this.c = c; this.dialect = dialect; }
+        JdbcTx(Handle h, Dialect dialect) {
+            this.h = h;
+            this.c = h.getConnection();
+            this.dialect = dialect;
+        }
 
         private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
 
@@ -1657,57 +1729,6 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException ex) { throw wrap(ex); }
         }
 
-        private static Instance readInstance(ResultSet rs) throws SQLException {
-            Instance i = new Instance();
-            i.id = rs.getString("id");
-            i.workflow = rs.getString("workflow");
-            i.version = rs.getInt("version");
-            i.correlationId = rs.getString("correlation_id");
-            i.status = InstanceStatus.valueOf(rs.getString("status"));
-            i.terminationReason = rs.getString("term_reason");
-            i.error = rs.getString("error");
-            i.context = Doc.parse(rs.getString("context"));
-            i.parentTokenId = rs.getString("parent_token_id");
-            i.createdAt = rs.getLong("created_at");
-            i.updatedAt = rs.getLong("updated_at");
-            i.revision = rs.getLong("revision");
-            long settleAt = rs.getLong("settle_at");
-            i.settleAt = rs.wasNull() ? null : settleAt;
-            return i;
-        }
 
-        private static Token readToken(ResultSet rs) throws SQLException {
-            Token t = new Token();
-            t.id = rs.getString("id");
-            t.instanceId = rs.getString("instance_id");
-            t.workflow = rs.getString("workflow");
-            t.version = rs.getInt("version");
-            t.nodeId = rs.getString("node_id");
-            t.kind = NodeKind.valueOf(rs.getString("kind"));
-            t.status = TokenStatus.valueOf(rs.getString("status"));
-            t.activity = rs.getString("activity");
-            t.queue = rs.getString("queue");
-            t.attempt = rs.getInt("attempt");
-            t.availableAt = rs.getLong("available_at");
-            t.leaseOwner = rs.getString("lease_owner");
-            t.leaseExpiresAt = rs.getLong("lease_expires");
-            // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
-            // normalise it here so the engine always sees a non-null join stack.
-            String joinStack = rs.getString("join_stack");
-            t.joinStack = joinStack == null ? "" : joinStack;
-            t.lastError = rs.getString("last_error");
-            t.payload = PayloadCodec.decode(rs.getString("payload"));
-            long compSeq = rs.getLong("comp_seq");
-            t.compSeq = rs.wasNull() ? null : compSeq;
-            long startedAt = rs.getLong("started_at");
-            t.startedAt = rs.wasNull() ? null : startedAt;
-            long finishedAt = rs.getLong("finished_at");
-            t.finishedAt = rs.wasNull() ? null : finishedAt;
-            long seq = rs.getLong("seq");
-            t.seq = rs.wasNull() ? null : seq;
-            t.createdAt = rs.getLong("created_at");
-            t.updatedAt = rs.getLong("updated_at");
-            return t;
-        }
     }
 }
