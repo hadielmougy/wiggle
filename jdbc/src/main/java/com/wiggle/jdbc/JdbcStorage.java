@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.Query;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
@@ -923,14 +924,9 @@ public final class JdbcStorage implements Storage {
 
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
             String sql = forUpdate
-                    ? "SELECT * FROM wf_instance WHERE id=? FOR UPDATE"
-                    : "SELECT * FROM wf_instance WHERE id=?";
-            try (PreparedStatement p = ps(sql)) {
-                p.setString(1, id);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(readInstance(rs)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+                    ? "SELECT * FROM wf_instance WHERE id=:id FOR UPDATE"
+                    : "SELECT * FROM wf_instance WHERE id=:id";
+            return h.createQuery(sql).bind("id", id).mapTo(Instance.class).findFirst();
         }
 
         private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=?,term_reason=?," +
@@ -980,41 +976,32 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
-            String sql = "SELECT * FROM wf_instance WHERE correlation_id=? ORDER BY created_at DESC LIMIT ?";
-            try (PreparedStatement p = ps(sql)) {
-                p.setString(1, correlationId);
-                p.setInt(2, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Instance> out = new ArrayList<>();
-                    while (rs.next()) out.add(readInstance(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_instance WHERE correlation_id=:cid "
+                            + "ORDER BY created_at DESC LIMIT :limit")
+                    .bind("cid", correlationId)
+                    .bind("limit", limit)
+                    .mapTo(Instance.class)
+                    .list();
         }
 
         @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
-            StringBuilder sql = new StringBuilder("SELECT * FROM wf_instance WHERE 1=1");
-            if (workflow != null) sql.append(" AND workflow=?");
-            if (status != null) sql.append(" AND status=?");
-            sql.append(" ORDER BY created_at DESC LIMIT ?");
-            try (PreparedStatement p = ps(sql.toString())) {
-                int idx = 1;
-                if (workflow != null) p.setString(idx++, workflow);
-                if (status != null) p.setString(idx++, status.name());
-                p.setInt(idx, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Instance> out = new ArrayList<>();
-                    while (rs.next()) out.add(readInstance(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            // Both filters are optional, so the clauses are conditional but the binds are not
+            // positional: a name binds where it appears, or nowhere, and cannot slide.
+            Query q = h.createQuery("SELECT * FROM wf_instance WHERE 1=1"
+                    + (workflow != null ? " AND workflow=:workflow" : "")
+                    + (status != null ? " AND status=:status" : "")
+                    + " ORDER BY created_at DESC LIMIT :limit");
+            q.bind("limit", limit);
+            if (workflow != null) q.bind("workflow", workflow);
+            if (status != null) q.bind("status", status.name());
+            return q.mapTo(Instance.class).list();
         }
 
         @Override public int countInstances(InstanceStatus status) {
-            try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_instance WHERE status=?")) {
-                p.setString(1, status.name());
-                try (ResultSet rs = p.executeQuery()) { return rs.next() ? rs.getInt(1) : 0; }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT COUNT(*) FROM wf_instance WHERE status=:status")
+                    .bind("status", status.name())
+                    .mapTo(Integer.class)
+                    .one();
         }
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version," +
@@ -1073,12 +1060,10 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<Token> findToken(String id) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE id=?")) {
-                p.setString(1, id);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(readToken(rs)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE id=:id")
+                    .bind("id", id)
+                    .mapTo(Token.class)
+                    .findFirst();
         }
 
         @Override public List<Token> findTokens(List<String> ids) {
@@ -1095,14 +1080,10 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> tokensOf(String instanceId) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE instance_id=? ORDER BY id")) {
-                p.setString(1, instanceId);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE instance_id=:id ORDER BY id")
+                    .bind("id", instanceId)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override
