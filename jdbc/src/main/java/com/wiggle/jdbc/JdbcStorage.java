@@ -1382,18 +1382,22 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void upsertNode(ServerNode n) {
-            try (PreparedStatement upd = ps("UPDATE wf_node SET name=?,last_heartbeat=?,workers=? WHERE id=?")) {
-                upd.setString(1, n.name); upd.setLong(2, n.lastHeartbeat); upd.setInt(3, n.workers);
-                upd.setString(4, n.id);
-                if (upd.executeUpdate() == 0) {
-                    try (PreparedStatement ins = ps("INSERT INTO wf_node " +
-                            "(id,name,first_heartbeat,last_heartbeat,workers,leader) VALUES (?,?,?,?,?,0)")) {
-                        ins.setString(1, n.id); ins.setString(2, n.name); ins.setLong(3, n.firstHeartbeat);
-                        ins.setLong(4, n.lastHeartbeat); ins.setInt(5, n.workers);
-                        ins.executeUpdate();
-                    }
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            int updated = h.createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
+                            + "workers=:workers WHERE id=:id")
+                    .bind("name", n.name)
+                    .bind("beat", n.lastHeartbeat)
+                    .bind("workers", n.workers)
+                    .bind("id", n.id)
+                    .execute();
+            if (updated > 0) return;
+            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader) "
+                            + "VALUES (:id,:name,:first,:beat,:workers,0)")
+                    .bind("id", n.id)
+                    .bind("name", n.name)
+                    .bind("first", n.firstHeartbeat)
+                    .bind("beat", n.lastHeartbeat)
+                    .bind("workers", n.workers)
+                    .execute();
         }
 
         @Override public List<ServerNode> nodes() {
@@ -1422,11 +1426,10 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void setLeader(String nodeId, boolean leader) {
-            try (PreparedStatement p = ps("UPDATE wf_node SET leader=? WHERE id=?")) {
-                p.setInt(1, leader ? 1 : 0);
-                p.setString(2, nodeId);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("UPDATE wf_node SET leader=:leader WHERE id=:id")
+                    .bind("leader", leader ? 1 : 0)
+                    .bind("id", nodeId)
+                    .execute();
         }
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
@@ -1486,13 +1489,19 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void insertAnomaly(Rows.Anomaly a) {
-            try (PreparedStatement p = ps("INSERT INTO wf_anomaly (id,instance_id,workflow,version,kind,"
-                    + "expected_node,reported_node,detail,observed_at) VALUES (?,?,?,?,?,?,?,?,?)")) {
-                p.setString(1, a.id()); p.setString(2, a.instanceId()); p.setString(3, a.workflow());
-                p.setInt(4, a.version()); p.setString(5, a.kind()); p.setString(6, a.expectedNode());
-                p.setString(7, a.reportedNode()); p.setString(8, a.detail()); p.setLong(9, a.at());
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("INSERT INTO wf_anomaly (id,instance_id,workflow,version,kind,"
+                            + "expected_node,reported_node,detail,observed_at) VALUES "
+                            + "(:id,:instanceId,:workflow,:version,:kind,:expected,:reported,:detail,:at)")
+                    .bind("id", a.id())
+                    .bind("instanceId", a.instanceId())
+                    .bind("workflow", a.workflow())
+                    .bind("version", a.version())
+                    .bind("kind", a.kind())
+                    .bind("expected", a.expectedNode())
+                    .bind("reported", a.reportedNode())
+                    .bind("detail", a.detail())
+                    .bind("at", a.at())
+                    .execute();
         }
 
         @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
@@ -1518,18 +1527,23 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public long appendEvent(Rows.Event e) {
-            try (PreparedStatement p = c.prepareStatement("INSERT INTO wf_event (instance_id,workflow,version,"
-                    + "correlation_id,type,node_id,payload_ver,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    Statement.RETURN_GENERATED_KEYS)) {
-                p.setString(1, e.instanceId()); p.setString(2, e.workflow()); p.setInt(3, e.version());
-                p.setString(4, e.correlationId()); p.setString(5, e.type()); p.setString(6, e.nodeId());
-                p.setInt(7, e.payloadVer()); p.setString(8, e.payload()); p.setLong(9, e.createdAt());
-                p.executeUpdate();
-                try (ResultSet keys = p.getGeneratedKeys()) {
-                    if (!keys.next()) throw new StorageException("wf_event insert returned no seq", null);
-                    return keys.getLong(1);
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createUpdate("INSERT INTO wf_event (instance_id,workflow,version,correlation_id,type,"
+                            + "node_id,payload_ver,payload,created_at) VALUES "
+                            + "(:instanceId,:workflow,:version,:correlationId,:type,:nodeId,:payloadVer,"
+                            + ":payload,:createdAt)")
+                    .bind("instanceId", e.instanceId())
+                    .bind("workflow", e.workflow())
+                    .bind("version", e.version())
+                    .bind("correlationId", e.correlationId())
+                    .bind("type", e.type())
+                    .bind("nodeId", e.nodeId())
+                    .bind("payloadVer", e.payloadVer())
+                    .bind("payload", e.payload())
+                    .bind("createdAt", e.createdAt())
+                    .executeAndReturnGeneratedKeys("seq")
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElseThrow(() -> new StorageException("wf_event insert returned no seq", null));
         }
 
         @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
@@ -1565,13 +1579,15 @@ public final class JdbcStorage implements Storage {
             } catch (SQLException ex) { throw wrap(ex); }
         }
 
-        @Override public void createEventCursorIfAbsent(Rows.EventCursor c) {
-            try (PreparedStatement p = ps(dialect.insertIgnore(
-                    "INSERT INTO wf_event_cursor (consumer,acked_seq,last_seen,created_at) VALUES (?,?,?,?)"))) {
-                p.setString(1, c.consumer()); p.setLong(2, c.ackedSeq());
-                p.setLong(3, c.lastSeen()); p.setLong(4, c.createdAt());
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+        @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
+            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor "
+                            + "(consumer,acked_seq,last_seen,created_at) VALUES "
+                            + "(:consumer,:acked,:lastSeen,:createdAt)"))
+                    .bind("consumer", cursor.consumer())
+                    .bind("acked", cursor.ackedSeq())
+                    .bind("lastSeen", cursor.lastSeen())
+                    .bind("createdAt", cursor.createdAt())
+                    .execute();
         }
 
         @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) {
@@ -1602,21 +1618,17 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
-            List<Long> seqs = new ArrayList<>();
-            String sql = "SELECT seq FROM wf_event WHERE created_at<?" + (upToSeq != null ? " AND seq<=?" : "")
-                    + " ORDER BY seq LIMIT ?";
-            try (PreparedStatement p = ps(sql)) {
-                int i = 1;
-                p.setLong(i++, createdBefore);
-                if (upToSeq != null) p.setLong(i++, upToSeq);
-                p.setInt(i, max);
-                try (ResultSet rs = p.executeQuery()) { while (rs.next()) seqs.add(rs.getLong(1)); }
-            } catch (SQLException ex) { throw wrap(ex); }
+            Query pick = h.createQuery("SELECT seq FROM wf_event WHERE created_at<:before"
+                    + (upToSeq != null ? " AND seq<=:upTo" : "")
+                    + " ORDER BY seq LIMIT :max");
+            pick.bind("before", createdBefore).bind("max", max);
+            if (upToSeq != null) pick.bind("upTo", upToSeq);
+            List<Long> seqs = pick.mapTo(Long.class).list();
             if (seqs.isEmpty()) return 0;
-            try (PreparedStatement d = ps("DELETE FROM wf_event WHERE seq<=? AND created_at<?")) {
-                d.setLong(1, seqs.getLast()); d.setLong(2, createdBefore);
-                return d.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createUpdate("DELETE FROM wf_event WHERE seq<=:upTo AND created_at<:before")
+                    .bind("upTo", seqs.getLast())
+                    .bind("before", createdBefore)
+                    .execute();
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
