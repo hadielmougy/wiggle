@@ -57,6 +57,17 @@ class RowsTest {
         }
 
         @Test
+        @DisplayName("innermostJoinGroup parses a raw stack exactly as currentJoinGroup reads the row")
+        void innermostJoinGroupIsTheSameParse() {
+            for (String stack : new String[] {null, "", "g1", "g1,g2", "g1,g2,g3", ",g2", "g1,"}) {
+                Token t = new Token();
+                t.joinStack = stack;
+                assertEquals(t.currentJoinGroup(), Token.innermostJoinGroup(stack),
+                        "the row and the raw parse must agree for stack " + stack);
+            }
+        }
+
+        @Test
         @DisplayName("popJoinStack drops the innermost group")
         void popJoinStack() {
             Token t = new Token();

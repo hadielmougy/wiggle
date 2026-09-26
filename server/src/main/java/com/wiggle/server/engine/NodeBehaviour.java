@@ -162,7 +162,7 @@ abstract class NodeBehaviour {
             Tokens.markJoined(s.tx(), s.token(), s.now());
             long arrived = s.tx().joinStacksAt(s.inst().id, s.node().id()).stream()
                     // TODO: evaluate postgres expression to count on the server side rather than pulling all the rows and counting here
-                    .filter(stack -> group.equals(lastSegment(stack)))
+                    .filter(stack -> group.equals(Rows.Token.innermostJoinGroup(stack)))
                     .count();
             if (arrived < expected) return true;
             List<Rows.Token> atBarrier = joinedAtBarrier(s.tx(), s.inst(), s.node(), group);
@@ -172,12 +172,6 @@ abstract class NodeBehaviour {
             s.tx().insertToken(cont);
             s.work().push(cont);
             return true;
-        }
-
-        private static String lastSegment(String joinStack) {
-            if (joinStack == null || joinStack.isEmpty()) return null;
-            int i = joinStack.lastIndexOf(',');
-            return i < 0 ? joinStack : joinStack.substring(i + 1);
         }
 
         private static List<Rows.Token> joinedAtBarrier(Tx tx, Rows.Instance inst, Node node, String group) {

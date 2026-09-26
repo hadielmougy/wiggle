@@ -84,6 +84,12 @@ public final class Rows {
         public long updatedAt;
 
         public String currentJoinGroup() {
+            return innermostJoinGroup(joinStack);
+        }
+
+        /** The innermost fork group of a raw join stack: its last segment, or null when unscoped.
+         *  Takes the string rather than a row, for the barrier counting arrivals by stack. */
+        public static String innermostJoinGroup(String joinStack) {
             if (joinStack == null || joinStack.isEmpty()) return null;
             int i = joinStack.lastIndexOf(',');
             return i < 0 ? joinStack : joinStack.substring(i + 1);
