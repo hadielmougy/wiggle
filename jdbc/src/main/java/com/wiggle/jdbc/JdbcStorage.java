@@ -1358,31 +1358,24 @@ public final class JdbcStorage implements Storage {
 
 
         @Override public Rows.QueueDepth queueDepth(long now) {
-            try (PreparedStatement p = ps("SELECT COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
-                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?")) {
-                p.setLong(1, now);
-                try (ResultSet rs = p.executeQuery()) {
-                    rs.next();
-                    return new Rows.QueueDepth(rs.getInt(1), rs.getLong(2));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "
+                            + "FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') "
+                            + "AND available_at<=:now")
+                    .bind("now", now)
+                    .map((rs, ctx) -> new Rows.QueueDepth(rs.getInt("depth"), rs.getLong("oldest")))
+                    .one();
         }
 
         @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
-            try (PreparedStatement p = ps("SELECT workflow, version, queue, COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
-                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=? " +
-                    "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT ?")) {
-                p.setLong(1, now);
-                p.setInt(2, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Rows.BacklogSlice> out = new ArrayList<>();
-                    while (rs.next()) {
-                        out.add(new Rows.BacklogSlice(rs.getString(1), rs.getInt(2), rs.getString(3),
-                                rs.getInt(4), rs.getLong(5)));
-                    }
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT workflow, version, queue, COUNT(*) AS depth, "
+                            + "COALESCE(MIN(available_at),0) AS oldest FROM wf_token "
+                            + "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=:now "
+                            + "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .map((rs, ctx) -> new Rows.BacklogSlice(rs.getString("workflow"), rs.getInt("version"),
+                            rs.getString("queue"), rs.getInt("depth"), rs.getLong("oldest")))
+                    .list();
         }
 
         @Override public int countProcessedSince(long since) {
@@ -1444,21 +1437,21 @@ public final class JdbcStorage implements Storage {
             List<String> ids = new ArrayList<>();
             // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
             // dialect a deterministic "oldest first" deletion order at no cost.
-            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?")) {
-                p.setLong(1, updatedBefore);
-                p.setInt(2, limit);
-                try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }
-            } catch (SQLException e) { throw wrap(e); }
+            ids.addAll(h.createQuery("SELECT id FROM wf_instance "
+                            + "WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<:before "
+                            + "ORDER BY updated_at LIMIT :limit")
+                    .bind("before", updatedBefore)
+                    .bind("limit", limit)
+                    .mapTo(String.class)
+                    .list());
             if (ids.isEmpty()) return 0;
-            try (PreparedStatement dt = ps("DELETE FROM wf_token WHERE instance_id=?");
-                 PreparedStatement dc = ps("DELETE FROM wf_comp_log WHERE instance_id=?");
-                 PreparedStatement di = ps("DELETE FROM wf_instance WHERE id=?")) {
-                for (String id : ids) {
-                    dt.setString(1, id); dt.executeUpdate();
-                    dc.setString(1, id); dc.executeUpdate();
-                    di.setString(1, id); di.executeUpdate();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            // Children before parents: a token or comp-log row outliving its instance is a leak.
+            for (String table : List.of("wf_token", "wf_comp_log")) {
+                h.createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
+                        .bindList("ids", ids)
+                        .execute();
+            }
+            h.createUpdate("DELETE FROM wf_instance WHERE id IN (<ids>)").bindList("ids", ids).execute();
             return ids.size();
         }
 
@@ -1478,22 +1471,22 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
-            java.util.List<Rows.CompLog> out = new java.util.ArrayList<>();
-            try (PreparedStatement p = ps("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
-                    + "FROM wf_comp_log WHERE instance_id=? ORDER BY seq")) {
-                p.setString(1, instanceId);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
+            return h.createQuery("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
+                            + "FROM wf_comp_log WHERE instance_id=:id ORDER BY seq")
+                    .bind("id", instanceId)
+                    .map((rs, ctx) -> {
                         Rows.CompLog e = new Rows.CompLog();
                         e.instanceId = instanceId;
-                        e.seq = rs.getLong(1); e.nodeId = rs.getString(2); e.activity = rs.getString(3);
-                        e.queue = rs.getString(4); e.input = Doc.parse(rs.getString(5));
-                        e.result = Doc.parse(rs.getString(6)); e.compensated = rs.getInt(7) != 0;
-                        out.add(e);
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+                        e.seq = rs.getLong("seq");
+                        e.nodeId = rs.getString("node_id");
+                        e.activity = rs.getString("activity");
+                        e.queue = rs.getString("queue");
+                        e.input = Doc.parse(rs.getString("input_json"));
+                        e.result = Doc.parse(rs.getString("result_json"));
+                        e.compensated = rs.getInt("compensated") != 0;
+                        return e;
+                    })
+                    .list();
         }
 
         @Override public void insertAnomaly(Rows.Anomaly a) {
@@ -1513,25 +1506,19 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
-            StringBuilder sql = new StringBuilder("SELECT id,instance_id,workflow,version,kind,expected_node,"
-                    + "reported_node,detail,observed_at FROM wf_anomaly WHERE 1=1");
-            if (workflow != null) sql.append(" AND workflow=?");
-            if (instanceId != null) sql.append(" AND instance_id=?");
-            sql.append(" ORDER BY observed_at DESC, id DESC LIMIT ?");
-            List<Rows.Anomaly> out = new ArrayList<>();
-            try (PreparedStatement p = ps(sql.toString())) {
-                int i = 1;
-                if (workflow != null) p.setString(i++, workflow);
-                if (instanceId != null) p.setString(i++, instanceId);
-                p.setInt(i, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        out.add(new Rows.Anomaly(rs.getString(1), rs.getString(2), rs.getString(3), rs.getInt(4),
-                                rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getLong(9)));
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+            Query q = h.createQuery("SELECT id,instance_id,workflow,version,kind,expected_node,"
+                    + "reported_node,detail,observed_at FROM wf_anomaly WHERE 1=1"
+                    + (workflow != null ? " AND workflow=:workflow" : "")
+                    + (instanceId != null ? " AND instance_id=:instanceId" : "")
+                    + " ORDER BY observed_at DESC, id DESC LIMIT :limit");
+            q.bind("limit", limit);
+            if (workflow != null) q.bind("workflow", workflow);
+            if (instanceId != null) q.bind("instanceId", instanceId);
+            return q.map((rs, ctx) -> new Rows.Anomaly(rs.getString("id"), rs.getString("instance_id"),
+                            rs.getString("workflow"), rs.getInt("version"), rs.getString("kind"),
+                            rs.getString("expected_node"), rs.getString("reported_node"),
+                            rs.getString("detail"), rs.getLong("observed_at")))
+                    .list();
         }
 
         @Override public long appendEvent(Rows.Event e) {
@@ -1633,21 +1620,24 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
-            List<Rows.StepDuration> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
-                    + "WHERE workflow=? AND version=? AND status='DONE' AND finished_at > ? AND started_at IS NOT NULL "
-                    + "ORDER BY finished_at DESC LIMIT ?")) {
-                p.setString(1, workflow); p.setInt(2, version); p.setLong(3, since); p.setInt(4, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        long seq = rs.getLong(5);
+            return h.createQuery("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
+                            + "WHERE workflow=:workflow AND version=:version AND status='DONE' "
+                            + "AND finished_at > :since AND started_at IS NOT NULL "
+                            + "ORDER BY finished_at DESC LIMIT :max")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .bind("since", since)
+                    .bind("max", max)
+                    .map((rs, ctx) -> {
+                        rs.getLong("seq");
+                        // An observed step waited for nothing: it was never dispatched from a queue.
                         boolean observed = !rs.wasNull();
-                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2)),
-                                observed ? 0 : Math.max(0, rs.getLong(2) - rs.getLong(4))));
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+                        long ran = Math.max(0, rs.getLong("finished_at") - rs.getLong("started_at"));
+                        long waited = observed ? 0
+                                : Math.max(0, rs.getLong("started_at") - rs.getLong("available_at"));
+                        return new Rows.StepDuration(rs.getString("node_id"), ran, waited);
+                    })
+                    .list();
         }
 
         @Override public void markCompensated(String instanceId, long seq) {
