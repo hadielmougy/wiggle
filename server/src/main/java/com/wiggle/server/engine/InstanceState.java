@@ -38,6 +38,8 @@ enum InstanceState {
 
     /** The saga reverse pass owns it: forward work has stopped, undo tasks are in flight. */
     COMPENSATING(Liveness.LIVE, InstanceStatus.COMPENSATED, InstanceStatus.COMPENSATION_FAILED) {
+        @Override boolean compensating() { return true; }
+
         @Override boolean dispatches(boolean compensation) { return compensation; }
     },
 
@@ -87,6 +89,12 @@ enum InstanceState {
 
     /** A cancel request is honoured here; anywhere else it is ignored as already-decided. */
     boolean cancellable() {
+        return false;
+    }
+
+    /** The reverse pass owns the instance: an undo may settle its comp-log entry here, and only
+     *  here. The mirror of {@link #running}, which is the forward pass. */
+    boolean compensating() {
         return false;
     }
 

@@ -166,6 +166,19 @@ class StateChartTest {
     }
 
     @Test
+    @DisplayName("only COMPENSATING is the reverse pass; the forward one is only RUNNING")
+    void compensatingIsExactlyOneState() {
+        for (InstanceStatus s : InstanceStatus.values()) {
+            InstanceState state = InstanceState.of(s);
+            assertEquals(s == InstanceStatus.COMPENSATING, state.compensating(),
+                    s + ".compensating()");
+            assertEquals(s == InstanceStatus.RUNNING, state.running(), s + ".running()");
+            assertTrue(!(state.compensating() && state.running()),
+                    s + " cannot be going forwards and backwards at once");
+        }
+    }
+
+    @Test
     @DisplayName("only RUNNING holds a lease, and only RUNNING dispatches the reverse pass")
     void dispatchClassificationsAreSingular() {
         assertEquals(Set.of(TokenState.RUNNING), Arrays.stream(TokenState.values())
