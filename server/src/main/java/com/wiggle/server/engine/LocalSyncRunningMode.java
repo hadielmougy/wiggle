@@ -10,4 +10,10 @@ public class LocalSyncRunningMode extends BaseRunningMode {
     LocalSyncRunningMode(Instances instances, NodeBehaviourFactory nodeBehaviourFactory, DefinitionRegistry definitions) {
         super(instances, nodeBehaviourFactory, definitions);
     }
+
+    /** A local worker holds the graph and keeps going, so the continuation stays leased to it. */
+    @Override
+    boolean chainsBack() {
+        return true;
+    }
 }

@@ -1,11 +1,12 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.client.WiggleClient.StepReport;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.TaskActivation;
 
-import java.util.Map;
+import java.util.List;
 
-/** Server-driven execution: run one step and report via complete/fail; the server advances the token. */
+/** Server-driven execution: run one step, report it, and let the server advance the token. */
 final class ServerRun {
 
     private static final System.Logger LOG = System.getLogger(ServerRun.class.getName());
@@ -54,16 +55,18 @@ final class ServerRun {
         }
     }
 
-    /** Reports a finished step: a predicate must have produced a boolean, a task merges its result. */
+    /** Reports a finished step: a predicate must have produced a boolean, a task merges its result.
+     *  The run is final by construction -- this worker holds no graph and takes no continuation. */
     private void settle(Object result, long startedAt, long finishedAt,
                         java.util.List<com.wiggle.core.EmittedEvent> emitted) {
-        if (task.kind() == NodeKind.PREDICATE && !(result instanceof Boolean)) {
+        boolean predicate = task.kind() == NodeKind.PREDICATE;
+        if (predicate && !(result instanceof Boolean)) {
             reportFailure("predicate '" + task.stepName() + "' returned " + Worker.typeName(result), false);
             return;
         }
-        w.client().complete(task.taskId(), task.leaseOwner(),
-                task.kind() == NodeKind.PREDICATE ? Map.of("value", result) : result,
-                startedAt, finishedAt, emitted);
+        StepReport step = new StepReport(task.nodeId(), predicate ? null : result,
+                predicate ? (Boolean) result : null, startedAt, finishedAt, emitted);
+        w.client().reportSteps(task.taskId(), task.leaseOwner(), List.of(step), true);
     }
 
     private void reportFailure(String message, boolean retryable) {

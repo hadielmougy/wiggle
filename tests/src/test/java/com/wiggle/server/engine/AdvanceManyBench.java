@@ -123,12 +123,12 @@ class AdvanceManyBench {
         int completed = 0;
         if (batch == 1) {
             for (Run run : runs) {
-                if ("COMPLETED".equals(engine.advance(run).instanceStatus())) completed++;
+                if ("COMPLETED".equals(engine.report(run).instanceStatus())) completed++;
             }
         } else {
             for (int i = 0; i < runs.size(); i += batch) {
                 Map<String, RunResult> results =
-                        engine.advanceMany(runs.subList(i, Math.min(i + batch, runs.size())));
+                        engine.report(runs.subList(i, Math.min(i + batch, runs.size())));
                 for (RunResult r : results.values()) {
                     if (r.ok() && "COMPLETED".equals(r.outcome().instanceStatus())) completed++;
                 }

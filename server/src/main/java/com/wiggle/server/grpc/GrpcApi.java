@@ -4,6 +4,7 @@ import com.wiggle.core.Tls;
 import com.wiggle.proto.*;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.cluster.ClusterManager;
+import com.wiggle.server.engine.ReportOutcome;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows.ServerNode;
@@ -333,20 +334,6 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void completeTask(TaskResultRequest req, StreamObserver<Ack> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CompleteTask taskId=" + req.getTaskId()
-                + " leaseOwner=" + req.getLeaseOwner());
-        run(resp, () -> {
-            Object result = req.hasResult() ? ProtoJson.fromValue(req.getResult()) : null;
-            engine.complete(req.getTaskId(), req.getLeaseOwner(), result,
-                    req.getStartedAt() == 0 ? null : req.getStartedAt(),
-                    req.getFinishedAt() == 0 ? null : req.getFinishedAt(),
-                    emitted(req.getEventsList()));
-            return Ack.newBuilder().setOk(true).build();
-        });
-    }
-
-    @Override
     public void failTask(TaskFailureRequest req, StreamObserver<Ack> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc FailTask taskId=" + req.getTaskId()
                 + " leaseOwner=" + req.getLeaseOwner() + " retryable=" + req.getRetryable()
@@ -368,47 +355,39 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void advanceRun(AdvanceRunRequest req, StreamObserver<AdvanceRunResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceRun taskId=" + req.getTaskId()
-                + " leaseOwner=" + req.getLeaseOwner() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
-        run(resp, () -> {
-            WorkflowEngine.Run run = new WorkflowEngine.Run(req.getTaskId(), req.getLeaseOwner(), stepInputs(req), req.getFinal());
-            WorkflowEngine.AdvanceOutcome out = engine.advance(run);
-            return AdvanceRunResult.newBuilder()
-                    .setInstanceStatus(out.instanceStatus())
-                    .setLeaseExpiresAt(out.leaseExpiresAt())
-                    .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId())
-                    .build();
-        });
-    }
-
-    @Override
-    public void advanceMany(AdvanceManyRequest req, StreamObserver<AdvanceManyResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AdvanceMany runs=" + req.getRunsCount());
+    public void reportSteps(ReportStepsRequest req, StreamObserver<ReportStepsResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ReportSteps runs=" + req.getRunsCount());
         run(resp, () -> {
             List<WorkflowEngine.Run> runs = new ArrayList<>(req.getRunsCount());
-            for (AdvanceRunRequest r : req.getRunsList()) {
+            for (ReportedRun r : req.getRunsList()) {
                 runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), stepInputs(r), r.getFinal()));
             }
-            Map<String, WorkflowEngine.RunResult> results = engine.advanceMany(runs);
-            AdvanceManyResult.Builder out = AdvanceManyResult.newBuilder();
-            results.forEach((taskId, r) -> {
-                RunOutcome.Builder one = RunOutcome.newBuilder().setTaskId(taskId);
-                if (r.ok()) {
-                    one.setOutcome(AdvanceRunResult.newBuilder()
-                            .setInstanceStatus(r.outcome().instanceStatus())
-                            .setLeaseExpiresAt(r.outcome().leaseExpiresAt())
-                            .setNextTaskId(r.outcome().nextTaskId() == null ? "" : r.outcome().nextTaskId()));
-                } else {
+            Map<String, WorkflowEngine.RunResult> results = engine.report(runs);
+            ReportStepsResult.Builder out = ReportStepsResult.newBuilder();
+            for (WorkflowEngine.Run submitted : runs) {
+                WorkflowEngine.RunResult r = results.get(submitted.startTaskId());
+                RunOutcome.Builder one = RunOutcome.newBuilder().setTaskId(submitted.startTaskId());
+                if (r != null && r.ok()) {
+                    one.setApplied(applied(r.outcome()));
+                } else if (r != null) {
                     one.setErrorStatus(r.errorStatus()).setError(r.error() == null ? "" : r.error());
+                } else {
+                    one.setErrorStatus(500).setError("no answer for run " + submitted.startTaskId());
                 }
                 out.addResults(one);
-            });
+            }
             return out.build();
         });
     }
 
-    private static List<WorkflowEngine.StepInput> stepInputs(AdvanceRunRequest req) {
+    private static RunApplied.Builder applied(ReportOutcome out) {
+        return RunApplied.newBuilder()
+                .setInstanceStatus(out.instanceStatus())
+                .setLeaseExpiresAt(out.leaseExpiresAt())
+                .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId());
+    }
+
+    private static List<WorkflowEngine.StepInput> stepInputs(ReportedRun req) {
         return stepInputs(req.getStepsList());
     }
 

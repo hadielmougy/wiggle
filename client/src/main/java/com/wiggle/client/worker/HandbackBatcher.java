@@ -3,7 +3,7 @@ package com.wiggle.client.worker;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.RunOutcome;
 import com.wiggle.client.WiggleClient.RunSubmission;
-import com.wiggle.core.AdvanceResult;
+import com.wiggle.core.ReportResult;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Collapses concurrent final handbacks into one {@code AdvanceMany} call. A LOCAL_ASYNC run that
+ * Collapses concurrent final handbacks into one {@code ReportSteps} call. A LOCAL_ASYNC run that
  * ends at a boundary needs nothing back but durability, so those flushes -- unlike mid-chain
  * ones, which need the leased continuation id synchronously -- can travel together.
  *
@@ -37,7 +37,7 @@ final class HandbackBatcher {
 
     private static final System.Logger LOG = System.getLogger(HandbackBatcher.class.getName());
 
-    private record Pending(String instanceId, RunSubmission run, CompletableFuture<AdvanceResult> done) {}
+    private record Pending(String instanceId, RunSubmission run, CompletableFuture<ReportResult> done) {}
 
     private final WiggleClient client;
     private final int maxBatch;
@@ -50,10 +50,10 @@ final class HandbackBatcher {
     }
 
     /** Reports one final handback, batched; blocks until it is durable on the server. */
-    AdvanceResult handback(String instanceId, String taskId, String leaseOwner,
+    ReportResult handback(String instanceId, String taskId, String leaseOwner,
                            List<WiggleClient.StepReport> steps) {
         RunSubmission run = new RunSubmission(taskId, leaseOwner, steps, true);
-        CompletableFuture<AdvanceResult> done = new CompletableFuture<>();
+        CompletableFuture<ReportResult> done = new CompletableFuture<>();
         queue.add(new Pending(instanceId, run, done));
         // A follower never parks unbounded: the leader that is flushing right now may have
         // deferred this run (its sibling was in that batch), and with no later traffic no one
@@ -104,7 +104,7 @@ final class HandbackBatcher {
             return;
         }
         try {
-            Map<String, RunOutcome> results = client.advanceMany(
+            Map<String, RunOutcome> results = client.reportSteps(
                     batch.stream().map(Pending::run).toList());
             for (Pending b : batch) {
                 RunOutcome r = results.get(b.run().taskId());
@@ -122,7 +122,7 @@ final class HandbackBatcher {
         }
     }
 
-    private AdvanceResult single(RunSubmission run) {
-        return client.advanceRun(run.taskId(), run.leaseOwner(), run.steps(), true);
+    private ReportResult single(RunSubmission run) {
+        return client.reportSteps(run.taskId(), run.leaseOwner(), run.steps(), true);
     }
 }

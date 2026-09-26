@@ -80,9 +80,9 @@ final class StateChart {
                 new Transition("RUNNING", "CANCEL_REQUESTED", "CANCELLED",
                         "still RUNNING; a terminal instance ignores it", "cancel"),
                 new Transition("COMPENSATING", "COMPENSATOR_COMPLETED", "COMPENSATING",
-                        "another uncompensated entry remains; the next undo is dispatched", "complete"),
+                        "another uncompensated entry remains; the next undo is dispatched", "report"),
                 new Transition("COMPENSATING", "COMPENSATOR_COMPLETED", "COMPENSATED",
-                        "no uncompensated entry remains", "complete"),
+                        "no uncompensated entry remains", "report"),
                 new Transition("COMPENSATING", "COMPENSATOR_EXHAUSTED", "COMPENSATION_FAILED",
                         "a compensator ran out of retries", "fail")));
     }
@@ -92,8 +92,8 @@ final class StateChart {
         List.of(
                 new Transition("(none)", "MINT", "READY",
                         "a continuation, a fork branch, or the start node", null),
-                new Transition("(none)", "ADVANCE_CHAIN", "RUNNING",
-                        "the reported run continues locally; leased straight back, never polled", "advance"),
+                new Transition("(none)", "CHAIN", "RUNNING",
+                        "the reported run continues locally; leased straight back, never polled", "report"),
                 new Transition("READY", "DRIVE_TASK", "READY",
                         "TASK or PREDICATE node; sets the queue and wakes pollers post-commit", null),
                 new Transition("READY", "DRIVE_SLEEP", "WAITING", "SLEEP node", null),
@@ -108,10 +108,8 @@ final class StateChart {
                 new Transition("READY", "POLL_CLAIMED", "RUNNING",
                         "availableAt has passed and the instance is RUNNING (COMPENSATING for a compensator)",
                         "poll"),
-                new Transition("RUNNING", "TASK_COMPLETED", "DONE",
-                        "the lease matches; the continuation is minted and driven", "complete"),
                 new Transition("RUNNING", "STEP_REPORTED", "DONE",
-                        "one step of a locally-executed run", "advance"),
+                        "the lease matches; the continuation is minted and driven", "report"),
                 new Transition("RUNNING", "TASK_FAILED", "READY",
                         "retryable and attempt < maxAttempts; availableAt = now + backoff", "fail"),
                 new Transition("RUNNING", "TASK_FAILED", "FAILED",
@@ -232,9 +230,10 @@ final class StateChart {
                   write lock and settles every active token; every other transition re-reads under
                   that same lock and bails. Nothing needs to rank cancel against a lease renewal —
                   a cancelled token is no longer `RUNNING`, so the renewal fails its lease check.
-                - **LOCAL_SYNC/LOCAL_ASYNC are not a third machine.** A reported run walks the same
-                  transitions as `complete`; the only difference is that the continuation is leased
-                  back to the same worker instead of being parked for the next poll.
+                - **LOCAL_SYNC/LOCAL_ASYNC are not a third machine.** Every worker reports through
+                  the same `report`, and a run of steps walks the same transitions one at a time;
+                  the only difference is that a chaining mode leases the continuation back to the
+                  same worker instead of parking it for the next poll.
 
                 ## Invariants
 
@@ -247,7 +246,7 @@ final class StateChart {
                 - An instance is terminal when it is neither `RUNNING` nor `COMPENSATING`. Three
                   places encode that rule — `InstanceView.isTerminal`, the JDBC purge query, and
                   the in-memory purge — and the test holds them to each other.
-                - Repeated delivery is conflict-safe rather than idempotent: a second `complete` or
+                - Repeated delivery is conflict-safe rather than idempotent: a second `report` or
                   `fail` for the same token fails its lease check and is rejected as a conflict.
                 """);
         return md.toString();
