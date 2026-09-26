@@ -2,6 +2,11 @@ package com.wiggle.jdbc;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.PreparedBatch;
+import org.jdbi.v3.core.statement.Query;
+import org.jdbi.v3.core.statement.SqlStatement;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
@@ -32,6 +37,7 @@ public final class JdbcStorage implements Storage {
 
     private final Dialect dialect;
     private final HikariDataSource ds;
+    private final Jdbi jdbi;
     private final String fingerprint;
 
     /** Explicit-dialect constructor used by the per-database modules. */
@@ -49,6 +55,13 @@ public final class JdbcStorage implements Storage {
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
         cfg.setPoolName("wiggle-" + dialect.id());
         this.ds = new HikariDataSource(cfg);
+        this.jdbi = Jdbi.create(this.ds)
+                .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
+                .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs))
+                .registerRowMapper(Rows.Event.class, (rs, ctx) -> readEvent(rs))
+                .registerRowMapper(Rows.EventCursor.class, (rs, ctx) -> readCursor(rs))
+                .registerRowMapper(Rows.Schedule.class, (rs, ctx) -> readSchedule(rs))
+                .registerRowMapper(ServerNode.class, (rs, ctx) -> readNode(rs));
     }
 
     private Connection borrow() {
@@ -526,20 +539,25 @@ public final class JdbcStorage implements Storage {
         st.execute(sql);
     }
 
+    /**
+     * JDBI borrows the connection and hands it back to the pool when the handle closes; the
+     * transaction stays this store's own, as it always was. Nothing calls {@code handle.begin()},
+     * so there is one owner of the commit boundary and not two.
+     */
     @Override public <R> R inTx(Function<Tx, R> work) {
-        Connection c = borrow();
-        try {
-            R r = work.apply(new JdbcTx(c, dialect));
-            c.commit();
-            return r;
-        } catch (SQLException e) {
-            rollback(c);
-            throw new StorageException("commit failed", e);
-        } catch (RuntimeException e) {
-            rollback(c);
-            throw e;
-        } finally {
-            release(c);
+        try (Handle h = jdbi.open()) {
+            Connection c = h.getConnection();
+            try {
+                R r = work.apply(new JdbcTx(h, dialect));
+                c.commit();
+                return r;
+            } catch (SQLException e) {
+                rollback(c);
+                throw new StorageException("commit failed", e);
+            } catch (RuntimeException e) {
+                rollback(c);
+                throw e;
+            }
         }
     }
 
@@ -551,6 +569,97 @@ public final class JdbcStorage implements Storage {
         ds.close();
     }
 
+
+    /** Row readers, shared by the registered JDBI mappers and by the statements not yet
+     *  converted. Unchanged from when they lived inside the transaction. */
+    static Instance readInstance(ResultSet rs) throws SQLException {
+        Instance i = new Instance();
+        i.id = rs.getString("id");
+        i.workflow = rs.getString("workflow");
+        i.version = rs.getInt("version");
+        i.correlationId = rs.getString("correlation_id");
+        i.status = InstanceStatus.valueOf(rs.getString("status"));
+        i.terminationReason = rs.getString("term_reason");
+        i.error = rs.getString("error");
+        i.context = Doc.parse(rs.getString("context"));
+        i.parentTokenId = rs.getString("parent_token_id");
+        i.createdAt = rs.getLong("created_at");
+        i.updatedAt = rs.getLong("updated_at");
+        i.revision = rs.getLong("revision");
+        long settleAt = rs.getLong("settle_at");
+        i.settleAt = rs.wasNull() ? null : settleAt;
+        return i;
+    }
+
+    static Token readToken(ResultSet rs) throws SQLException {
+        Token t = new Token();
+        t.id = rs.getString("id");
+        t.instanceId = rs.getString("instance_id");
+        t.workflow = rs.getString("workflow");
+        t.version = rs.getInt("version");
+        t.nodeId = rs.getString("node_id");
+        t.kind = NodeKind.valueOf(rs.getString("kind"));
+        t.status = TokenStatus.valueOf(rs.getString("status"));
+        t.activity = rs.getString("activity");
+        t.queue = rs.getString("queue");
+        t.attempt = rs.getInt("attempt");
+        t.availableAt = rs.getLong("available_at");
+        t.leaseOwner = rs.getString("lease_owner");
+        t.leaseExpiresAt = rs.getLong("lease_expires");
+        // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
+        // normalise it here so the engine always sees a non-null join stack.
+        String joinStack = rs.getString("join_stack");
+        t.joinStack = joinStack == null ? "" : joinStack;
+        t.lastError = rs.getString("last_error");
+        t.payload = PayloadCodec.decode(rs.getString("payload"));
+        long compSeq = rs.getLong("comp_seq");
+        t.compSeq = rs.wasNull() ? null : compSeq;
+        long startedAt = rs.getLong("started_at");
+        t.startedAt = rs.wasNull() ? null : startedAt;
+        long finishedAt = rs.getLong("finished_at");
+        t.finishedAt = rs.wasNull() ? null : finishedAt;
+        long seq = rs.getLong("seq");
+        t.seq = rs.wasNull() ? null : seq;
+        t.createdAt = rs.getLong("created_at");
+        t.updatedAt = rs.getLong("updated_at");
+        return t;
+    }
+
+    static ServerNode readNode(ResultSet rs) throws SQLException {
+        ServerNode n = new ServerNode();
+        n.id = rs.getString("id");
+        n.name = rs.getString("name");
+        n.firstHeartbeat = rs.getLong("first_heartbeat");
+        n.lastHeartbeat = rs.getLong("last_heartbeat");
+        n.workers = rs.getInt("workers");
+        n.leader = rs.getInt("leader") == 1;
+        return n;
+    }
+
+    static Rows.Schedule readSchedule(ResultSet rs) throws SQLException {
+        Rows.Schedule s = new Rows.Schedule();
+        s.id = rs.getString("id");
+        s.workflow = rs.getString("workflow");
+        s.intervalMillis = rs.getLong("interval_millis");
+        s.cron = rs.getString("cron");
+        s.context = Doc.parse(rs.getString("context"));
+        s.nextFireAt = rs.getLong("next_fire_at");
+        s.createdAt = rs.getLong("created_at");
+        return s;
+    }
+
+    static Rows.Event readEvent(ResultSet rs) throws SQLException {
+        return new Rows.Event(rs.getLong("seq"), rs.getString("instance_id"), rs.getString("workflow"),
+                rs.getInt("version"), rs.getString("correlation_id"), rs.getString("type"),
+                rs.getString("node_id"), rs.getInt("payload_ver"), rs.getString("payload"),
+                rs.getLong("created_at"));
+    }
+
+    static Rows.EventCursor readCursor(ResultSet rs) throws SQLException {
+        return new Rows.EventCursor(rs.getString("consumer"), rs.getLong("acked_seq"),
+                rs.getLong("last_seen"), rs.getLong("created_at"));
+    }
+
     public static final class StorageException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
@@ -558,14 +667,28 @@ public final class JdbcStorage implements Storage {
     }
 
     private static final class JdbcTx implements Tx {
+        private final Handle h;
         private final Connection c;
         private final Dialect dialect;
 
-        JdbcTx(Connection c, Dialect dialect) { this.c = c; this.dialect = dialect; }
+        JdbcTx(Handle h, Dialect dialect) {
+            this.h = h;
+            this.c = h.getConnection();
+            this.dialect = dialect;
+        }
 
         private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
 
         private static StorageException wrap(SQLException e) { return new StorageException(e.getMessage(), e); }
+
+        /** JDBI reports a failed statement as an unchecked exception carrying the driver's
+         *  SQLException somewhere in its cause chain; the dialect still decides what counts. */
+        private boolean isDuplicateKey(RuntimeException e) {
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                if (t instanceof SQLException sql && dialect.isDuplicateKey(sql)) return true;
+            }
+            return false;
+        }
 
         private record Edge(String to, String condition, int ordinal) { }
 
@@ -601,120 +724,145 @@ public final class JdbcStorage implements Storage {
             // insertIgnore rather than DELETE-then-INSERT: it leaves no window in which two nodes
             // registering the same new version collide on the primary key. The isDuplicateKey catch
             // covers a backend whose ignore is not inline.
-            try (PreparedStatement ins = ps(dialect.insertIgnore("INSERT INTO wf_definition " +
-                    "(name,version,body,registered_at,fingerprint,fingerprint_algo) VALUES (?,?,?,?,?,?)"))) {
-                ins.setString(1, name); ins.setInt(2, version); ins.setString(3, json);
-                ins.setLong(4, System.currentTimeMillis());
-                ins.setString(5, fingerprint); ins.setString(6, fingerprintAlgo);
-                ins.executeUpdate();
-            } catch (SQLException e) {
-                if (!dialect.isDuplicateKey(e)) throw wrap(e);
+            try {
+                h.createUpdate(dialect.insertIgnore("INSERT INTO wf_definition "
+                                + "(name,version,body,registered_at,fingerprint,fingerprint_algo) VALUES "
+                                + "(:name,:version,:body,:registeredAt,:fingerprint,:algo)"))
+                        .bind("name", name)
+                        .bind("version", version)
+                        .bind("body", json)
+                        .bind("registeredAt", System.currentTimeMillis())
+                        .bind("fingerprint", fingerprint)
+                        .bind("algo", fingerprintAlgo)
+                        .execute();
+            } catch (RuntimeException e) {
+                if (!isDuplicateKey(e)) throw e;
             }
         }
 
         @Override public void replaceDefinition(String name, int version, String json,
                                                 String fingerprint, String fingerprintAlgo) {
-            try (PreparedStatement p = ps("UPDATE wf_definition SET body=?, registered_at=?, " +
-                    "fingerprint=?, fingerprint_algo=? WHERE name=? AND version=?")) {
-                p.setString(1, json); p.setLong(2, System.currentTimeMillis());
-                p.setString(3, fingerprint); p.setString(4, fingerprintAlgo);
-                p.setString(5, name); p.setInt(6, version);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("UPDATE wf_definition SET body=:body, registered_at=:registeredAt, "
+                            + "fingerprint=:fingerprint, fingerprint_algo=:algo "
+                            + "WHERE name=:name AND version=:version")
+                    .bind("body", json)
+                    .bind("registeredAt", System.currentTimeMillis())
+                    .bind("fingerprint", fingerprint)
+                    .bind("algo", fingerprintAlgo)
+                    .bind("name", name)
+                    .bind("version", version)
+                    .execute();
         }
 
         @Override public Optional<StoredFingerprint> definitionFingerprint(String name, int version) {
-            try (PreparedStatement p = ps(
-                    "SELECT fingerprint, fingerprint_algo FROM wf_definition WHERE name=? AND version=? FOR UPDATE")) {
-                p.setString(1, name); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next()
-                            ? Optional.of(new StoredFingerprint(rs.getString(1), rs.getString(2)))
-                            : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT fingerprint, fingerprint_algo FROM wf_definition "
+                            + "WHERE name=:name AND version=:version FOR UPDATE")
+                    .bind("name", name)
+                    .bind("version", version)
+                    .map((rs, ctx) -> new StoredFingerprint(rs.getString("fingerprint"),
+                            rs.getString("fingerprint_algo")))
+                    .findFirst();
         }
 
         @Override public void putGraph(WorkflowDefinition def) {
             // The registry deletes these rows before a replacement, so anything still here is the
             // same graph: a no-op, even when two nodes register it at once.
             if (graphExists(def.name(), def.version())) return;
-            try (PreparedStatement node = ps(dialect.insertIgnore("INSERT INTO wf_graph_node " +
-                    "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason,is_start," +
-                    "items_key,item_key,loop_budget,compensable,arm_names,collect_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
-                 PreparedStatement edge = ps(dialect.insertIgnore("INSERT INTO wf_graph_edge " +
-                    "(workflow,version,from_node,to_node,cond,ordinal) VALUES (?,?,?,?,?,?)"))) {
-                for (Node n : def.nodes().values()) {
-                    node.setString(1, def.name()); node.setInt(2, def.version()); node.setString(3, n.id());
-                    node.setString(4, n.kind().name()); node.setString(5, n.name()); node.setString(6, n.activity());
-                    node.setString(7, n.queue());
-                    node.setString(8, n.retry() == null ? null : Json.write(n.retry().toJson()));
-                    node.setLong(9, n.sleepMillis()); node.setInt(10, n.expected());
-                    node.setInt(11, n.success() ? 1 : 0); node.setString(12, n.reason());
-                    node.setInt(13, n.id().equals(def.startNode()) ? 1 : 0);
-                    node.setString(14, n.itemsKey()); node.setString(15, n.itemKey()); node.setInt(16, n.loopBudget());
-                    node.setString(18, n.armNames().isEmpty() ? null : Json.write(n.armNames()));
-                    node.setString(19, n.collectKey());
-                    node.setInt(17, n.compensable() ? 1 : 0);
-                    node.addBatch();
-                    for (Edge e : edgesOf(n)) {
-                        edge.setString(1, def.name()); edge.setInt(2, def.version()); edge.setString(3, n.id());
-                        edge.setString(4, e.to); edge.setString(5, e.condition); edge.setInt(6, e.ordinal);
-                        edge.addBatch();
-                    }
+            PreparedBatch nodes = h.prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_node "
+                    + "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,"
+                    + "success,reason,is_start,items_key,item_key,loop_budget,compensable,arm_names,collect_key) "
+                    + "VALUES (:workflow,:version,:nodeId,:kind,:name,:activity,:queue,:retry,:sleepMillis,"
+                    + ":expected,:success,:reason,:isStart,:itemsKey,:itemKey,:loopBudget,:compensable,"
+                    + ":armNames,:collectKey)"));
+            PreparedBatch edges = h.prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_edge "
+                    + "(workflow,version,from_node,to_node,cond,ordinal) "
+                    + "VALUES (:workflow,:version,:from,:to,:cond,:ordinal)"));
+            for (Node n : def.nodes().values()) {
+                nodes.bind("workflow", def.name())
+                        .bind("version", def.version())
+                        .bind("nodeId", n.id())
+                        .bind("kind", n.kind().name())
+                        .bind("name", n.name())
+                        .bind("activity", n.activity())
+                        .bind("queue", n.queue())
+                        .bind("retry", n.retry() == null ? null : Json.write(n.retry().toJson()))
+                        .bind("sleepMillis", n.sleepMillis())
+                        .bind("expected", n.expected())
+                        .bind("success", n.success() ? 1 : 0)
+                        .bind("reason", n.reason())
+                        .bind("isStart", n.id().equals(def.startNode()) ? 1 : 0)
+                        .bind("itemsKey", n.itemsKey())
+                        .bind("itemKey", n.itemKey())
+                        .bind("loopBudget", n.loopBudget())
+                        .bind("compensable", n.compensable() ? 1 : 0)
+                        .bind("armNames", n.armNames().isEmpty() ? null : Json.write(n.armNames()))
+                        .bind("collectKey", n.collectKey())
+                        .add();
+                for (Edge e : edgesOf(n)) {
+                    edges.bind("workflow", def.name())
+                            .bind("version", def.version())
+                            .bind("from", n.id())
+                            .bind("to", e.to)
+                            .bind("cond", e.condition)
+                            .bind("ordinal", e.ordinal)
+                            .add();
                 }
-                node.executeBatch();
-                edge.executeBatch();
-            } catch (SQLException e) {
-                if (!dialect.isDuplicateKey(e)) throw wrap(e);
+            }
+            try {
+                nodes.execute();
+                if (edges.size() > 0) edges.execute();
+            } catch (RuntimeException e) {
+                if (!isDuplicateKey(e)) throw e;
             }
         }
 
         private boolean graphExists(String workflow, int version) {
-            try (PreparedStatement p = ps("SELECT 1 FROM wf_graph_node WHERE workflow=? AND version=? LIMIT 1")) {
-                p.setString(1, workflow); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) { return rs.next(); }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT 1 FROM wf_graph_node "
+                            + "WHERE workflow=:workflow AND version=:version LIMIT 1")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .mapTo(Integer.class)
+                    .findFirst()
+                    .isPresent();
         }
 
         @Override public void deleteGraph(String workflow, int version) {
-            deleteGraphRows("DELETE FROM wf_graph_edge WHERE workflow=? AND version=?", workflow, version);
-            deleteGraphRows("DELETE FROM wf_graph_node WHERE workflow=? AND version=?", workflow, version);
+            deleteGraphRows("wf_graph_edge", workflow, version);
+            deleteGraphRows("wf_graph_node", workflow, version);
         }
 
-        private void deleteGraphRows(String sql, String workflow, int version) {
-            try (PreparedStatement p = ps(sql)) {
-                p.setString(1, workflow);
-                p.setInt(2, version);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+        /** Edges before nodes: an edge pointing at a node that is gone is worse than neither. */
+        private void deleteGraphRows(String table, String workflow, int version) {
+            h.createUpdate("DELETE FROM " + table + " WHERE workflow=:workflow AND version=:version")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .execute();
         }
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
-            try (PreparedStatement p = ps("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,reason," +
-                    "items_key,item_key,loop_budget,compensable,arm_names,collect_key " +
-                    "FROM wf_graph_node WHERE workflow=? AND version=? AND node_id=?")) {
-                p.setString(1, workflow); p.setInt(2, version); p.setString(3, nodeId);
-                try (ResultSet rs = p.executeQuery()) {
-                    if (!rs.next()) return Optional.empty();
-                    NodeKind kind = NodeKind.valueOf(rs.getString(1));
-                    String name = rs.getString(2), activity = rs.getString(3), queue = rs.getString(4);
-                    String retryJson = rs.getString(5);
-                    RetryPolicy retry = retryJson == null ? null : RetryPolicy.fromJson(Json.parse(retryJson));
-                    long sleep = rs.getLong(6);
-                    int expected = rs.getInt(7);
-                    boolean success = rs.getInt(8) != 0;
-                    String reason = rs.getString(9);
-                    String itemsKey = rs.getString(10);
-                    String itemKey = rs.getString(11);
-                    int loopBudget = rs.getInt(12);   // NULL -> 0 (not a loop)
-                    boolean compensable = rs.getInt(13) != 0;
-                    Combine combine = Combine.of(kind, itemsKey, rs.getString(14), rs.getString(15));
-                    return Optional.of(assemble(workflow, version, nodeId, kind, name, activity, queue,
-                            retry, sleep, expected, success, reason, combine.itemsKey(), itemKey,
-                            loopBudget, compensable, combine));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,"
+                            + "reason,items_key,item_key,loop_budget,compensable,arm_names,collect_key "
+                            + "FROM wf_graph_node WHERE workflow=:workflow AND version=:version "
+                            + "AND node_id=:nodeId")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .bind("nodeId", nodeId)
+                    .map((rs, ctx) -> {
+                        NodeKind kind = NodeKind.valueOf(rs.getString("kind"));
+                        String retryJson = rs.getString("retry_json");
+                        RetryPolicy retry = retryJson == null ? null : RetryPolicy.fromJson(Json.parse(retryJson));
+                        String itemsKey = rs.getString("items_key");
+                        Combine combine = Combine.of(kind, itemsKey, rs.getString("arm_names"),
+                                rs.getString("collect_key"));
+                        return assemble(workflow, version, nodeId, kind, rs.getString("name"),
+                                rs.getString("activity"), rs.getString("queue"), retry,
+                                rs.getLong("sleep_millis"), rs.getInt("expected"),
+                                rs.getInt("success") != 0, rs.getString("reason"), combine.itemsKey(),
+                                rs.getString("item_key"),
+                                rs.getInt("loop_budget"),   // NULL -> 0 (not a loop)
+                                rs.getInt("compensable") != 0, combine);
+                    })
+                    .findFirst();
         }
 
         /**
@@ -740,13 +888,14 @@ public final class JdbcStorage implements Storage {
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
                               String itemsKey, String itemKey, int loopBudget, boolean compensable, Combine combine) {
             EdgeTargets targets = new EdgeTargets(kind);
-            try (PreparedStatement p = ps("SELECT to_node,cond FROM wf_graph_edge " +
-                    "WHERE workflow=? AND version=? AND from_node=? ORDER BY ordinal")) {
-                p.setString(1, workflow); p.setInt(2, version); p.setString(3, id);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) targets.absorb(rs.getString(1), rs.getString(2));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            h.createQuery("SELECT to_node,cond FROM wf_graph_edge "
+                            + "WHERE workflow=:workflow AND version=:version AND from_node=:from "
+                            + "ORDER BY ordinal")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .bind("from", id)
+                    .map((rs, ctx) -> new String[] {rs.getString("to_node"), rs.getString("cond")})
+                    .forEach(e -> targets.absorb(e[0], e[1]));
             Node n = new Node(id, kind, name, activity, queue, retry, sleep, targets.next, targets.altNext,
                     List.copyOf(targets.branches), expected, success, reason, itemsKey, itemKey, loopBudget, false,
                     combine.armNames(), combine.collectKey());
@@ -779,70 +928,65 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<String> graphStartNode(String workflow, int version) {
-            try (PreparedStatement p = ps("SELECT node_id FROM wf_graph_node " +
-                    "WHERE workflow=? AND version=? AND is_start=1")) {
-                p.setString(1, workflow); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT node_id FROM wf_graph_node "
+                            + "WHERE workflow=:workflow AND version=:version AND is_start=1")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .mapTo(String.class)
+                    .findFirst();
         }
 
         @Override public Optional<String> definition(String name, int version) {
-            try (PreparedStatement p = ps("SELECT body FROM wf_definition WHERE name=? AND version=?")) {
-                p.setString(1, name); p.setInt(2, version);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT body FROM wf_definition WHERE name=:name AND version=:version")
+                    .bind("name", name)
+                    .bind("version", version)
+                    .mapTo(String.class)
+                    .findFirst();
         }
 
         @Override public Optional<Integer> latestVersion(String name) {
-            try (PreparedStatement p = ps(
-                    "SELECT MAX(version) FROM wf_definition WHERE name=?")) {
-                p.setString(1, name);
-                try (ResultSet rs = p.executeQuery()) {
-                    if (!rs.next()) return Optional.empty();
-                    int v = rs.getInt(1);
-                    return rs.wasNull() ? Optional.empty() : Optional.of(v);
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            // MAX over no rows is a row holding NULL, not an empty result: findFirst would see
+            // one row either way, so the Optional has to come from the value.
+            return h.createQuery("SELECT MAX(version) FROM wf_definition WHERE name=:name")
+                    .bind("name", name)
+                    .mapTo(Integer.class)
+                    .findOne();
         }
 
         @Override public List<String> definitionNames() {
-            try (PreparedStatement p = ps("SELECT DISTINCT name FROM wf_definition ORDER BY name");
-                 ResultSet rs = p.executeQuery()) {
-                List<String> out = new ArrayList<>();
-                while (rs.next()) out.add(rs.getString(1));
-                return out;
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT DISTINCT name FROM wf_definition ORDER BY name")
+                    .mapTo(String.class)
+                    .list();
         }
 
-        private static final String INSERT_INSTANCE = "INSERT INTO wf_instance " +
-                "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,revision," +
-                "parent_token_id,settle_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        private static final String INSERT_INSTANCE = "INSERT INTO wf_instance "
+                + "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,"
+                + "revision,parent_token_id,settle_at) VALUES "
+                + "(:id,:workflow,:version,:correlationId,:status,:termReason,:error,:context,:createdAt,"
+                + ":updatedAt,:revision,:parentTokenId,:settleAt)";
 
         @Override public void insertInstance(Instance i) {
-            try (PreparedStatement p = ps(INSERT_INSTANCE)) {
-                bindInstance(p, i);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            bindInstance(h.createUpdate(INSERT_INSTANCE), i).execute();
         }
 
         @Override public boolean insertInstanceIfAbsent(Instance i) {
-            try (PreparedStatement p = ps(dialect.insertIgnore(INSERT_INSTANCE))) {
-                bindInstance(p, i);
-                return p.executeUpdate() > 0;
-            } catch (SQLException e) { throw wrap(e); }
+            return bindInstance(h.createUpdate(dialect.insertIgnore(INSERT_INSTANCE)), i).execute() > 0;
         }
 
-        private static void bindInstance(PreparedStatement p, Instance i) throws SQLException {
-            p.setString(1, i.id); p.setString(2, i.workflow); p.setInt(3, i.version);
-            p.setString(4, i.correlationId); p.setString(5, i.status.name());
-            p.setString(6, i.terminationReason); p.setString(7, i.error); p.setString(8, i.context.json());
-            p.setLong(9, i.createdAt); p.setLong(10, i.updatedAt); p.setLong(11, i.revision);
-            p.setString(12, i.parentTokenId);
-            setNullableLong(p, 13, i.settleAt);
+        private static <S extends SqlStatement<S>> S bindInstance(S s, Instance i) {
+            return s.bind("id", i.id)
+                    .bind("workflow", i.workflow)
+                    .bind("version", i.version)
+                    .bind("correlationId", i.correlationId)
+                    .bind("status", i.status.name())
+                    .bind("termReason", i.terminationReason)
+                    .bind("error", i.error)
+                    .bind("context", i.context.json())
+                    .bind("createdAt", i.createdAt)
+                    .bind("updatedAt", i.updatedAt)
+                    .bind("revision", i.revision)
+                    .bind("parentTokenId", i.parentTokenId)
+                    .bindByType("settleAt", i.settleAt, Long.class);
         }
 
         @Override public Optional<Instance> lockInstance(String id) { return loadInstance(id, true); }
@@ -851,25 +995,18 @@ public final class JdbcStorage implements Storage {
 
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
             String sql = forUpdate
-                    ? "SELECT * FROM wf_instance WHERE id=? FOR UPDATE"
-                    : "SELECT * FROM wf_instance WHERE id=?";
-            try (PreparedStatement p = ps(sql)) {
-                p.setString(1, id);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(readInstance(rs)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+                    ? "SELECT * FROM wf_instance WHERE id=:id FOR UPDATE"
+                    : "SELECT * FROM wf_instance WHERE id=:id";
+            return h.createQuery(sql).bind("id", id).mapTo(Instance.class).findFirst();
         }
 
-        private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=?,term_reason=?," +
-                "error=?,context=?,updated_at=?,settle_at=?,revision=revision+1 WHERE id=?";
+        private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=:status,"
+                + "term_reason=:termReason,error=:error,context=:context,updated_at=:updatedAt,"
+                + "settle_at=:settleAt,revision=revision+1 WHERE id=:id";
 
         @Override public void updateInstance(Instance i) {
-            try (PreparedStatement p = ps(UPDATE_INSTANCE)) {
-                bindInstanceUpdate(p, i);
-                p.executeUpdate();
-                i.revision++;
-            } catch (SQLException e) { throw wrap(e); }
+            bindInstanceUpdate(h.createUpdate(UPDATE_INSTANCE), i).execute();
+            i.revision++;
         }
 
         @Override public List<Instance> lockInstances(List<String> ids) {
@@ -880,195 +1017,154 @@ public final class JdbcStorage implements Storage {
             // would otherwise convoy, each batch serialising behind the other's whole commit. A
             // skipped instance is simply absent from the result; the caller answers its run as
             // retryable and the worker reports it singly.
-            String sql = "SELECT * FROM wf_instance WHERE id IN (" + placeholders(ids.size())
-                    + ") ORDER BY id FOR UPDATE" + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : "");
-            try (PreparedStatement p = ps(sql)) {
-                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Instance> out = new ArrayList<>(ids.size());
-                    while (rs.next()) out.add(readInstance(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_instance WHERE id IN (<ids>) ORDER BY id FOR UPDATE"
+                            + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : ""))
+                    .bindList("ids", ids)
+                    .mapTo(Instance.class)
+                    .list();
         }
 
         @Override public void updateInstances(List<Instance> instances) {
             if (instances.isEmpty()) return;
-            try (PreparedStatement p = ps(UPDATE_INSTANCE)) {
-                for (Instance i : instances) { bindInstanceUpdate(p, i); p.addBatch(); }
-                requireOneRowEach(p.executeBatch(), "update wf_instance");
-                for (Instance i : instances) i.revision++;
-            } catch (SQLException e) { throw wrap(e); }
+            PreparedBatch b = h.prepareBatch(UPDATE_INSTANCE);
+            for (Instance i : instances) bindInstanceUpdate(b, i).add();
+            requireOneRowEach(b.execute(), "update wf_instance");
+            for (Instance i : instances) i.revision++;
         }
 
-        private static void bindInstanceUpdate(PreparedStatement p, Instance i) throws SQLException {
-            p.setString(1, i.status.name()); p.setString(2, i.terminationReason); p.setString(3, i.error);
-            p.setString(4, i.context.json()); p.setLong(5, i.updatedAt); setNullableLong(p, 6, i.settleAt);
-            p.setString(7, i.id);
+        private static <S extends SqlStatement<S>> S bindInstanceUpdate(S s, Instance i) {
+            return s.bind("status", i.status.name())
+                    .bind("termReason", i.terminationReason)
+                    .bind("error", i.error)
+                    .bind("context", i.context.json())
+                    .bind("updatedAt", i.updatedAt)
+                    .bindByType("settleAt", i.settleAt, Long.class)
+                    .bind("id", i.id);
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
-            String sql = "SELECT * FROM wf_instance WHERE correlation_id=? ORDER BY created_at DESC LIMIT ?";
-            try (PreparedStatement p = ps(sql)) {
-                p.setString(1, correlationId);
-                p.setInt(2, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Instance> out = new ArrayList<>();
-                    while (rs.next()) out.add(readInstance(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_instance WHERE correlation_id=:cid "
+                            + "ORDER BY created_at DESC LIMIT :limit")
+                    .bind("cid", correlationId)
+                    .bind("limit", limit)
+                    .mapTo(Instance.class)
+                    .list();
         }
 
         @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
-            StringBuilder sql = new StringBuilder("SELECT * FROM wf_instance WHERE 1=1");
-            if (workflow != null) sql.append(" AND workflow=?");
-            if (status != null) sql.append(" AND status=?");
-            sql.append(" ORDER BY created_at DESC LIMIT ?");
-            try (PreparedStatement p = ps(sql.toString())) {
-                int idx = 1;
-                if (workflow != null) p.setString(idx++, workflow);
-                if (status != null) p.setString(idx++, status.name());
-                p.setInt(idx, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Instance> out = new ArrayList<>();
-                    while (rs.next()) out.add(readInstance(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            // Both filters are optional, so the clauses are conditional but the binds are not
+            // positional: a name binds where it appears, or nowhere, and cannot slide.
+            Query q = h.createQuery("SELECT * FROM wf_instance WHERE 1=1"
+                    + (workflow != null ? " AND workflow=:workflow" : "")
+                    + (status != null ? " AND status=:status" : "")
+                    + " ORDER BY created_at DESC LIMIT :limit");
+            q.bind("limit", limit);
+            if (workflow != null) q.bind("workflow", workflow);
+            if (status != null) q.bind("status", status.name());
+            return q.mapTo(Instance.class).list();
         }
 
         @Override public int countInstances(InstanceStatus status) {
-            try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_instance WHERE status=?")) {
-                p.setString(1, status.name());
-                try (ResultSet rs = p.executeQuery()) { return rs.next() ? rs.getInt(1) : 0; }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT COUNT(*) FROM wf_instance WHERE status=:status")
+                    .bind("status", status.name())
+                    .mapTo(Integer.class)
+                    .one();
         }
 
-        private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version," +
-                "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack," +
-                "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
+                + "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,"
+                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq) VALUES "
+                + "(:id,:instanceId,:workflow,:version,:nodeId,:kind,:status,:activity,:queue,:attempt,"
+                + ":availableAt,:leaseOwner,:leaseExpires,:joinStack,:lastError,:createdAt,:updatedAt,:payload,"
+                + ":compSeq,:startedAt,:finishedAt,:seq)";
 
         @Override public void insertToken(Token t) {
-            try (PreparedStatement p = ps(INSERT_TOKEN)) {
-                bindToken(p, t);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
         }
 
         @Override public void insertTokens(List<Token> tokens) {
             if (tokens.isEmpty()) return;
-            try (PreparedStatement p = ps(INSERT_TOKEN)) {
-                for (Token t : tokens) { bindToken(p, t); p.addBatch(); }
-                requireOneRowEach(p.executeBatch(), "insert wf_token");
-            } catch (SQLException e) { throw wrap(e); }
+            PreparedBatch b = h.prepareBatch(INSERT_TOKEN);
+            for (Token t : tokens) bindToken(b, t).add();
+            requireOneRowEach(b.execute(), "insert wf_token");
         }
 
-        /** Binds parameters 1..22 in wf_token insert column order. */
-        private void bindToken(PreparedStatement p, Token t) throws SQLException {
-            p.setString(1, t.id);
-            p.setString(2, t.instanceId);
-            p.setString(3, t.workflow);
-            p.setInt(4, t.version);
-            p.setString(5, t.nodeId);
-            p.setString(6, t.kind.name());
-            p.setString(7, t.status.name());
-            p.setString(8, t.activity);
-            p.setString(9, t.queue);
-            p.setInt(10, t.attempt);
-            p.setLong(11, t.availableAt);
-            p.setString(12, t.leaseOwner);
-            p.setLong(13, t.leaseExpiresAt);
-            p.setString(14, t.joinStack == null ? "" : t.joinStack);
-            p.setString(15, t.lastError);
-            p.setLong(16, t.createdAt);
-            p.setLong(17, t.updatedAt);
-            p.setString(18, PayloadCodec.encode(t.payload));
-            setNullableLong(p, 19, t.compSeq);
-            setNullableLong(p, 20, t.startedAt);
-            setNullableLong(p, 21, t.finishedAt);
-            setNullableLong(p, 22, t.seq);
-        }
-
-        private static String placeholders(int n) {
-            return "?,".repeat(n - 1) + "?";
-        }
-
-        private static void setNullableLong(PreparedStatement p, int idx, Long v) throws SQLException {
-            if (v == null) p.setNull(idx, java.sql.Types.BIGINT);
-            else p.setLong(idx, v);
+        /** Every wf_token column, by name. The empty join-stack sentinel is applied here, not
+         *  assumed of the row. */
+        private static <S extends SqlStatement<S>> S bindToken(S s, Token t) {
+            return s.bind("id", t.id)
+                    .bind("instanceId", t.instanceId)
+                    .bind("workflow", t.workflow)
+                    .bind("version", t.version)
+                    .bind("nodeId", t.nodeId)
+                    .bind("kind", t.kind.name())
+                    .bind("status", t.status.name())
+                    .bind("activity", t.activity)
+                    .bind("queue", t.queue)
+                    .bind("attempt", t.attempt)
+                    .bind("availableAt", t.availableAt)
+                    .bind("leaseOwner", t.leaseOwner)
+                    .bind("leaseExpires", t.leaseExpiresAt)
+                    .bind("joinStack", t.joinStack == null ? "" : t.joinStack)
+                    .bind("lastError", t.lastError)
+                    .bind("createdAt", t.createdAt)
+                    .bind("updatedAt", t.updatedAt)
+                    .bind("payload", PayloadCodec.encode(t.payload))
+                    .bindByType("compSeq", t.compSeq, Long.class)
+                    .bindByType("startedAt", t.startedAt, Long.class)
+                    .bindByType("finishedAt", t.finishedAt, Long.class)
+                    .bindByType("seq", t.seq, Long.class);
         }
 
         @Override public Optional<Token> findToken(String id) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE id=?")) {
-                p.setString(1, id);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? Optional.of(readToken(rs)) : Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE id=:id")
+                    .bind("id", id)
+                    .mapTo(Token.class)
+                    .findFirst();
         }
 
         @Override public List<Token> findTokens(List<String> ids) {
             if (ids.isEmpty()) return List.of();
-            String sql = "SELECT * FROM wf_token WHERE id IN (" + placeholders(ids.size()) + ")";
-            try (PreparedStatement p = ps(sql)) {
-                for (int i = 0; i < ids.size(); i++) p.setString(i + 1, ids.get(i));
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>(ids.size());
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE id IN (<ids>)")
+                    .bindList("ids", ids)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override public List<Token> tokensOf(String instanceId) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE instance_id=? ORDER BY id")) {
-                p.setString(1, instanceId);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE instance_id=:id ORDER BY id")
+                    .bind("id", instanceId)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override
         public boolean hasActiveTokens(String instanceId) {
-            try (PreparedStatement p = ps("SELECT 1 FROM wf_token WHERE instance_id=? AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1")) {
-                p.setString(1, instanceId);
-                try (ResultSet rs = p.executeQuery()) { return rs.next(); }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT 1 FROM wf_token WHERE instance_id=:id "
+                            + "AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1")
+                    .bind("id", instanceId)
+                    .mapTo(Integer.class)
+                    .findFirst()
+                    .isPresent();
         }
 
-        private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=?,kind=?,status=?," +
-                "activity=?,queue=?,attempt=?,available_at=?,lease_owner=?,lease_expires=?,join_stack=?," +
-                "last_error=?,updated_at=?,payload=?,comp_seq=?,started_at=?,finished_at=?,seq=? WHERE id=?";
+        // Every column the insert names except the identity ones, so the same binds serve both.
+        private static final String UPDATE_TOKEN = "UPDATE wf_token SET node_id=:nodeId,kind=:kind,"
+                + "status=:status,activity=:activity,queue=:queue,attempt=:attempt,"
+                + "available_at=:availableAt,lease_owner=:leaseOwner,lease_expires=:leaseExpires,"
+                + "join_stack=:joinStack,last_error=:lastError,updated_at=:updatedAt,payload=:payload,"
+                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq WHERE id=:id";
 
         @Override
         public void updateToken(Token t) {
-            try (PreparedStatement p = ps(UPDATE_TOKEN)) {
-                bindTokenUpdate(p, t);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            bindToken(h.createUpdate(UPDATE_TOKEN), t).execute();
         }
 
         @Override public void updateTokens(List<Token> tokens) {
             if (tokens.isEmpty()) return;
-            try (PreparedStatement p = ps(UPDATE_TOKEN)) {
-                for (Token t : tokens) { bindTokenUpdate(p, t); p.addBatch(); }
-                requireOneRowEach(p.executeBatch(), "update wf_token");
-            } catch (SQLException e) { throw wrap(e); }
-        }
-
-        private static void bindTokenUpdate(PreparedStatement p, Token t) throws SQLException {
-            p.setString(1, t.nodeId); p.setString(2, t.kind.name()); p.setString(3, t.status.name());
-            p.setString(4, t.activity); p.setString(5, t.queue); p.setInt(6, t.attempt);
-            p.setLong(7, t.availableAt); p.setString(8, t.leaseOwner); p.setLong(9, t.leaseExpiresAt);
-            p.setString(10, t.joinStack == null ? "" : t.joinStack); p.setString(11, t.lastError);
-            p.setLong(12, t.updatedAt); p.setString(13, PayloadCodec.encode(t.payload));
-            setNullableLong(p, 14, t.compSeq); setNullableLong(p, 15, t.startedAt);
-            setNullableLong(p, 16, t.finishedAt); setNullableLong(p, 17, t.seq); p.setString(18, t.id);
+            PreparedBatch b = h.prepareBatch(UPDATE_TOKEN);
+            for (Token t : tokens) bindToken(b, t).add();
+            requireOneRowEach(b.execute(), "update wf_token");
         }
 
         /** A count that is not one row means a buffered write ran out of order (an update flushed
@@ -1085,15 +1181,12 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public List<String> joinStacksAt(String instanceId, String nodeId) {
-            try (PreparedStatement p = ps("SELECT join_stack FROM wf_token WHERE instance_id=? AND node_id=? AND status='JOINED'")) {
-                p.setString(1, instanceId);
-                p.setString(2, nodeId);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<String> out = new ArrayList<>();
-                    while (rs.next()) out.add(rs.getString(1));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT join_stack FROM wf_token "
+                            + "WHERE instance_id=:id AND node_id=:node AND status='JOINED'")
+                    .bind("id", instanceId)
+                    .bind("node", nodeId)
+                    .mapTo(String.class)
+                    .list();
         }
 
         @Override public List<Token> claimTasks(String workerId, Set<String> queues,
@@ -1111,25 +1204,37 @@ public final class JdbcStorage implements Storage {
          * set the dispatch index already found, so it costs a predicate and no join -- wf_token
          * carries both columns.
          */
-        private static void appendVersions(StringBuilder sql, Set<WorkflowVersion> versions) {
-            if (versions == null || versions.isEmpty()) return;
-            sql.append(" AND (");
+        /** The (workflow, version) filter: one OR-ed pair per version, each named by its position
+         *  so the clause and its binds cannot drift apart. */
+        private static String versionsClause(Set<WorkflowVersion> versions) {
+            if (versions == null || versions.isEmpty()) return "";
+            StringBuilder sql = new StringBuilder(" AND (");
             for (int i = 0; i < versions.size(); i++) {
                 if (i > 0) sql.append(" OR ");
-                sql.append("(workflow=? AND version=?)");
+                sql.append("(workflow=:wf").append(i).append(" AND version=:ver").append(i).append(")");
             }
-            sql.append(")");
+            return sql.append(")").toString();
         }
 
-        /** Binds what {@link #appendVersions} appended; same set, so the same iteration order. */
-        private static int bindVersions(PreparedStatement p, int idx, Set<WorkflowVersion> versions)
-                throws SQLException {
-            if (versions == null || versions.isEmpty()) return idx;
+        private static void bindVersions(Query q, Set<WorkflowVersion> versions) {
+            if (versions == null || versions.isEmpty()) return;
+            int i = 0;
             for (WorkflowVersion v : versions) {
-                p.setString(idx++, v.workflow());
-                p.setInt(idx++, v.version());
+                q.bind("wf" + i, v.workflow());
+                q.bind("ver" + i, v.version());
+                i++;
             }
-            return idx;
+        }
+
+        /** The claim candidate filter, shared by both dialect paths: ready task tokens that are due,
+         *  optionally narrowed to the worker's queues and its bound versions. {@code %s} is the
+         *  select list -- the ids alone where the update reads them back, whole rows otherwise. */
+        private static String claimFilter(Set<String> queues, Set<WorkflowVersion> versions) {
+            return "SELECT %s FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
+                    + " AND available_at<=:now"
+                    + (queues != null && !queues.isEmpty() ? " AND queue IN (<queues>)" : "")
+                    + versionsClause(versions)
+                    + " ORDER BY available_at, id LIMIT :max";
         }
 
         /**
@@ -1142,77 +1247,52 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
                                                      Set<WorkflowVersion> versions, int max,
                                                      long now, long leaseUntil) {
-            StringBuilder pick = new StringBuilder(
-                    "SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
-            if (queues != null && !queues.isEmpty()) {
-                pick.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
-            }
-            appendVersions(pick, versions);
-            pick.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
-            String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=?," +
-                    "started_at=?,finished_at=NULL WHERE id IN (" + pick + ") RETURNING *";
-            try (PreparedStatement p = ps(sql)) {
-                int idx = 1;
-                p.setString(idx++, workerId);   // SET lease_owner
-                p.setLong(idx++, leaseUntil);   // SET lease_expires
-                p.setLong(idx++, now);          // SET updated_at
-                p.setLong(idx++, now);          // SET started_at: the step's clock starts when a worker takes it
-                p.setLong(idx++, now);          // WHERE available_at<=?
-                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
-                idx = bindVersions(p, idx, versions);
-                p.setInt(idx, max);             // LIMIT
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            String pick = claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
+            Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+                    + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
+                    + " WHERE id IN (" + pick + ") RETURNING *");
+            q.bind("owner", workerId)
+                    .bind("until", leaseUntil)
+                    // updated_at, started_at and the due cutoff are all this instant
+                    .bind("now", now)
+                    .bind("max", max);
+            if (queues != null && !queues.isEmpty()) q.bindList("queues", List.copyOf(queues));
+            bindVersions(q, versions);
+            return q.mapTo(Token.class).list();
         }
 
         /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
         private List<Token> claimCompareAndSet(String workerId, Set<String> queues,
                                                Set<WorkflowVersion> versions, int max,
                                                long now, long leaseUntil) {
-            StringBuilder sql = new StringBuilder(
-                    "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
-            if (queues != null && !queues.isEmpty()) {
-                sql.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
-            }
-            appendVersions(sql, versions);
-            sql.append(" ORDER BY available_at, id LIMIT ?");
-            List<Token> candidates = new ArrayList<>();
-            try (PreparedStatement p = ps(sql.toString())) {
-                int idx = 1;
-                p.setLong(idx++, now);
-                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
-                idx = bindVersions(p, idx, versions);
-                p.setInt(idx, max * 4); // over-fetch: some candidates will lose the CAS race
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) candidates.add(readToken(rs));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            Query pick = h.createQuery(claimFilter(queues, versions).formatted("*"));
+            pick.bind("now", now)
+                    .bind("max", max * 4);   // over-fetch: some candidates will lose the CAS race
+            if (queues != null && !queues.isEmpty()) pick.bindList("queues", List.copyOf(queues));
+            bindVersions(pick, versions);
+            List<Token> candidates = pick.mapTo(Token.class).list();
 
             List<Token> claimed = new ArrayList<>();
-            try (PreparedStatement upd = ps("UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?," +
-                    "updated_at=?,started_at=?,finished_at=NULL WHERE id=? AND status='READY'")) {
-                for (Token t : candidates) {
-                    if (claimed.size() >= max) break;
-                    upd.setString(1, workerId);
-                    upd.setLong(2, leaseUntil);
-                    upd.setLong(3, now);
-                    upd.setLong(4, now);
-                    upd.setString(5, t.id);
-                    if (upd.executeUpdate() == 1) {
-                        t.status = TokenStatus.RUNNING;
-                        t.leaseOwner = workerId;
-                        t.leaseExpiresAt = leaseUntil;
-                        t.startedAt = now;
-                        t.finishedAt = null;
-                        t.updatedAt = now;
-                        claimed.add(t);
-                    }
+            for (Token t : candidates) {
+                if (claimed.size() >= max) break;
+                int won = h.createUpdate("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+                                + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
+                                + " WHERE id=:id AND status='READY'")
+                        .bind("owner", workerId)
+                        .bind("until", leaseUntil)
+                        .bind("now", now)
+                        .bind("id", t.id)
+                        .execute();
+                if (won == 1) {
+                    t.status = TokenStatus.RUNNING;
+                    t.leaseOwner = workerId;
+                    t.leaseExpiresAt = leaseUntil;
+                    t.startedAt = now;
+                    t.finishedAt = null;
+                    t.updatedAt = now;
+                    claimed.add(t);
                 }
-            } catch (SQLException e) { throw wrap(e); }
+            }
             return claimed;
         }
 
@@ -1222,13 +1302,12 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Instance> dueSettle(long now, int max) {
-            List<Instance> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
-                    + "AND settle_at <= ? ORDER BY settle_at LIMIT ?")) {
-                p.setLong(1, now); p.setInt(2, max);
-                try (ResultSet rs = p.executeQuery()) { while (rs.next()) out.add(readInstance(rs)); }
-            } catch (SQLException e) { throw wrap(e); }
-            return out;
+            return h.createQuery("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
+                            + "AND settle_at <= :now ORDER BY settle_at LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .mapTo(Instance.class)
+                    .list();
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {
@@ -1237,15 +1316,11 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> pendingSignals(int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
-                    "ORDER BY created_at LIMIT ?")) {
-                p.setInt(1, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' "
+                            + "ORDER BY created_at LIMIT :max")
+                    .bind("max", max)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override public List<Token> dueSignals(long now, int max) {
@@ -1254,324 +1329,284 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<String> childInstanceIds(String parentInstanceId) {
-            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE parent_token_id IN " +
-                    "(SELECT id FROM wf_token WHERE instance_id=?) ORDER BY id")) {
-                p.setString(1, parentInstanceId);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<String> out = new ArrayList<>();
-                    while (rs.next()) out.add(rs.getString(1));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT id FROM wf_instance WHERE parent_token_id IN "
+                            + "(SELECT id FROM wf_token WHERE instance_id=:id) ORDER BY id")
+                    .bind("id", parentInstanceId)
+                    .mapTo(String.class)
+                    .list();
         }
 
         @Override public void putSchedule(Rows.Schedule s) {
             // Upsert by id: the engine reuses the existing id when a schedule for the same
             // workflow already exists, so a re-create updates the row rather than duplicating it.
             // The seven bound parameters are identical across dialects; only the SQL text differs.
-            try (PreparedStatement p = ps(dialect.scheduleUpsert())) {
-                p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
-                p.setString(4, s.cron); p.setString(5, s.context.json());
-                p.setLong(6, s.nextFireAt); p.setLong(7, s.createdAt);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            // The dialect supplies the SQL with positional parameters in insert-column order, so
+            // this one stays positional: the statement text is the dialect's to spell, not ours.
+            h.createUpdate(dialect.scheduleUpsert())
+                    .bind(0, s.id)
+                    .bind(1, s.workflow)
+                    .bind(2, s.intervalMillis)
+                    .bind(3, s.cron)
+                    .bind(4, s.context.json())
+                    .bind(5, s.nextFireAt)
+                    .bind(6, s.createdAt)
+                    .execute();
         }
 
         @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE workflow=?")) {
-                p.setString(1, workflow);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? java.util.Optional.of(readSchedule(rs)) : java.util.Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_schedule WHERE workflow=:workflow")
+                    .bind("workflow", workflow)
+                    .mapTo(Rows.Schedule.class)
+                    .findFirst();
         }
 
         @Override public void deleteSchedule(String id) {
-            try (PreparedStatement p = ps("DELETE FROM wf_schedule WHERE id=?")) {
-                p.setString(1, id);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("DELETE FROM wf_schedule WHERE id=:id").bind("id", id).execute();
         }
 
         @Override public List<Rows.Schedule> schedules() {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule ORDER BY id");
-                 ResultSet rs = p.executeQuery()) {
-                List<Rows.Schedule> out = new ArrayList<>();
-                while (rs.next()) out.add(readSchedule(rs));
-                return out;
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_schedule ORDER BY id")
+                    .mapTo(Rows.Schedule.class)
+                    .list();
         }
 
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
-                    "ORDER BY next_fire_at LIMIT ?")) {
-                p.setLong(1, now); p.setInt(2, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Rows.Schedule> out = new ArrayList<>();
-                    while (rs.next()) out.add(readSchedule(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_schedule WHERE next_fire_at<=:now "
+                            + "ORDER BY next_fire_at LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .mapTo(Rows.Schedule.class)
+                    .list();
         }
 
         @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
-            try (PreparedStatement p = ps("UPDATE wf_schedule SET next_fire_at=? WHERE id=? AND next_fire_at=?")) {
-                p.setLong(1, nextFireAt); p.setString(2, id); p.setLong(3, expectedFireAt);
-                return p.executeUpdate() == 1;
-            } catch (SQLException e) { throw wrap(e); }
+            // Compare-and-set on the fire time: exactly one node moves a schedule forward.
+            return h.createUpdate("UPDATE wf_schedule SET next_fire_at=:next "
+                            + "WHERE id=:id AND next_fire_at=:expected")
+                    .bind("next", nextFireAt)
+                    .bind("id", id)
+                    .bind("expected", expectedFireAt)
+                    .execute() == 1;
         }
 
-        private static Rows.Schedule readSchedule(ResultSet rs) throws SQLException {
-            Rows.Schedule s = new Rows.Schedule();
-            s.id = rs.getString("id");
-            s.workflow = rs.getString("workflow");
-            s.intervalMillis = rs.getLong("interval_millis");
-            s.cron = rs.getString("cron");
-            s.context = Doc.parse(rs.getString("context"));
-            s.nextFireAt = rs.getLong("next_fire_at");
-            s.createdAt = rs.getLong("created_at");
-            return s;
-        }
 
         @Override public Rows.QueueDepth queueDepth(long now) {
-            try (PreparedStatement p = ps("SELECT COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
-                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?")) {
-                p.setLong(1, now);
-                try (ResultSet rs = p.executeQuery()) {
-                    rs.next();
-                    return new Rows.QueueDepth(rs.getInt(1), rs.getLong(2));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "
+                            + "FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') "
+                            + "AND available_at<=:now")
+                    .bind("now", now)
+                    .map((rs, ctx) -> new Rows.QueueDepth(rs.getInt("depth"), rs.getLong("oldest")))
+                    .one();
         }
 
         @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
-            try (PreparedStatement p = ps("SELECT workflow, version, queue, COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
-                    "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=? " +
-                    "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT ?")) {
-                p.setLong(1, now);
-                p.setInt(2, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Rows.BacklogSlice> out = new ArrayList<>();
-                    while (rs.next()) {
-                        out.add(new Rows.BacklogSlice(rs.getString(1), rs.getInt(2), rs.getString(3),
-                                rs.getInt(4), rs.getLong(5)));
-                    }
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT workflow, version, queue, COUNT(*) AS depth, "
+                            + "COALESCE(MIN(available_at),0) AS oldest FROM wf_token "
+                            + "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=:now "
+                            + "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .map((rs, ctx) -> new Rows.BacklogSlice(rs.getString("workflow"), rs.getInt("version"),
+                            rs.getString("queue"), rs.getInt("depth"), rs.getLong("oldest")))
+                    .list();
         }
 
         @Override public int countProcessedSince(long since) {
-            try (PreparedStatement p = ps("SELECT COUNT(*) FROM wf_token " +
-                    "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>?")) {
-                p.setLong(1, since);
-                try (ResultSet rs = p.executeQuery()) {
-                    rs.next();
-                    return rs.getInt(1);
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT COUNT(*) FROM wf_token "
+                            + "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>:since")
+                    .bind("since", since)
+                    .mapTo(Integer.class)
+                    .one();
         }
 
+        /** The token sweeps: one bound time and a cap, in that order. */
         private List<Token> query(String sql, long arg, int limit) {
-            try (PreparedStatement p = ps(sql)) {
-                p.setLong(1, arg);
-                p.setInt(2, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery(sql)
+                    .bind(0, arg)
+                    .bind(1, limit)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override public void upsertNode(ServerNode n) {
-            try (PreparedStatement upd = ps("UPDATE wf_node SET name=?,last_heartbeat=?,workers=? WHERE id=?")) {
-                upd.setString(1, n.name); upd.setLong(2, n.lastHeartbeat); upd.setInt(3, n.workers);
-                upd.setString(4, n.id);
-                if (upd.executeUpdate() == 0) {
-                    try (PreparedStatement ins = ps("INSERT INTO wf_node " +
-                            "(id,name,first_heartbeat,last_heartbeat,workers,leader) VALUES (?,?,?,?,?,0)")) {
-                        ins.setString(1, n.id); ins.setString(2, n.name); ins.setLong(3, n.firstHeartbeat);
-                        ins.setLong(4, n.lastHeartbeat); ins.setInt(5, n.workers);
-                        ins.executeUpdate();
-                    }
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            int updated = h.createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
+                            + "workers=:workers WHERE id=:id")
+                    .bind("name", n.name)
+                    .bind("beat", n.lastHeartbeat)
+                    .bind("workers", n.workers)
+                    .bind("id", n.id)
+                    .execute();
+            if (updated > 0) return;
+            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader) "
+                            + "VALUES (:id,:name,:first,:beat,:workers,0)")
+                    .bind("id", n.id)
+                    .bind("name", n.name)
+                    .bind("first", n.firstHeartbeat)
+                    .bind("beat", n.lastHeartbeat)
+                    .bind("workers", n.workers)
+                    .execute();
         }
 
         @Override public List<ServerNode> nodes() {
-            try (PreparedStatement p = ps("SELECT * FROM wf_node ORDER BY first_heartbeat, id");
-                 ResultSet rs = p.executeQuery()) {
-                List<ServerNode> out = new ArrayList<>();
-                while (rs.next()) {
-                    ServerNode n = new ServerNode();
-                    n.id = rs.getString("id");
-                    n.name = rs.getString("name");
-                    n.firstHeartbeat = rs.getLong("first_heartbeat");
-                    n.lastHeartbeat = rs.getLong("last_heartbeat");
-                    n.workers = rs.getInt("workers");
-                    n.leader = rs.getInt("leader") == 1;
-                    out.add(n);
-                }
-                return out;
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_node ORDER BY first_heartbeat, id")
+                    .mapTo(ServerNode.class)
+                    .list();
         }
 
         @Override public void deleteNodesOlderThan(long before) {
-            try (PreparedStatement p = ps("DELETE FROM wf_node WHERE last_heartbeat<?")) {
-                p.setLong(1, before);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
+                    .bind("before", before)
+                    .execute();
         }
 
         @Override public void setLeader(String nodeId, boolean leader) {
-            try (PreparedStatement p = ps("UPDATE wf_node SET leader=? WHERE id=?")) {
-                p.setInt(1, leader ? 1 : 0);
-                p.setString(2, nodeId);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("UPDATE wf_node SET leader=:leader WHERE id=:id")
+                    .bind("leader", leader ? 1 : 0)
+                    .bind("id", nodeId)
+                    .execute();
         }
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
             List<String> ids = new ArrayList<>();
             // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
             // dialect a deterministic "oldest first" deletion order at no cost.
-            try (PreparedStatement p = ps("SELECT id FROM wf_instance WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<? ORDER BY updated_at LIMIT ?")) {
-                p.setLong(1, updatedBefore);
-                p.setInt(2, limit);
-                try (ResultSet rs = p.executeQuery()) { while (rs.next()) ids.add(rs.getString(1)); }
-            } catch (SQLException e) { throw wrap(e); }
+            ids.addAll(h.createQuery("SELECT id FROM wf_instance "
+                            + "WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<:before "
+                            + "ORDER BY updated_at LIMIT :limit")
+                    .bind("before", updatedBefore)
+                    .bind("limit", limit)
+                    .mapTo(String.class)
+                    .list());
             if (ids.isEmpty()) return 0;
-            try (PreparedStatement dt = ps("DELETE FROM wf_token WHERE instance_id=?");
-                 PreparedStatement dc = ps("DELETE FROM wf_comp_log WHERE instance_id=?");
-                 PreparedStatement di = ps("DELETE FROM wf_instance WHERE id=?")) {
-                for (String id : ids) {
-                    dt.setString(1, id); dt.executeUpdate();
-                    dc.setString(1, id); dc.executeUpdate();
-                    di.setString(1, id); di.executeUpdate();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            // Children before parents: a token or comp-log row outliving its instance is a leak.
+            for (String table : List.of("wf_token", "wf_comp_log")) {
+                h.createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
+                        .bindList("ids", ids)
+                        .execute();
+            }
+            h.createUpdate("DELETE FROM wf_instance WHERE id IN (<ids>)").bindList("ids", ids).execute();
             return ids.size();
         }
 
         @Override public void appendCompensation(Rows.CompLog e) {
-            try (PreparedStatement p = ps("INSERT INTO wf_comp_log "
-                    + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
-                    + "VALUES (?,?,?,?,?,?,?,?)")) {
-                p.setString(1, e.instanceId); p.setLong(2, e.seq); p.setString(3, e.nodeId);
-                p.setString(4, e.activity); p.setString(5, e.queue);
-                p.setString(6, e.input == null ? null : e.input.json()); p.setString(7, e.result == null ? null : e.result.json());
-                p.setInt(8, e.compensated ? 1 : 0);
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("INSERT INTO wf_comp_log "
+                            + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
+                            + "VALUES (:instanceId,:seq,:nodeId,:activity,:queue,:input,:result,:compensated)")
+                    .bind("instanceId", e.instanceId)
+                    .bind("seq", e.seq)
+                    .bind("nodeId", e.nodeId)
+                    .bind("activity", e.activity)
+                    .bind("queue", e.queue)
+                    .bind("input", e.input == null ? null : e.input.json())
+                    .bind("result", e.result == null ? null : e.result.json())
+                    .bind("compensated", e.compensated ? 1 : 0)
+                    .execute();
         }
 
         @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
-            java.util.List<Rows.CompLog> out = new java.util.ArrayList<>();
-            try (PreparedStatement p = ps("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
-                    + "FROM wf_comp_log WHERE instance_id=? ORDER BY seq")) {
-                p.setString(1, instanceId);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
+            return h.createQuery("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
+                            + "FROM wf_comp_log WHERE instance_id=:id ORDER BY seq")
+                    .bind("id", instanceId)
+                    .map((rs, ctx) -> {
                         Rows.CompLog e = new Rows.CompLog();
                         e.instanceId = instanceId;
-                        e.seq = rs.getLong(1); e.nodeId = rs.getString(2); e.activity = rs.getString(3);
-                        e.queue = rs.getString(4); e.input = Doc.parse(rs.getString(5));
-                        e.result = Doc.parse(rs.getString(6)); e.compensated = rs.getInt(7) != 0;
-                        out.add(e);
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+                        e.seq = rs.getLong("seq");
+                        e.nodeId = rs.getString("node_id");
+                        e.activity = rs.getString("activity");
+                        e.queue = rs.getString("queue");
+                        e.input = Doc.parse(rs.getString("input_json"));
+                        e.result = Doc.parse(rs.getString("result_json"));
+                        e.compensated = rs.getInt("compensated") != 0;
+                        return e;
+                    })
+                    .list();
         }
 
         @Override public void insertAnomaly(Rows.Anomaly a) {
-            try (PreparedStatement p = ps("INSERT INTO wf_anomaly (id,instance_id,workflow,version,kind,"
-                    + "expected_node,reported_node,detail,observed_at) VALUES (?,?,?,?,?,?,?,?,?)")) {
-                p.setString(1, a.id()); p.setString(2, a.instanceId()); p.setString(3, a.workflow());
-                p.setInt(4, a.version()); p.setString(5, a.kind()); p.setString(6, a.expectedNode());
-                p.setString(7, a.reportedNode()); p.setString(8, a.detail()); p.setLong(9, a.at());
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("INSERT INTO wf_anomaly (id,instance_id,workflow,version,kind,"
+                            + "expected_node,reported_node,detail,observed_at) VALUES "
+                            + "(:id,:instanceId,:workflow,:version,:kind,:expected,:reported,:detail,:at)")
+                    .bind("id", a.id())
+                    .bind("instanceId", a.instanceId())
+                    .bind("workflow", a.workflow())
+                    .bind("version", a.version())
+                    .bind("kind", a.kind())
+                    .bind("expected", a.expectedNode())
+                    .bind("reported", a.reportedNode())
+                    .bind("detail", a.detail())
+                    .bind("at", a.at())
+                    .execute();
         }
 
         @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
-            StringBuilder sql = new StringBuilder("SELECT id,instance_id,workflow,version,kind,expected_node,"
-                    + "reported_node,detail,observed_at FROM wf_anomaly WHERE 1=1");
-            if (workflow != null) sql.append(" AND workflow=?");
-            if (instanceId != null) sql.append(" AND instance_id=?");
-            sql.append(" ORDER BY observed_at DESC, id DESC LIMIT ?");
-            List<Rows.Anomaly> out = new ArrayList<>();
-            try (PreparedStatement p = ps(sql.toString())) {
-                int i = 1;
-                if (workflow != null) p.setString(i++, workflow);
-                if (instanceId != null) p.setString(i++, instanceId);
-                p.setInt(i, limit);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        out.add(new Rows.Anomaly(rs.getString(1), rs.getString(2), rs.getString(3), rs.getInt(4),
-                                rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getLong(9)));
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+            Query q = h.createQuery("SELECT id,instance_id,workflow,version,kind,expected_node,"
+                    + "reported_node,detail,observed_at FROM wf_anomaly WHERE 1=1"
+                    + (workflow != null ? " AND workflow=:workflow" : "")
+                    + (instanceId != null ? " AND instance_id=:instanceId" : "")
+                    + " ORDER BY observed_at DESC, id DESC LIMIT :limit");
+            q.bind("limit", limit);
+            if (workflow != null) q.bind("workflow", workflow);
+            if (instanceId != null) q.bind("instanceId", instanceId);
+            return q.map((rs, ctx) -> new Rows.Anomaly(rs.getString("id"), rs.getString("instance_id"),
+                            rs.getString("workflow"), rs.getInt("version"), rs.getString("kind"),
+                            rs.getString("expected_node"), rs.getString("reported_node"),
+                            rs.getString("detail"), rs.getLong("observed_at")))
+                    .list();
         }
 
         @Override public long appendEvent(Rows.Event e) {
-            try (PreparedStatement p = c.prepareStatement("INSERT INTO wf_event (instance_id,workflow,version,"
-                    + "correlation_id,type,node_id,payload_ver,payload,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                    Statement.RETURN_GENERATED_KEYS)) {
-                p.setString(1, e.instanceId()); p.setString(2, e.workflow()); p.setInt(3, e.version());
-                p.setString(4, e.correlationId()); p.setString(5, e.type()); p.setString(6, e.nodeId());
-                p.setInt(7, e.payloadVer()); p.setString(8, e.payload()); p.setLong(9, e.createdAt());
-                p.executeUpdate();
-                try (ResultSet keys = p.getGeneratedKeys()) {
-                    if (!keys.next()) throw new StorageException("wf_event insert returned no seq", null);
-                    return keys.getLong(1);
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createUpdate("INSERT INTO wf_event (instance_id,workflow,version,correlation_id,type,"
+                            + "node_id,payload_ver,payload,created_at) VALUES "
+                            + "(:instanceId,:workflow,:version,:correlationId,:type,:nodeId,:payloadVer,"
+                            + ":payload,:createdAt)")
+                    .bind("instanceId", e.instanceId())
+                    .bind("workflow", e.workflow())
+                    .bind("version", e.version())
+                    .bind("correlationId", e.correlationId())
+                    .bind("type", e.type())
+                    .bind("nodeId", e.nodeId())
+                    .bind("payloadVer", e.payloadVer())
+                    .bind("payload", e.payload())
+                    .bind("createdAt", e.createdAt())
+                    .executeAndReturnGeneratedKeys("seq")
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElseThrow(() -> new StorageException("wf_event insert returned no seq", null));
         }
 
         @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
-            List<Rows.Event> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
-                    + "payload_ver,payload,created_at FROM wf_event WHERE seq>? AND created_at<? ORDER BY seq LIMIT ?")) {
-                p.setLong(1, afterSeq); p.setLong(2, createdBefore); p.setInt(3, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        out.add(new Rows.Event(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getInt(4),
-                                rs.getString(5), rs.getString(6), rs.getString(7), rs.getInt(8), rs.getString(9),
-                                rs.getLong(10)));
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+            return h.createQuery("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
+                            + "payload_ver,payload,created_at FROM wf_event "
+                            + "WHERE seq>:after AND created_at<:before ORDER BY seq LIMIT :max")
+                    .bind("after", afterSeq)
+                    .bind("before", createdBefore)
+                    .bind("max", max)
+                    .mapTo(Rows.Event.class)
+                    .list();
         }
 
         @Override public long latestEventSeq() {
-            try (PreparedStatement p = ps("SELECT COALESCE(MAX(seq),0) FROM wf_event");
-                 ResultSet rs = p.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_event").mapTo(Long.class).one();
         }
 
         @Override public Rows.EventCursor eventCursor(String consumer) {
-            try (PreparedStatement p = ps("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor WHERE consumer=?")) {
-                p.setString(1, consumer);
-                try (ResultSet rs = p.executeQuery()) {
-                    if (!rs.next()) return null;
-                    return new Rows.EventCursor(rs.getString(1), rs.getLong(2), rs.getLong(3), rs.getLong(4));
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createQuery("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor "
+                            + "WHERE consumer=:consumer")
+                    .bind("consumer", consumer)
+                    .mapTo(Rows.EventCursor.class)
+                    .findFirst()
+                    .orElse(null);
         }
 
-        @Override public void createEventCursorIfAbsent(Rows.EventCursor c) {
-            try (PreparedStatement p = ps(dialect.insertIgnore(
-                    "INSERT INTO wf_event_cursor (consumer,acked_seq,last_seen,created_at) VALUES (?,?,?,?)"))) {
-                p.setString(1, c.consumer()); p.setLong(2, c.ackedSeq());
-                p.setLong(3, c.lastSeen()); p.setLong(4, c.createdAt());
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+        @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
+            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor "
+                            + "(consumer,acked_seq,last_seen,created_at) VALUES "
+                            + "(:consumer,:acked,:lastSeen,:createdAt)"))
+                    .bind("consumer", cursor.consumer())
+                    .bind("acked", cursor.ackedSeq())
+                    .bind("lastSeen", cursor.lastSeen())
+                    .bind("createdAt", cursor.createdAt())
+                    .execute();
         }
 
         @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) {
@@ -1584,130 +1619,80 @@ public final class JdbcStorage implements Storage {
         }
 
         /** Moves an existing cursor forward (never back) and stamps it; 0 when the consumer has none. */
+        /** An ack never moves a cursor back, so the new seq appears twice in the CASE. One name,
+         *  bound once, rather than two positions that have to hold the same value. */
         private int moveCursor(String consumer, long ackedSeq, long now) {
-            try (PreparedStatement p = ps("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<? THEN ? "
-                    + "ELSE acked_seq END, last_seen=? WHERE consumer=?")) {
-                p.setLong(1, ackedSeq); p.setLong(2, ackedSeq); p.setLong(3, now); p.setString(4, consumer);
-                return p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createUpdate("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<:acked "
+                            + "THEN :acked ELSE acked_seq END, last_seen=:now WHERE consumer=:consumer")
+                    .bind("acked", ackedSeq)
+                    .bind("now", now)
+                    .bind("consumer", consumer)
+                    .execute();
         }
 
         @Override public Long oldestAckedSeq() {
-            try (PreparedStatement p = ps("SELECT MIN(acked_seq) FROM wf_event_cursor");
-                 ResultSet rs = p.executeQuery()) {
-                if (!rs.next()) return null;
-                long v = rs.getLong(1);
-                return rs.wasNull() ? null : v;
-            } catch (SQLException ex) { throw wrap(ex); }
+            // MIN over no cursors is a row holding NULL, so the absence comes from the value.
+            return h.createQuery("SELECT MIN(acked_seq) FROM wf_event_cursor")
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElse(null);
         }
 
         @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
-            List<Long> seqs = new ArrayList<>();
-            String sql = "SELECT seq FROM wf_event WHERE created_at<?" + (upToSeq != null ? " AND seq<=?" : "")
-                    + " ORDER BY seq LIMIT ?";
-            try (PreparedStatement p = ps(sql)) {
-                int i = 1;
-                p.setLong(i++, createdBefore);
-                if (upToSeq != null) p.setLong(i++, upToSeq);
-                p.setInt(i, max);
-                try (ResultSet rs = p.executeQuery()) { while (rs.next()) seqs.add(rs.getLong(1)); }
-            } catch (SQLException ex) { throw wrap(ex); }
+            Query pick = h.createQuery("SELECT seq FROM wf_event WHERE created_at<:before"
+                    + (upToSeq != null ? " AND seq<=:upTo" : "")
+                    + " ORDER BY seq LIMIT :max");
+            pick.bind("before", createdBefore).bind("max", max);
+            if (upToSeq != null) pick.bind("upTo", upToSeq);
+            List<Long> seqs = pick.mapTo(Long.class).list();
             if (seqs.isEmpty()) return 0;
-            try (PreparedStatement d = ps("DELETE FROM wf_event WHERE seq<=? AND created_at<?")) {
-                d.setLong(1, seqs.getLast()); d.setLong(2, createdBefore);
-                return d.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createUpdate("DELETE FROM wf_event WHERE seq<=:upTo AND created_at<:before")
+                    .bind("upTo", seqs.getLast())
+                    .bind("before", createdBefore)
+                    .execute();
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
-            List<Rows.StepDuration> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
-                    + "WHERE workflow=? AND version=? AND status='DONE' AND finished_at > ? AND started_at IS NOT NULL "
-                    + "ORDER BY finished_at DESC LIMIT ?")) {
-                p.setString(1, workflow); p.setInt(2, version); p.setLong(3, since); p.setInt(4, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        long seq = rs.getLong(5);
+            return h.createQuery("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
+                            + "WHERE workflow=:workflow AND version=:version AND status='DONE' "
+                            + "AND finished_at > :since AND started_at IS NOT NULL "
+                            + "ORDER BY finished_at DESC LIMIT :max")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .bind("since", since)
+                    .bind("max", max)
+                    .map((rs, ctx) -> {
+                        rs.getLong("seq");
+                        // An observed step waited for nothing: it was never dispatched from a queue.
                         boolean observed = !rs.wasNull();
-                        out.add(new Rows.StepDuration(rs.getString(1), Math.max(0, rs.getLong(3) - rs.getLong(2)),
-                                observed ? 0 : Math.max(0, rs.getLong(2) - rs.getLong(4))));
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+                        long ran = Math.max(0, rs.getLong("finished_at") - rs.getLong("started_at"));
+                        long waited = observed ? 0
+                                : Math.max(0, rs.getLong("started_at") - rs.getLong("available_at"));
+                        return new Rows.StepDuration(rs.getString("node_id"), ran, waited);
+                    })
+                    .list();
         }
 
         @Override public void markCompensated(String instanceId, long seq) {
-            try (PreparedStatement p = ps("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=? AND seq=?")) {
-                p.setString(1, instanceId); p.setLong(2, seq);
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=:id AND seq=:seq")
+                    .bind("id", instanceId)
+                    .bind("seq", seq)
+                    .execute();
         }
 
         @Override
         public void cancelActiveTokens(String instanceId, long now) {
-            try (PreparedStatement p = ps("""
-                    UPDATE wf_token
-                       SET status='CANCELLED', lease_owner=NULL, lease_expires=0, updated_at=?
-                     WHERE instance_id=? AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED')
-                    """)) {
-                p.setLong(1, now);
-                p.setString(2, instanceId);
-                p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            h.createUpdate("""
+                            UPDATE wf_token
+                               SET status='CANCELLED', lease_owner=NULL, lease_expires=0, updated_at=:now
+                             WHERE instance_id=:id
+                               AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED')
+                            """)
+                    .bind("now", now)
+                    .bind("id", instanceId)
+                    .execute();
         }
 
-        private static Instance readInstance(ResultSet rs) throws SQLException {
-            Instance i = new Instance();
-            i.id = rs.getString("id");
-            i.workflow = rs.getString("workflow");
-            i.version = rs.getInt("version");
-            i.correlationId = rs.getString("correlation_id");
-            i.status = InstanceStatus.valueOf(rs.getString("status"));
-            i.terminationReason = rs.getString("term_reason");
-            i.error = rs.getString("error");
-            i.context = Doc.parse(rs.getString("context"));
-            i.parentTokenId = rs.getString("parent_token_id");
-            i.createdAt = rs.getLong("created_at");
-            i.updatedAt = rs.getLong("updated_at");
-            i.revision = rs.getLong("revision");
-            long settleAt = rs.getLong("settle_at");
-            i.settleAt = rs.wasNull() ? null : settleAt;
-            return i;
-        }
 
-        private static Token readToken(ResultSet rs) throws SQLException {
-            Token t = new Token();
-            t.id = rs.getString("id");
-            t.instanceId = rs.getString("instance_id");
-            t.workflow = rs.getString("workflow");
-            t.version = rs.getInt("version");
-            t.nodeId = rs.getString("node_id");
-            t.kind = NodeKind.valueOf(rs.getString("kind"));
-            t.status = TokenStatus.valueOf(rs.getString("status"));
-            t.activity = rs.getString("activity");
-            t.queue = rs.getString("queue");
-            t.attempt = rs.getInt("attempt");
-            t.availableAt = rs.getLong("available_at");
-            t.leaseOwner = rs.getString("lease_owner");
-            t.leaseExpiresAt = rs.getLong("lease_expires");
-            // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
-            // normalise it here so the engine always sees a non-null join stack.
-            String joinStack = rs.getString("join_stack");
-            t.joinStack = joinStack == null ? "" : joinStack;
-            t.lastError = rs.getString("last_error");
-            t.payload = PayloadCodec.decode(rs.getString("payload"));
-            long compSeq = rs.getLong("comp_seq");
-            t.compSeq = rs.wasNull() ? null : compSeq;
-            long startedAt = rs.getLong("started_at");
-            t.startedAt = rs.wasNull() ? null : startedAt;
-            long finishedAt = rs.getLong("finished_at");
-            t.finishedAt = rs.wasNull() ? null : finishedAt;
-            long seq = rs.getLong("seq");
-            t.seq = rs.wasNull() ? null : seq;
-            t.createdAt = rs.getLong("created_at");
-            t.updatedAt = rs.getLong("updated_at");
-            return t;
-        }
     }
 }
