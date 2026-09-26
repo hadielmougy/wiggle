@@ -76,9 +76,7 @@ abstract class BaseRunningMode implements RunningMode {
         Instance inst = ctx.task().inst();
         long now = System.currentTimeMillis();
         long leaseExpiry = now + ctx.leaseMillis();
-        if (!InstanceState.of(inst.status).running()) {
-            return new ReportOutcome(inst.status.name(), 0, null);
-        }
+        if (!inst.status.running()) return ReportOutcome.stopped(inst);
         Token current = ctx.task().token();
         Tokens.requireLease(current, ctx.leaseOwner());
         LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);

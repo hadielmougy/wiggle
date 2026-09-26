@@ -395,10 +395,16 @@ public final class WorkflowEngine {
         return done;
     }
 
+    /** Whether a leader sweep should act on this item: its instance is still there, and still
+     *  running the forward flow. A swept item whose instance moved on is dropped, not failed. */
+    private static boolean sweepable(Instance inst) {
+        return inst != null && inst.status.running();
+    }
+
     private void settleObservedRun(Tx tx, String id) {
         Instance inst = tx.lockInstance(id).orElse(null);
         long now = System.currentTimeMillis();
-        if (inst == null || !InstanceState.of(inst.status).running() || inst.settleAt == null || inst.settleAt > now) return;
+        if (!sweepable(inst) || inst.settleAt == null || inst.settleAt > now) return;
         WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
                 .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
         boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
@@ -623,7 +629,7 @@ public final class WorkflowEngine {
 
     private void fireTimer(Tx tx, Token timer) {
         Instance inst = tx.lockInstance(timer.instanceId).orElse(null);
-        if (inst == null || !InstanceState.of(inst.status).running()) return;
+        if (!sweepable(inst)) return;
         Token t = tx.findToken(timer.id).orElse(null);
         if (t == null || t.status != TokenStatus.WAITING) return;
         long ts = System.currentTimeMillis();
@@ -645,7 +651,7 @@ public final class WorkflowEngine {
 
     private void escalateOrFailSignal(Tx tx, Token task) {
         Instance inst = tx.lockInstance(task.instanceId).orElse(null);
-        if (inst == null || !InstanceState.of(inst.status).running()) return;
+        if (!sweepable(inst)) return;
         Token t = tx.findToken(task.id).orElse(null);
         if (t == null || t.status != TokenStatus.AWAITING) return;
         long ts = System.currentTimeMillis();
@@ -691,7 +697,7 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             Token t = locked.token();
             Tokens.requireLease(t, leaseOwner);
-            if (!InstanceState.of(inst.status).live()) return;
+            if (!inst.status.live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
         });
@@ -711,7 +717,7 @@ public final class WorkflowEngine {
             instances.compensatorExhausted(tx, inst, node, compSeq, reason, now);
             return;
         }
-        if (InstanceState.of(inst.status).running()) {
+        if (inst.status.running()) {
             instances.fail(tx, inst, node.name() + ": " + reason, now);
         }
     }

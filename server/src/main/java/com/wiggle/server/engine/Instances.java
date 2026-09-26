@@ -184,7 +184,7 @@ final class Instances {
         Token probe = tx.findToken(child.parentTokenId).orElse(null);
         if (probe == null) return;
         Instance parent = tx.lockInstance(probe.instanceId).orElse(null);
-        if (parent == null || !InstanceState.of(parent.status).running()) return;
+        if (parent == null || !parent.status.running()) return;
         Token t = tx.findToken(child.parentTokenId).orElse(null);   // re-read under the lock
         if (t == null || t.status != TokenStatus.AWAITING || t.kind != NodeKind.SUB_WORKFLOW) return;
         LazyGraph def = definitions.graph(tx, parent.workflow, parent.version);

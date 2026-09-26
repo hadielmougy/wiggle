@@ -83,7 +83,7 @@ final class Sagas {
 
     /** A compensator completed: settle its entry and drive the next-newest, or finish the pass. */
     void complete(Tx tx, Instance inst, Token t, long seq, long now) {
-        if (!InstanceState.of(inst.status).compensating()) {
+        if (!inst.status.compensating()) {
             throw EngineException.conflict("instance " + inst.id + " is " + inst.status);
         }
         Tokens.settle(tx, t, now);
@@ -95,7 +95,7 @@ final class Sagas {
     /** A compensator itself is out of retries: the one thing worse than a stuck saga is a stuck
      *  saga reported as success -- refuse to pretend and demand a human. */
     void compensatorExhausted(Tx tx, Instance inst, Node node, long seq, String failReason, long now) {
-        if (!InstanceState.of(inst.status).compensating()) return;
+        if (!inst.status.compensating()) return;
         LOG.log(System.Logger.Level.WARNING, () -> "instance " + inst.id
                 + " COMPENSATION_FAILED at undo seq " + seq + ": " + failReason);
         instances.compensationFailed(tx, inst,

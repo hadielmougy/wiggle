@@ -99,10 +99,11 @@ class StateChartTest {
             assertTrue(s.successors().isEmpty(),
                     "TokenState." + s + " is settled but declares successors " + s.successors());
         }
-        for (InstanceState s : InstanceState.values()) {
+        for (InstanceStatus s : InstanceStatus.values()) {
             if (s.live()) continue;
-            assertTrue(s.successors().isEmpty(),
-                    "InstanceState." + s + " is terminal but declares successors " + s.successors());
+            assertTrue(InstanceState.of(s).successors().isEmpty(),
+                    "InstanceState." + s + " is terminal but declares successors "
+                            + InstanceState.of(s).successors());
         }
     }
 
@@ -166,19 +167,6 @@ class StateChartTest {
     }
 
     @Test
-    @DisplayName("only COMPENSATING is the reverse pass; the forward one is only RUNNING")
-    void compensatingIsExactlyOneState() {
-        for (InstanceStatus s : InstanceStatus.values()) {
-            InstanceState state = InstanceState.of(s);
-            assertEquals(s == InstanceStatus.COMPENSATING, state.compensating(),
-                    s + ".compensating()");
-            assertEquals(s == InstanceStatus.RUNNING, state.running(), s + ".running()");
-            assertTrue(!(state.compensating() && state.running()),
-                    s + " cannot be going forwards and backwards at once");
-        }
-    }
-
-    @Test
     @DisplayName("only RUNNING holds a lease, and only RUNNING dispatches the reverse pass")
     void dispatchClassificationsAreSingular() {
         assertEquals(Set.of(TokenState.RUNNING), Arrays.stream(TokenState.values())
@@ -192,7 +180,7 @@ class StateChartTest {
     }
 
     @Test
-    @DisplayName("InstanceState.live() and InstanceView.isTerminal() agree")
+    @DisplayName("InstanceStatus.live() and InstanceView.isTerminal() agree")
     void terminalClassificationMatchesInstanceView() {
         Set<String> fromCode = Arrays.stream(InstanceStatus.values())
                 .filter(s -> view(s).isTerminal())

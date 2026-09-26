@@ -85,7 +85,7 @@ public class ObservedRunningMode extends BaseRunningMode {
         // Closing is sticky: once END was seen (or a report said final) a straggler keeps the short
         // grace rather than pushing the run back out to the stall threshold.
         boolean closing = ctx.fin() || (inst.settleAt != null && inst.settleAt - inst.updatedAt <= settleMillis);
-        if (!InstanceState.of(inst.status).running() && !ctx.steps().isEmpty()) {
+        if (!inst.status.running() && !ctx.steps().isEmpty()) {
             record(tx, inst, AFTER_END, null, ctx.steps().getFirst().nodeId(),
                     ctx.steps().size() + " step(s) reported after the instance " + inst.status, now);
             anomalies++;
@@ -120,7 +120,7 @@ public class ObservedRunningMode extends BaseRunningMode {
                 closing = true;
             }
         }
-        if (InstanceState.of(inst.status).running()) {
+        if (inst.status.running()) {
             inst.settleAt = now + (closing ? settleMillis : stallMillis);
             Instances.touch(tx, inst, now);
         }

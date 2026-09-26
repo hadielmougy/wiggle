@@ -9,14 +9,14 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * An instance's state: what it is, what it may become, and how it gets there. One constant per
+ * What an instance in each state may BECOME, and what it PERMITS. One constant per
  * {@link InstanceStatus}, matched by name -- the parent half of the pair {@link TokenState}
  * completes.
  *
- * <p>Every write to an instance's status happens in this file and nowhere else. Reading one
- * constant tells you whether the instance is still live, whether a caller may cancel it, which
- * of its tokens are dispatchable, and every state it may move to; the transitions below are the
- * only ways to make one, and {@link #move} refuses any a state does not declare.
+ * <p>What the status MEANS -- live, running forward, undoing -- belongs to {@link InstanceStatus}
+ * itself, so a reader holding only the status does not need this type. What is left here is what
+ * needs the transition graph: whether a caller may cancel, which of its tokens are dispatchable,
+ * every state it may move to, and the refusal of any move a state does not declare.
  *
  * <p>What a transition MEANS for the rest of the engine -- cancelling the instance's tokens,
  * resuming a waiting parent, handing over to the saga reverse pass -- stays in
@@ -68,27 +68,9 @@ enum InstanceState {
 
     static { for (InstanceStatus s : InstanceStatus.values()) of(s); }   // every status has a state
 
-    /** Not finished: either running forward, or undoing. The persisted status owns this
-     *  classification, so the engine, the stores and {@code InstanceView} cannot disagree. */
-    boolean live() {
-        return InstanceStatus.valueOf(name()).live();
-    }
-
-    /** The forward flow is live: work may be reported against it, and a finished sub-workflow
-     *  may resume its parent's token here. Only RUNNING -- COMPENSATING is going backwards. */
-    boolean running() {
-        return InstanceStatus.valueOf(name()).running();
-    }
-
     /** A cancel request is honoured here; anywhere else it is ignored as already-decided. */
     boolean cancellable() {
         return false;
-    }
-
-    /** The reverse pass owns the instance: an undo may settle its comp-log entry here, and only
-     *  here. The mirror of {@link #running}, which is the forward pass. */
-    boolean compensating() {
-        return InstanceStatus.valueOf(name()).compensating();
     }
 
     /** Whether a token of this instance may be handed to a worker. RUNNING dispatches the forward

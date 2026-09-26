@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.InstanceStatus;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -51,7 +52,7 @@ final class StateChart {
             "CANCELLED", "Abandoned because the instance stopped running.");
 
     static List<State> instanceStates() {
-        return Arrays.stream(InstanceState.values())
+        return Arrays.stream(InstanceStatus.values())
                 .map(s -> new State(s.name(), s.live() ? "live" : "terminal", INSTANCE_NOTES.get(s.name())))
                 .toList();
     }
