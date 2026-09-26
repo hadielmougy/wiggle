@@ -10,7 +10,7 @@ import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
 import com.wiggle.server.store.Tx;
 
@@ -272,7 +272,7 @@ final class Tokens {
             base = payload.top().view();
         }
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
-                node.activity(), node.kind(), t.attempt + 1, until, workerId, Scopes.dispatchContext(inst, t).raw(),
+                node.activity(), node.kind(), t.nextAttempt(), until, workerId, Scopes.dispatchContext(inst, t).raw(),
                 base == null ? null : base.raw(), itemIndex, itemMapKey, mode));
     }
 

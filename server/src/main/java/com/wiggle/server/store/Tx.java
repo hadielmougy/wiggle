@@ -1,7 +1,7 @@
 package com.wiggle.server.store;
 
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Token;

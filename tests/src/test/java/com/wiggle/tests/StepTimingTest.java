@@ -12,7 +12,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

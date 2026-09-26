@@ -2,11 +2,11 @@ package com.wiggle.server.store;
 
 import com.wiggle.core.NodeKind;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Schedule;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -54,6 +54,53 @@ class RowsTest {
 
             t.joinStack = null;
             assertNull(t.currentJoinGroup(), "a null stack is treated as empty");
+        }
+
+        @Test
+        @DisplayName("a lease has expired only when it was taken, had an expiry, and it has passed")
+        void expiredLeaseNeedsAllThree() {
+            long now = 1_000L;
+            for (TokenStatus s : TokenStatus.values()) {
+                Token t = new Token();
+                t.status = s;
+                t.leaseExpiresAt = now - 1;
+                assertEquals(s == TokenStatus.RUNNING, t.hasExpiredLeaseAt(now),
+                        s + " with a past expiry");
+            }
+            Token never = new Token();
+            never.status = TokenStatus.RUNNING;
+            never.leaseExpiresAt = 0;
+            assertFalse(never.hasExpiredLeaseAt(now), "no expiry means no lease, not an overdue one");
+
+            Token live = new Token();
+            live.status = TokenStatus.RUNNING;
+            live.leaseExpiresAt = now + 1;
+            assertFalse(live.hasExpiredLeaseAt(now), "a future expiry is still held");
+
+            Token exact = new Token();
+            exact.status = TokenStatus.RUNNING;
+            exact.leaseExpiresAt = now;
+            assertFalse(exact.hasExpiredLeaseAt(now), "expiry is exclusive: equal is not yet expired");
+        }
+
+        @Test
+        @DisplayName("nextAttempt is the try about to run, one past the finished ones")
+        void nextAttemptIsOnePastFinished() {
+            Token t = new Token();
+            assertEquals(1, t.nextAttempt(), "a fresh token has run nothing, so it is on its first try");
+            t.attempt = 3;
+            assertEquals(4, t.nextAttempt());
+        }
+
+        @Test
+        @DisplayName("innermostJoinGroup parses a raw stack exactly as currentJoinGroup reads the row")
+        void innermostJoinGroupIsTheSameParse() {
+            for (String stack : new String[] {null, "", "g1", "g1,g2", "g1,g2,g3", ",g2", "g1,"}) {
+                Token t = new Token();
+                t.joinStack = stack;
+                assertEquals(t.currentJoinGroup(), Token.innermostJoinGroup(stack),
+                        "the row and the raw parse must agree for stack " + stack);
+            }
         }
 
         @Test

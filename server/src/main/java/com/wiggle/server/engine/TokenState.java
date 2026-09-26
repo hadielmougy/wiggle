@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 
 import java.util.Collections;
 import java.util.EnumSet;
@@ -23,10 +23,10 @@ import java.util.Set;
  */
 enum TokenState {
 
-    READY(Liveness.ACTIVE, TokenStatus.RUNNING, TokenStatus.WAITING, TokenStatus.AWAITING,
+    READY(TokenStatus.RUNNING, TokenStatus.WAITING, TokenStatus.AWAITING,
             TokenStatus.JOINED, TokenStatus.DONE, TokenStatus.CANCELLED),
 
-    RUNNING(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.READY, TokenStatus.FAILED,
+    RUNNING(TokenStatus.DONE, TokenStatus.READY, TokenStatus.FAILED,
             TokenStatus.CANCELLED) {
         @Override boolean holdsLease() { return true; }
 
@@ -46,20 +46,16 @@ enum TokenState {
         }
     },
 
-    WAITING(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.CANCELLED),
-    AWAITING(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.FAILED, TokenStatus.CANCELLED),
-    JOINED(Liveness.ACTIVE, TokenStatus.DONE, TokenStatus.CANCELLED),
-    DONE(Liveness.SETTLED),
-    FAILED(Liveness.SETTLED),
-    CANCELLED(Liveness.SETTLED);
+    WAITING(TokenStatus.DONE, TokenStatus.CANCELLED),
+    AWAITING(TokenStatus.DONE, TokenStatus.FAILED, TokenStatus.CANCELLED),
+    JOINED(TokenStatus.DONE, TokenStatus.CANCELLED),
+    DONE(),
+    FAILED(),
+    CANCELLED();
 
-    private enum Liveness { ACTIVE, SETTLED }
-
-    private final Liveness liveness;
     private final Set<TokenStatus> successors;
 
-    TokenState(Liveness liveness, TokenStatus... successors) {
-        this.liveness = liveness;
+    TokenState(TokenStatus... successors) {
         this.successors = successors.length == 0
                 ? Collections.unmodifiableSet(EnumSet.noneOf(TokenStatus.class))
                 : Collections.unmodifiableSet(EnumSet.copyOf(Set.of(successors)));
@@ -71,9 +67,10 @@ enum TokenState {
 
     static { for (TokenStatus s : TokenStatus.values()) of(s); }   // every status has a state, or fail at load
 
-    /** Still doing something, or waiting to: an instance with one of these has not finished. */
+    /** Still doing something, or waiting to. The persisted status owns this classification, so the
+     *  engine and the stores cannot disagree about which tokens keep an instance alive. */
     boolean active() {
-        return liveness == Liveness.ACTIVE;
+        return TokenStatus.valueOf(name()).active();
     }
 
     /** Implies a non-null {@code leaseOwner} and an expiry. Only RUNNING. */

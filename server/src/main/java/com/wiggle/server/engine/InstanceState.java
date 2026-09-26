@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 
 
 import java.util.Collections;
@@ -9,14 +9,14 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * An instance's state: what it is, what it may become, and how it gets there. One constant per
+ * What an instance in each state may BECOME, and what it PERMITS. One constant per
  * {@link InstanceStatus}, matched by name -- the parent half of the pair {@link TokenState}
  * completes.
  *
- * <p>Every write to an instance's status happens in this file and nowhere else. Reading one
- * constant tells you whether the instance is still live, whether a caller may cancel it, which
- * of its tokens are dispatchable, and every state it may move to; the transitions below are the
- * only ways to make one, and {@link #move} refuses any a state does not declare.
+ * <p>What the status MEANS -- live, running forward, undoing -- belongs to {@link InstanceStatus}
+ * itself, so a reader holding only the status does not need this type. What is left here is what
+ * needs the transition graph: whether a caller may cancel, which of its tokens are dispatchable,
+ * every state it may move to, and the refusal of any move a state does not declare.
  *
  * <p>What a transition MEANS for the rest of the engine -- cancelling the instance's tokens,
  * resuming a waiting parent, handing over to the saga reverse pass -- stays in
@@ -25,10 +25,8 @@ import java.util.Set;
 enum InstanceState {
 
     /** The normal life of an instance: tokens moving over the graph. */
-    RUNNING(Liveness.LIVE, InstanceStatus.COMPLETED, InstanceStatus.FAILED,
+    RUNNING(InstanceStatus.COMPLETED, InstanceStatus.FAILED,
             InstanceStatus.CANCELLED, InstanceStatus.COMPENSATING) {
-        @Override boolean running() { return true; }
-
         @Override boolean cancellable() { return true; }
 
         @Override boolean dispatches(boolean compensation) { return !compensation; }
@@ -37,32 +35,28 @@ enum InstanceState {
     },
 
     /** The saga reverse pass owns it: forward work has stopped, undo tasks are in flight. */
-    COMPENSATING(Liveness.LIVE, InstanceStatus.COMPENSATED, InstanceStatus.COMPENSATION_FAILED) {
+    COMPENSATING(InstanceStatus.COMPENSATED, InstanceStatus.COMPENSATION_FAILED) {
         @Override boolean dispatches(boolean compensation) { return compensation; }
     },
 
     /** A token reached a successful END and nothing was left running. */
-    COMPLETED(Liveness.TERMINAL),
+    COMPLETED(),
 
     /** Something unrecoverable, with nothing recorded to undo. */
-    FAILED(Liveness.TERMINAL),
+    FAILED(),
 
     /** Cancelled by a caller. Never compensates: only a failure starts the reverse pass. */
-    CANCELLED(Liveness.TERMINAL),
+    CANCELLED(),
 
     /** The reverse pass undid every recorded step. */
-    COMPENSATED(Liveness.TERMINAL),
+    COMPENSATED(),
 
     /** A compensator ran out of retries. Stuck, and deliberately loud. */
-    COMPENSATION_FAILED(Liveness.TERMINAL);
+    COMPENSATION_FAILED();
 
-    private enum Liveness { LIVE, TERMINAL }
-
-    private final Liveness liveness;
     private final Set<InstanceStatus> successors;
 
-    InstanceState(Liveness liveness, InstanceStatus... successors) {
-        this.liveness = liveness;
+    InstanceState(InstanceStatus... successors) {
         this.successors = successors.length == 0
                 ? Collections.unmodifiableSet(EnumSet.noneOf(InstanceStatus.class))
                 : Collections.unmodifiableSet(EnumSet.copyOf(Set.of(successors)));
@@ -73,17 +67,6 @@ enum InstanceState {
     }
 
     static { for (InstanceStatus s : InstanceStatus.values()) of(s); }   // every status has a state
-
-    /** Not finished: either running forward, or undoing. Mirrors {@code InstanceView.isTerminal}. */
-    boolean live() {
-        return liveness == Liveness.LIVE;
-    }
-
-    /** The forward flow is live: work may be reported against it, and a finished sub-workflow
-     *  may resume its parent's token here. Only RUNNING -- COMPENSATING is going backwards. */
-    boolean running() {
-        return false;
-    }
 
     /** A cancel request is honoured here; anywhere else it is ignored as already-decided. */
     boolean cancellable() {

@@ -8,6 +8,6 @@ package com.wiggle.core;
 public record ReportResult(String instanceStatus, long leaseExpiresAt, String nextTaskId) {
 
     public boolean running() {
-        return "RUNNING".equals(instanceStatus);
+        return InstanceStatus.runningByName(instanceStatus);
     }
 }

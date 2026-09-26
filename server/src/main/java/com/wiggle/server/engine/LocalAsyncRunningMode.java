@@ -92,8 +92,8 @@ public class LocalAsyncRunningMode extends LocalSyncRunningMode {
         if (t == null) {
             return RunResult.reject(EngineException.notFound("task"));
         }
-        if (!InstanceState.of(inst.status).running()) {
-            return RunResult.of(new ReportOutcome(inst.status.name(), 0, null));
+        if (!inst.status.running()) {
+            return RunResult.of(ReportOutcome.stopped(inst));
         }
         try {
             Tokens.requireLease(t, run.leaseOwner());

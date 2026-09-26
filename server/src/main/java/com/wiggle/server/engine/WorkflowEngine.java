@@ -4,7 +4,8 @@ import com.wiggle.core.*;
 import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.TokenStatus;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -146,9 +147,14 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Live (RUNNING) instance count grouped by the epoch encoded in each instance id -- this cell's
+     * Live instance count grouped by the epoch encoded in each instance id -- this cell's
      * contribution to the coordinator's retire census (R21). A DRAINING epoch that reaches zero here on
      * every cell can be retired. Legacy ids (no epoch) count as the genesis epoch 0.
+     *
+     * <p>Live means {@link InstanceStatus#live}, so COMPENSATING counts: its undo tokens are still
+     * dispatched against the epoch's ring, and an epoch retired underneath them strands the reverse
+     * pass. The statuses come from the enum rather than a list here, so a new live status is
+     * censused without anyone remembering to add it.
      */
     public Map<Long, Integer> liveCountByEpoch() {
         return queries.liveCountByEpoch();
@@ -389,10 +395,16 @@ public final class WorkflowEngine {
         return done;
     }
 
+    /** Whether a leader sweep should act on this item: its instance is still there, and still
+     *  running the forward flow. A swept item whose instance moved on is dropped, not failed. */
+    private static boolean sweepable(Instance inst) {
+        return inst != null && inst.status.running();
+    }
+
     private void settleObservedRun(Tx tx, String id) {
         Instance inst = tx.lockInstance(id).orElse(null);
         long now = System.currentTimeMillis();
-        if (inst == null || !InstanceState.of(inst.status).running() || inst.settleAt == null || inst.settleAt > now) return;
+        if (!sweepable(inst) || inst.settleAt == null || inst.settleAt > now) return;
         WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
                 .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
         boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
@@ -617,7 +629,7 @@ public final class WorkflowEngine {
 
     private void fireTimer(Tx tx, Token timer) {
         Instance inst = tx.lockInstance(timer.instanceId).orElse(null);
-        if (inst == null || !InstanceState.of(inst.status).running()) return;
+        if (!sweepable(inst)) return;
         Token t = tx.findToken(timer.id).orElse(null);
         if (t == null || t.status != TokenStatus.WAITING) return;
         long ts = System.currentTimeMillis();
@@ -639,7 +651,7 @@ public final class WorkflowEngine {
 
     private void escalateOrFailSignal(Tx tx, Token task) {
         Instance inst = tx.lockInstance(task.instanceId).orElse(null);
-        if (inst == null || !InstanceState.of(inst.status).running()) return;
+        if (!sweepable(inst)) return;
         Token t = tx.findToken(task.id).orElse(null);
         if (t == null || t.status != TokenStatus.AWAITING) return;
         long ts = System.currentTimeMillis();
@@ -670,7 +682,7 @@ public final class WorkflowEngine {
         Instance inst = tx.lockInstance(orphan.instanceId).orElse(null);
         if (inst == null) return;
         Token t = tx.findToken(orphan.id).orElse(null);
-        if (t == null || t.status != TokenStatus.RUNNING || t.leaseExpiresAt >= System.currentTimeMillis()) return;
+        if (t == null || !t.hasExpiredLeaseAt(System.currentTimeMillis())) return;
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
         long ts = System.currentTimeMillis();
         LOG.log(System.Logger.Level.DEBUG, () -> "reclaim: " + node.name() + " of instance " + inst.id
@@ -685,7 +697,7 @@ public final class WorkflowEngine {
             Instance inst = locked.inst();
             Token t = locked.token();
             Tokens.requireLease(t, leaseOwner);
-            if (!InstanceState.of(inst.status).live()) return;
+            if (!inst.status.live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
         });
@@ -705,7 +717,7 @@ public final class WorkflowEngine {
             instances.compensatorExhausted(tx, inst, node, compSeq, reason, now);
             return;
         }
-        if (InstanceState.of(inst.status).running()) {
+        if (inst.status.running()) {
             instances.fail(tx, inst, node.name() + ": " + reason, now);
         }
     }

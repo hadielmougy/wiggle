@@ -4,7 +4,7 @@ import com.wiggle.core.EmittedEvent;
 import com.wiggle.core.Json;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Tx;
 
 import java.util.LinkedHashMap;

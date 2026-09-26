@@ -3,9 +3,9 @@ package com.wiggle.server.engine;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Rows.TokenStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -99,10 +99,11 @@ class StateChartTest {
             assertTrue(s.successors().isEmpty(),
                     "TokenState." + s + " is settled but declares successors " + s.successors());
         }
-        for (InstanceState s : InstanceState.values()) {
+        for (InstanceStatus s : InstanceStatus.values()) {
             if (s.live()) continue;
-            assertTrue(s.successors().isEmpty(),
-                    "InstanceState." + s + " is terminal but declares successors " + s.successors());
+            assertTrue(InstanceState.of(s).successors().isEmpty(),
+                    "InstanceState." + s + " is terminal but declares successors "
+                            + InstanceState.of(s).successors());
         }
     }
 
@@ -179,7 +180,7 @@ class StateChartTest {
     }
 
     @Test
-    @DisplayName("InstanceState.live() and InstanceView.isTerminal() agree")
+    @DisplayName("InstanceStatus.live() and InstanceView.isTerminal() agree")
     void terminalClassificationMatchesInstanceView() {
         Set<String> fromCode = Arrays.stream(InstanceStatus.values())
                 .filter(s -> view(s).isTerminal())

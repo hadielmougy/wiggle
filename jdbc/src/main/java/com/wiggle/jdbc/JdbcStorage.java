@@ -5,6 +5,8 @@ import com.zaxxer.hikari.HikariDataSource;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
+import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
 import com.wiggle.server.store.Storage;
@@ -128,7 +130,7 @@ public final class JdbcStorage implements Storage {
               workflow       VARCHAR(200) NOT NULL,
               version        INT          NOT NULL,
               correlation_id VARCHAR(200),
-              status         VARCHAR(16)  NOT NULL,
+              status         VARCHAR(32)  NOT NULL,
               term_reason    VARCHAR(200),
               error          TEXT,
               context        TEXT         NOT NULL,
@@ -338,6 +340,14 @@ public final class JdbcStorage implements Storage {
             // step ambiguous from the outside.
             new Migration(17, "event-node", """
             ALTER TABLE wf_event ADD COLUMN IF NOT EXISTS node_id VARCHAR(64);
+            """),
+            // wf_instance.status was VARCHAR(16), and COMPENSATION_FAILED is nineteen characters:
+            // the one status a saga reaches when a compensator runs out of retries could not be
+            // written at all, so the update rolled back and the instance stayed COMPENSATING with
+            // its undo retrying forever. Only JDBC deployments hit it -- the in-memory store holds
+            // the enum, which is why every test passed. 32 leaves room for a longer status later.
+            new Migration(18, "instance-status-width", """
+            ALTER TABLE wf_instance ALTER COLUMN status TYPE VARCHAR(32);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */

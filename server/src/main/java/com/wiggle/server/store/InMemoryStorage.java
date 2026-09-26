@@ -1,7 +1,9 @@
 package com.wiggle.server.store;
 
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.*;
@@ -381,7 +383,7 @@ public final class InMemoryStorage implements Storage {
 
         @Override public List<Token> expiredLeases(long now, int max) {
             return tokens.values().stream()
-                    .filter(t -> t.status == TokenStatus.RUNNING && t.leaseExpiresAt > 0 && t.leaseExpiresAt < now)
+                    .filter(t -> t.hasExpiredLeaseAt(now))
                     .limit(max)
                     .map(Token::clone)
                     .toList();
@@ -448,8 +450,7 @@ public final class InMemoryStorage implements Storage {
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
             List<String> victims = instances.values().stream()
-                    .filter(i -> i.status != InstanceStatus.RUNNING
-                            && i.status != InstanceStatus.COMPENSATING && i.updatedAt < updatedBefore)
+                    .filter(i -> !i.status.live() && i.updatedAt < updatedBefore)
                     .limit(limit)
                     .map(i -> i.id)
                     .toList();

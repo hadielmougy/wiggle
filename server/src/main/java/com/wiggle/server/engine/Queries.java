@@ -4,7 +4,7 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.placement.IdCodec;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.server.store.Rows.InstanceStatus;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
 
@@ -18,7 +18,8 @@ import java.util.Set;
 /** Read-only views over the store and the poller roster. Nothing here moves a token. */
 final class Queries {
 
-    /** Cap on the live set scanned for the epoch census; a draining epoch shrinks, so this is ample. */
+    /** Cap per live status on the set scanned for the epoch census; a draining epoch shrinks, so
+     *  this is ample. */
     private static final int LIVE_CENSUS_CAP = 100_000;
 
     private final Storage storage;
@@ -61,9 +62,12 @@ final class Queries {
     Map<Long, Integer> liveCountByEpoch() {
         return storage.inTx(tx -> {
             Map<Long, Integer> out = new HashMap<>();
-            for (Instance i : tx.listInstances(null, InstanceStatus.RUNNING, LIVE_CENSUS_CAP)) {
-                long epoch = IdCodec.parse(i.id).map(IdCodec.Placement::epoch).orElse(0L);
-                out.merge(epoch, 1, Integer::sum);
+            for (InstanceStatus status : InstanceStatus.values()) {
+                if (!status.live()) continue;
+                for (Instance i : tx.listInstances(null, status, LIVE_CENSUS_CAP)) {
+                    long epoch = IdCodec.parse(i.id).map(IdCodec.Placement::epoch).orElse(0L);
+                    out.merge(epoch, 1, Integer::sum);
+                }
             }
             return out;
         });

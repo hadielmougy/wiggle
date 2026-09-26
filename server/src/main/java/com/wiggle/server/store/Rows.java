@@ -1,25 +1,13 @@
 package com.wiggle.server.store;
 
 import com.wiggle.core.Doc;
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.TokenStatus;
 
 /** Mutable storage rows. Deliberately dumb structs -- all invariants live in the engine. */
 public final class Rows {
     private Rows() {}
-
-    public enum InstanceStatus { RUNNING, COMPLETED, FAILED, CANCELLED,
-        COMPENSATING, COMPENSATED, COMPENSATION_FAILED }
-
-    public enum TokenStatus {
-        /** Dispatchable to a worker. */           READY,
-        /** Leased by a worker. */                 RUNNING,
-        /** Sleeping until availableAt. */         WAITING,
-        /** Awaiting an external/user completion. */ AWAITING,
-        /** Parked at a join barrier. */           JOINED,
-        /** Consumed. */                           DONE,
-        /** Terminally failed. */                  FAILED,
-        /** Abandoned because a sibling failed. */ CANCELLED
-    }
 
     public static final class Instance implements Cloneable {
         public String id;
@@ -84,6 +72,12 @@ public final class Rows {
         public long updatedAt;
 
         public String currentJoinGroup() {
+            return innermostJoinGroup(joinStack);
+        }
+
+        /** The innermost fork group of a raw join stack: its last segment, or null when unscoped.
+         *  Takes the string rather than a row, for the barrier counting arrivals by stack. */
+        public static String innermostJoinGroup(String joinStack) {
             if (joinStack == null || joinStack.isEmpty()) return null;
             int i = joinStack.lastIndexOf(',');
             return i < 0 ? joinStack : joinStack.substring(i + 1);
@@ -99,10 +93,20 @@ public final class Rows {
             return (joinStack == null || joinStack.isEmpty()) ? group : joinStack + "," + group;
         }
 
+        /** The attempt number a dispatch reports: {@code attempt} counts finished tries, so the
+         *  one about to run is the next. */
+        public int nextAttempt() {
+            return attempt + 1;
+        }
+
+        /** The lease this token holds has run out: it is leased, the lease had an expiry, and that
+         *  expiry has passed. A zero expiry means no lease was ever taken, not one long overdue. */
+        public boolean hasExpiredLeaseAt(long now) {
+            return status == TokenStatus.RUNNING && leaseExpiresAt > 0 && leaseExpiresAt < now;
+        }
+
         public boolean isActive() {
-            return status == TokenStatus.READY || status == TokenStatus.RUNNING
-                    || status == TokenStatus.WAITING || status == TokenStatus.AWAITING
-                    || status == TokenStatus.JOINED;
+            return status.active();
         }
 
         @Override public Token clone() {
