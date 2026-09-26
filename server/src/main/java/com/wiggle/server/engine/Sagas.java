@@ -47,7 +47,7 @@ final class Sagas {
      *  the reverse pass never chains. */
     static TaskActivation activation(Instance inst, Token t, String workerId, long until) {
         return new TaskActivation(t.id, inst.id, inst.workflow, inst.version,
-                t.nodeId, t.activity, t.activity, NodeKind.TASK, t.attempt + 1, until, workerId,
+                t.nodeId, t.activity, t.activity, NodeKind.TASK, t.nextAttempt(), until, workerId,
                 t.payload.staged(), null, 0, null, ExecutionMode.SERVER);
     }
 

@@ -105,6 +105,12 @@ public final class Rows {
             return (joinStack == null || joinStack.isEmpty()) ? group : joinStack + "," + group;
         }
 
+        /** The attempt number a dispatch reports: {@code attempt} counts finished tries, so the
+         *  one about to run is the next. */
+        public int nextAttempt() {
+            return attempt + 1;
+        }
+
         public boolean isActive() {
             return status == TokenStatus.READY || status == TokenStatus.RUNNING
                     || status == TokenStatus.WAITING || status == TokenStatus.AWAITING

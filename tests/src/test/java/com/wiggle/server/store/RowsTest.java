@@ -57,6 +57,15 @@ class RowsTest {
         }
 
         @Test
+        @DisplayName("nextAttempt is the try about to run, one past the finished ones")
+        void nextAttemptIsOnePastFinished() {
+            Token t = new Token();
+            assertEquals(1, t.nextAttempt(), "a fresh token has run nothing, so it is on its first try");
+            t.attempt = 3;
+            assertEquals(4, t.nextAttempt());
+        }
+
+        @Test
         @DisplayName("innermostJoinGroup parses a raw stack exactly as currentJoinGroup reads the row")
         void innermostJoinGroupIsTheSameParse() {
             for (String stack : new String[] {null, "", "g1", "g1,g2", "g1,g2,g3", ",g2", "g1,"}) {
