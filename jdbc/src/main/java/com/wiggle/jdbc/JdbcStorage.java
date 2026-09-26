@@ -1157,25 +1157,37 @@ public final class JdbcStorage implements Storage {
          * set the dispatch index already found, so it costs a predicate and no join -- wf_token
          * carries both columns.
          */
-        private static void appendVersions(StringBuilder sql, Set<WorkflowVersion> versions) {
-            if (versions == null || versions.isEmpty()) return;
-            sql.append(" AND (");
+        /** The (workflow, version) filter: one OR-ed pair per version, each named by its position
+         *  so the clause and its binds cannot drift apart. */
+        private static String versionsClause(Set<WorkflowVersion> versions) {
+            if (versions == null || versions.isEmpty()) return "";
+            StringBuilder sql = new StringBuilder(" AND (");
             for (int i = 0; i < versions.size(); i++) {
                 if (i > 0) sql.append(" OR ");
-                sql.append("(workflow=? AND version=?)");
+                sql.append("(workflow=:wf").append(i).append(" AND version=:ver").append(i).append(")");
             }
-            sql.append(")");
+            return sql.append(")").toString();
         }
 
-        /** Binds what {@link #appendVersions} appended; same set, so the same iteration order. */
-        private static int bindVersions(PreparedStatement p, int idx, Set<WorkflowVersion> versions)
-                throws SQLException {
-            if (versions == null || versions.isEmpty()) return idx;
+        private static void bindVersions(Query q, Set<WorkflowVersion> versions) {
+            if (versions == null || versions.isEmpty()) return;
+            int i = 0;
             for (WorkflowVersion v : versions) {
-                p.setString(idx++, v.workflow());
-                p.setInt(idx++, v.version());
+                q.bind("wf" + i, v.workflow());
+                q.bind("ver" + i, v.version());
+                i++;
             }
-            return idx;
+        }
+
+        /** The claim candidate filter, shared by both dialect paths: ready task tokens that are due,
+         *  optionally narrowed to the worker's queues and its bound versions. {@code %s} is the
+         *  select list -- the ids alone where the update reads them back, whole rows otherwise. */
+        private static String claimFilter(Set<String> queues, Set<WorkflowVersion> versions) {
+            return "SELECT %s FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
+                    + " AND available_at<=:now"
+                    + (queues != null && !queues.isEmpty() ? " AND queue IN (<queues>)" : "")
+                    + versionsClause(versions)
+                    + " ORDER BY available_at, id LIMIT :max";
         }
 
         /**
@@ -1188,77 +1200,52 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
                                                      Set<WorkflowVersion> versions, int max,
                                                      long now, long leaseUntil) {
-            StringBuilder pick = new StringBuilder(
-                    "SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
-            if (queues != null && !queues.isEmpty()) {
-                pick.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
-            }
-            appendVersions(pick, versions);
-            pick.append(" ORDER BY available_at, id LIMIT ? FOR UPDATE SKIP LOCKED");
-            String sql = "UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?,updated_at=?," +
-                    "started_at=?,finished_at=NULL WHERE id IN (" + pick + ") RETURNING *";
-            try (PreparedStatement p = ps(sql)) {
-                int idx = 1;
-                p.setString(idx++, workerId);   // SET lease_owner
-                p.setLong(idx++, leaseUntil);   // SET lease_expires
-                p.setLong(idx++, now);          // SET updated_at
-                p.setLong(idx++, now);          // SET started_at: the step's clock starts when a worker takes it
-                p.setLong(idx++, now);          // WHERE available_at<=?
-                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
-                idx = bindVersions(p, idx, versions);
-                p.setInt(idx, max);             // LIMIT
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            String pick = claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
+            Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+                    + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
+                    + " WHERE id IN (" + pick + ") RETURNING *");
+            q.bind("owner", workerId)
+                    .bind("until", leaseUntil)
+                    // updated_at, started_at and the due cutoff are all this instant
+                    .bind("now", now)
+                    .bind("max", max);
+            if (queues != null && !queues.isEmpty()) q.bindList("queues", List.copyOf(queues));
+            bindVersions(q, versions);
+            return q.mapTo(Token.class).list();
         }
 
         /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
         private List<Token> claimCompareAndSet(String workerId, Set<String> queues,
                                                Set<WorkflowVersion> versions, int max,
                                                long now, long leaseUntil) {
-            StringBuilder sql = new StringBuilder(
-                    "SELECT * FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=?");
-            if (queues != null && !queues.isEmpty()) {
-                sql.append(" AND queue IN (").append("?,".repeat(queues.size() - 1)).append("?)");
-            }
-            appendVersions(sql, versions);
-            sql.append(" ORDER BY available_at, id LIMIT ?");
-            List<Token> candidates = new ArrayList<>();
-            try (PreparedStatement p = ps(sql.toString())) {
-                int idx = 1;
-                p.setLong(idx++, now);
-                if (queues != null && !queues.isEmpty()) for (String q : queues) p.setString(idx++, q);
-                idx = bindVersions(p, idx, versions);
-                p.setInt(idx, max * 4); // over-fetch: some candidates will lose the CAS race
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) candidates.add(readToken(rs));
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            Query pick = h.createQuery(claimFilter(queues, versions).formatted("*"));
+            pick.bind("now", now)
+                    .bind("max", max * 4);   // over-fetch: some candidates will lose the CAS race
+            if (queues != null && !queues.isEmpty()) pick.bindList("queues", List.copyOf(queues));
+            bindVersions(pick, versions);
+            List<Token> candidates = pick.mapTo(Token.class).list();
 
             List<Token> claimed = new ArrayList<>();
-            try (PreparedStatement upd = ps("UPDATE wf_token SET status='RUNNING',lease_owner=?,lease_expires=?," +
-                    "updated_at=?,started_at=?,finished_at=NULL WHERE id=? AND status='READY'")) {
-                for (Token t : candidates) {
-                    if (claimed.size() >= max) break;
-                    upd.setString(1, workerId);
-                    upd.setLong(2, leaseUntil);
-                    upd.setLong(3, now);
-                    upd.setLong(4, now);
-                    upd.setString(5, t.id);
-                    if (upd.executeUpdate() == 1) {
-                        t.status = TokenStatus.RUNNING;
-                        t.leaseOwner = workerId;
-                        t.leaseExpiresAt = leaseUntil;
-                        t.startedAt = now;
-                        t.finishedAt = null;
-                        t.updatedAt = now;
-                        claimed.add(t);
-                    }
+            for (Token t : candidates) {
+                if (claimed.size() >= max) break;
+                int won = h.createUpdate("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+                                + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
+                                + " WHERE id=:id AND status='READY'")
+                        .bind("owner", workerId)
+                        .bind("until", leaseUntil)
+                        .bind("now", now)
+                        .bind("id", t.id)
+                        .execute();
+                if (won == 1) {
+                    t.status = TokenStatus.RUNNING;
+                    t.leaseOwner = workerId;
+                    t.leaseExpiresAt = leaseUntil;
+                    t.startedAt = now;
+                    t.finishedAt = null;
+                    t.updatedAt = now;
+                    claimed.add(t);
                 }
-            } catch (SQLException e) { throw wrap(e); }
+            }
             return claimed;
         }
 
