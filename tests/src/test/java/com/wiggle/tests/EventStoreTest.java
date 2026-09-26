@@ -15,8 +15,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * The event log's storage contract, against both backends: the in-memory store and the real SQL
- * (H2 by default, a live database when one is configured). Every assertion is relative to what
- * the log held when the test started, so a shared database other tests also write to is fine.
+ * (H2 by default, a live database when one is configured).
+ *
+ * <p>A shared database other tests also write to is fine, but only because every assertion is made
+ * relative to what the log already held. Reads are scoped by the head seq captured on entry. The
+ * trim cannot be scoped that way -- retention is global by nature, deleting by age and
+ * acknowledgement across the whole log -- so it is checked against the rows that qualify at that
+ * moment rather than against a fixed number.
  */
 class EventStoreTest {
 
@@ -105,9 +110,25 @@ class EventStoreTest {
         long slowest = storage.inTx(tx -> tx.oldestAckedSeq());
         assertTrue(slowest <= first, "the slowest cursor is what retention sees");
 
-        // Retention: below the cutoff and at or below the given seq, oldest first.
-        int trimmed = storage.inTx(tx -> tx.deleteEvents(now - 9_500, first, 100));
-        assertEquals(1, trimmed, "only the entry that is both old enough and acknowledged");
+        // Retention: below the cutoff and at or below the given seq, oldest first. Unlike every read
+        // above, a trim cannot be scoped by a watermark -- it deletes by age and acknowledgement
+        // across the whole log. On a shared database that log also holds entries other tests and
+        // earlier runs left behind, all of them older and lower-seq than this test's, so a fixed
+        // limit is spent on those and never reaches its own entry. Everything below is therefore
+        // relative to how many rows qualify at that moment, counted in the same transaction that
+        // trims them so nothing can be appended in between.
+        long cutoff = now - 9_500;
+        int[] pass = storage.inTx(tx -> {
+            int qualifying = (int) tx.eventsAfter(0, 100_000).stream()
+                    .filter(e -> e.createdAt() < cutoff && e.seq() <= first)
+                    .count();
+            int bounded = tx.deleteEvents(cutoff, first, 1);
+            int rest = tx.deleteEvents(cutoff, first, qualifying);
+            return new int[] {qualifying, bounded, rest};
+        });
+        assertTrue(pass[0] >= 1, "this test's own backdated entry qualifies, whatever else does");
+        assertEquals(1, pass[1], "the limit bounds a trim to one entry");
+        assertEquals(pass[0] - 1, pass[2], "and the rest go on the next pass, none of them twice");
         List<Rows.Event> left = storage.inTx(tx -> tx.eventsAfter(base, 100));
         assertEquals(List.of(second, emitted, fresh), left.stream().map(Rows.Event::seq).toList());
     }
