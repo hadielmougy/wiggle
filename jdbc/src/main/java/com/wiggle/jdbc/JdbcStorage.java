@@ -57,7 +57,11 @@ public final class JdbcStorage implements Storage {
         this.ds = new HikariDataSource(cfg);
         this.jdbi = Jdbi.create(this.ds)
                 .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
-                .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs));
+                .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs))
+                .registerRowMapper(Rows.Event.class, (rs, ctx) -> readEvent(rs))
+                .registerRowMapper(Rows.EventCursor.class, (rs, ctx) -> readCursor(rs))
+                .registerRowMapper(Rows.Schedule.class, (rs, ctx) -> readSchedule(rs))
+                .registerRowMapper(ServerNode.class, (rs, ctx) -> readNode(rs));
     }
 
     private Connection borrow() {
@@ -619,6 +623,41 @@ public final class JdbcStorage implements Storage {
         t.createdAt = rs.getLong("created_at");
         t.updatedAt = rs.getLong("updated_at");
         return t;
+    }
+
+    static ServerNode readNode(ResultSet rs) throws SQLException {
+        ServerNode n = new ServerNode();
+        n.id = rs.getString("id");
+        n.name = rs.getString("name");
+        n.firstHeartbeat = rs.getLong("first_heartbeat");
+        n.lastHeartbeat = rs.getLong("last_heartbeat");
+        n.workers = rs.getInt("workers");
+        n.leader = rs.getInt("leader") == 1;
+        return n;
+    }
+
+    static Rows.Schedule readSchedule(ResultSet rs) throws SQLException {
+        Rows.Schedule s = new Rows.Schedule();
+        s.id = rs.getString("id");
+        s.workflow = rs.getString("workflow");
+        s.intervalMillis = rs.getLong("interval_millis");
+        s.cron = rs.getString("cron");
+        s.context = Doc.parse(rs.getString("context"));
+        s.nextFireAt = rs.getLong("next_fire_at");
+        s.createdAt = rs.getLong("created_at");
+        return s;
+    }
+
+    static Rows.Event readEvent(ResultSet rs) throws SQLException {
+        return new Rows.Event(rs.getLong("seq"), rs.getString("instance_id"), rs.getString("workflow"),
+                rs.getInt("version"), rs.getString("correlation_id"), rs.getString("type"),
+                rs.getString("node_id"), rs.getInt("payload_ver"), rs.getString("payload"),
+                rs.getLong("created_at"));
+    }
+
+    static Rows.EventCursor readCursor(ResultSet rs) throws SQLException {
+        return new Rows.EventCursor(rs.getString("consumer"), rs.getLong("acked_seq"),
+                rs.getLong("last_seen"), rs.getLong("created_at"));
     }
 
     public static final class StorageException extends RuntimeException {
@@ -1244,15 +1283,11 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> pendingSignals(int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' " +
-                    "ORDER BY created_at LIMIT ?")) {
-                p.setInt(1, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Token> out = new ArrayList<>();
-                    while (rs.next()) out.add(readToken(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' "
+                            + "ORDER BY created_at LIMIT :max")
+                    .bind("max", max)
+                    .mapTo(Token.class)
+                    .list();
         }
 
         @Override public List<Token> dueSignals(long now, int max) {
@@ -1272,69 +1307,55 @@ public final class JdbcStorage implements Storage {
             // Upsert by id: the engine reuses the existing id when a schedule for the same
             // workflow already exists, so a re-create updates the row rather than duplicating it.
             // The seven bound parameters are identical across dialects; only the SQL text differs.
-            try (PreparedStatement p = ps(dialect.scheduleUpsert())) {
-                p.setString(1, s.id); p.setString(2, s.workflow); p.setLong(3, s.intervalMillis);
-                p.setString(4, s.cron); p.setString(5, s.context.json());
-                p.setLong(6, s.nextFireAt); p.setLong(7, s.createdAt);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            // The dialect supplies the SQL with positional parameters in insert-column order, so
+            // this one stays positional: the statement text is the dialect's to spell, not ours.
+            h.createUpdate(dialect.scheduleUpsert())
+                    .bind(0, s.id)
+                    .bind(1, s.workflow)
+                    .bind(2, s.intervalMillis)
+                    .bind(3, s.cron)
+                    .bind(4, s.context.json())
+                    .bind(5, s.nextFireAt)
+                    .bind(6, s.createdAt)
+                    .execute();
         }
 
         @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE workflow=?")) {
-                p.setString(1, workflow);
-                try (ResultSet rs = p.executeQuery()) {
-                    return rs.next() ? java.util.Optional.of(readSchedule(rs)) : java.util.Optional.empty();
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_schedule WHERE workflow=:workflow")
+                    .bind("workflow", workflow)
+                    .mapTo(Rows.Schedule.class)
+                    .findFirst();
         }
 
         @Override public void deleteSchedule(String id) {
-            try (PreparedStatement p = ps("DELETE FROM wf_schedule WHERE id=?")) {
-                p.setString(1, id);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("DELETE FROM wf_schedule WHERE id=:id").bind("id", id).execute();
         }
 
         @Override public List<Rows.Schedule> schedules() {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule ORDER BY id");
-                 ResultSet rs = p.executeQuery()) {
-                List<Rows.Schedule> out = new ArrayList<>();
-                while (rs.next()) out.add(readSchedule(rs));
-                return out;
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_schedule ORDER BY id")
+                    .mapTo(Rows.Schedule.class)
+                    .list();
         }
 
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            try (PreparedStatement p = ps("SELECT * FROM wf_schedule WHERE next_fire_at<=? " +
-                    "ORDER BY next_fire_at LIMIT ?")) {
-                p.setLong(1, now); p.setInt(2, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    List<Rows.Schedule> out = new ArrayList<>();
-                    while (rs.next()) out.add(readSchedule(rs));
-                    return out;
-                }
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_schedule WHERE next_fire_at<=:now "
+                            + "ORDER BY next_fire_at LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .mapTo(Rows.Schedule.class)
+                    .list();
         }
 
         @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
-            try (PreparedStatement p = ps("UPDATE wf_schedule SET next_fire_at=? WHERE id=? AND next_fire_at=?")) {
-                p.setLong(1, nextFireAt); p.setString(2, id); p.setLong(3, expectedFireAt);
-                return p.executeUpdate() == 1;
-            } catch (SQLException e) { throw wrap(e); }
+            // Compare-and-set on the fire time: exactly one node moves a schedule forward.
+            return h.createUpdate("UPDATE wf_schedule SET next_fire_at=:next "
+                            + "WHERE id=:id AND next_fire_at=:expected")
+                    .bind("next", nextFireAt)
+                    .bind("id", id)
+                    .bind("expected", expectedFireAt)
+                    .execute() == 1;
         }
 
-        private static Rows.Schedule readSchedule(ResultSet rs) throws SQLException {
-            Rows.Schedule s = new Rows.Schedule();
-            s.id = rs.getString("id");
-            s.workflow = rs.getString("workflow");
-            s.intervalMillis = rs.getLong("interval_millis");
-            s.cron = rs.getString("cron");
-            s.context = Doc.parse(rs.getString("context"));
-            s.nextFireAt = rs.getLong("next_fire_at");
-            s.createdAt = rs.getLong("created_at");
-            return s;
-        }
 
         @Override public Rows.QueueDepth queueDepth(long now) {
             try (PreparedStatement p = ps("SELECT COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token " +
@@ -1401,28 +1422,15 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<ServerNode> nodes() {
-            try (PreparedStatement p = ps("SELECT * FROM wf_node ORDER BY first_heartbeat, id");
-                 ResultSet rs = p.executeQuery()) {
-                List<ServerNode> out = new ArrayList<>();
-                while (rs.next()) {
-                    ServerNode n = new ServerNode();
-                    n.id = rs.getString("id");
-                    n.name = rs.getString("name");
-                    n.firstHeartbeat = rs.getLong("first_heartbeat");
-                    n.lastHeartbeat = rs.getLong("last_heartbeat");
-                    n.workers = rs.getInt("workers");
-                    n.leader = rs.getInt("leader") == 1;
-                    out.add(n);
-                }
-                return out;
-            } catch (SQLException e) { throw wrap(e); }
+            return h.createQuery("SELECT * FROM wf_node ORDER BY first_heartbeat, id")
+                    .mapTo(ServerNode.class)
+                    .list();
         }
 
         @Override public void deleteNodesOlderThan(long before) {
-            try (PreparedStatement p = ps("DELETE FROM wf_node WHERE last_heartbeat<?")) {
-                p.setLong(1, before);
-                p.executeUpdate();
-            } catch (SQLException e) { throw wrap(e); }
+            h.createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
+                    .bind("before", before)
+                    .execute();
         }
 
         @Override public void setLeader(String nodeId, boolean leader) {
@@ -1547,36 +1555,27 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
-            List<Rows.Event> out = new ArrayList<>();
-            try (PreparedStatement p = ps("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
-                    + "payload_ver,payload,created_at FROM wf_event WHERE seq>? AND created_at<? ORDER BY seq LIMIT ?")) {
-                p.setLong(1, afterSeq); p.setLong(2, createdBefore); p.setInt(3, max);
-                try (ResultSet rs = p.executeQuery()) {
-                    while (rs.next()) {
-                        out.add(new Rows.Event(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getInt(4),
-                                rs.getString(5), rs.getString(6), rs.getString(7), rs.getInt(8), rs.getString(9),
-                                rs.getLong(10)));
-                    }
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
-            return out;
+            return h.createQuery("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
+                            + "payload_ver,payload,created_at FROM wf_event "
+                            + "WHERE seq>:after AND created_at<:before ORDER BY seq LIMIT :max")
+                    .bind("after", afterSeq)
+                    .bind("before", createdBefore)
+                    .bind("max", max)
+                    .mapTo(Rows.Event.class)
+                    .list();
         }
 
         @Override public long latestEventSeq() {
-            try (PreparedStatement p = ps("SELECT COALESCE(MAX(seq),0) FROM wf_event");
-                 ResultSet rs = p.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0;
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_event").mapTo(Long.class).one();
         }
 
         @Override public Rows.EventCursor eventCursor(String consumer) {
-            try (PreparedStatement p = ps("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor WHERE consumer=?")) {
-                p.setString(1, consumer);
-                try (ResultSet rs = p.executeQuery()) {
-                    if (!rs.next()) return null;
-                    return new Rows.EventCursor(rs.getString(1), rs.getLong(2), rs.getLong(3), rs.getLong(4));
-                }
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createQuery("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor "
+                            + "WHERE consumer=:consumer")
+                    .bind("consumer", consumer)
+                    .mapTo(Rows.EventCursor.class)
+                    .findFirst()
+                    .orElse(null);
         }
 
         @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
@@ -1600,21 +1599,23 @@ public final class JdbcStorage implements Storage {
         }
 
         /** Moves an existing cursor forward (never back) and stamps it; 0 when the consumer has none. */
+        /** An ack never moves a cursor back, so the new seq appears twice in the CASE. One name,
+         *  bound once, rather than two positions that have to hold the same value. */
         private int moveCursor(String consumer, long ackedSeq, long now) {
-            try (PreparedStatement p = ps("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<? THEN ? "
-                    + "ELSE acked_seq END, last_seen=? WHERE consumer=?")) {
-                p.setLong(1, ackedSeq); p.setLong(2, ackedSeq); p.setLong(3, now); p.setString(4, consumer);
-                return p.executeUpdate();
-            } catch (SQLException ex) { throw wrap(ex); }
+            return h.createUpdate("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<:acked "
+                            + "THEN :acked ELSE acked_seq END, last_seen=:now WHERE consumer=:consumer")
+                    .bind("acked", ackedSeq)
+                    .bind("now", now)
+                    .bind("consumer", consumer)
+                    .execute();
         }
 
         @Override public Long oldestAckedSeq() {
-            try (PreparedStatement p = ps("SELECT MIN(acked_seq) FROM wf_event_cursor");
-                 ResultSet rs = p.executeQuery()) {
-                if (!rs.next()) return null;
-                long v = rs.getLong(1);
-                return rs.wasNull() ? null : v;
-            } catch (SQLException ex) { throw wrap(ex); }
+            // MIN over no cursors is a row holding NULL, so the absence comes from the value.
+            return h.createQuery("SELECT MIN(acked_seq) FROM wf_event_cursor")
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElse(null);
         }
 
         @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
