@@ -140,6 +140,26 @@ class FlowApiRegressionTest {
         assertEquals(true, out.get("after"), "and the join was not stranded");
     }
 
+    @Test
+    @DisplayName("a gate after a step in an arm: the step's work reaches the merge, nothing past the gate does")
+    void gateAfterAStepInBranchStillContributesThatStep() throws Exception {
+        BranchStepThenGate h = new BranchStepThenGate();
+
+        FlowSpec typed = FlowSpec.define("branch-step-gate", 1, Map.class, BranchStepThenGateSteps.class, (f, s) -> {
+            var seeded = f.thenApply(s::seed);
+            var gated = seeded.thenApply(s::reserve).thenFilter(s::gate).thenApply(s::afterGate);
+            var other = seeded.thenApply(s::sibling);
+            return Wiggle.allOf(gated, other).combineWithContext(s::merge).thenApply(s::after);
+        });
+
+        Map<String, Object> out = run(typed, h, Map.of());
+        assertEquals(true, out.get("reserved"), "the closed arm contributes its view as of the gate");
+        assertNull(out.get("tail"), "nothing past the closed gate ran");
+        assertEquals(1L, out.get("seed"), "the pre-fork context came back through the join");
+        assertEquals(true, out.get("siblingRan"), "its sibling still ran");
+        assertEquals(true, out.get("after"), "and the join was not stranded");
+    }
+
 
     @Test
     @DisplayName("a per-step retry policy retries a transient failure")
@@ -250,6 +270,17 @@ class FlowApiRegressionTest {
         Map<String, Object> after(Map<String, Object> c);
     }
 
+    interface BranchStepThenGateSteps {
+        Map<String, Object> seed(Map<String, Object> c);
+        Map<String, Object> reserve(Map<String, Object> c);
+        boolean gate(Map<String, Object> c);
+        Map<String, Object> afterGate(Map<String, Object> c);
+        Map<String, Object> sibling(Map<String, Object> c);
+        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                 Map<String, Object> gated, Map<String, Object> other);
+        Map<String, Object> after(Map<String, Object> c);
+    }
+
     interface RetrySteps {
         Map<String, Object> flaky(Map<String, Object> c);
     }
@@ -317,6 +348,22 @@ class FlowApiRegressionTest {
         public boolean gate(Map<String, Object> c) { return false; }
         public Map<String, Object> skipped(Map<String, Object> c) { return Scenarios.put(c, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> c) { return Scenarios.put(c, "ran", true); }
+        public Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+                                         Map<String, Object> gated, Map<String, Object> other) {
+            return Scenarios.fold(base, gated, other);
+        }
+        public Map<String, Object> after(Map<String, Object> c) { return Scenarios.put(c, "after", true); }
+    }
+
+    // The gated arm runs a step BEFORE its guard, so its staged result is that step's return -- the
+    // guard itself never touches the view, and the step past it never runs.
+    @com.wiggle.client.worker.ForFlow("branch-step-gate")
+    public static final class BranchStepThenGate implements BranchStepThenGateSteps {
+        public Map<String, Object> seed(Map<String, Object> c) { return Scenarios.put(c, "seed", 1L); }
+        public Map<String, Object> reserve(Map<String, Object> c) { return Scenarios.put(c, "reserved", true); }
+        public boolean gate(Map<String, Object> c) { return false; }
+        public Map<String, Object> afterGate(Map<String, Object> c) { return Scenarios.put(c, "tail", true); }
+        public Map<String, Object> sibling(Map<String, Object> c) { return Scenarios.put(c, "siblingRan", true); }
         public Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
                                          Map<String, Object> gated, Map<String, Object> other) {
             return Scenarios.fold(base, gated, other);
