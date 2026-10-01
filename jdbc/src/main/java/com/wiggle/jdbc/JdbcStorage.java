@@ -15,6 +15,8 @@ import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
 import com.wiggle.server.store.Storage;
+import com.wiggle.server.store.StorageException;
+import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.Tx;
 
 import java.nio.charset.StandardCharsets;
@@ -35,10 +37,19 @@ import java.util.function.Function;
  */
 public final class JdbcStorage implements Storage {
 
+    private static final System.Logger LOG = System.getLogger(JdbcStorage.class.getName());
+
     private final Dialect dialect;
     private final HikariDataSource ds;
     private final Jdbi jdbi;
     private final String fingerprint;
+
+    /** Attempts a transaction gets when it rolled back on a momentary failure; 1 disables the replay. */
+    private final int txAttempts = (int) envLong("wiggle.jdbc.txAttempts", "WIGGLE_JDBC_TX_ATTEMPTS", 3);
+
+    /** Base pause before a replay; attempt n waits {@code n x} this, so contention spreads out. */
+    private final long txRetryDelayMillis =
+            envLong("wiggle.jdbc.txRetryDelayMillis", "WIGGLE_JDBC_TX_RETRY_DELAY_MILLIS", 50);
 
     /** Explicit-dialect constructor used by the per-database modules. */
     public JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect) {
@@ -68,8 +79,18 @@ public final class JdbcStorage implements Storage {
         try {
             return ds.getConnection();
         } catch (SQLException e) {
-            throw new StorageException("cannot obtain connection", e);
+            throw new StorageException("cannot obtain connection", e, classify(e));
         }
+    }
+
+    /** {@link Classification#TRANSIENT} if the dialect recognises a momentary failure anywhere in the
+     *  cause chain, {@link Classification#PERMANENT} otherwise. Never answers {@code AMBIGUOUS}: only
+     *  the commit boundary knows that, and {@link #attemptTx} labels it there. */
+    private Classification classify(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql && dialect.isTransient(sql)) return Classification.TRANSIENT;
+        }
+        return Classification.PERMANENT;
     }
 
     /** Stable per-database identity: every node pointed at this JDBC URL shares it, distinct URLs differ. */
@@ -83,6 +104,18 @@ public final class JdbcStorage implements Storage {
             return sb.toString();
         } catch (Exception e) {
             return "db-" + Integer.toHexString(s.hashCode());   // never fails routing on a hash quirk
+        }
+    }
+
+    /** A system property first, then the environment: the property is how a test shortens a bound. */
+    private static long envLong(String prop, String env, long def) {
+        String v = System.getProperty(prop);
+        if (v == null || v.isBlank()) v = System.getenv(env);
+        if (v == null || v.isBlank()) return def;
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            return def;
         }
     }
 
@@ -393,7 +426,7 @@ public final class JdbcStorage implements Storage {
             c.commit();   // also releases the migration lock held for the duration
         } catch (SQLException e) {
             rollback(c);
-            throw new StorageException("migration failed", e);
+            throw new StorageException("migration failed", e, classify(e));
         } finally {
             release(c);
         }
@@ -540,24 +573,86 @@ public final class JdbcStorage implements Storage {
     }
 
     /**
-     * JDBI borrows the connection and hands it back to the pool when the handle closes; the
-     * transaction stays this store's own, as it always was. Nothing calls {@code handle.begin()},
-     * so there is one owner of the commit boundary and not two.
+     * Runs {@code work} in one transaction, replaying it on a momentary database failure.
+     *
+     * <p>A replay is only ever offered where the attempt provably applied nothing: the failure came
+     * out of a statement, the transaction rolled back, and the dialect calls that failure transient
+     * (connection loss, a pool timeout, a deadlock victim, a serialization failure). Those replays
+     * are what make a database blip invisible to a caller instead of a failed workflow step. A failed
+     * <em>commit</em> is never replayed -- the work may be durable -- and nothing else is either.
+     *
+     * <p>{@code work} must therefore be re-runnable against a fresh {@link Tx}: it may read, write
+     * and throw, but it must not depend on in-process state it mutated on the previous attempt. Every
+     * engine body satisfies this by construction, since each one re-reads the rows it works from.
+     * {@code wiggle.jdbc.txAttempts} / {@code WIGGLE_JDBC_TX_ATTEMPTS} bounds the replays (read once
+     * per store, at construction); 1 turns them off.
      */
     @Override public <R> R inTx(Function<Tx, R> work) {
-        try (Handle h = jdbi.open()) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return attemptTx(work);
+            } catch (StorageException e) {
+                if (!e.repeatable() || attempt >= txAttempts) throw e;
+                int a = attempt;
+                LOG.log(System.Logger.Level.DEBUG, () -> "transaction rolled back on a transient failure ("
+                        + e.getMessage() + "); replaying, attempt " + (a + 1) + " of " + txAttempts);
+                pauseBeforeReplay(attempt, e);
+            }
+        }
+    }
+
+    /**
+     * One attempt. JDBI borrows the connection and hands it back to the pool when the handle closes;
+     * the transaction stays this store's own, as it always was. Nothing calls {@code handle.begin()},
+     * so there is one owner of the commit boundary and not two.
+     */
+    private <R> R attemptTx(Function<Tx, R> work) {
+        try (Handle h = open()) {
             Connection c = h.getConnection();
             try {
                 R r = work.apply(new JdbcTx(h, dialect));
                 c.commit();
                 return r;
             } catch (SQLException e) {
+                // Only the commit above throws a checked SQLException here, and its outcome is
+                // unknown: the rollback may be a no-op over work that is already durable.
                 rollback(c);
-                throw new StorageException("commit failed", e);
+                throw new StorageException("commit failed", e, Classification.AMBIGUOUS);
             } catch (RuntimeException e) {
                 rollback(c);
-                throw e;
+                throw labelled(e);
             }
+        }
+    }
+
+    /** A handle, with a pool timeout or a dead connection reported as the transient failure it is. */
+    private Handle open() {
+        try {
+            return jdbi.open();
+        } catch (RuntimeException e) {
+            throw new StorageException("cannot obtain connection", e, classify(e));
+        }
+    }
+
+    /** A transient statement failure, re-raised as a {@link StorageException} the replay above can
+     *  recognise. Anything else -- including a {@code StorageException} already classified by the
+     *  statement that raised it -- passes through untouched. */
+    private RuntimeException labelled(RuntimeException e) {
+        if (e instanceof StorageException) return e;
+        return classify(e) == Classification.TRANSIENT
+                ? new StorageException(e.getMessage(), e, Classification.TRANSIENT) : e;
+    }
+
+    /** Waits out a transient failure before replaying. An interrupt abandons the replay and surfaces
+     *  the original failure, with the thread's interrupt flag restored. */
+    private void pauseBeforeReplay(int attempt, StorageException failure) {
+        long delay = txRetryDelayMillis * attempt;
+        if (delay <= 0) return;
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw failure;
         }
     }
 
@@ -660,12 +755,6 @@ public final class JdbcStorage implements Storage {
                 rs.getLong("last_seen"), rs.getLong("created_at"));
     }
 
-    public static final class StorageException extends RuntimeException {
-        private static final long serialVersionUID = 1L;
-
-        public StorageException(String m, Throwable c) { super(m, c); }
-    }
-
     private static final class JdbcTx implements Tx {
         private final Handle h;
         private final Connection c;
@@ -679,7 +768,10 @@ public final class JdbcStorage implements Storage {
 
         private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
 
-        private static StorageException wrap(SQLException e) { return new StorageException(e.getMessage(), e); }
+        private StorageException wrap(SQLException e) {
+            return new StorageException(e.getMessage(), e, dialect.isTransient(e)
+                    ? Classification.TRANSIENT : Classification.PERMANENT);
+        }
 
         /** JDBI reports a failed statement as an unchecked exception carrying the driver's
          *  SQLException somewhere in its cause chain; the dialect still decides what counts. */
