@@ -568,6 +568,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_SCHEMA_MODE` | `apply` | `apply` runs pending migrations on startup; `verify` applies nothing and fails fast if the schema is behind or has drifted (DBA/CI-owned schema) |
 | `WIGGLE_MIGRATE_ONLY` | `false` | `true` = apply migrations and exit (a one-shot job; then run the app with `WIGGLE_SCHEMA_MODE=verify`) |
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP max pool size |
+| `WIGGLE_JDBC_TX_ATTEMPTS` | `3` | replays for a transaction that rolled back on a momentary database failure; `1` disables |
 | `WIGGLE_LEASE_MILLIS` | `30000` | task lease before a stalled step is reclaimed |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `20000` | max server-side block of a worker poll |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `1000` | housekeeping / dispatch loop cadence |

@@ -138,7 +138,38 @@ never fails, so nothing alerts. See
 [backlog coverage](/docs/onboarding/#75-backlog-coverage-work-nothing-can-claim) and
 [Versioning](/docs/versioning/).
 
-## 7. The statuses
+## 7. When the database wobbles
+
+Everything above is about *your* step failing. A database that stutters is a different event, and the
+engine does not spend your step's retry budget on it where it can avoid it.
+
+A failure that provably applied nothing — a dropped connection, a pool timeout, a deadlock victim, a
+serialization failure — is replayed by the store on a fresh connection, up to three attempts by
+default. The transaction had rolled back, so there is nothing to undo and nothing to double; a blip
+shorter than the replays is invisible to your workflow.
+
+Where the replays run out, what the caller is told depends on what the failure says about the rows:
+
+| the failure | the caller gets | retried by the client |
+|---|---|---|
+| nothing was applied | `UNAVAILABLE` | yes — this is the one status `RpcRetry` acts on |
+| the commit's outcome is unknown | `INTERNAL` | no: the work may be durable, and re-sending a `start` would double it |
+| the statement was refused on its own terms | `INTERNAL` | no: it would be refused again |
+
+Two consequences worth knowing:
+
+- **Pass a correlation id to `start`** when a double-started instance would be a problem. It is the
+  only thing that makes a start idempotent across an ambiguous failure, and it is the same advice as
+  for a retried failover.
+- **A worker that cannot hand its result back still costs the step an attempt.** The handback fails,
+  the lease expires, the leader reclaims the task, and the step is retried per its policy —
+  indistinguishable, by design, from a worker that died. Handlers must be idempotent anyway (§1), and
+  this is one of the reasons why.
+
+Tuning, if the defaults do not suit the deployment: `WIGGLE_JDBC_TX_ATTEMPTS` (default 3; 1 disables
+the replay) and `WIGGLE_JDBC_TX_RETRY_DELAY_MILLIS` (default 50, multiplied by the attempt).
+
+## 8. The statuses
 
 | status | meaning |
 |---|---|
@@ -152,4 +183,5 @@ never fails, so nothing alerts. See
 
 Everything on this page is asserted by `ErrorHandlingTest`, which counts handler attempts rather
 than only reading the final status: a page that got the retry count wrong would still look right if
-all you checked was `FAILED`.
+all you checked was `FAILED`. Section 7 is asserted by `TransientFailureTest` and
+`StorageFailureStatusTest`, and by `PostgresDeadlockRetryTest` against a live PostgreSQL.

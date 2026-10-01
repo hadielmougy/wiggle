@@ -12,6 +12,7 @@ import io.grpc.Grpc;
 import io.grpc.InsecureServerCredentials;
 import io.grpc.Server;
 import io.grpc.ServerCredentials;
+import com.wiggle.server.store.StorageException;
 import io.grpc.Status;
 import io.grpc.TlsServerCredentials;
 import io.grpc.stub.StreamObserver;
@@ -617,17 +618,38 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         } catch (IllegalArgumentException e) {
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with bad request: " + e.getMessage());
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
-        } catch (Exception e) {
-            // Unexpected -- an engine bug or an infrastructure failure (e.g. a StorageException wrapping
-            // a SQLException). Log the full detail server-side, but return only a generic INTERNAL to the
-            // client: the exception class/message can leak internals (SQL text, table/constraint names,
-            // driver codes, host/schema). A short correlation id ties the client's error to this log line.
+        } catch (StorageException e) {
+            // A store failure that applied nothing is UNAVAILABLE, which is both the honest status and
+            // the useful one: it promises the call did not take effect, which is exactly the client's
+            // retry condition, so a database blip costs a caller a pause rather than a failed
+            // operation. An unknown commit is not that, and takes the INTERNAL path below.
+            if (!e.repeatable()) {
+                internal(resp, e);
+                return;
+            }
             String errorId = UUID.randomUUID().toString().substring(0, 8);
-            LOG.log(System.Logger.Level.ERROR, "unhandled error [" + errorId + "]", e);
-            resp.onError(Status.INTERNAL
-                    .withDescription("internal error (ref " + errorId + ")")
+            LOG.log(System.Logger.Level.WARNING, "storage unavailable [" + errorId + "]", e);
+            resp.onError(Status.UNAVAILABLE
+                    .withDescription("storage temporarily unavailable (ref " + errorId + ")")
                     .asRuntimeException());
+        } catch (Exception e) {
+            internal(resp, e);
         }
+    }
+
+    /**
+     * An engine bug, or an infrastructure failure whose effect is not known (a commit that may have
+     * landed). The full detail is logged server-side and only a generic INTERNAL goes back: the
+     * exception class/message can leak internals (SQL text, table/constraint names, driver codes,
+     * host/schema), and an unknown commit must never be reported as a retryable "nothing happened". A
+     * short correlation id ties the client's error to this log line.
+     */
+    private <T> void internal(StreamObserver<T> resp, Exception e) {
+        String errorId = UUID.randomUUID().toString().substring(0, 8);
+        LOG.log(System.Logger.Level.ERROR, "unhandled error [" + errorId + "]", e);
+        resp.onError(Status.INTERNAL
+                .withDescription("internal error (ref " + errorId + ")")
+                .asRuntimeException());
     }
 
     private static Status status(int httpStatusCode) {

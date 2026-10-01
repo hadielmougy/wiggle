@@ -395,6 +395,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_JDBC_USER` | `wiggle.jdbc.user` | *(unset)* | database user |
 | `WIGGLE_JDBC_PASSWORD` | `wiggle.jdbc.password` | *(unset)* | database password |
 | `WIGGLE_JDBC_POOL_SIZE` | `wiggle.jdbc.poolSize` | `10` | JDBC connection pool size |
+| `WIGGLE_JDBC_TX_ATTEMPTS` | `wiggle.jdbc.txAttempts` | `3` | replays for a transaction the database could not serve momentarily |
 
 ### 6.3 Server — engine, cluster & housekeeping
 
