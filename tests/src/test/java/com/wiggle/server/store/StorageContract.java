@@ -284,6 +284,43 @@ abstract class StorageContract {
         assertTrue(storage.inTx(tx -> tx.lockInstances(List.of())).isEmpty(), "no ids, no rows");
     }
 
+    @Test
+    @DisplayName("joinedAt is the instance's JOINED tokens at one node, in id order")
+    void joinedAtIsTheBarrier() {
+        Instance inst = instance(id("wf"));
+        Token a = token(inst, NodeKind.JOIN, TokenStatus.JOINED, null);
+        Token b = token(inst, NodeKind.JOIN, TokenStatus.JOINED, null);
+        Token elsewhere = token(inst, NodeKind.JOIN, TokenStatus.JOINED, null);
+        elsewhere.nodeId = "n2";
+        Token settled = token(inst, NodeKind.JOIN, TokenStatus.DONE, null);
+        Instance other = instance(id("wf"));
+        Token foreign = token(other, NodeKind.JOIN, TokenStatus.JOINED, null);
+        store(inst, a, b, elsewhere, settled);
+        store(other, foreign);
+
+        assertEquals(List.of(a.id, b.id), idsOf(storage.inTx(tx -> tx.joinedAt(inst.id, "n1"))));
+        assertEquals(List.of(elsewhere.id), idsOf(storage.inTx(tx -> tx.joinedAt(inst.id, "n2"))));
+        assertTrue(storage.inTx(tx -> tx.joinedAt(inst.id, "n3")).isEmpty());
+    }
+
+    @Test
+    @DisplayName("awaitingSignal finds the token waiting on that signal, and nothing else")
+    void awaitingSignalFindsTheWait() {
+        Instance inst = instance(id("wf"));
+        Token approve = token(inst, NodeKind.SIGNAL, TokenStatus.AWAITING, null);
+        approve.activity = "approve";
+        Token reject = token(inst, NodeKind.SIGNAL, TokenStatus.AWAITING, null);
+        reject.activity = "reject";
+        Token delivered = token(inst, NodeKind.SIGNAL, TokenStatus.DONE, null);
+        delivered.activity = "ship";
+        store(inst, approve, reject, delivered);
+
+        assertEquals(approve.id, storage.inTx(tx -> tx.awaitingSignal(inst.id, "approve")).orElseThrow().id);
+        assertEquals(reject.id, storage.inTx(tx -> tx.awaitingSignal(inst.id, "reject")).orElseThrow().id);
+        assertTrue(storage.inTx(tx -> tx.awaitingSignal(inst.id, "ship")).isEmpty(), "already delivered");
+        assertTrue(storage.inTx(tx -> tx.awaitingSignal(inst.id, "unknown")).isEmpty());
+    }
+
     // -- WGL-STOR-030/031/032: definitions and their normalised graphs --
 
     @Test

@@ -2,6 +2,8 @@ package com.wiggle.server.store;
 
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.NodeKind;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Token;
@@ -103,6 +105,21 @@ public interface Tx extends GraphStore {
     }
 
     List<String> joinStacksAt(String instanceId, String nodeId);
+
+    /** The instance's JOINED tokens parked at {@code nodeId}, by id. */
+    default List<Token> joinedAt(String instanceId, String nodeId) {
+        return tokensOf(instanceId).stream()
+                .filter(t -> t.status == TokenStatus.JOINED && nodeId.equals(t.nodeId))
+                .toList();
+    }
+
+    /** The instance's token AWAITING signal {@code name}, the lowest id if several. */
+    default Optional<Token> awaitingSignal(String instanceId, String name) {
+        return tokensOf(instanceId).stream()
+                .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.SIGNAL)
+                .filter(t -> name.equals(t.activity))
+                .findFirst();
+    }
 
     boolean hasActiveTokens(String instanceId);
 

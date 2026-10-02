@@ -576,10 +576,7 @@ public final class WorkflowEngine {
         transactions.inTxVoid(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             Instances.requireRunning(inst);
-            Token t = tx.tokensOf(instanceId).stream()
-                    .filter(x -> x.status == TokenStatus.AWAITING && x.kind == NodeKind.SIGNAL)
-                    .filter(x -> name.equals(x.activity))
-                    .findFirst()
+            Token t = tx.awaitingSignal(instanceId, name)
                     .orElseThrow(() -> EngineException.conflict(
                             "instance " + instanceId + " is not waiting for signal '" + name + "'"));
             long now = System.currentTimeMillis();
