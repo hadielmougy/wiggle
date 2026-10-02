@@ -21,6 +21,9 @@ import static org.junit.jupiter.api.Assertions.*;
  * definition is flattened into node/edge rows on register and rebuilt one node at a time,
  * with each edge kind (task next, predicate true/false, fork branches) folded back into
  * the node's typed slots. The in-memory conformance suite never exercises this SQL path.
+ *
+ * <p>This is the SQL normalisation in depth; what every backend owes the graph read path, in
+ * common, is {@code server/store/StorageContract}.
  */
 class JdbcGraphTest {
 
