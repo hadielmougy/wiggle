@@ -7,6 +7,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jdbi.v3.core.statement.Query;
 import org.jdbi.v3.core.statement.SqlStatement;
+import org.jdbi.v3.core.statement.Update;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
@@ -612,6 +613,7 @@ public final class JdbcStorage implements Storage {
         t.joinStack = joinStack == null ? "" : joinStack;
         t.lastError = rs.getString("last_error");
         t.payload = PayloadCodec.decode(rs.getString("payload"));
+        t.storedPayload = t.payload;
         long compSeq = rs.getLong("comp_seq");
         t.compSeq = rs.wasNull() ? null : compSeq;
         long startedAt = rs.getLong("started_at");
@@ -1080,6 +1082,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
+            t.storedPayload = t.payload;
         }
 
         @Override public void insertTokens(List<Token> tokens) {
@@ -1087,15 +1090,23 @@ public final class JdbcStorage implements Storage {
             PreparedBatch b = h.prepareBatch(INSERT_TOKEN);
             for (Token t : tokens) bindToken(b, t).add();
             requireOneRowEach(b.execute(), "insert wf_token");
+            for (Token t : tokens) t.storedPayload = t.payload;
         }
 
         /** Every wf_token column, by name. The empty join-stack sentinel is applied here, not
          *  assumed of the row. */
         private static <S extends SqlStatement<S>> S bindToken(S s, Token t) {
-            return s.bind("id", t.id)
+            return bindUpdatable(s, t)
                     .bind("instanceId", t.instanceId)
                     .bind("workflow", t.workflow)
                     .bind("version", t.version)
+                    .bind("createdAt", t.createdAt)
+                    .bind("payload", PayloadCodec.encode(t.payload));
+        }
+
+        /** The columns {@link #UPDATE_TOKEN_KEEP_PAYLOAD} sets, and the id it matches on. */
+        private static <S extends SqlStatement<S>> S bindUpdatable(S s, Token t) {
+            return s.bind("id", t.id)
                     .bind("nodeId", t.nodeId)
                     .bind("kind", t.kind.name())
                     .bind("status", t.status.name())
@@ -1107,9 +1118,7 @@ public final class JdbcStorage implements Storage {
                     .bind("leaseExpires", t.leaseExpiresAt)
                     .bind("joinStack", t.joinStack == null ? "" : t.joinStack)
                     .bind("lastError", t.lastError)
-                    .bind("createdAt", t.createdAt)
                     .bind("updatedAt", t.updatedAt)
-                    .bind("payload", PayloadCodec.encode(t.payload))
                     .bindByType("compSeq", t.compSeq, Long.class)
                     .bindByType("startedAt", t.startedAt, Long.class)
                     .bindByType("finishedAt", t.finishedAt, Long.class)
@@ -1155,16 +1164,63 @@ public final class JdbcStorage implements Storage {
                 + "join_stack=:joinStack,last_error=:lastError,updated_at=:updatedAt,payload=:payload,"
                 + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq WHERE id=:id";
 
-        @Override
-        public void updateToken(Token t) {
-            bindToken(h.createUpdate(UPDATE_TOKEN), t).execute();
+        /** {@link #UPDATE_TOKEN} minus the payload column, for a row whose payload is unchanged. */
+        private static final String UPDATE_TOKEN_KEEP_PAYLOAD = UPDATE_TOKEN.replace("payload=:payload,", "");
+
+        private static boolean payloadUnchanged(Token t) {
+            return t.storedPayload != null && t.payload == t.storedPayload;
         }
 
+        private static <S extends SqlStatement<S>> S bindTokenUpdate(S s, Token t, boolean keepPayload) {
+            return keepPayload ? bindUpdatable(s, t) : bindToken(s, t);
+        }
+
+        @Override
+        public void updateToken(Token t) {
+            boolean keep = payloadUnchanged(t);
+            bindTokenUpdate(h.createUpdate(keep ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN), t, keep).execute();
+            t.storedPayload = t.payload;
+        }
+
+        /** Rows with an unchanged payload go in a batch that leaves the column alone. Splitting
+         *  reorders writes across the two batches, so a list naming one row twice keeps the single
+         *  full-row batch and its order. */
         @Override public void updateTokens(List<Token> tokens) {
             if (tokens.isEmpty()) return;
-            PreparedBatch b = h.prepareBatch(UPDATE_TOKEN);
-            for (Token t : tokens) bindToken(b, t).add();
+            List<Token> keep = new ArrayList<>();
+            List<Token> write = new ArrayList<>();
+            Set<String> ids = new HashSet<>();
+            boolean distinct = true;
+            for (Token t : tokens) {
+                distinct &= ids.add(t.id);
+                (payloadUnchanged(t) ? keep : write).add(t);
+            }
+            if (!distinct) {
+                keep.clear();
+                write = tokens;
+            }
+            updateBatch(write, false);
+            updateBatch(keep, true);
+            for (Token t : tokens) t.storedPayload = t.payload;
+        }
+
+        private void updateBatch(List<Token> tokens, boolean keepPayload) {
+            if (tokens.isEmpty()) return;
+            PreparedBatch b = h.prepareBatch(keepPayload ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN);
+            for (Token t : tokens) bindTokenUpdate(b, t, keepPayload).add();
             requireOneRowEach(b.execute(), "update wf_token");
+        }
+
+        @Override
+        public boolean renewLease(String taskId, String leaseOwner, long until, long now) {
+            Update u = h.createUpdate("UPDATE wf_token SET lease_expires=:until,updated_at=:now"
+                            + " WHERE id=:id AND status='RUNNING'"
+                            + (leaseOwner == null ? "" : " AND lease_owner=:owner"))
+                    .bind("until", until)
+                    .bind("now", now)
+                    .bind("id", taskId);
+            if (leaseOwner != null) u.bind("owner", leaseOwner);
+            return u.execute() == 1;
         }
 
         /** A count that is not one row means a buffered write ran out of order (an update flushed

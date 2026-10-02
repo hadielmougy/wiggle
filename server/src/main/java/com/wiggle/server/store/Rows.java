@@ -56,6 +56,10 @@ public final class Rows {
          * {@link PayloadCodec}; nothing above the store sees its serialised form.
          */
         public TokenPayload payload = TokenPayload.EMPTY;
+        /** The payload object a store last read into or wrote from this row, or null when it has
+         *  not been through one. While {@link #payload} is still this same object an update may
+         *  leave the stored payload column as it is. */
+        public TokenPayload storedPayload;
         /** Set on a compensation token: the comp-log entry its undo settles. Null on forward work,
          *  which is what tells the two apart. */
         public Long compSeq;
