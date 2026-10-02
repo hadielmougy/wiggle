@@ -43,6 +43,10 @@ public final class WorkflowEngine {
      *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
     private final long loopMaxIterations = ServerEnv.envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
 
+    /** A retry backing off at least this long waits WAITING until {@link #promoteDueRetries}, not READY. */
+    private final long retryParkFromMillis = ServerEnv.envLong(
+            "wiggle.retry.timerMinMillis", "WIGGLE_RETRY_TIMER_MIN_MILLIS", 1_000);
+
     /** How many of a leader sweep's due items run at once, each in its own transaction. */
     private final Sweeper sweeper = new Sweeper((int) ServerEnv.envLong(
             "wiggle.sweep.parallelism", "WIGGLE_SWEEP_PARALLELISM", 4));
@@ -55,6 +59,7 @@ public final class WorkflowEngine {
     private final DispatchNotifier notifier = new DispatchNotifier();
     private final Transactions transactions;
     private final Instances instances;
+    private final Tokens tokens;
     private final Dispatch dispatch;
     private final Schedules schedules;
     private final long defaultLeaseMillis;
@@ -71,7 +76,7 @@ public final class WorkflowEngine {
         this.queries                = new Queries(storage, pollers);
         this.defaultLeaseMillis     = defaultLeaseMillis;
         this.transactions           = new Transactions(storage, notifier);
-        var tokens                  = new Tokens(definitions, transactions::wake);
+        this.tokens                 = new Tokens(definitions, transactions::wake);
         this.instances              = new Instances(definitions, tokens, idMinter, this::drive);
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules              = new Schedules(transactions, instances, sweeper);
@@ -631,6 +636,24 @@ public final class WorkflowEngine {
         drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), ts);
     }
 
+    /** Leader duty: retries parked for their backoff become dispatchable once it has run out. */
+    public int promoteDueRetries(int max) {
+        List<Token> due = transactions.read(tx -> tx.dueRetries(System.currentTimeMillis(), max));
+        logDue("promoteDueRetries", due);
+        return sweep(due, "retry promotion of", this::promoteRetry);
+    }
+
+    private void promoteRetry(Tx tx, Token parked) {
+        Instance inst = tx.lockInstance(parked.instanceId).orElse(null);
+        if (inst == null || !inst.status.live()) return;
+        Token t = tx.findToken(parked.id).orElse(null);
+        long ts = System.currentTimeMillis();
+        if (t == null || t.status != TokenStatus.WAITING || t.kind == NodeKind.SLEEP || t.availableAt > ts) return;
+        tokens.promote(tx, t, ts);
+        LOG.log(System.Logger.Level.DEBUG, () -> "retry of " + t.id + " (attempt " + t.nextAttempt()
+                + ") on instance " + inst.id + " is due");
+    }
+
     /** Leader duty: signal waits whose deadline has passed escalate (to {@code altNext}) or fail. */
     public int fireDueSignalDeadlines(int max) {
         List<Token> due = transactions.read(tx -> tx.dueSignals(System.currentTimeMillis(), max));
@@ -700,7 +723,8 @@ public final class WorkflowEngine {
      */
     private void settleFailure(Tx tx, Instance inst, Token t, Node node,
                                String lastError, String failReason, boolean retryable, long now) {
-        Tokens.Outcome outcome = Tokens.reportFailure(tx, t, node, lastError, failReason, retryable, now);
+        Tokens.Outcome outcome = Tokens.reportFailure(tx, t, node, lastError, failReason, retryable,
+                retryParkFromMillis, now);
         if (!(outcome instanceof Tokens.Outcome.Exhausted(String reason, Long compSeq))) return;
         if (compSeq != null) {
             instances.compensatorExhausted(tx, inst, node, compSeq, reason, now);

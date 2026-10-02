@@ -69,28 +69,30 @@ public final class Housekeeper implements AutoCloseable {
         }
         try {
             LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: leader running timers/leases/deadlines sweep");
-            int fired = 0, reclaimed = 0, escalated = 0, scheduled = 0, rounds = 0;
+            int fired = 0, reclaimed = 0, escalated = 0, scheduled = 0, retried = 0, rounds = 0;
             boolean anyFull;
             do {
                 int f = engine.fireDueTimers(batchSize);
+                int p = engine.promoteDueRetries(batchSize);
                 int r = engine.reclaimExpiredLeases(batchSize);
                 int e = engine.fireDueSignalDeadlines(batchSize);
                 int s = engine.fireDueSchedules(batchSize);
                 int o = engine.settleObservedRuns(batchSize);
-                fired += f; reclaimed += r; escalated += e; scheduled += s; rounds++;
+                fired += f; retried += p; reclaimed += r; escalated += e; scheduled += s; rounds++;
                 // Drain mode: a full batch means more work is (almost certainly) still due -- go
                 // again now rather than parking it for a whole tick. Bounded by real work: every
                 // extra round fired a full batch, so an idle system never loops.
-                anyFull = adaptive && (f >= batchSize || r >= batchSize || e >= batchSize || s >= batchSize
+                anyFull = adaptive && (f >= batchSize || p >= batchSize || r >= batchSize || e >= batchSize || s >= batchSize
                         || o >= batchSize);
             } while (anyFull && cluster.isLeader() && !Thread.currentThread().isInterrupted());
-            int fFired = fired, fReclaimed = reclaimed, fEscalated = escalated, fScheduled = scheduled, fRounds = rounds;
+            int fFired = fired, fRetried = retried, fReclaimed = reclaimed, fEscalated = escalated,
+                    fScheduled = scheduled, fRounds = rounds;
             if (rounds > 1) LOG.log(System.Logger.Level.INFO, () -> "housekeeping drain: " + fRounds
-                    + " rounds in one tick (" + fFired + " timers, " + fReclaimed + " leases, "
-                    + fEscalated + " deadlines, " + fScheduled + " schedules)");
+                    + " rounds in one tick (" + fFired + " timers, " + fRetried + " retries, " + fReclaimed
+                    + " leases, " + fEscalated + " deadlines, " + fScheduled + " schedules)");
             else LOG.log(System.Logger.Level.DEBUG, () -> "housekeeping tick: " + fFired + " timers fired, "
-                    + fReclaimed + " leases reclaimed, " + fEscalated + " signal deadlines fired, "
-                    + fScheduled + " schedules fired");
+                    + fRetried + " retries promoted, " + fReclaimed + " leases reclaimed, " + fEscalated
+                    + " signal deadlines fired, " + fScheduled + " schedules fired");
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, "housekeeping tick failed: " + e);
         }

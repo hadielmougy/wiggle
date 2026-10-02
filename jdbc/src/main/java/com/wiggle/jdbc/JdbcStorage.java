@@ -1549,6 +1549,11 @@ public final class JdbcStorage implements Storage {
             return claimed;
         }
 
+        @Override public List<Token> dueRetries(long now, int max) {
+            return query("SELECT * FROM wf_token WHERE status='WAITING' AND kind IN ('TASK','PREDICATE') " +
+                    "AND available_at<=? ORDER BY available_at LIMIT ?", now, max);
+        }
+
         @Override public List<Token> dueTimers(long now, int max) {
             return query("SELECT * FROM wf_token WHERE status='WAITING' AND kind='SLEEP' AND available_at<=? " +
                     "ORDER BY available_at LIMIT ?", now, max);

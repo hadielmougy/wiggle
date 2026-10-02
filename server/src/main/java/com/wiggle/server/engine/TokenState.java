@@ -26,7 +26,7 @@ enum TokenState {
     READY(TokenStatus.RUNNING, TokenStatus.WAITING, TokenStatus.AWAITING,
             TokenStatus.JOINED, TokenStatus.DONE, TokenStatus.CANCELLED),
 
-    RUNNING(TokenStatus.DONE, TokenStatus.READY, TokenStatus.FAILED,
+    RUNNING(TokenStatus.DONE, TokenStatus.READY, TokenStatus.WAITING, TokenStatus.FAILED,
             TokenStatus.CANCELLED) {
         @Override boolean holdsLease() { return true; }
 
@@ -46,7 +46,7 @@ enum TokenState {
         }
     },
 
-    WAITING(TokenStatus.DONE, TokenStatus.CANCELLED),
+    WAITING(TokenStatus.DONE, TokenStatus.READY, TokenStatus.CANCELLED),
     AWAITING(TokenStatus.DONE, TokenStatus.FAILED, TokenStatus.CANCELLED),
     JOINED(TokenStatus.DONE, TokenStatus.CANCELLED),
     DONE(),
