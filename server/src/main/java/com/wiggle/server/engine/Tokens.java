@@ -62,6 +62,7 @@ final class Tokens {
         t.status = TokenStatus.READY;
         t.attempt = 0;
         t.availableAt = now;
+        t.instCreatedAt = inst.createdAt;
         t.joinStack = joinStack == null ? "" : joinStack;
         t.createdAt = now;
         t.updatedAt = now;

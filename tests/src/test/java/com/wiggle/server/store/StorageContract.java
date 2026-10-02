@@ -859,6 +859,34 @@ abstract class StorageContract {
     // -- WGL-STOR-021/022: the claim, whichever statement the dialect uses --
 
     @Test
+    @DisplayName("the claim serves the oldest instance's ready work first, and skips what is not due")
+    void claimServesOldestInstanceFirst() {
+        String q = id("q");
+        Instance older = instance(id("wf"));
+        older.createdAt = now - 10_000;
+        Instance newer = instance(id("wf"));
+        newer.createdAt = now - 5_000;
+        Token newerReadyLongest = token(newer, NodeKind.TASK, TokenStatus.READY, q);
+        newerReadyLongest.instCreatedAt = newer.createdAt;
+        newerReadyLongest.availableAt = ANCIENT;
+        Token olderReadyLater = token(older, NodeKind.TASK, TokenStatus.READY, q);
+        olderReadyLater.instCreatedAt = older.createdAt;
+        olderReadyLater.availableAt = ANCIENT + 100;
+        Token olderNotDue = token(older, NodeKind.TASK, TokenStatus.READY, q);
+        olderNotDue.instCreatedAt = older.createdAt;
+        olderNotDue.availableAt = now + 60_000;
+        store(older, olderReadyLater, olderNotDue);
+        store(newer, newerReadyLongest);
+
+        assertEquals(List.of(olderReadyLater.id),
+                idsOf(storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 1, now, now + 1_000))),
+                "the older instance first, though the newer one's task has been ready longer");
+        assertEquals(List.of(newerReadyLongest.id),
+                idsOf(storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 10, now, now + 1_000))),
+                "a task not yet due is stepped over, not the end of the scan");
+    }
+
+    @Test
     @DisplayName("the claim leases a token, and never offers it twice")
     void claimLeasesAndIsNotOfferedTwice() {
         Instance i = instance(id("wf"));

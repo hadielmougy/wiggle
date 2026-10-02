@@ -426,6 +426,16 @@ public final class JdbcStorage implements Storage {
             DROP INDEX IF EXISTS ix_token_lease;
             DROP INDEX IF EXISTS ix_token_throughput;
             DROP INDEX IF EXISTS ix_token_timed;
+            """, Dialect::supportsPartialIndexes),
+            // Dispatch serves the oldest instance's ready work first, so a backlog finishes what it
+            // started instead of advancing every instance one step at a time. Rows written before
+            // this carry 0 and are served first.
+            new Migration(20, "token-instance-age", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS inst_created_at BIGINT NOT NULL DEFAULT 0;
+            """),
+            new Migration(21, "ready-index-by-instance-age", """
+            CREATE INDEX IF NOT EXISTS ix_token_ready_age ON wf_token (queue, inst_created_at, available_at, id) WHERE status='READY';
+            DROP INDEX IF EXISTS ix_token_ready;
             """, Dialect::supportsPartialIndexes));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -733,6 +743,7 @@ public final class JdbcStorage implements Storage {
         t.queue = rs.getString("queue");
         t.attempt = rs.getInt("attempt");
         t.availableAt = rs.getLong("available_at");
+        t.instCreatedAt = rs.getLong("inst_created_at");
         t.leaseOwner = rs.getString("lease_owner");
         t.leaseExpiresAt = rs.getLong("lease_expires");
         // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
@@ -1215,10 +1226,10 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
                 + "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,"
-                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq) VALUES "
+                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,inst_created_at) VALUES "
                 + "(:id,:instanceId,:workflow,:version,:nodeId,:kind,:status,:activity,:queue,:attempt,"
                 + ":availableAt,:leaseOwner,:leaseExpires,:joinStack,:lastError,:createdAt,:updatedAt,:payload,"
-                + ":compSeq,:startedAt,:finishedAt,:seq)";
+                + ":compSeq,:startedAt,:finishedAt,:seq,:instCreatedAt)";
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
@@ -1241,6 +1252,7 @@ public final class JdbcStorage implements Storage {
                     .bind("workflow", t.workflow)
                     .bind("version", t.version)
                     .bind("createdAt", t.createdAt)
+                    .bind("instCreatedAt", t.instCreatedAt)
                     .bind("payload", PayloadCodec.encode(t.payload));
         }
 
@@ -1450,7 +1462,7 @@ public final class JdbcStorage implements Storage {
                     + " AND available_at<=:now"
                     + (queues != null && !queues.isEmpty() ? " AND queue IN (<queues>)" : "")
                     + versionsClause(versions)
-                    + " ORDER BY available_at, id LIMIT :max";
+                    + " ORDER BY inst_created_at, available_at, id LIMIT :max";
         }
 
         /**
@@ -1496,10 +1508,10 @@ public final class JdbcStorage implements Storage {
             StringBuilder names = new StringBuilder();
             for (int i = 0; i < queueCount; i++) names.append(i == 0 ? "" : ",").append("(:q").append(i).append(")");
             return "SELECT c.id FROM (VALUES " + names + ") AS q(name) CROSS JOIN LATERAL ("
-                    + "SELECT id, available_at FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
+                    + "SELECT id, inst_created_at, available_at FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
                     + " AND available_at<=:now AND queue=q.name" + versionsClause(versions)
-                    + " ORDER BY available_at, id LIMIT :max FOR UPDATE SKIP LOCKED) c"
-                    + " ORDER BY c.available_at, c.id LIMIT :max";
+                    + " ORDER BY inst_created_at, available_at, id LIMIT :max FOR UPDATE SKIP LOCKED) c"
+                    + " ORDER BY c.inst_created_at, c.available_at, c.id LIMIT :max";
         }
 
         /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
