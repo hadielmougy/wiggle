@@ -1385,6 +1385,26 @@ public final class JdbcStorage implements Storage {
                     .list();
         }
 
+        @Override
+        public List<Token> joinedAt(String instanceId, String nodeId) {
+            return h.createQuery("SELECT * FROM wf_token "
+                            + "WHERE instance_id=:id AND node_id=:node AND status='JOINED' ORDER BY id")
+                    .bind("id", instanceId)
+                    .bind("node", nodeId)
+                    .mapTo(Token.class)
+                    .list();
+        }
+
+        @Override
+        public Optional<Token> awaitingSignal(String instanceId, String name) {
+            return h.createQuery("SELECT * FROM wf_token WHERE instance_id=:id AND status='AWAITING' "
+                            + "AND kind='SIGNAL' AND activity=:name ORDER BY id LIMIT 1")
+                    .bind("id", instanceId)
+                    .bind("name", name)
+                    .mapTo(Token.class)
+                    .findFirst();
+        }
+
         @Override public List<Token> claimTasks(String workerId, Set<String> queues,
                                                 Set<WorkflowVersion> versions, int max, long now,
                                                 long leaseUntil) {
