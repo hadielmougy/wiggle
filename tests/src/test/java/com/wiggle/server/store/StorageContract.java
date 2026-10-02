@@ -432,6 +432,66 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("updateInstance leaves the fields that settle an instance's identity alone")
+    void updateInstanceDoesNotWriteTheIdentityFields() {
+        Instance i = instance(id("wf"));
+        i.correlationId = "order-" + i.id;
+        i.parentTokenId = id("tok");
+        store(i);
+
+        Instance live = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        live.workflow = id("rewritten");
+        live.version = 99;
+        live.correlationId = "rewritten";
+        live.parentTokenId = "rewritten";
+        live.createdAt = now + 10_000;
+        live.status = InstanceStatus.COMPLETED;      // one mutable field, so the write is no no-op
+        live.updatedAt = now + 1;
+        storage.inTxVoid(tx -> tx.updateInstance(live));
+
+        Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        assertEquals(InstanceStatus.COMPLETED, back.status, "the mutable field was written");
+        assertEquals(now + 1, back.updatedAt);
+        // And none of the rest, however the caller had left them: an instance's workflow, its
+        // version, its business key, its parent and when it started are settled at insert.
+        assertEquals(i.workflow, back.workflow);
+        assertEquals(1, back.version);
+        assertEquals(i.correlationId, back.correlationId);
+        assertEquals(i.parentTokenId, back.parentTokenId);
+        assertEquals(now, back.createdAt);
+    }
+
+    @Test
+    @DisplayName("the revision counts the writes the row has taken, not the writer's idea of them")
+    void revisionIsAdvancedFromTheStoredRow() {
+        Instance i = instance(id("wf"));
+        store(i);
+        for (int k = 0; k < 2; k++) {
+            Instance live = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+            live.updatedAt = now + k;
+            storage.inTxVoid(tx -> tx.updateInstance(live));
+        }
+        assertEquals(2, storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow().revision);
+
+        // A caller that never re-read, so its copy still says revision 0. The next revision is the
+        // stored one plus one: a stale writer cannot walk it backwards.
+        i.revision = 0;
+        i.updatedAt = now + 5;
+        storage.inTxVoid(tx -> tx.updateInstance(i));
+        assertEquals(3, storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow().revision);
+        assertEquals(1, i.revision, "and the caller's own copy is advanced from where it was");
+    }
+
+    @Test
+    @DisplayName("updateInstance on a row that is not there creates nothing")
+    void updateInstanceOnAMissingRowIsANoOp() {
+        Instance never = instance(id("wf"));
+        storage.inTxVoid(tx -> tx.updateInstance(never));
+        assertTrue(storage.inTx(tx -> tx.findInstance(never.id)).isEmpty(),
+                "a write-back is not a way to insert");
+    }
+
+    @Test
     @DisplayName("updateInstances is updateInstance over a set")
     void updateInstancesIsTheBatchedUpdate() {
         String wf = id("wf");

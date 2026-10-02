@@ -51,6 +51,22 @@ public interface Tx extends GraphStore {
         return out;
     }
     Optional<Instance> findInstance(String id);
+
+    /**
+     * Writes back the fields of an instance that change as it runs: status, termination reason,
+     * error, context and {@code settleAt}, stamped with {@code updatedAt}.
+     *
+     * <p>It writes nothing else. An instance's identity and provenance -- {@code workflow},
+     * {@code version}, {@code correlationId}, {@code parentTokenId}, {@code createdAt} -- are
+     * settled when the row is inserted and are not reachable from here, so a body that hands back
+     * a row carrying a changed one cannot rewrite history with it. Nothing in the engine assigns
+     * them after birth; this is what keeps that true of the store as well.
+     *
+     * <p>The revision is advanced by the store, from the value the row holds rather than from the
+     * caller's: it counts the writes the row has taken. A caller working from a stale copy is
+     * therefore not able to walk the revision backwards, and its own copy is advanced from where
+     * it was so the engine can write the row on again.
+     */
     void updateInstance(Instance instance);
 
     /** {@code updateInstance} for a set of rows; same contract as {@link #insertTokens}. */
