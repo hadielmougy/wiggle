@@ -17,8 +17,8 @@ import java.util.concurrent.CountDownLatch;
 /**
  * A timer-throughput micro-benchmark: every instance parks on a server-side {@code sleep}, so the
  * drain rate is gated by how fast the housekeeper promotes due timers — {@code batch} per tick with
- * the fixed sweep, batch-until-partial with adaptive housekeeping
- * ({@code WIGGLE_ADAPTIVE_HOUSEKEEPING=true}).
+ * the fixed sweep ({@code WIGGLE_ADAPTIVE_HOUSEKEEPING=false}), batch-until-partial with adaptive
+ * housekeeping (the default), each batch run {@code WIGGLE_SWEEP_PARALLELISM} timers at a time.
  *
  * <p>All instances are pre-submitted and the workers started; every instance runs
  * {@code enter → sleep(short) → exit}, so within a moment the whole population's timers are due at
@@ -27,12 +27,14 @@ import java.util.concurrent.CountDownLatch;
  * tick after it becomes due.
  *
  * <pre>
- *   ./gradlew :example:timerBench                                     # fixed (baseline)
- *   WIGGLE_ADAPTIVE_HOUSEKEEPING=true ./gradlew :example:timerBench   # adaptive
+ *   WIGGLE_ADAPTIVE_HOUSEKEEPING=false ./gradlew :example:timerBench   # fixed (baseline)
+ *   ./gradlew :example:timerBench                                      # adaptive
+ *   WIGGLE_SWEEP_PARALLELISM=1 ./gradlew :example:timerBench           # adaptive, serial sweeps
  * </pre>
  * Tunables: {@code WIGGLE_BENCH_COUNT} (2000), {@code WIGGLE_BENCH_SLEEP_MILLIS} (25),
  * {@code WIGGLE_TICK_MILLIS} (1000), {@code WIGGLE_HOUSEKEEPING_BATCH} (100),
- * {@code WIGGLE_BENCH_WORKERS} (4), {@code WIGGLE_WORKER_CONCURRENCY} (16).
+ * {@code WIGGLE_BENCH_WORKERS} (4), {@code WIGGLE_WORKER_CONCURRENCY} (16). {@code WIGGLE_JDBC_URL}
+ * (with {@code _USER}/{@code _PASSWORD}) runs it on a database instead of in memory.
  */
 public final class TimerBench {
 
@@ -48,7 +50,9 @@ public final class TimerBench {
         int batch = intEnv("WIGGLE_HOUSEKEEPING_BATCH", 100);
         int workers = intEnv("WIGGLE_BENCH_WORKERS", 4);
         int concurrency = intEnv("WIGGLE_WORKER_CONCURRENCY", 16);
-        boolean adaptive = Boolean.parseBoolean(env("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"));
+        boolean adaptive = Boolean.parseBoolean(env("WIGGLE_ADAPTIVE_HOUSEKEEPING", "true"));
+        String parallelism = env("WIGGLE_SWEEP_PARALLELISM", "4");
+        String jdbcUrl = env("WIGGLE_JDBC_URL", null);
 
         CountDownLatch done = new CountDownLatch(count);
         FlowSpec bp = FlowSpec.define("bench-timer", 1, Map.class, TimerSteps.class, (f, s) -> f
@@ -56,15 +60,16 @@ public final class TimerBench {
                 .thenSleep("hold", Duration.ofMillis(sleepMillis))
                 .thenAccept(s::exit));
 
-        ServerConfig config = new ServerConfig(0, "timer-bench", null, null, null, 16,
+        ServerConfig config = new ServerConfig(0, "timer-bench", jdbcUrl,
+                env("WIGGLE_JDBC_USER", null), env("WIGGLE_JDBC_PASSWORD", null), 16,
                 Duration.ofMillis(tickMillis), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), batch, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
 
-        System.out.printf("timer bench: count=%d sleep=%dms tick=%dms batch=%d adaptive=%s%n",
-                count, sleepMillis, tickMillis, batch, adaptive);
+        System.out.printf("timer bench: count=%d sleep=%dms tick=%dms batch=%d adaptive=%s parallelism=%s store=%s%n",
+                count, sleepMillis, tickMillis, batch, adaptive, parallelism, jdbcUrl == null ? "memory" : jdbcUrl);
 
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = Benchmark.open(config, jdbcUrl);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             for (int i = 0; i < count; i++) client.start(bp, Map.of("i", (long) i));

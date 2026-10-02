@@ -88,7 +88,7 @@ public final class Benchmark {
 
     /** In-memory with no URL; else JdbcStorage with the dialect picked from the URL (postgres / h2).
      *  Storage is an explicit factory (no ServiceLoader), so the benchmark wires it here. */
-    private static WiggleServer open(ServerConfig config, String jdbcUrl) throws Exception {
+    static WiggleServer open(ServerConfig config, String jdbcUrl) throws Exception {
         if (jdbcUrl == null) return new WiggleServer(config).start();
         com.wiggle.jdbc.Dialect dialect = jdbcUrl.startsWith("jdbc:postgresql")
                 ? new com.wiggle.postgres.PostgresDialect() : new com.wiggle.postgres.H2Dialect();
