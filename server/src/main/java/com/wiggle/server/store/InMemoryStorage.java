@@ -317,6 +317,15 @@ public final class InMemoryStorage implements Storage {
             return claimed;
         }
 
+        @Override public List<Token> dueRetries(long now, int max) {
+            return tokens.values().stream()
+                    .filter(t -> t.status == TokenStatus.WAITING && (t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE) && t.availableAt <= now)
+                    .sorted(Comparator.comparingLong((Token t) -> t.availableAt))
+                    .limit(max)
+                    .map(Token::clone)
+                    .toList();
+        }
+
         @Override public List<Token> dueTimers(long now, int max) {
             return tokens.values().stream()
                     .filter(t -> t.status == TokenStatus.WAITING && t.kind == NodeKind.SLEEP && t.availableAt <= now)

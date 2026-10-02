@@ -187,10 +187,11 @@ final class Tokens {
     /**
      * The retry-or-fail transition. Only a leased token can fail, which the state is asked to
      * confirm before anything is written; what an exhausted token means for its instance is the
-     * caller's call.
+     * caller's call. A retry whose backoff is at least {@code parkFromMillis} waits WAITING, out of
+     * the dispatch index, until {@link #promote} makes it READY; a shorter one waits READY.
      */
     static Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
-                                 String failReason, boolean retryable, long now) {
+                                 String failReason, boolean retryable, long parkFromMillis, long now) {
         TokenState state = TokenState.of(t.status);
         state.requireLeasedBy(t, null);
         RetryPolicy policy = node.retry() == null ? RetryPolicy.forever() : node.retry();
@@ -198,12 +199,19 @@ final class Tokens {
         t.lastError = lastError;
         state.releaseLease(t);
         if (retryable && t.attempt < policy.maxAttempts()) {
-            t.availableAt = now + policy.backoffMillis(t.attempt);
-            move(tx, t, TokenStatus.READY, now);
+            long backoff = policy.backoffMillis(t.attempt);
+            t.availableAt = now + backoff;
+            move(tx, t, backoff >= parkFromMillis ? TokenStatus.WAITING : TokenStatus.READY, now);
             return new Outcome.Retried();
         }
         move(tx, t, TokenStatus.FAILED, now);
         return new Outcome.Exhausted(failReason, Sagas.seqOf(t));
+    }
+
+    /** A parked retry whose backoff has run out becomes dispatchable, and its queue is woken. */
+    void promote(Tx tx, Token t, long now) {
+        move(tx, t, TokenStatus.READY, now);
+        wake(t.queue);
     }
 
     /** Cancels every still-active token of an instance in one statement. The per-token

@@ -69,9 +69,9 @@ Owned by `Tokens`.
 
 | State | | Meaning |
 |---|---|---|
-| `READY` | active | Dispatchable. A retry waits here too, behind availableAt. |
+| `READY` | active | Dispatchable. A retry with a short backoff waits here too, behind availableAt. |
 | `RUNNING` | active | Leased. Implies a non-null leaseOwner and an expiry. |
-| `WAITING` | active | Parked on the clock until availableAt. |
+| `WAITING` | active | Parked on the clock until availableAt: a SLEEP node, or a retry's longer backoff. |
 | `AWAITING` | active | Parked on an external actor: a signal, or a child instance. |
 | `JOINED` | active | Parked at a join barrier, waiting on its siblings. |
 | `DONE` | settled | Consumed. Covers a completed step, a spent fork, and a satisfied barrier. |
@@ -93,11 +93,14 @@ Owned by `Tokens`.
 | `READY` | `DRIVE_END` | `DONE` | END node | *internal* |
 | `READY` | `POLL_CLAIMED` | `RUNNING` | availableAt has passed and the instance is RUNNING (COMPENSATING for a compensator) | `poll` |
 | `RUNNING` | `STEP_REPORTED` | `DONE` | the lease matches; the continuation is minted and driven | `report` |
-| `RUNNING` | `TASK_FAILED` | `READY` | retryable and attempt < maxAttempts; availableAt = now + backoff | `fail` |
+| `RUNNING` | `TASK_FAILED` | `READY` | retryable and attempt < maxAttempts, backoff under WIGGLE_RETRY_TIMER_MIN_MILLIS; availableAt = now + backoff | `fail` |
+| `RUNNING` | `TASK_FAILED` | `WAITING` | retryable and attempt < maxAttempts, backoff at least WIGGLE_RETRY_TIMER_MIN_MILLIS; availableAt = now + backoff | `fail` |
 | `RUNNING` | `TASK_FAILED` | `FAILED` | not retryable, or attempts exhausted | `fail` |
 | `RUNNING` | `LEASE_EXPIRED` | `READY` | same retry policy as an explicit failure; the attempt is spent | `reclaimExpiredLeases` |
+| `RUNNING` | `LEASE_EXPIRED` | `WAITING` | same retry policy, with a backoff long enough to park | `reclaimExpiredLeases` |
 | `RUNNING` | `LEASE_EXPIRED` | `FAILED` | attempts exhausted | `reclaimExpiredLeases` |
-| `WAITING` | `TIMER_DUE` | `DONE` | availableAt has passed and the instance is RUNNING | `fireDueTimers` |
+| `WAITING` | `TIMER_DUE` | `DONE` | a SLEEP whose availableAt has passed, and the instance is RUNNING | `fireDueTimers` |
+| `WAITING` | `RETRY_DUE` | `READY` | a parked retry whose availableAt has passed, and the instance is live | `promoteDueRetries` |
 | `AWAITING` | `SIGNAL_DELIVERED` | `DONE` | the name matches and the instance is RUNNING | `signal` |
 | `AWAITING` | `SIGNAL_DEADLINE` | `DONE` | the deadline passed; continues at altNext, or the instance fails | `fireDueSignalDeadlines` |
 | `AWAITING` | `SUB_WORKFLOW_TERMINAL` | `DONE` | the child COMPLETED; its context merges back into the parent's scope | *internal* |

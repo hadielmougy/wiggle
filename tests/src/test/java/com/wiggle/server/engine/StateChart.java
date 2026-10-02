@@ -42,9 +42,9 @@ final class StateChart {
 
     /** Prose only: the name and the classification come from {@link TokenState}. */
     private static final Map<String, String> TOKEN_NOTES = Map.of(
-            "READY", "Dispatchable. A retry waits here too, behind availableAt.",
+            "READY", "Dispatchable. A retry with a short backoff waits here too, behind availableAt.",
             "RUNNING", "Leased. Implies a non-null leaseOwner and an expiry.",
-            "WAITING", "Parked on the clock until availableAt.",
+            "WAITING", "Parked on the clock until availableAt: a SLEEP node, or a retry's longer backoff.",
             "AWAITING", "Parked on an external actor: a signal, or a child instance.",
             "JOINED", "Parked at a join barrier, waiting on its siblings.",
             "DONE", "Consumed. Covers a completed step, a spent fork, and a satisfied barrier.",
@@ -112,15 +112,23 @@ final class StateChart {
                 new Transition("RUNNING", "STEP_REPORTED", "DONE",
                         "the lease matches; the continuation is minted and driven", "report"),
                 new Transition("RUNNING", "TASK_FAILED", "READY",
-                        "retryable and attempt < maxAttempts; availableAt = now + backoff", "fail"),
+                        "retryable and attempt < maxAttempts, backoff under WIGGLE_RETRY_TIMER_MIN_MILLIS; "
+                                + "availableAt = now + backoff", "fail"),
+                new Transition("RUNNING", "TASK_FAILED", "WAITING",
+                        "retryable and attempt < maxAttempts, backoff at least WIGGLE_RETRY_TIMER_MIN_MILLIS; "
+                                + "availableAt = now + backoff", "fail"),
                 new Transition("RUNNING", "TASK_FAILED", "FAILED",
                         "not retryable, or attempts exhausted", "fail"),
                 new Transition("RUNNING", "LEASE_EXPIRED", "READY",
                         "same retry policy as an explicit failure; the attempt is spent", "reclaimExpiredLeases"),
+                new Transition("RUNNING", "LEASE_EXPIRED", "WAITING",
+                        "same retry policy, with a backoff long enough to park", "reclaimExpiredLeases"),
                 new Transition("RUNNING", "LEASE_EXPIRED", "FAILED",
                         "attempts exhausted", "reclaimExpiredLeases"),
                 new Transition("WAITING", "TIMER_DUE", "DONE",
-                        "availableAt has passed and the instance is RUNNING", "fireDueTimers"),
+                        "a SLEEP whose availableAt has passed, and the instance is RUNNING", "fireDueTimers"),
+                new Transition("WAITING", "RETRY_DUE", "READY",
+                        "a parked retry whose availableAt has passed, and the instance is live", "promoteDueRetries"),
                 new Transition("AWAITING", "SIGNAL_DELIVERED", "DONE",
                         "the name matches and the instance is RUNNING", "signal"),
                 new Transition("AWAITING", "SIGNAL_DEADLINE", "DONE",
