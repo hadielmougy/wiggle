@@ -177,9 +177,28 @@ public final class InMemoryStorage implements Storage {
             return Optional.ofNullable(i == null ? null : i.clone());
         }
 
+        /**
+         * The mutable fields onto the stored row, which is what {@link Tx#updateInstance} says and
+         * what the JDBC UPDATE does by naming its columns. Putting the caller's row in whole --
+         * what this did -- also wrote the identity fields, so a body that changed one could rewrite
+         * an instance's workflow or its creation time, and a stale caller could walk the revision
+         * backwards. Neither is reachable from the engine, which assigns those at birth only; the
+         * point is that the store does not offer it.
+         */
         @Override public void updateInstance(Instance i) {
+            Instance stored = instances.get(i.id);
+            if (stored != null) {
+                Instance next = stored.clone();
+                next.status = i.status;
+                next.terminationReason = i.terminationReason;
+                next.error = i.error;
+                next.context = i.context;
+                next.settleAt = i.settleAt;
+                next.updatedAt = i.updatedAt;
+                next.revision = stored.revision + 1;
+                instances.put(i.id, next);
+            }
             i.revision++;
-            instances.put(i.id, i.clone());
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
