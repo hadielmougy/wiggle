@@ -24,6 +24,7 @@ import java.security.MessageDigest;
 import java.sql.*;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Shared-database store. This is what makes multi-node operation work: instance
@@ -124,8 +125,15 @@ public final class JdbcStorage implements Storage {
         try { c.close(); } catch (SQLException ignored) { }  // returns the connection to the pool
     }
 
-    /** One forward-only schema step. {@code sql} may hold several {@code ;}-separated statements. */
-    public record Migration(int version, String name, String sql) { }
+    /**
+     * One forward-only schema step. {@code sql} may hold several {@code ;}-separated statements.
+     * On a dialect {@code appliesTo} rejects, the step is recorded as applied without running.
+     */
+    public record Migration(int version, String name, String sql, Predicate<Dialect> appliesTo) {
+        public Migration(int version, String name, String sql) {
+            this(version, name, sql, dialect -> true);
+        }
+    }
 
     /**
      * Ordered, forward-only schema history. Append new migrations; never edit or reorder an
@@ -394,7 +402,30 @@ public final class JdbcStorage implements Storage {
             // the enum, which is why every test passed. 32 leaves room for a longer status later.
             new Migration(18, "instance-status-width", """
             ALTER TABLE wf_instance ALTER COLUMN status TYPE VARCHAR(32);
-            """));
+            """),
+            // Every wf_token query that filters on status names exactly one status, so each gets an
+            // index over only the rows in that status: ready (claim, queue depth, backlog), waiting
+            // (timers), awaiting (signal deadlines), running (expired leases), and done (throughput,
+            // step durations). Settled rows are most of the table and no longer sit in the dispatch,
+            // timer, signal or lease indexes, and a status move writes an entry only to the indexes
+            // whose predicate the new row satisfies. The four full indexes these replace are dropped.
+            // Databases without partial indexes (H2) keep the full ones.
+            //
+            // Building these on a large wf_token blocks writes to it until they finish, so run this
+            // in a maintenance window (or ahead of the deploy with WIGGLE_MIGRATE_ONLY=true) when
+            // the table is big.
+            new Migration(19, "partial-token-indexes", """
+            CREATE INDEX IF NOT EXISTS ix_token_ready ON wf_token (queue, available_at, id) WHERE status='READY';
+            CREATE INDEX IF NOT EXISTS ix_token_waiting ON wf_token (available_at) WHERE status='WAITING';
+            CREATE INDEX IF NOT EXISTS ix_token_awaiting ON wf_token (available_at) WHERE status='AWAITING';
+            CREATE INDEX IF NOT EXISTS ix_token_running ON wf_token (lease_expires) WHERE status='RUNNING';
+            CREATE INDEX IF NOT EXISTS ix_token_done ON wf_token (updated_at) WHERE status='DONE';
+            CREATE INDEX IF NOT EXISTS ix_token_done_timed ON wf_token (workflow, version, finished_at) WHERE status='DONE';
+            DROP INDEX IF EXISTS ix_token_dispatch;
+            DROP INDEX IF EXISTS ix_token_lease;
+            DROP INDEX IF EXISTS ix_token_throughput;
+            DROP INDEX IF EXISTS ix_token_timed;
+            """, Dialect::supportsPartialIndexes));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
@@ -525,9 +556,11 @@ public final class JdbcStorage implements Storage {
             return;
         }
         for (Migration m : pending) {
-            try (Statement st = c.createStatement()) {
-                for (String stmt : m.sql().split(";")) {
-                    if (!stmt.isBlank()) execDdl(st, stmt);
+            if (m.appliesTo().test(dialect)) {
+                try (Statement st = c.createStatement()) {
+                    for (String stmt : m.sql().split(";")) {
+                        if (!stmt.isBlank()) execDdl(st, stmt);
+                    }
                 }
             }
             try (PreparedStatement ins = c.prepareStatement(
