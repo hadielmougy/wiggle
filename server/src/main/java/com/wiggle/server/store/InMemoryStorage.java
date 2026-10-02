@@ -28,7 +28,8 @@ public final class InMemoryStorage implements Storage {
      *  head instead of sorting every live token on every poll — the sort-per-poll this replaces was
      *  ~90% of engine CPU in the embedded throughput benchmark. Guarded by the global lock. */
     private final NavigableSet<Token> readyTasks = new TreeSet<>(
-            Comparator.comparingLong((Token t) -> t.availableAt).thenComparing(t -> t.id));
+            Comparator.comparingLong((Token t) -> t.instCreatedAt).thenComparingLong(t -> t.availableAt)
+                    .thenComparing(t -> t.id));
 
     /** A worker-run step's queue wait: ready to claimed. An observed step (reported, with a seq)
      *  was never queued, so it waited for nothing. */
@@ -300,7 +301,7 @@ public final class InMemoryStorage implements Storage {
             Iterator<Token> it = readyTasks.iterator();
             while (it.hasNext() && claimed.size() < max) {
                 Token live = it.next();
-                if (live.availableAt > now) break;   // ordered by availableAt: the rest are future
+                if (live.availableAt > now) continue;   // not due yet; older instances come first
                 if (queues != null && !queues.isEmpty() && !queues.contains(live.queue)) continue;
                 if (versions != null && !versions.isEmpty()
                         && !versions.contains(new WorkflowVersion(live.workflow, live.version))) continue;
@@ -314,6 +315,15 @@ public final class InMemoryStorage implements Storage {
                 claimed.add(live.clone());
             }
             return claimed;
+        }
+
+        @Override public List<Token> dueRetries(long now, int max) {
+            return tokens.values().stream()
+                    .filter(t -> t.status == TokenStatus.WAITING && (t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE) && t.availableAt <= now)
+                    .sorted(Comparator.comparingLong((Token t) -> t.availableAt))
+                    .limit(max)
+                    .map(Token::clone)
+                    .toList();
         }
 
         @Override public List<Token> dueTimers(long now, int max) {
@@ -411,9 +421,9 @@ public final class InMemoryStorage implements Storage {
         @Override public Rows.QueueDepth queueDepth(long now) {
             int count = 0;
             long oldest = 0;
-            for (Token t : readyTasks) {              // ordered by availableAt
-                if (t.availableAt > now) break;
-                if (count == 0) oldest = t.availableAt;
+            for (Token t : readyTasks) {
+                if (t.availableAt > now) continue;
+                oldest = count == 0 ? t.availableAt : Math.min(oldest, t.availableAt);
                 count++;
             }
             return new Rows.QueueDepth(count, oldest);
@@ -423,11 +433,11 @@ public final class InMemoryStorage implements Storage {
             record Key(String workflow, int version, String queue) {}
             Map<Key, int[]> counts = new LinkedHashMap<>();      // key -> {count}
             Map<Key, Long> oldest = new LinkedHashMap<>();
-            for (Token t : readyTasks) {                          // ordered by availableAt
-                if (t.availableAt > now) break;
+            for (Token t : readyTasks) {
+                if (t.availableAt > now) continue;
                 Key k = new Key(t.workflow, t.version, t.queue);
                 counts.computeIfAbsent(k, x -> new int[1])[0]++;
-                oldest.putIfAbsent(k, t.availableAt);             // first seen is the oldest
+                oldest.merge(k, t.availableAt, Math::min);
             }
             return counts.entrySet().stream()
                     .sorted((a, b) -> Integer.compare(b.getValue()[0], a.getValue()[0]))

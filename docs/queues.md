@@ -106,9 +106,10 @@ The routing is two moves the server makes with the same `queue` label:
 
 1. **Stamp.** When an instance advances to a worker step, the server parks that step's token `READY` and
    stamps the token's `queue` from the node (`parkAtWorkerStep`: `token.queue = node.queue()`).
-2. **Filter.** A poll claims the oldest `READY` tasks whose `queue` is in the worker's served set
+2. **Filter.** A poll claims `READY` tasks whose `queue` is in the worker's served set
    (`claimTasks` filters `queues.contains(token.queue)`), flips them to `RUNNING`, and stamps a
-   **lease** owned by that worker.
+   **lease** owned by that worker. Tasks of the oldest instances go first, then the longest-ready, so
+   under a backlog the server finishes the instances it started before advancing newer ones.
 
 So the token's queue (from the DSL) is exactly what the claim filters on. A worker receives a step **iff**
 that step's queue ∈ the worker's served queues.

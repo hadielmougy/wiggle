@@ -150,6 +150,10 @@ public interface Tx extends GraphStore {
     /** WAITING timer tokens whose fire time has passed. */
     List<Token> dueTimers(long now, int max);
 
+    /** WAITING task and predicate tokens -- retries parked for their backoff -- whose backoff has run
+     *  out, earliest first. */
+    List<Token> dueRetries(long now, int max);
+
     /** AWAITING signal tokens, oldest first -- what the pending-signals list shows. */
     List<Token> pendingSignals(int max);
 

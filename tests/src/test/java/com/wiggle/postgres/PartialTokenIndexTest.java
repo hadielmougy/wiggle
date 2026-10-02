@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class PartialTokenIndexTest {
 
-    private static final Set<String> PARTIAL = Set.of("ix_token_ready", "ix_token_waiting", "ix_token_awaiting",
+    private static final Set<String> PARTIAL = Set.of("ix_token_ready_age", "ix_token_waiting", "ix_token_awaiting",
             "ix_token_running", "ix_token_done", "ix_token_done_timed");
     private static final Set<String> REPLACED = Set.of("ix_token_dispatch", "ix_token_lease",
             "ix_token_throughput", "ix_token_timed");
@@ -65,7 +65,7 @@ class PartialTokenIndexTest {
         }
     }
 
-    private static final Set<String> READY = Set.of("ix_token_ready");
+    private static final Set<String> READY = Set.of("ix_token_ready_age");
     private static final Set<String> DONE = Set.of("ix_token_done", "ix_token_done_timed");
 
     /** Each query, as the store issues it, against the partial indexes over its status. Which of
@@ -73,7 +73,7 @@ class PartialTokenIndexTest {
     private static final Map<String, Set<String>> PLANS = new HashMap<>();
     static {
         PLANS.put("SELECT id FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
-                + " AND available_at<=1000 AND queue IN ('q1','q2') ORDER BY available_at, id LIMIT 10",
+                + " AND available_at<=1000 AND queue IN ('q1','q2') ORDER BY inst_created_at, available_at, id LIMIT 10",
                 READY);
         PLANS.put("SELECT COUNT(*), COALESCE(MIN(available_at),0) FROM wf_token WHERE status='READY'"
                 + " AND kind IN ('TASK','PREDICATE') AND available_at<=1000", READY);

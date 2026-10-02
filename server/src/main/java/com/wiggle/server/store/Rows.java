@@ -45,6 +45,8 @@ public final class Rows {
         public int attempt;
         /** Earliest time this token may be dispatched (or the timer fire time). */
         public long availableAt;
+        /** When the token's instance started: dispatch serves older instances first. */
+        public long instCreatedAt;
         public String leaseOwner;
         public long leaseExpiresAt;
         /** Comma separated stack of enclosing fork groups; last element is innermost. */
