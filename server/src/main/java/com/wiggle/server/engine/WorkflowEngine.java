@@ -43,6 +43,10 @@ public final class WorkflowEngine {
      *  doWhile is budgeted; a loop that legitimately needs more says so in the topology. */
     private final long loopMaxIterations = ServerEnv.envLong("WIGGLE_LOOP_MAX_ITERATIONS", 10_000);
 
+    /** How many of a leader sweep's due items run at once, each in its own transaction. */
+    private final Sweeper sweeper = new Sweeper((int) ServerEnv.envLong(
+            "wiggle.sweep.parallelism", "WIGGLE_SWEEP_PARALLELISM", 4));
+
     private final DefinitionRegistry definitions;
     private final Queries queries;
     /** Who is polling this node and for what -- so the console can show unclaimable work. */
@@ -70,7 +74,7 @@ public final class WorkflowEngine {
         var tokens                  = new Tokens(definitions, transactions::wake);
         this.instances              = new Instances(definitions, tokens, idMinter, this::drive);
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
-        this.schedules              = new Schedules(transactions, instances);
+        this.schedules              = new Schedules(transactions, instances, sweeper);
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
     }
 
@@ -383,16 +387,10 @@ public final class WorkflowEngine {
     /** Leader duty: judge observed runs whose settle time has passed. */
     public int settleObservedRuns(int max) {
         List<Instance> due = transactions.read(tx -> tx.dueSettle(System.currentTimeMillis(), max));
-        int done = 0;
-        for (Instance probe : due) {
-            try {
-                transactions.inTxVoid(tx -> settleObservedRun(tx, probe.id));
-                done++;
-            } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.WARNING, "settle of observed run " + probe.id + " failed: " + e);
-            }
-        }
-        return done;
+        return sweeper.run(due, probe -> "settle of observed run " + probe.id, probe -> {
+            transactions.inTxVoid(tx -> settleObservedRun(tx, probe.id));
+            return true;
+        });
     }
 
     /** Whether a leader sweep should act on this item: its instance is still there, and still
@@ -576,10 +574,7 @@ public final class WorkflowEngine {
         transactions.inTxVoid(tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             Instances.requireRunning(inst);
-            Token t = tx.tokensOf(instanceId).stream()
-                    .filter(x -> x.status == TokenStatus.AWAITING && x.kind == NodeKind.SIGNAL)
-                    .filter(x -> name.equals(x.activity))
-                    .findFirst()
+            Token t = tx.awaitingSignal(instanceId, name)
                     .orElseThrow(() -> EngineException.conflict(
                             "instance " + instanceId + " is not waiting for signal '" + name + "'"));
             long now = System.currentTimeMillis();
@@ -602,16 +597,10 @@ public final class WorkflowEngine {
 
     /** Runs {@code action} once per token, each in its own transaction, isolating failures. */
     private int sweep(List<Token> due, String what, SweepAction action) {
-        int done = 0;
-        for (Token token : due) {
-            try {
-                transactions.inTxVoid(tx -> action.apply(tx, token));
-                done++;
-            } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.WARNING, what + " " + token.id + " failed: " + e);
-            }
-        }
-        return done;
+        return sweeper.run(due, token -> what + " " + token.id, token -> {
+            transactions.inTxVoid(tx -> action.apply(tx, token));
+            return true;
+        });
     }
 
     private static void logDue(String what, List<Token> due) {

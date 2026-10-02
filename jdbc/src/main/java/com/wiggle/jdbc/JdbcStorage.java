@@ -7,6 +7,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jdbi.v3.core.statement.Query;
 import org.jdbi.v3.core.statement.SqlStatement;
+import org.jdbi.v3.core.statement.Update;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.PayloadCodec;
@@ -24,6 +25,7 @@ import java.security.MessageDigest;
 import java.sql.*;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Shared-database store. This is what makes multi-node operation work: instance
@@ -124,8 +126,15 @@ public final class JdbcStorage implements Storage {
         try { c.close(); } catch (SQLException ignored) { }  // returns the connection to the pool
     }
 
-    /** One forward-only schema step. {@code sql} may hold several {@code ;}-separated statements. */
-    public record Migration(int version, String name, String sql) { }
+    /**
+     * One forward-only schema step. {@code sql} may hold several {@code ;}-separated statements.
+     * On a dialect {@code appliesTo} rejects, the step is recorded as applied without running.
+     */
+    public record Migration(int version, String name, String sql, Predicate<Dialect> appliesTo) {
+        public Migration(int version, String name, String sql) {
+            this(version, name, sql, dialect -> true);
+        }
+    }
 
     /**
      * Ordered, forward-only schema history. Append new migrations; never edit or reorder an
@@ -394,7 +403,30 @@ public final class JdbcStorage implements Storage {
             // the enum, which is why every test passed. 32 leaves room for a longer status later.
             new Migration(18, "instance-status-width", """
             ALTER TABLE wf_instance ALTER COLUMN status TYPE VARCHAR(32);
-            """));
+            """),
+            // Every wf_token query that filters on status names exactly one status, so each gets an
+            // index over only the rows in that status: ready (claim, queue depth, backlog), waiting
+            // (timers), awaiting (signal deadlines), running (expired leases), and done (throughput,
+            // step durations). Settled rows are most of the table and no longer sit in the dispatch,
+            // timer, signal or lease indexes, and a status move writes an entry only to the indexes
+            // whose predicate the new row satisfies. The four full indexes these replace are dropped.
+            // Databases without partial indexes (H2) keep the full ones.
+            //
+            // Building these on a large wf_token blocks writes to it until they finish, so run this
+            // in a maintenance window (or ahead of the deploy with WIGGLE_MIGRATE_ONLY=true) when
+            // the table is big.
+            new Migration(19, "partial-token-indexes", """
+            CREATE INDEX IF NOT EXISTS ix_token_ready ON wf_token (queue, available_at, id) WHERE status='READY';
+            CREATE INDEX IF NOT EXISTS ix_token_waiting ON wf_token (available_at) WHERE status='WAITING';
+            CREATE INDEX IF NOT EXISTS ix_token_awaiting ON wf_token (available_at) WHERE status='AWAITING';
+            CREATE INDEX IF NOT EXISTS ix_token_running ON wf_token (lease_expires) WHERE status='RUNNING';
+            CREATE INDEX IF NOT EXISTS ix_token_done ON wf_token (updated_at) WHERE status='DONE';
+            CREATE INDEX IF NOT EXISTS ix_token_done_timed ON wf_token (workflow, version, finished_at) WHERE status='DONE';
+            DROP INDEX IF EXISTS ix_token_dispatch;
+            DROP INDEX IF EXISTS ix_token_lease;
+            DROP INDEX IF EXISTS ix_token_throughput;
+            DROP INDEX IF EXISTS ix_token_timed;
+            """, Dialect::supportsPartialIndexes));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
@@ -525,9 +557,11 @@ public final class JdbcStorage implements Storage {
             return;
         }
         for (Migration m : pending) {
-            try (Statement st = c.createStatement()) {
-                for (String stmt : m.sql().split(";")) {
-                    if (!stmt.isBlank()) execDdl(st, stmt);
+            if (m.appliesTo().test(dialect)) {
+                try (Statement st = c.createStatement()) {
+                    for (String stmt : m.sql().split(";")) {
+                        if (!stmt.isBlank()) execDdl(st, stmt);
+                    }
                 }
             }
             try (PreparedStatement ins = c.prepareStatement(
@@ -764,6 +798,14 @@ public final class JdbcStorage implements Storage {
             this.h = h;
             this.c = h.getConnection();
             this.dialect = dialect;
+            h.registerRowMapper(Token.class, (rs, ctx) -> recorded(readToken(rs)));
+        }
+
+        /** Notes that the row's stored payload is {@code t.payload}, as of this transaction. */
+        private Token recorded(Token t) {
+            t.storedPayload = t.payload;
+            t.storedIn = this;
+            return t;
         }
 
         private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
@@ -1085,6 +1127,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
+        @Override public Optional<Instance> lockInstanceOf(String tokenId) {
+            return h.createQuery("SELECT * FROM wf_instance WHERE id=(SELECT instance_id FROM wf_token WHERE id=:id)"
+                            + " FOR UPDATE")
+                    .bind("id", tokenId)
+                    .mapTo(Instance.class)
+                    .findFirst();
+        }
+
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
             String sql = forUpdate
                     ? "SELECT * FROM wf_instance WHERE id=:id FOR UPDATE"
@@ -1172,6 +1222,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
+            recorded(t);
         }
 
         @Override public void insertTokens(List<Token> tokens) {
@@ -1179,15 +1230,23 @@ public final class JdbcStorage implements Storage {
             PreparedBatch b = h.prepareBatch(INSERT_TOKEN);
             for (Token t : tokens) bindToken(b, t).add();
             requireOneRowEach(b.execute(), "insert wf_token");
+            for (Token t : tokens) recorded(t);
         }
 
         /** Every wf_token column, by name. The empty join-stack sentinel is applied here, not
          *  assumed of the row. */
         private static <S extends SqlStatement<S>> S bindToken(S s, Token t) {
-            return s.bind("id", t.id)
+            return bindUpdatable(s, t)
                     .bind("instanceId", t.instanceId)
                     .bind("workflow", t.workflow)
                     .bind("version", t.version)
+                    .bind("createdAt", t.createdAt)
+                    .bind("payload", PayloadCodec.encode(t.payload));
+        }
+
+        /** The columns {@link #UPDATE_TOKEN_KEEP_PAYLOAD} sets, and the id it matches on. */
+        private static <S extends SqlStatement<S>> S bindUpdatable(S s, Token t) {
+            return s.bind("id", t.id)
                     .bind("nodeId", t.nodeId)
                     .bind("kind", t.kind.name())
                     .bind("status", t.status.name())
@@ -1199,9 +1258,7 @@ public final class JdbcStorage implements Storage {
                     .bind("leaseExpires", t.leaseExpiresAt)
                     .bind("joinStack", t.joinStack == null ? "" : t.joinStack)
                     .bind("lastError", t.lastError)
-                    .bind("createdAt", t.createdAt)
                     .bind("updatedAt", t.updatedAt)
-                    .bind("payload", PayloadCodec.encode(t.payload))
                     .bindByType("compSeq", t.compSeq, Long.class)
                     .bindByType("startedAt", t.startedAt, Long.class)
                     .bindByType("finishedAt", t.finishedAt, Long.class)
@@ -1247,16 +1304,63 @@ public final class JdbcStorage implements Storage {
                 + "join_stack=:joinStack,last_error=:lastError,updated_at=:updatedAt,payload=:payload,"
                 + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq WHERE id=:id";
 
-        @Override
-        public void updateToken(Token t) {
-            bindToken(h.createUpdate(UPDATE_TOKEN), t).execute();
+        /** {@link #UPDATE_TOKEN} minus the payload column, for a row whose payload is unchanged. */
+        private static final String UPDATE_TOKEN_KEEP_PAYLOAD = UPDATE_TOKEN.replace("payload=:payload,", "");
+
+        private boolean payloadUnchanged(Token t) {
+            return t.storedIn == this && t.payload == t.storedPayload;
         }
 
+        private static <S extends SqlStatement<S>> S bindTokenUpdate(S s, Token t, boolean keepPayload) {
+            return keepPayload ? bindUpdatable(s, t) : bindToken(s, t);
+        }
+
+        @Override
+        public void updateToken(Token t) {
+            boolean keep = payloadUnchanged(t);
+            bindTokenUpdate(h.createUpdate(keep ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN), t, keep).execute();
+            recorded(t);
+        }
+
+        /** Rows with an unchanged payload go in a batch that leaves the column alone. Splitting
+         *  reorders writes across the two batches, so a list naming one row twice keeps the single
+         *  full-row batch and its order. */
         @Override public void updateTokens(List<Token> tokens) {
             if (tokens.isEmpty()) return;
-            PreparedBatch b = h.prepareBatch(UPDATE_TOKEN);
-            for (Token t : tokens) bindToken(b, t).add();
+            List<Token> keep = new ArrayList<>();
+            List<Token> write = new ArrayList<>();
+            Set<String> ids = new HashSet<>();
+            boolean distinct = true;
+            for (Token t : tokens) {
+                distinct &= ids.add(t.id);
+                (payloadUnchanged(t) ? keep : write).add(t);
+            }
+            if (!distinct) {
+                keep.clear();
+                write = tokens;
+            }
+            updateBatch(write, false);
+            updateBatch(keep, true);
+            for (Token t : tokens) recorded(t);
+        }
+
+        private void updateBatch(List<Token> tokens, boolean keepPayload) {
+            if (tokens.isEmpty()) return;
+            PreparedBatch b = h.prepareBatch(keepPayload ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN);
+            for (Token t : tokens) bindTokenUpdate(b, t, keepPayload).add();
             requireOneRowEach(b.execute(), "update wf_token");
+        }
+
+        @Override
+        public boolean renewLease(String taskId, String leaseOwner, long until, long now) {
+            Update u = h.createUpdate("UPDATE wf_token SET lease_expires=:until,updated_at=:now"
+                            + " WHERE id=:id AND status='RUNNING'"
+                            + (leaseOwner == null ? "" : " AND lease_owner=:owner"))
+                    .bind("until", until)
+                    .bind("now", now)
+                    .bind("id", taskId);
+            if (leaseOwner != null) u.bind("owner", leaseOwner);
+            return u.execute() == 1;
         }
 
         /** A count that is not one row means a buffered write ran out of order (an update flushed
@@ -1279,6 +1383,26 @@ public final class JdbcStorage implements Storage {
                     .bind("node", nodeId)
                     .mapTo(String.class)
                     .list();
+        }
+
+        @Override
+        public List<Token> joinedAt(String instanceId, String nodeId) {
+            return h.createQuery("SELECT * FROM wf_token "
+                            + "WHERE instance_id=:id AND node_id=:node AND status='JOINED' ORDER BY id")
+                    .bind("id", instanceId)
+                    .bind("node", nodeId)
+                    .mapTo(Token.class)
+                    .list();
+        }
+
+        @Override
+        public Optional<Token> awaitingSignal(String instanceId, String name) {
+            return h.createQuery("SELECT * FROM wf_token WHERE instance_id=:id AND status='AWAITING' "
+                            + "AND kind='SIGNAL' AND activity=:name ORDER BY id LIMIT 1")
+                    .bind("id", instanceId)
+                    .bind("name", name)
+                    .mapTo(Token.class)
+                    .findFirst();
         }
 
         @Override public List<Token> claimTasks(String workerId, Set<String> queues,
@@ -1339,7 +1463,10 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
                                                      Set<WorkflowVersion> versions, int max,
                                                      long now, long leaseUntil) {
-            String pick = claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
+            boolean perQueue = queues != null && queues.size() > 1;
+            String pick = perQueue
+                    ? perQueuePick(queues.size(), versions)
+                    : claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
             Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                     + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                     + " WHERE id IN (" + pick + ") RETURNING *");
@@ -1348,9 +1475,31 @@ public final class JdbcStorage implements Storage {
                     // updated_at, started_at and the due cutoff are all this instant
                     .bind("now", now)
                     .bind("max", max);
-            if (queues != null && !queues.isEmpty()) q.bindList("queues", List.copyOf(queues));
+            if (perQueue) {
+                int i = 0;
+                for (String queue : queues) q.bind("q" + i++, queue);
+            } else if (queues != null && !queues.isEmpty()) {
+                q.bindList("queues", List.copyOf(queues));
+            }
             bindVersions(q, versions);
             return q.mapTo(Token.class).list();
+        }
+
+        /**
+         * The claim's pick across several queues: each queue's earliest {@code max} dispatchable
+         * rows, read in index order and locked SKIP LOCKED, then the earliest {@code max} of
+         * those. One filter over all the queues instead would sort every due row in them on
+         * every claim. Rows locked here but not picked stay locked, and are skipped by other
+         * claimers, until this claim commits.
+         */
+        private static String perQueuePick(int queueCount, Set<WorkflowVersion> versions) {
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < queueCount; i++) names.append(i == 0 ? "" : ",").append("(:q").append(i).append(")");
+            return "SELECT c.id FROM (VALUES " + names + ") AS q(name) CROSS JOIN LATERAL ("
+                    + "SELECT id, available_at FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
+                    + " AND available_at<=:now AND queue=q.name" + versionsClause(versions)
+                    + " ORDER BY available_at, id LIMIT :max FOR UPDATE SKIP LOCKED) c"
+                    + " ORDER BY c.available_at, c.id LIMIT :max";
         }
 
         /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */

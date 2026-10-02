@@ -33,7 +33,7 @@ public final class Housekeeper implements AutoCloseable {
                        Duration retention, int batchSize) {
         this(engine, cluster, pollInterval, retention, batchSize,
                 Boolean.parseBoolean(System.getProperty("wiggle.adaptive.housekeeping",
-                        System.getenv().getOrDefault("WIGGLE_ADAPTIVE_HOUSEKEEPING", "false"))));
+                        System.getenv().getOrDefault("WIGGLE_ADAPTIVE_HOUSEKEEPING", "true"))));
     }
 
     /**

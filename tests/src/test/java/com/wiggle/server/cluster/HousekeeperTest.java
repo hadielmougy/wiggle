@@ -62,6 +62,24 @@ class HousekeeperTest {
         }
     }
 
+    @Test @DisplayName("a housekeeper built without the flag drains: adaptive is the default")
+    void adaptiveIsTheDefault() throws Exception {
+        try (Storage storage = new InMemoryStorage();
+             ClusterManager cluster = new ClusterManager(storage, "hk-default", 1, 5000, 3)) {
+            storage.migrate();
+            cluster.start();
+            WorkflowEngine engine = engine(storage);
+            FlowSpec bp = sleeper(20);
+            engine.register(bp.definition());
+            for (int i = 0; i < 25; i++) engine.start(bp.name(), bp.version(), Map.of(), null);
+            Thread.sleep(60);
+
+            new Housekeeper(engine, cluster, Duration.ofMillis(100), Duration.ofHours(1), 10).tick();
+            assertEquals(25, engine.poll("w", bp.definition().workerQueues(), 100, null).size(),
+                    "one tick promoted all 25 due timers, past the batch of 10");
+        }
+    }
+
     @Test @DisplayName("a leader tick fires due timers")
     void leaderTickFiresTimers() throws Exception {
         try (Storage storage = new InMemoryStorage();

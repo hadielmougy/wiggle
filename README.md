@@ -509,8 +509,8 @@ is the machine.
 | Client side | submitter (24 threads) + 2 workers (`concurrency=100` each, `LOCAL_ASYNC` batch 64) on the host |
 | Runtime | OpenJDK 21 |
 
-**Adaptive polling** (opt-in flags; each reacts to what the last poll observed — never to queue
-depth — so an idle system pays nothing):
+**Adaptive polling** (each reacts to what the last poll observed — never to queue depth — so an
+idle system pays nothing; adaptive housekeeping is on by default, the fallback ramp is opt-in):
 
 | what | fixed cadence | adaptive | flag |
 |---|---|---|---|
@@ -543,7 +543,7 @@ WIGGLE_SERVER_URL=127.0.0.1:8080 \
   ./gradlew :example:rateCeiling     # the deployment ceiling: ramps rates, judges by probe sojourn
                                      # (point it at a running node with a worker attached)
 
-./gradlew :example:timerBench        # timer promotion (WIGGLE_ADAPTIVE_HOUSEKEEPING=true to compare)
+./gradlew :example:timerBench        # timer promotion (WIGGLE_ADAPTIVE_HOUSEKEEPING=false to compare)
 
 WIGGLE_SUBMIT_URL=… WIGGLE_WORKER_URL=… \
   ./gradlew :example:fallbackProbe   # cross-node dispatch latency (pin two nodes of one cluster)

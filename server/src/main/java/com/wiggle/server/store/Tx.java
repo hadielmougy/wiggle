@@ -2,6 +2,8 @@ package com.wiggle.server.store;
 
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.NodeKind;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Token;
@@ -35,6 +37,12 @@ public interface Tx extends GraphStore {
     boolean insertInstanceIfAbsent(Instance instance);
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
+
+    /** {@code lockInstance} on the instance that owns token {@code tokenId}; empty when either the
+     *  token or its instance is missing. */
+    default Optional<Instance> lockInstanceOf(String tokenId) {
+        return findToken(tokenId).flatMap(t -> lockInstance(t.instanceId));
+    }
 
     /**
      * {@code lockInstance} for a set of rows, {@code ids} already sorted ascending. The default
@@ -102,7 +110,37 @@ public interface Tx extends GraphStore {
         for (Token t : tokens) updateToken(t);
     }
 
+    /**
+     * Moves the lease expiry of a RUNNING token to {@code until}, touching nothing else of the
+     * row. A null {@code leaseOwner} matches any holder. Returns false, having written nothing,
+     * when the token is missing, not RUNNING, or leased by someone else.
+     */
+    default boolean renewLease(String taskId, String leaseOwner, long until, long now) {
+        Token t = findToken(taskId).orElse(null);
+        if (t == null || t.status != TokenStatus.RUNNING) return false;
+        if (leaseOwner != null && !leaseOwner.equals(t.leaseOwner)) return false;
+        t.leaseExpiresAt = until;
+        t.updatedAt = now;
+        updateToken(t);
+        return true;
+    }
+
     List<String> joinStacksAt(String instanceId, String nodeId);
+
+    /** The instance's JOINED tokens parked at {@code nodeId}, by id. */
+    default List<Token> joinedAt(String instanceId, String nodeId) {
+        return tokensOf(instanceId).stream()
+                .filter(t -> t.status == TokenStatus.JOINED && nodeId.equals(t.nodeId))
+                .toList();
+    }
+
+    /** The instance's token AWAITING signal {@code name}, the lowest id if several. */
+    default Optional<Token> awaitingSignal(String instanceId, String name) {
+        return tokensOf(instanceId).stream()
+                .filter(t -> t.status == TokenStatus.AWAITING && t.kind == NodeKind.SIGNAL)
+                .filter(t -> name.equals(t.activity))
+                .findFirst();
+    }
 
     boolean hasActiveTokens(String instanceId);
 

@@ -284,6 +284,83 @@ abstract class StorageContract {
         assertTrue(storage.inTx(tx -> tx.lockInstances(List.of())).isEmpty(), "no ids, no rows");
     }
 
+    @Test
+    @DisplayName("lockInstanceOf locks the instance owning a token; a missing token or instance is empty")
+    void lockInstanceOfFindsTheOwner() {
+        Instance owner = instance(id("wf"));
+        Token task = token(owner, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(owner, task);
+        Instance gone = instance(id("wf"));
+        Token orphan = token(gone, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        storage.inTxVoid(tx -> tx.insertToken(orphan));
+
+        assertEquals(owner.id, storage.inTx(tx -> tx.lockInstanceOf(task.id)).orElseThrow().id);
+        assertTrue(storage.inTx(tx -> tx.lockInstanceOf(id("tok"))).isEmpty(), "no such token");
+        assertTrue(storage.inTx(tx -> tx.lockInstanceOf(orphan.id)).isEmpty(), "a token whose instance is gone");
+    }
+
+    @Test
+    @DisplayName("lockInstanceOf serialises a read-modify-write across threads, as lockInstance does")
+    void lockInstanceOfSerialisesReadModifyWrite() throws Exception {
+        Instance seed = instance(id("wf"));
+        seed.context = doc("n", 0);
+        Token task = token(seed, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(seed, task);
+
+        int threads = 2;
+        int each = 25;
+        race(threads, () -> {
+            for (int k = 0; k < each; k++) {
+                storage.inTxVoid(tx -> {
+                    Instance live = tx.lockInstanceOf(task.id).orElseThrow();
+                    live.context = doc("n", counter(live.context) + 1);
+                    live.updatedAt = System.currentTimeMillis();
+                    tx.updateInstance(live);
+                });
+            }
+        });
+
+        Instance done = storage.inTx(tx -> tx.findInstance(seed.id)).orElseThrow();
+        assertEquals(threads * each, counter(done.context), "no increment taken under the lock was lost");
+    }
+
+    @Test
+    @DisplayName("joinedAt is the instance's JOINED tokens at one node, in id order")
+    void joinedAtIsTheBarrier() {
+        Instance inst = instance(id("wf"));
+        Token a = token(inst, NodeKind.JOIN, TokenStatus.JOINED, null);
+        Token b = token(inst, NodeKind.JOIN, TokenStatus.JOINED, null);
+        Token elsewhere = token(inst, NodeKind.JOIN, TokenStatus.JOINED, null);
+        elsewhere.nodeId = "n2";
+        Token settled = token(inst, NodeKind.JOIN, TokenStatus.DONE, null);
+        Instance other = instance(id("wf"));
+        Token foreign = token(other, NodeKind.JOIN, TokenStatus.JOINED, null);
+        store(inst, a, b, elsewhere, settled);
+        store(other, foreign);
+
+        assertEquals(List.of(a.id, b.id), idsOf(storage.inTx(tx -> tx.joinedAt(inst.id, "n1"))));
+        assertEquals(List.of(elsewhere.id), idsOf(storage.inTx(tx -> tx.joinedAt(inst.id, "n2"))));
+        assertTrue(storage.inTx(tx -> tx.joinedAt(inst.id, "n3")).isEmpty());
+    }
+
+    @Test
+    @DisplayName("awaitingSignal finds the token waiting on that signal, and nothing else")
+    void awaitingSignalFindsTheWait() {
+        Instance inst = instance(id("wf"));
+        Token approve = token(inst, NodeKind.SIGNAL, TokenStatus.AWAITING, null);
+        approve.activity = "approve";
+        Token reject = token(inst, NodeKind.SIGNAL, TokenStatus.AWAITING, null);
+        reject.activity = "reject";
+        Token delivered = token(inst, NodeKind.SIGNAL, TokenStatus.DONE, null);
+        delivered.activity = "ship";
+        store(inst, approve, reject, delivered);
+
+        assertEquals(approve.id, storage.inTx(tx -> tx.awaitingSignal(inst.id, "approve")).orElseThrow().id);
+        assertEquals(reject.id, storage.inTx(tx -> tx.awaitingSignal(inst.id, "reject")).orElseThrow().id);
+        assertTrue(storage.inTx(tx -> tx.awaitingSignal(inst.id, "ship")).isEmpty(), "already delivered");
+        assertTrue(storage.inTx(tx -> tx.awaitingSignal(inst.id, "unknown")).isEmpty());
+    }
+
     // -- WGL-STOR-030/031/032: definitions and their normalised graphs --
 
     @Test

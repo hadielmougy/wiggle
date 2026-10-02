@@ -16,9 +16,11 @@ final class Dispatch {
 
     private static final System.Logger LOG = System.getLogger(Dispatch.class.getName());
 
-    /** How long a long-poll waits between fallback DB claims when no local wake-on-produce arrives.
-     *  Same-node production wakes a poller immediately; this bounds the latency for cross-node
-     *  production (and any missed signal). Overridable via {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
+    /** How long the poll at the front of a line of parked polls waits between fallback DB claims
+     *  when no local wake-on-produce arrives; the polls behind it wait for a wake (see
+     *  {@link DispatchNotifier}). Same-node production wakes a poller immediately; this bounds the
+     *  latency for cross-node production (and any missed signal). Overridable via
+     *  {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
     private final long fallbackPollMillis = ServerEnv.envLong("WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
     /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
@@ -68,21 +70,28 @@ final class Dispatch {
         pollers.seen(workerId, queues, versions, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
+        DispatchNotifier.Interest interest = new DispatchNotifier.Interest(queues, versions);
         Map<String, Long> since = notifier.snapshot(queues);
         List<TaskActivation> tasks = claimNow(workerId, queues, versions, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
         long fallbackWait = adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
+        boolean signaled = false;
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-            long remaining = deadline - System.currentTimeMillis();
-            boolean signaled = notifier.awaitChange(queues, since, Math.min(fallbackWait, remaining));
+            signaled = notifier.await(interest, max, since, fallbackWait, deadline);
             if (signaled && max > 1) lingerForBatch(deadline);
-            if (cancelled.cancelled()) return List.of();   // worker gone -- leave the work for a live one
+            if (cancelled.cancelled()) {
+                if (signaled) notifier.passOn(interest);   // the wake was meant for a claim; hand it on
+                return List.of();                          // worker gone -- leave the work for a live one
+            }
             since = notifier.snapshot(queues);
             tasks = claimNow(workerId, queues, versions, max, lease);
             if (adaptiveFallbackPoll) {
                 fallbackWait = signaled ? fallbackPollMillis : Math.min(fallbackWait * 2, fallbackPollMillis);
             }
         }
+        // A full claim nobody signalled for may have left more behind: wake the next poll to look.
+        // A signal already woke polls enough to cover the tokens it announced.
+        if (tasks.size() >= max && !signaled) notifier.passOn(interest);
         if (!tasks.isEmpty()) {
             List<TaskActivation> claimed = tasks;
             LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
