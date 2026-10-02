@@ -3,8 +3,8 @@ package com.wiggle.server.engine;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
-import java.util.HashSet;
-import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * The engine's transaction scope: a storage transaction plus the wake-on-produce signal that must
@@ -36,8 +36,8 @@ final class Transactions {
     private final Storage storage;
     private final DispatchNotifier notifier;
 
-    /** Queues that had a token parked READY during the in-flight transaction. */
-    private final ThreadLocal<Set<String>> readyQueues = new ThreadLocal<>();
+    /** How many tokens the in-flight transaction parked READY, by queue. */
+    private final ThreadLocal<Map<String, Integer>> readyQueues = new ThreadLocal<>();
 
     Transactions(Storage storage, DispatchNotifier notifier) {
         this.storage = storage;
@@ -47,8 +47,8 @@ final class Transactions {
     /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op.
      *  Handed to producers as a {@link QueueWake}. */
     void wake(String queue) {
-        Set<String> ready = readyQueues.get();
-        if (ready != null && queue != null) ready.add(queue);
+        Map<String, Integer> ready = readyQueues.get();
+        if (ready != null && queue != null) ready.merge(queue, 1, Integer::sum);
     }
 
     /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue it marked. */
@@ -58,11 +58,14 @@ final class Transactions {
                     + "inTx. A nested call would run on a second connection and deadlock against the "
                     + "instance lock the outer transaction holds. Pass the open Tx down instead.");
         }
-        Set<String> mine = new HashSet<>();
+        Map<String, Integer> mine = new HashMap<>();
         readyQueues.set(mine);
         T result;
         try {
-            result = storage.inTx(body::run);
+            result = storage.inTx(tx -> {
+                mine.clear();   // a replayed attempt counts its own tokens, not the rolled-back one's too
+                return body.run(tx);
+            });
         } finally {
             readyQueues.remove();
         }
