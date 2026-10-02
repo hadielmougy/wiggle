@@ -19,10 +19,12 @@ final class Schedules {
 
     private final Transactions transactions;
     private final Instances instances;
+    private final Sweeper sweeper;
 
-    Schedules(Transactions transactions, Instances instances) {
+    Schedules(Transactions transactions, Instances instances, Sweeper sweeper) {
         this.transactions = transactions;
         this.instances = instances;
+        this.sweeper = sweeper;
     }
 
     /** Creates a recurring start: {@code workflow} fires every {@code every}, first fire after one interval. */
@@ -86,15 +88,7 @@ final class Schedules {
     int fireDue(int max) {
         long now = System.currentTimeMillis();
         List<Rows.Schedule> due = transactions.read(tx -> tx.dueSchedules(now, max));
-        int fired = 0;
-        for (Rows.Schedule sched : due) {
-            try {
-                if (fire(sched, now)) fired++;
-            } catch (RuntimeException e) {
-                LOG.log(System.Logger.Level.WARNING, "schedule " + sched.id + " failed to fire: " + e);
-            }
-        }
-        return fired;
+        return sweeper.run(due, sched -> "schedule " + sched.id + " firing", sched -> fire(sched, now));
     }
 
     private boolean fire(Rows.Schedule sched, long now) {
