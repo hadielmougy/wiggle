@@ -229,14 +229,15 @@ final class Tokens {
         TokenState.of(t.status).requireLeasedBy(t, leaseOwner);
     }
 
+    /** Renews in one write; only a refused renewal reads the token, to say why it was refused. */
     static long extendLease(Tx tx, String taskId, String leaseOwner, long extraMillis) {
+        long now = System.currentTimeMillis();
+        long until = now + extraMillis;
+        if (tx.renewLease(taskId, leaseOwner, until, now)) return until;
         Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
         requireLease(t, leaseOwner);
-        long now = System.currentTimeMillis();
-        TokenState.of(t.status).renewLease(t, now + extraMillis);
-        t.updatedAt = now;
-        tx.updateToken(t);
-        return t.leaseExpiresAt;
+        TokenState.of(t.status).renewLease(t, until);
+        throw EngineException.conflict("lease for task " + taskId + " changed while renewing it");
     }
 
     List<TaskActivation> claim(Tx tx, String workerId, Set<String> queues, Set<WorkflowVersion> versions,

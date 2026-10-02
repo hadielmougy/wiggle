@@ -2,6 +2,7 @@ package com.wiggle.server.store;
 
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Token;
@@ -106,6 +107,21 @@ public interface Tx extends GraphStore {
     /** {@code updateToken} for a set of rows; same contract as {@link #insertTokens}. */
     default void updateTokens(List<Token> tokens) {
         for (Token t : tokens) updateToken(t);
+    }
+
+    /**
+     * Moves the lease expiry of a RUNNING token to {@code until}, touching nothing else of the
+     * row. A null {@code leaseOwner} matches any holder. Returns false, having written nothing,
+     * when the token is missing, not RUNNING, or leased by someone else.
+     */
+    default boolean renewLease(String taskId, String leaseOwner, long until, long now) {
+        Token t = findToken(taskId).orElse(null);
+        if (t == null || t.status != TokenStatus.RUNNING) return false;
+        if (leaseOwner != null && !leaseOwner.equals(t.leaseOwner)) return false;
+        t.leaseExpiresAt = until;
+        t.updatedAt = now;
+        updateToken(t);
+        return true;
     }
 
     List<String> joinStacksAt(String instanceId, String nodeId);
