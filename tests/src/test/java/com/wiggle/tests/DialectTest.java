@@ -34,11 +34,14 @@ class DialectTest {
         assertTrue(d.scheduleUpsert().contains("ON CONFLICT (id) DO UPDATE"));
     }
 
-    @Test @DisplayName("H2 keeps ON CONFLICT but has no SKIP LOCKED, so it claims via compare-and-set")
+    @Test @DisplayName("H2 keeps ON CONFLICT DO NOTHING, merges instead of upserting, and has no SKIP LOCKED")
     void h2() {
         H2Dialect d = new H2Dialect();
         assertFalse(d.supportsSkipLocked());
         assertFalse(d.supportsReturning());
+        assertEquals("INSERT INTO t VALUES (?) ON CONFLICT DO NOTHING", d.insertIgnore("INSERT INTO t VALUES (?)"));
+        assertTrue(d.scheduleUpsert().contains("MERGE INTO wf_schedule"),
+                "ON CONFLICT stops at DO NOTHING here, so an upsert that updates is a MERGE");
     }
 
     @Test @DisplayName("a momentary failure is recognised from the SQL state, whichever type the driver threw")
@@ -82,15 +85,28 @@ class DialectTest {
         assertFalse(d.isTransient(dup), "and a duplicate key is not momentary");
     }
 
-    @Test @DisplayName("the two dialects differ only in the claim primitives and the migration lock")
+    @Test
+    @DisplayName("the two dialects differ in the claim primitives, the migration lock and the schedule upsert")
     void theyAgreeOnEverythingElse() {
         PostgresDialect pg = new PostgresDialect();
         H2Dialect h2 = new H2Dialect();
-        // Same schema, same upserts: H2 in PostgreSQL mode takes the store's SQL verbatim, which is
-        // why both of these are now one shared default rather than two identical overrides.
-        assertEquals(pg.scheduleUpsert(), h2.scheduleUpsert(), "the schedule upsert is identical");
+        // Same schema, and the same DO NOTHING conflict clause: that much H2 does take verbatim,
+        // which is why insertIgnore is one shared default rather than two identical overrides.
         assertEquals(pg.insertIgnore("INSERT INTO t VALUES (?)"),
                 h2.insertIgnore("INSERT INTO t VALUES (?)"), "conflict handling is identical");
+
+        // The schedule upsert is not shared: H2 takes ON CONFLICT only as far as DO NOTHING, so it
+        // spells this one as a MERGE. What has to agree is the shape the store binds to -- seven
+        // positional parameters in insert-column order -- and not the text. That both statements
+        // then behave the same is asserted by running them: server/store/StorageContract.
+        assertTrue(pg.scheduleUpsert().contains("ON CONFLICT (id) DO UPDATE"), pg.scheduleUpsert());
+        assertTrue(h2.scheduleUpsert().contains("MERGE INTO wf_schedule"), h2.scheduleUpsert());
+        for (Dialect d : java.util.List.of(pg, h2)) {
+            assertTrue(d.scheduleUpsert().contains("wf_schedule"), d.id() + " upserts wf_schedule");
+            assertEquals(7, d.scheduleUpsert().chars().filter(c -> c == '?').count(),
+                    d.id() + " binds the seven schedule columns, in insert-column order");
+        }
+
         // And the difference that does matter.
         assertTrue(pg.supportsSkipLocked() && pg.supportsReturning(), "PostgreSQL claims in one statement");
         assertFalse(h2.supportsSkipLocked() || h2.supportsReturning(), "H2 falls back to compare-and-set");

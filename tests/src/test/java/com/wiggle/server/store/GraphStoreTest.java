@@ -23,6 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * reference data -- exercised through {@link InMemoryStorage}. It documents the interface's
  * behaviour independently of the engine ({@link DefaultLazyGraph} tests the
  * lazy view; {@code JdbcGraphTest} the JDBC row normalisation).
+ *
+ * <p>Being one backend, it cannot catch the two drifting apart: that is {@link StorageContract},
+ * which asserts the clauses both have to answer and runs them against each.
  */
 class GraphStoreTest {
 
