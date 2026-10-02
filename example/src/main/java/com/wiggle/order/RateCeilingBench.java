@@ -107,7 +107,7 @@ public final class RateCeilingBench {
 
     record ProbeSample(long atStageMillis, long sojournMillis) {}   // sojourn -1 = timed out
 
-    record StageResult(int targetRate, double achievedRate, long submitP50, long submitP99,
+    record StageResult(int targetRate, double achievedRate, long submitP50, long submitP99, long maxLagMillis,
                        long probeFirstMed, long probeLastMed, int probes, boolean pass, String note) {}
 
     public static void main(String[] args) throws Exception {
@@ -175,12 +175,15 @@ public final class RateCeilingBench {
         ConcurrentLinkedQueue<ProbeSample> probes = new ConcurrentLinkedQueue<>();
         AtomicLong slots = new AtomicLong();
         AtomicLong started = new AtomicLong();
+        AtomicLong maxLagNanos = new AtomicLong();
         AtomicBoolean failed = new AtomicBoolean();
         long intervalNanos = 1_000_000_000L / rate;
         long t0 = System.nanoTime();
         long endNanos = t0 + stageMillis * 1_000_000L;
 
-        // Paced submitters: thread-shared slot counter → evenly spaced arrivals at the target rate.
+        // Paced submitters: thread-shared slot counter → evenly spaced arrivals at the target rate. A slot
+        // the submitters only reach after the stage has ended is dropped, not issued late, so the starts
+        // counted are the ones the server received inside the stage and the achieved rate is real.
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch done = new CountDownLatch(threads);
         for (int t = 0; t < threads; t++) {
@@ -192,6 +195,8 @@ public final class RateCeilingBench {
                         if (at >= endNanos) return;
                         long wait = at - System.nanoTime();
                         if (wait > 0) TimeUnit.NANOSECONDS.sleep(wait);
+                        else maxLagNanos.accumulateAndGet(-wait, Math::max);
+                        if (System.nanoTime() >= endNanos) return;
                         long seq = started.getAndIncrement();
                         Order order = Order.of("B-" + seq, "bench-" + seq, 1 + (int) (seq % 3),
                                 new BigDecimal("100.00"));
@@ -251,10 +256,12 @@ public final class RateCeilingBench {
         boolean piling = timedOut || (lastMed - midMed) > 3000;
         boolean pass = !failed.get() && !submitterBound && !piling;
         String note = failed.get() ? "submitter error"
-                : submitterBound ? "submitter-bound (client could not reach the target rate)"
+                : submitterBound ? "submitter-bound: starts fell behind the target rate (slow submits = the "
+                        + "server's start path; fast submits = add BENCH_THREADS)"
                 : timedOut ? "probe timed out (> " + PROBE_TIMEOUT_MILLIS / 1000 + "s)"
                 : piling ? "sojourn drifting up — queue piling" : "stable";
-        return new StageResult(rate, achieved, p50, p99, midMed, lastMed, ordered.size(), pass, note);
+        return new StageResult(rate, achieved, p50, p99, maxLagNanos.get() / 1_000_000,
+                midMed, lastMed, ordered.size(), pass, note);
     }
 
     /** Start one probe instance and poll it to a terminal state; -1 on timeout. The poll routes by the
@@ -316,9 +323,9 @@ public final class RateCeilingBench {
     }
 
     private static String format(StageResult r) {
-        return String.format("rate=%d/s  achieved=%.0f/s  submit p50=%dms p99=%dms  " +
+        return String.format("rate=%d/s  achieved=%.0f/s  submit p50=%dms p99=%dms  max lag=%dms  " +
                         "probe sojourn first½=%dms last½=%dms (%d probes)  %s  [%s]",
-                r.targetRate(), r.achievedRate(), r.submitP50(), r.submitP99(),
+                r.targetRate(), r.achievedRate(), r.submitP50(), r.submitP99(), r.maxLagMillis(),
                 r.probeFirstMed(), r.probeLastMed(), r.probes(), r.pass() ? "PASS" : "FAIL", r.note());
     }
 
