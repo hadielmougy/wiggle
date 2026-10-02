@@ -1118,6 +1118,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
+        @Override public Optional<Instance> lockInstanceOf(String tokenId) {
+            return h.createQuery("SELECT * FROM wf_instance WHERE id=(SELECT instance_id FROM wf_token WHERE id=:id)"
+                            + " FOR UPDATE")
+                    .bind("id", tokenId)
+                    .mapTo(Instance.class)
+                    .findFirst();
+        }
+
         private Optional<Instance> loadInstance(String id, boolean forUpdate) {
             String sql = forUpdate
                     ? "SELECT * FROM wf_instance WHERE id=:id FOR UPDATE"

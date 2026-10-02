@@ -36,6 +36,12 @@ public interface Tx extends GraphStore {
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
 
+    /** {@code lockInstance} on the instance that owns token {@code tokenId}; empty when either the
+     *  token or its instance is missing. */
+    default Optional<Instance> lockInstanceOf(String tokenId) {
+        return findToken(tokenId).flatMap(t -> lockInstance(t.instanceId));
+    }
+
     /**
      * {@code lockInstance} for a set of rows, {@code ids} already sorted ascending. The default
      * loops -- exactly today's one-lock-per-statement, in the caller's order. A JDBC backend

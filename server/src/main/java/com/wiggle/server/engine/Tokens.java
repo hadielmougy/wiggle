@@ -217,9 +217,10 @@ final class Tokens {
 
     record LockedTask(Instance inst, Token token) {}
 
+    /** The task's instance, locked, and the task as it stands under that lock. */
     static LockedTask lock(Tx tx, String taskId) {
-        Token probe   = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-        Instance inst = tx.lockInstance(probe.instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+        Instance inst = tx.lockInstanceOf(taskId).orElseThrow(() -> tx.findToken(taskId).isPresent()
+                ? EngineException.notFound("instance") : EngineException.notFound("task"));
         Token token   = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
         return new LockedTask(inst, token);
     }

@@ -284,6 +284,46 @@ abstract class StorageContract {
         assertTrue(storage.inTx(tx -> tx.lockInstances(List.of())).isEmpty(), "no ids, no rows");
     }
 
+    @Test
+    @DisplayName("lockInstanceOf locks the instance owning a token; a missing token or instance is empty")
+    void lockInstanceOfFindsTheOwner() {
+        Instance owner = instance(id("wf"));
+        Token task = token(owner, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(owner, task);
+        Instance gone = instance(id("wf"));
+        Token orphan = token(gone, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        storage.inTxVoid(tx -> tx.insertToken(orphan));
+
+        assertEquals(owner.id, storage.inTx(tx -> tx.lockInstanceOf(task.id)).orElseThrow().id);
+        assertTrue(storage.inTx(tx -> tx.lockInstanceOf(id("tok"))).isEmpty(), "no such token");
+        assertTrue(storage.inTx(tx -> tx.lockInstanceOf(orphan.id)).isEmpty(), "a token whose instance is gone");
+    }
+
+    @Test
+    @DisplayName("lockInstanceOf serialises a read-modify-write across threads, as lockInstance does")
+    void lockInstanceOfSerialisesReadModifyWrite() throws Exception {
+        Instance seed = instance(id("wf"));
+        seed.context = doc("n", 0);
+        Token task = token(seed, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(seed, task);
+
+        int threads = 2;
+        int each = 25;
+        race(threads, () -> {
+            for (int k = 0; k < each; k++) {
+                storage.inTxVoid(tx -> {
+                    Instance live = tx.lockInstanceOf(task.id).orElseThrow();
+                    live.context = doc("n", counter(live.context) + 1);
+                    live.updatedAt = System.currentTimeMillis();
+                    tx.updateInstance(live);
+                });
+            }
+        });
+
+        Instance done = storage.inTx(tx -> tx.findInstance(seed.id)).orElseThrow();
+        assertEquals(threads * each, counter(done.context), "no increment taken under the lock was lost");
+    }
+
     // -- WGL-STOR-030/031/032: definitions and their normalised graphs --
 
     @Test
