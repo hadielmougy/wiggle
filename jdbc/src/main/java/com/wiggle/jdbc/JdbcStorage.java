@@ -1463,7 +1463,10 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
                                                      Set<WorkflowVersion> versions, int max,
                                                      long now, long leaseUntil) {
-            String pick = claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
+            boolean perQueue = queues != null && queues.size() > 1;
+            String pick = perQueue
+                    ? perQueuePick(queues.size(), versions)
+                    : claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
             Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                     + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                     + " WHERE id IN (" + pick + ") RETURNING *");
@@ -1472,9 +1475,31 @@ public final class JdbcStorage implements Storage {
                     // updated_at, started_at and the due cutoff are all this instant
                     .bind("now", now)
                     .bind("max", max);
-            if (queues != null && !queues.isEmpty()) q.bindList("queues", List.copyOf(queues));
+            if (perQueue) {
+                int i = 0;
+                for (String queue : queues) q.bind("q" + i++, queue);
+            } else if (queues != null && !queues.isEmpty()) {
+                q.bindList("queues", List.copyOf(queues));
+            }
             bindVersions(q, versions);
             return q.mapTo(Token.class).list();
+        }
+
+        /**
+         * The claim's pick across several queues: each queue's earliest {@code max} dispatchable
+         * rows, read in index order and locked SKIP LOCKED, then the earliest {@code max} of
+         * those. One filter over all the queues instead would sort every due row in them on
+         * every claim. Rows locked here but not picked stay locked, and are skipped by other
+         * claimers, until this claim commits.
+         */
+        private static String perQueuePick(int queueCount, Set<WorkflowVersion> versions) {
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < queueCount; i++) names.append(i == 0 ? "" : ",").append("(:q").append(i).append(")");
+            return "SELECT c.id FROM (VALUES " + names + ") AS q(name) CROSS JOIN LATERAL ("
+                    + "SELECT id, available_at FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
+                    + " AND available_at<=:now AND queue=q.name" + versionsClause(versions)
+                    + " ORDER BY available_at, id LIMIT :max FOR UPDATE SKIP LOCKED) c"
+                    + " ORDER BY c.available_at, c.id LIMIT :max";
         }
 
         /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
