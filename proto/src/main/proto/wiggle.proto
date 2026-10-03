@@ -179,6 +179,12 @@ message Token {
     // When the step ran on the reporting side (LOCAL_* and OBSERVED); absent when not reported.
     optional int64 started_at = 10;
     optional int64 finished_at = 11;
+    // What the step ran with and returned, where the server recorded it. A task's absent output left
+    // the context unchanged; a predicate's output is its branch. Either may be a truncation marker:
+    // {"$truncated": <length>, "head": "..."}.
+    optional google.protobuf.Value input = 12;
+    optional google.protobuf.Value output = 13;
+    int64 created_at = 14;
 }
 
 message InstanceDetail {

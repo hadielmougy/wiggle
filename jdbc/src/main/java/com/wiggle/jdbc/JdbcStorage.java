@@ -436,7 +436,13 @@ public final class JdbcStorage implements Storage {
             new Migration(21, "ready-index-by-instance-age", """
             CREATE INDEX IF NOT EXISTS ix_token_ready_age ON wf_token (queue, inst_created_at, available_at, id) WHERE status='READY';
             DROP INDEX IF EXISTS ix_token_ready;
-            """, Dialect::supportsPartialIndexes));
+            """, Dialect::supportsPartialIndexes),
+            // A step's input and output as JSON, for the console to show. Null on rows written before
+            // this, and wherever recording is off.
+            new Migration(22, "token-step-io", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS step_input TEXT;
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS step_output TEXT;
+            """));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
@@ -760,6 +766,8 @@ public final class JdbcStorage implements Storage {
         t.finishedAt = rs.wasNull() ? null : finishedAt;
         long seq = rs.getLong("seq");
         t.seq = rs.wasNull() ? null : seq;
+        t.stepInput = rs.getString("step_input");
+        t.stepOutput = rs.getString("step_output");
         t.createdAt = rs.getLong("created_at");
         t.updatedAt = rs.getLong("updated_at");
         return t;
@@ -1226,10 +1234,11 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
                 + "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,"
-                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,inst_created_at) VALUES "
+                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,inst_created_at,"
+                + "step_input,step_output) VALUES "
                 + "(:id,:instanceId,:workflow,:version,:nodeId,:kind,:status,:activity,:queue,:attempt,"
                 + ":availableAt,:leaseOwner,:leaseExpires,:joinStack,:lastError,:createdAt,:updatedAt,:payload,"
-                + ":compSeq,:startedAt,:finishedAt,:seq,:instCreatedAt)";
+                + ":compSeq,:startedAt,:finishedAt,:seq,:instCreatedAt,:stepInput,:stepOutput)";
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
@@ -1274,7 +1283,9 @@ public final class JdbcStorage implements Storage {
                     .bindByType("compSeq", t.compSeq, Long.class)
                     .bindByType("startedAt", t.startedAt, Long.class)
                     .bindByType("finishedAt", t.finishedAt, Long.class)
-                    .bindByType("seq", t.seq, Long.class);
+                    .bindByType("seq", t.seq, Long.class)
+                    .bindByType("stepInput", t.stepInput, String.class)
+                    .bindByType("stepOutput", t.stepOutput, String.class);
         }
 
         @Override public Optional<Token> findToken(String id) {
@@ -1314,7 +1325,8 @@ public final class JdbcStorage implements Storage {
                 + "status=:status,activity=:activity,queue=:queue,attempt=:attempt,"
                 + "available_at=:availableAt,lease_owner=:leaseOwner,lease_expires=:leaseExpires,"
                 + "join_stack=:joinStack,last_error=:lastError,updated_at=:updatedAt,payload=:payload,"
-                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq WHERE id=:id";
+                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq,"
+                + "step_input=:stepInput,step_output=:stepOutput WHERE id=:id";
 
         /** {@link #UPDATE_TOKEN} minus the payload column, for a row whose payload is unchanged. */
         private static final String UPDATE_TOKEN_KEEP_PAYLOAD = UPDATE_TOKEN.replace("payload=:payload,", "");

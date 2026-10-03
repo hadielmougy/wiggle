@@ -176,7 +176,8 @@ public final class GrpcDashboardData implements DashboardData {
     private static TokenView token(WiggleClient.TokenInfo t) {
         // queue / leaseExpiresAt / updatedAt are not on the wire Token -> null / 0.
         return new TokenView(t.id(), t.nodeId(), t.kind(), t.status(), t.activity(),
-                null, t.attempt(), t.availableAt(), t.leaseOwner(), 0, t.lastError(), 0);
+                null, t.attempt(), t.availableAt(), t.leaseOwner(), 0, t.lastError(), 0,
+                t.startedAt(), t.finishedAt(), t.createdAt(), t.input(), t.output());
     }
 
     private static String str(Object o) { return o == null ? null : String.valueOf(o); }

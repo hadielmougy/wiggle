@@ -579,6 +579,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         if (t.lastError != null) m.setLastError(t.lastError);
         if (t.startedAt != null) m.setStartedAt(t.startedAt);
         if (t.finishedAt != null) m.setFinishedAt(t.finishedAt);
+        if (t.stepInput != null) m.setInput(ProtoJson.toValue(com.wiggle.core.Json.parse(t.stepInput)));
+        if (t.stepOutput != null) m.setOutput(ProtoJson.toValue(com.wiggle.core.Json.parse(t.stepOutput)));
+        m.setCreatedAt(t.createdAt);
         return m.build();
     }
 

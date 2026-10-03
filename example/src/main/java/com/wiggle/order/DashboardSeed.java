@@ -19,7 +19,8 @@ import java.util.Map;
  * <pre>./gradlew :example:seedDashboard                                       # terminal 1
  * WIGGLE_URL=localhost:8080 ./gradlew :console:run   ->   http://localhost:8090   # terminal 2</pre>
  *
- * Every tab has something to see: Instances (with a live trace), Workflows (diagrams),
+ * Every tab has something to see: Instances (each run's steps, with input, output, retries and
+ * timing), Workflows (their steps),
  * Signals (two pending approvals), Schedules (one cron, one interval).
  *
  * <p>Config comes from the environment ({@link ServerConfig#fromEnvironment()}), so the same

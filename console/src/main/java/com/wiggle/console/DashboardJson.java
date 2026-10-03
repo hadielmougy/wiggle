@@ -43,6 +43,11 @@ final class DashboardJson {
         m.put("leaseExpiresAt", t.leaseExpiresAt());
         m.put("lastError", t.lastError());
         m.put("updatedAt", t.updatedAt());
+        m.put("startedAt", t.startedAt());
+        m.put("finishedAt", t.finishedAt());
+        m.put("createdAt", t.createdAt());
+        m.put("input", t.input());
+        m.put("output", t.output());
         return m;
     }
 

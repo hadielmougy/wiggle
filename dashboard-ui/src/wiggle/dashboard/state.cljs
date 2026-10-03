@@ -22,16 +22,17 @@
                 :search "" :search-by :correlation}   ; free-text lookup by :correlation | :id
     :selected  nil                 ; selected instance id
     :detail    nil                 ; {:instance .. :tokens ..}
-    :graph     nil                 ; {:name .. :nodes .. } for the diagram
+    :graph     nil                 ; {:name .. :nodes .. } — step names and the workflows tab's step table
     :graph-for nil                 ; which workflow the loaded graph is for
+    :wf-open   nil                 ; the workflow expanded on the workflows tab
     :auto?     true
-    :window    nil                 ; {:kind :detail|:diagram :mode :normal|:max|:min} — the floating popup
+    :window    nil                 ; {:kind :detail|:password :mode :normal|:max|:min} — the floating popup
     :toast     nil}))              ; {:kind :ok|:err :text ".."}
 
 (defn tab [] (:tab @db))
 (defn set-tab! [t] (swap! db assoc :tab t :window nil))   ; switching tabs dismisses any popup
 
-;; ---- floating window (the flow-diagram / detail popup) ----
+;; ---- floating window (the instance detail / password popup) ----
 (defn open-window! [kind] (swap! db assoc :window {:kind kind :mode :normal}))
 (defn close-window! [] (swap! db assoc :window nil :selected nil :detail nil))
 ;; toggle back to :normal if already in that mode, so the same button restores

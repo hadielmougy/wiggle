@@ -203,9 +203,14 @@ public final class WiggleClient implements AutoCloseable {
     /** An instance view plus the (proto-shaped) tokens driving it. */
     public record InstanceWithTokens(com.wiggle.core.InstanceView instance, java.util.List<TokenInfo> tokens) {}
 
-    /** A token as carried on the wire (thinner than the server row: no queue/leaseExpires/updatedAt). */
+    /**
+     * A token as carried on the wire (thinner than the server row: no queue/leaseExpires/updatedAt).
+     * {@code startedAt}/{@code finishedAt} are null for an untimed step; {@code input}/{@code output}
+     * are the step's recorded JSON, null where none was recorded.
+     */
     public record TokenInfo(String id, String nodeId, String kind, String status, String activity,
-                            int attempt, long availableAt, String leaseOwner, String lastError) {}
+                            int attempt, long availableAt, String leaseOwner, String lastError,
+                            Long startedAt, Long finishedAt, long createdAt, Object input, Object output) {}
 
     /** Instances started with {@code correlationId} (a business key), newest first (default limit 50). */
     public java.util.List<com.wiggle.core.InstanceView> findByCorrelation(String correlationId) {

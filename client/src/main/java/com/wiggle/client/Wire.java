@@ -45,7 +45,11 @@ final class Wire {
     static WiggleClient.TokenInfo tokenInfo(Token t) {
         return new WiggleClient.TokenInfo(t.getId(), t.getNodeId(), t.getKind(), t.getStatus(), t.getActivity(),
                 t.getAttempt(), t.getAvailableAt(), t.hasLeaseOwner() ? t.getLeaseOwner() : null,
-                t.hasLastError() ? t.getLastError() : null);
+                t.hasLastError() ? t.getLastError() : null,
+                t.hasStartedAt() ? t.getStartedAt() : null, t.hasFinishedAt() ? t.getFinishedAt() : null,
+                t.getCreatedAt(),
+                t.hasInput() ? ProtoJson.fromValue(t.getInput()) : null,
+                t.hasOutput() ? ProtoJson.fromValue(t.getOutput()) : null);
     }
 
     static List<WiggleClient.BacklogSlice> backlogSlices(BacklogCoverage res) {

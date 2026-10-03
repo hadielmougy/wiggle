@@ -3,29 +3,12 @@
             [clojure.string :as str]
             [wiggle.dashboard.state :as st :refer [db]]
             [wiggle.dashboard.actions :as act]
-            [wiggle.dashboard.diagram :as diagram]
             [wiggle.dashboard.util :as u]))
 
 ;; ---------------------------------------------------------------- shared bits
 
 (defn badge [status]
   [:span {:class (str "badge " status)} status])
-
-(def ^:private status-priority
-  {"FAILED" 5 "RUNNING" 4 "READY" 4 "AWAITING" 3 "WAITING" 3
-   "CANCELLED" 2 "DONE" 1 "JOINED" 1 "COMPLETED" 1})
-
-(defn token-statuses
-  "Collapses an instance's tokens to one status per node for the trace overlay, keeping the
-   most interesting status when a node has several tokens (retries, dynamic branches)."
-  [tokens]
-  (reduce (fn [m {:keys [nodeId status]}]
-            (if (and nodeId
-                     (> (get status-priority status 0)
-                        (get status-priority (get m nodeId) 0)))
-              (assoc m nodeId status)
-              m))
-          {} tokens))
 
 ;; ---------------------------------------------------------------- header
 
@@ -115,16 +98,116 @@
 
 ;; ---------------------------------------------------------------- instance detail
 
+(defn- ms [n]
+  (cond (nil? n) "—"
+        (>= n 60000) (str (.toFixed (/ n 60000) 1) " min")
+        (>= n 1000) (str (.toFixed (/ n 1000) 2) " s")
+        :else (str (Math/round n) " ms")))
+
+(defn- clock [t]
+  (when (and t (pos? t)) (.toLocaleTimeString (js/Date. t) [] #js {:hour12 false})))
+
+(defn- step-duration
+  "How long the step ran: its own clock when settled, the time so far while it is running."
+  [{:keys [startedAt finishedAt status]}]
+  (cond (and startedAt finishedAt) (- finishedAt startedAt)
+        (and startedAt (= status "RUNNING")) (- (js/Date.now) startedAt)))
+
+(defn- queue-wait
+  "How long the step sat ready before a worker took it; nil where that is not known."
+  [{:keys [startedAt availableAt]}]
+  (when (and startedAt (pos? availableAt) (>= startedAt availableAt))
+    (- startedAt availableAt)))
+
+(defn- step-label [names t]
+  (or (get names (:nodeId t))
+      (not-empty (:activity t))
+      (:nodeId t)))
+
+(defn- truncated? [v] (and (map? v) (contains? v :$truncated)))
+
+(defn- json-block
+  "A recorded input/output: pretty JSON, or the head of one the server truncated."
+  [v]
+  (if (truncated? v)
+    [:div
+     [:div.muted {:style {:margin-bottom 6}}
+      "truncated by the server: " (:$truncated v) " characters, first " (count (:head v)) " shown"]
+     [:pre (:head v)]]
+    [:pre (u/pretty-json v)]))
+
+(defn- step-output [t]
+  (cond
+    (= (:kind t) "PREDICATE")
+    (if (nil? (:output t)) [:div.muted "—"] [:div "branch " [:strong (if (:output t) "yes" "no")]])
+    (some? (:output t)) [json-block (:output t)]
+    (and (= (:status t) "DONE") (some? (:input t))) [:div.muted "returned nothing: the context was left unchanged"]
+    (some? (:input t)) [:div.muted "no output: the step has not completed"]
+    :else [:div.muted "not recorded"]))
+
+(defn- step-detail [t]
+  [:div.step-detail
+   [:div.step-io
+    [:div [:h3 "Input"] (if (some? (:input t)) [json-block (:input t)] [:div.muted "not recorded"])]
+    [:div [:h3 "Output"] [step-output t]]]
+   [:dl.facts
+    [:dt "retries"] [:dd (or (:attempt t) 0)]
+    [:dt "status"] [:dd [badge (:status t)]]
+    [:dt "ready at"] [:dd (or (u/ts (:availableAt t)) "—")]
+    [:dt "started"] [:dd (or (u/ts (:startedAt t)) "—")]
+    [:dt "finished"] [:dd (or (u/ts (:finishedAt t)) "—")]
+    [:dt "duration"] [:dd (ms (step-duration t))]
+    [:dt "waited in queue"] [:dd (ms (queue-wait t))]
+    (when (:leaseOwner t) [:<> [:dt "leased to"] [:dd (:leaseOwner t)]])
+    [:dt "token"] [:dd [:code (:id t)]]]
+   (when (:lastError t)
+     [:div [:h3 "Last error"] [:pre.err (:lastError t)]])])
+
+(def ^:private step-cols 8)
+
+(defn steps-table
+  "Every token of the instance in the order it was created, one row per step run. Clicking a row
+   expands it in place to the step's input, output, retries and timing."
+  []
+  (let [open (r/atom #{})]
+    (fn [tokens names]
+      (let [rows (sort-by (juxt :createdAt :id) tokens)]
+        [:table.steps
+         [:thead [:tr [:th {:style {:width "6%"}} "#"] [:th {:style {:width "28%"}} "step"]
+                  [:th {:style {:width "12%"}} "kind"] [:th {:style {:width "12%"}} "status"]
+                  [:th {:style {:width "10%"}} "retries"] [:th {:style {:width "11%"}} "started"]
+                  [:th {:style {:width "11%"}} "duration"] [:th {:style {:width "10%"}} "waited"]]]
+         [:tbody
+          (for [[n t] (map-indexed vector rows)
+                :let [open? (contains? @open (:id t))]]
+            ^{:key (:id t)}
+            [:<>
+             [:tr {:class (when open? "sel")
+                   :on-click #(swap! open (fn [o] (if (contains? o (:id t)) (disj o (:id t)) (conj o (:id t)))))}
+              [:td.muted (if open? "▾ " "▸ ") (inc n)]
+              [:td [:strong (step-label names t)] " " [:code.muted (:nodeId t)]]
+              [:td.muted (:kind t)]
+              [:td [badge (:status t)]]
+              [:td {:class (when (pos? (:attempt t)) "retried")} (or (:attempt t) 0)]
+              [:td.muted (or (clock (:startedAt t)) "—")]
+              [:td (ms (step-duration t))]
+              [:td.muted (ms (queue-wait t))]]
+             (when open?
+               [:tr.expanded [:td {:col-span step-cols} [step-detail t]]])])]]))))
+
 (defn detail-body []
   (let [{:keys [detail selected graph graph-for]} @db
         i (:instance detail)]
     (cond
-       (not selected) [:div.empty "select an instance to trace it"]
+       (not selected) [:div.empty "select an instance to see its steps"]
        (not i)        [:div.empty "loading…"]
        :else
        (let [tokens (:tokens detail)
-             statuses (token-statuses tokens)
-             graph-ok (= graph-for (:workflow i))]
+             names (when (= graph-for (:workflow i))
+                     (into {} (for [n (:nodes graph)] [(:id n) (:name n)])))
+             ran (filter :startedAt tokens)
+             first-start (some->> (seq ran) (map :startedAt) (apply min))
+             last-finish (some->> (seq (keep :finishedAt tokens)) (apply max))]
          [:div
           [:div.toolbar
            [badge (:status i)]
@@ -133,12 +216,15 @@
            (when (and (st/can-write?) (= (:status i) "RUNNING"))
              [:button.danger {:on-click #(act/cancel! (:id i) "cancelled from dashboard")} "cancel"])]
 
-          (when (:error i) [:pre.err (:error i)])
+          [:dl.facts.summary
+           [:dt "started"] [:dd (or (u/ts (:createdAt i)) "—")]
+           [:dt "updated"] [:dd (u/ago (:updatedAt i)) " ago"]
+           [:dt "steps run"] [:dd (count ran)]
+           [:dt "retries"] [:dd (reduce + 0 (keep :attempt tokens))]
+           [:dt "elapsed"] [:dd (ms (when (and first-start last-finish (>= last-finish first-start))
+                                      (- last-finish first-start)))]]
 
-          (when (and graph graph-ok)
-            [:div
-             [:h2 {:style {:padding "10px 14px 0" :margin 0 :fontSize 12 :color "var(--muted)"}} "Trace"]
-             [diagram/diagram graph {:statuses statuses}]])
+          (when (:error i) [:pre.err {:style {:margin "0 14px 10px"}} (:error i)])
 
           ;; any signal this instance is waiting on -> inline deliver
           (for [t tokens
@@ -150,19 +236,12 @@
              (when (st/can-write?)
                [signal-form (:activity t) #(act/signal! (:id i) (:activity t) %)])])
 
-          [:h2 {:style {:padding "10px 14px 0" :margin 0 :fontSize 12 :color "var(--muted)"}} "Tokens"]
+          [:h2.sub "Steps"]
           (if (seq tokens)
-            [:table
-             [:thead [:tr [:th "node"] [:th "kind"] [:th "status"] [:th "try"] [:th "last error"]]]
-             [:tbody
-              (for [t tokens]
-                ^{:key (:id t)}
-                [:tr [:td [:code (:nodeId t)]] [:td (:kind t)]
-                 [:td [badge (:status t)]] [:td (:attempt t)]
-                 [:td.muted (:lastError t)]])]]
-            [:div.empty "no tokens"])
+            ^{:key (:id i)} [steps-table tokens names]
+            [:div.empty "no steps yet"])
 
-          [:h2 {:style {:padding "10px 14px 0" :margin 0 :fontSize 12 :color "var(--muted)"}} "Context"]
+          [:h2.sub "Current context"]
           [:pre {:style {:margin "8px 14px 14px"}} (u/pretty-json (:context i))]]))))
 
 ;; ---------------------------------------------------------------- instances tab
@@ -229,27 +308,60 @@
 
 ;; ---------------------------------------------------------------- workflows tab
 
+(defn- successors [n]
+  (remove nil? (concat [(:next n) (:altNext n)] (:branches n))))
+
+(defn- in-flow-order
+  "The graph's nodes breadth-first from its start, so a workflow reads in the order it runs; any node
+   the walk does not reach comes last."
+  [{:keys [nodes startNode]}]
+  (let [by-id (into {} (map (juxt :id identity)) nodes)]
+    (loop [queue (if startNode [startNode] []), seen #{}, out []]
+      (if-let [id (first queue)]
+        (if (or (seen id) (not (by-id id)))
+          (recur (subvec queue 1) seen out)
+          (recur (into (subvec queue 1) (successors (by-id id))) (conj seen id) (conj out (by-id id))))
+        (into out (remove #(seen (:id %)) nodes))))))
+
+(defn- retry-text [{:keys [maxAttempts]}]
+  (cond (nil? maxAttempts) "—"
+        (>= maxAttempts 10000) "until it succeeds"
+        :else (str "up to " maxAttempts " attempts")))
+
+(defn- workflow-steps [graph]
+  [:table.steps
+   [:thead [:tr [:th "step"] [:th "kind"] [:th "queue"] [:th "next"] [:th "retry"]]]
+   [:tbody
+    (for [n (in-flow-order graph)]
+      ^{:key (:id n)}
+      [:tr {:style {:cursor "default"}}
+       [:td [:strong (:name n)] " " [:code.muted (:id n)]]
+       [:td.muted (:kind n)]
+       [:td.muted (or (:queue n) "—")]
+       [:td.muted (str/join ", " (successors n))]
+       [:td.muted (retry-text (:retry n))]])]])
+
 (defn workflows-tab []
-  (let [{:keys [workflows graph graph-for]} @db]
-    [:div
-     [:section.panel
-      [:h2 "Workflows" [:span.count (count workflows)]]
-      (if-not (seq workflows)
-        [:div.empty "no workflows registered"]
-        [:table [:tbody
-                 (for [w workflows]
-                   ^{:key w}
-                   [:tr {:class (when (= w graph-for) "sel")
-                         :on-click #(do (act/load-graph! w) (st/open-window! :diagram))}
-                    [:td w]])]])]
-     (when (= :diagram (get-in @db [:window :kind]))
-       [floating-window {:title [:span "Diagram"
-                                 (when graph-for [:span.muted {:style {:fontWeight 400}} " · " graph-for
-                                                  " v" (:version graph)])]
-                         :on-close st/close-window!}
-        (if graph
-          [diagram/diagram graph {:selected nil}]
-          [:div.empty "select a workflow to see its graph"])])]))
+  (let [{:keys [workflows graph graph-for wf-open]} @db]
+    [:section.panel
+     [:h2 "Workflows" [:span.count (count workflows)]]
+     (if-not (seq workflows)
+       [:div.empty "no workflows registered"]
+       [:table [:tbody
+                (for [w workflows
+                      :let [open? (= w wf-open)
+                            loaded (when (= w graph-for) graph)]]
+                  ^{:key w}
+                  [:<>
+                   [:tr {:class (when open? "sel")
+                         :on-click #(if open?
+                                      (swap! db assoc :wf-open nil)
+                                      (do (swap! db assoc :wf-open w) (act/load-graph! w)))}
+                    [:td (if open? "▾ " "▸ ") w
+                     (when (and open? loaded) [:span.muted " v" (:version loaded)])]]
+                   (when open?
+                     [:tr.expanded [:td
+                                    (if loaded [workflow-steps loaded] [:div.empty "loading…"])]])])]])]))
 
 ;; ---------------------------------------------------------------- schedules tab
 
@@ -392,10 +504,13 @@
 
 ;; ---------------------------------------------------------------- performance tab
 
-(defn- ms [n]
-  (cond (nil? n) "—"
-        (>= n 1000) (str (.toFixed (/ n 1000) 2) " s")
-        :else (str (Math/round n) " ms")))
+(defn- heat-colour
+  "green -> amber -> red for a 0..1 share of the slowest step's p95."
+  [h]
+  (cond (nil? h) nil
+        (< h 0.34) "#3ecf7a"
+        (< h 0.67) "#c9a86a"
+        :else "#ff8080"))
 
 (defn perf-toolbar []
   (let [{:keys [workflow window]} (:perf @db)]
@@ -413,26 +528,23 @@
      [:button.ghost {:on-click act/load-perf! :title "refresh"} "↻"]]))
 
 (defn stats-panel []
-  (let [{:keys [stats graph graph-for perf]} @db
+  (let [{:keys [stats perf]} @db
         nodes (:nodes stats)
         top (or (:p95Millis (first nodes)) 0)
-        heat (into {} (for [n nodes] [(:nodeId n) (if (pos? top) (/ (:p95Millis n) top) 0)]))
-        subs (into {} (for [n nodes] [(:nodeId n) (str "p95 " (ms (:p95Millis n)) " · n=" (:count n))]))
-        graph-ok (and graph (= graph-for (:workflow perf)))]
+        heat (into {} (for [n nodes] [(:nodeId n) (if (pos? top) (/ (:p95Millis n) top) 0)]))]
     [:section.panel
      [:h2 "Step durations" [:span.count (count nodes)]]
      [:p.muted
       "How long each step takes by the handler's own clock, over the newest timed steps in the"
       " window. A worker-run step also shows how long it waited to be claimed, so a slow step and a"
       " starved one read differently; an observed step waits for nothing. Slowest p95 first, so the"
-      " top row is the bottleneck; the diagram rings each step by its share of that p95."]
+      " top row is the bottleneck."]
      (cond
        (empty? (:workflow perf)) [:div.empty "choose a workflow to see its step durations"]
        (nil? stats) [:div.empty "loading…"]
        (empty? nodes) [:div.empty "no timed steps in this window"]
        :else
        [:<>
-        (when graph-ok [diagram/diagram graph {:heat heat :subs subs}])
         [:table
          [:thead [:tr [:th "step"] [:th "runs"] [:th "mean"] [:th "p50"] [:th "p95"] [:th "max"]
                   [:th {:title "time from ready to claimed by a worker"} "wait p50 / p95"]
@@ -445,14 +557,14 @@
              [:td (:count n)]
              [:td.muted (ms (:meanMillis n))]
              [:td (ms (:p50Millis n))]
-             [:td {:style {:color (diagram/heat-colour (get heat (:nodeId n)))}} (ms (:p95Millis n))]
+             [:td {:style {:color (heat-colour (get heat (:nodeId n)))}} (ms (:p95Millis n))]
              [:td.muted (ms (:maxMillis n))]
              [:td.muted (if (pos? (or (:waitP95Millis n) 0))
                           (str (ms (:waitP50Millis n)) " / " (ms (:waitP95Millis n)))
                           "—")]
              [:td {:style {:width 180 :min-width 180}}
               [:div.bar [:span {:style {:width (str (* 100 (get heat (:nodeId n) 0)) "%")
-                                        :background (diagram/heat-colour (get heat (:nodeId n)))}}]]]])]]])]))
+                                        :background (heat-colour (get heat (:nodeId n)))}}]]]])]]])]))
 
 (def ^:private anomaly-hint
   {"OUT_OF_ORDER" "a step ran where another was due; the run was resynchronised at the reported step"

@@ -670,6 +670,8 @@ abstract class StorageContract {
         t.startedAt = now + 1;
         t.finishedAt = now + 2;
         t.seq = 11L;
+        t.stepInput = "{\"order\":1}";
+        t.stepOutput = "{\"order\":1,\"paid\":true}";
         t.payload = TokenPayload.EMPTY
                 .push(TokenPayload.FrameKind.ARM, 1, null, doc("arm", "left"))
                 .push(TokenPayload.FrameKind.ITEM, 2, "k2", doc("item", "second"))
@@ -698,12 +700,35 @@ abstract class StorageContract {
         assertEquals(now + 1, back.startedAt);
         assertEquals(now + 2, back.finishedAt);
         assertEquals(11L, back.seq);
+        assertEquals("{\"order\":1}", back.stepInput);
+        assertEquals("{\"order\":1,\"paid\":true}", back.stepOutput);
         assertEquals(now, back.createdAt);
         assertEquals(now, back.updatedAt);
         // Every store encodes the payload on write, so what comes back is what the codec makes of
         // it -- a JSON number is a Long either way -- and not the object that was handed in.
         assertEquals(PayloadCodec.decode(PayloadCodec.encode(t.payload)), back.payload);
         assertTrue(storage.inTx(tx -> tx.findToken(id("tok"))).isEmpty(), "an unknown id is absent");
+    }
+
+    @Test
+    @DisplayName("an update writes a token's recorded step input and output, and can clear them")
+    void tokenStepIoUpdates() {
+        Instance i = instance(id("wf"));
+        Token t = token(i, NodeKind.TASK, TokenStatus.RUNNING, id("q"));
+        store(i, t);
+        assertNull(storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().stepInput, "nothing recorded yet");
+
+        Token settled = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        settled.stepInput = "{\"in\":1}";
+        settled.stepOutput = "true";
+        storage.inTx(tx -> { tx.updateToken(settled); return null; });
+        Token back = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        assertEquals("{\"in\":1}", back.stepInput);
+        assertEquals("true", back.stepOutput);
+
+        back.stepOutput = null;
+        storage.inTx(tx -> { tx.updateToken(back); return null; });
+        assertNull(storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().stepOutput);
     }
 
     @Test
