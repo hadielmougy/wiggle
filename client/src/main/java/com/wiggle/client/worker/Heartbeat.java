@@ -119,7 +119,7 @@ final class Heartbeat {
         });
     }
 
-    private static boolean unreachable(WiggleApiException e) {
+    static boolean unreachable(WiggleApiException e) {
         return e.getCause() instanceof StatusRuntimeException s && s.getStatus().getCode() == Status.Code.UNAVAILABLE;
     }
 }

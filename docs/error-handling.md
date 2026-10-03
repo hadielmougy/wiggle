@@ -161,10 +161,17 @@ Two consequences worth knowing:
 - **Pass a correlation id to `start`** when a double-started instance would be a problem. It is the
   only thing that makes a start idempotent across an ambiguous failure, and it is the same advice as
   for a retried failover.
-- **A worker that cannot hand its result back still costs the step an attempt.** The handback fails,
-  the lease expires, the leader reclaims the task, and the step is retried per its policy —
+- **A worker that cannot hand its result back keeps it.** On `UNAVAILABLE` the worker retries the
+  handback until the step's lease runs out, then holds the result in memory and resends it every
+  `errorBackoff` until the server answers. If the server took it back first — the leader reclaimed
+  the lapsed lease — the held result is refused and the step is retried per its policy,
   indistinguishable, by design, from a worker that died. Handlers must be idempotent anyway (§1), and
   this is one of the reasons why.
+- **A cell restart does not reclaim the leases it missed.** For one default lease
+  (`WIGGLE_LEASE_MILLIS`) after a node becomes leader, a task claimed before that node started is
+  not reclaimed: its lease lapsed while no worker could reach the cell. Workers reconnect inside that
+  window and deliver their held results, so an outage shorter than the step's lease plus the grace
+  re-runs nothing. A worker that really died is reclaimed once the window closes.
 
 Tuning, if the defaults do not suit the deployment: `WIGGLE_JDBC_TX_ATTEMPTS` (default 3; 1 disables
 the replay) and `WIGGLE_JDBC_TX_RETRY_DELAY_MILLIS` (default 50, multiplied by the attempt).

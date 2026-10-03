@@ -16,6 +16,7 @@ import java.util.function.Function;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -27,6 +28,10 @@ class HousekeeperTest {
 
     interface SleeperSteps {
         Map<String, Object> after(Map<String, Object> ctx);
+    }
+
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
     }
 
     private static WorkflowEngine engine(Storage storage) {
@@ -77,6 +82,53 @@ class HousekeeperTest {
             new Housekeeper(engine, cluster, Duration.ofMillis(100), Duration.ofHours(1), 10).tick();
             assertEquals(25, engine.poll("w", bp.definition().workerQueues(), 100, null).size(),
                     "one tick promoted all 25 due timers, past the batch of 10");
+        }
+    }
+
+    @Test @DisplayName("within the reconnect grace a lease claimed before the node started is spared; one claimed after is not")
+    void reconnectGraceSparesLeasesFromBeforeStart() throws Exception {
+        try (Storage storage = new InMemoryStorage();
+             ClusterManager cluster = new ClusterManager(storage, "hk-grace", 1, 5000, 3)) {
+            storage.migrate();
+            cluster.start();
+            WorkflowEngine engine = engine(storage);
+            FlowSpec bp = FlowSpec.define("hk-grace", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+            engine.register(bp.definition());
+            engine.start(bp.name(), bp.version(), Map.of(), null);
+            engine.start(bp.name(), bp.version(), Map.of(), null);
+            String before = engine.poll("w", bp.definition().workerQueues(), 1, 50L).getFirst().taskId();
+            Thread.sleep(5);
+
+            Housekeeper housekeeper = new Housekeeper(engine, cluster, Duration.ofMillis(100),
+                    Duration.ofHours(1), 10, false, Duration.ofHours(1));
+            String after = engine.poll("w", bp.definition().workerQueues(), 1, 50L).getFirst().taskId();
+            Thread.sleep(100);    // both leases have now run out
+            housekeeper.tick();   // first leader tick: the grace window opens
+
+            assertDoesNotThrow(() -> engine.extendLease(before, "w", 30_000),
+                    "the task claimed before the housekeeper existed is still leased to its worker");
+            assertThrows(RuntimeException.class, () -> engine.extendLease(after, "w", 30_000),
+                    "the task claimed after it was created was reclaimed as usual");
+        }
+    }
+
+    @Test @DisplayName("with no reconnect grace an expired lease from before the node started is reclaimed")
+    void noGraceReclaimsAtOnce() throws Exception {
+        try (Storage storage = new InMemoryStorage();
+             ClusterManager cluster = new ClusterManager(storage, "hk-nograce", 1, 5000, 3)) {
+            storage.migrate();
+            cluster.start();
+            WorkflowEngine engine = engine(storage);
+            FlowSpec bp = FlowSpec.define("hk-nograce", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+            engine.register(bp.definition());
+            engine.start(bp.name(), bp.version(), Map.of(), null);
+            String taskId = engine.poll("w", bp.definition().workerQueues(), 1, 50L).getFirst().taskId();
+            Thread.sleep(100);
+
+            new Housekeeper(engine, cluster, Duration.ofMillis(100), Duration.ofHours(1), 10).tick();
+
+            assertThrows(RuntimeException.class, () -> engine.extendLease(taskId, "w", 30_000),
+                    "reclaimed on the first tick");
         }
     }
 

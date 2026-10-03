@@ -11,6 +11,10 @@ import java.util.concurrent.TimeUnit;
  * Leader-only background duties. Non-leaders keep serving the HTTP API and handing
  * out work; only the leader touches the clock-driven parts of the system, which keeps
  * timer firing and orphan reclamation from being done N times over in an N-node cluster.
+ *
+ * <p>For {@code reconnectGrace} after this node becomes leader, a task claimed before this node
+ * started is not reclaimed even if its lease has run out: a lease that lapsed while the cell was down
+ * is no evidence its worker died, and the worker gets that long to reconnect and report or heartbeat.
  */
 public final class Housekeeper implements AutoCloseable {
 
@@ -22,6 +26,9 @@ public final class Housekeeper implements AutoCloseable {
     private final Duration retention;
     private final int batchSize;
     private final boolean adaptive;
+    private final Duration reconnectGrace;
+    private final long createdAt = System.currentTimeMillis();
+    private long leaderSince = -1;
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "wiggle-housekeeper");
@@ -31,9 +38,13 @@ public final class Housekeeper implements AutoCloseable {
 
     public Housekeeper(WorkflowEngine engine, ClusterManager cluster, Duration pollInterval,
                        Duration retention, int batchSize) {
-        this(engine, cluster, pollInterval, retention, batchSize,
-                Boolean.parseBoolean(System.getProperty("wiggle.adaptive.housekeeping",
-                        System.getenv().getOrDefault("WIGGLE_ADAPTIVE_HOUSEKEEPING", "true"))));
+        this(engine, cluster, pollInterval, retention, batchSize, adaptiveByDefault());
+    }
+
+    /** {@code wiggle.adaptive.housekeeping} / {@code WIGGLE_ADAPTIVE_HOUSEKEEPING}, default true. */
+    public static boolean adaptiveByDefault() {
+        return Boolean.parseBoolean(System.getProperty("wiggle.adaptive.housekeeping",
+                System.getenv().getOrDefault("WIGGLE_ADAPTIVE_HOUSEKEEPING", "true")));
     }
 
     /**
@@ -46,12 +57,18 @@ public final class Housekeeper implements AutoCloseable {
      */
     public Housekeeper(WorkflowEngine engine, ClusterManager cluster, Duration pollInterval,
                        Duration retention, int batchSize, boolean adaptive) {
+        this(engine, cluster, pollInterval, retention, batchSize, adaptive, Duration.ZERO);
+    }
+
+    public Housekeeper(WorkflowEngine engine, ClusterManager cluster, Duration pollInterval,
+                       Duration retention, int batchSize, boolean adaptive, Duration reconnectGrace) {
         this.engine = engine;
         this.cluster = cluster;
         this.pollInterval = pollInterval;
         this.retention = retention;
         this.batchSize = batchSize;
         this.adaptive = adaptive;
+        this.reconnectGrace = reconnectGrace;
     }
 
     public void start() {
@@ -64,9 +81,13 @@ public final class Housekeeper implements AutoCloseable {
     /** Package-visible so tests can drive a tick deterministically. */
     void tick() {
         if (!cluster.isLeader()) {
+            leaderSince = -1;
             LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: skipped, not leader");
             return;
         }
+        long now = System.currentTimeMillis();
+        if (leaderSince < 0) leaderSince = now;
+        long spareClaimedBefore = now < leaderSince + reconnectGrace.toMillis() ? createdAt : Long.MIN_VALUE;
         try {
             LOG.log(System.Logger.Level.DEBUG, "housekeeping tick: leader running timers/leases/deadlines sweep");
             int fired = 0, reclaimed = 0, escalated = 0, scheduled = 0, retried = 0, rounds = 0;
@@ -74,7 +95,7 @@ public final class Housekeeper implements AutoCloseable {
             do {
                 int f = engine.fireDueTimers(batchSize);
                 int p = engine.promoteDueRetries(batchSize);
-                int r = engine.reclaimExpiredLeases(batchSize);
+                int r = engine.reclaimExpiredLeases(batchSize, spareClaimedBefore);
                 int e = engine.fireDueSignalDeadlines(batchSize);
                 int s = engine.fireDueSchedules(batchSize);
                 int o = engine.settleObservedRuns(batchSize);

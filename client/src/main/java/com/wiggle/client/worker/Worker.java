@@ -37,6 +37,7 @@ public final class Worker implements AutoCloseable {
     private final Object capacityFreed = new Object();
     private ExecutorService executor;
     private ScheduledExecutorService heartbeats;
+    private Outbox outbox;
     private Thread pollThread;
 
     private final ThreadFactory heartbeatThreadFactory = new ThreadFactory() {
@@ -79,6 +80,8 @@ public final class Worker implements AutoCloseable {
     WorkerOptions options() { return options; }
 
     ScheduledExecutorService heartbeatPool() { return heartbeats; }
+
+    Outbox outbox() { return outbox; }
 
     Registrations registrations() { return registrations; }
 
@@ -138,6 +141,7 @@ public final class Worker implements AutoCloseable {
         if (!registrations.isEmpty()) registrations.reconcile(client, options);
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
+        outbox = new Outbox(workerId, options.errorBackoff().toMillis());
         pollThread = new Thread(this::pollLoop, "wiggle-worker-" + workerId);
         pollThread.setDaemon(false);
         pollThread.start();
@@ -280,6 +284,7 @@ public final class Worker implements AutoCloseable {
         if (pollThread != null) pollThread.interrupt();
         awaitExecutor();          // in-flight runs flush their own handbacks while draining
         if (heartbeats != null) heartbeats.shutdownNow();
+        if (outbox != null) outbox.close();
     }
 
     private void awaitExecutor() {

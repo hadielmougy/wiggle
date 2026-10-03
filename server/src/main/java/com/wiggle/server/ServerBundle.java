@@ -38,7 +38,8 @@ final class ServerBundle {
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
                 idMinter(ns, config.cellId(), placement()));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
-                config.retention(), config.housekeepingBatch());
+                config.retention(), config.housekeepingBatch(), Housekeeper.adaptiveByDefault(),
+                config.defaultLease());
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
