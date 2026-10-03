@@ -15,3 +15,7 @@ node_modules/
 
 # local playground cluster state
 /.playground/
+
+# GCP ceiling environment: credentials and run results
+/deploy/gcp/.state/
+/deploy/gcp/results/
