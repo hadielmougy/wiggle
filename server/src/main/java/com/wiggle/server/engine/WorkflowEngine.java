@@ -678,7 +678,17 @@ public final class WorkflowEngine {
 
     /** Leader duty: return tasks whose worker died back to the ready pool. */
     public int reclaimExpiredLeases(int max) {
-        List<Token> orphans = transactions.read(tx -> tx.expiredLeases(System.currentTimeMillis(), max));
+        return reclaimExpiredLeases(max, Long.MIN_VALUE);
+    }
+
+    /**
+     * {@link #reclaimExpiredLeases(int)}, sparing tasks claimed before {@code spareClaimedBefore}:
+     * their lease may have run out only because their worker could not reach the cell, so it stays put.
+     */
+    public int reclaimExpiredLeases(int max, long spareClaimedBefore) {
+        List<Token> orphans = transactions.read(tx -> tx.expiredLeases(System.currentTimeMillis(), max)).stream()
+                .filter(t -> t.startedAt == null || t.startedAt >= spareClaimedBefore)
+                .toList();
         logDue("reclaimExpiredLeases", orphans);
         return sweep(orphans, "reclaim of", this::reclaimOrphan);
     }

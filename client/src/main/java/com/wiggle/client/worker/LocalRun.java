@@ -84,7 +84,9 @@ final class LocalRun {
     private void drainOnShutdown() {
         if (buffer.isEmpty()) return;   // nothing computed yet; the claimed lease simply expires and is reclaimed
         try {
-            lease.deliver(() -> w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), true));
+            String taskId = serverTaskId;
+            List<WiggleClient.StepReport> steps = List.copyOf(buffer);
+            w.outbox().deliverOrPark(lease, taskId, () -> w.client().reportSteps(taskId, leaseOwner, steps, true));
             int drained = buffer.size();
             buffer.clear();
             LOG.log(System.Logger.Level.DEBUG, () -> "drained " + drained
@@ -165,17 +167,23 @@ final class LocalRun {
                 || buffer.size() >= maxBatch;
     }
 
-    /** Flushes the buffer; true = the server leased us the continuation, keep chaining. */
+    /**
+     * Flushes the buffer; true = the server leased us the continuation, keep chaining. A flush held
+     * past the lease is resent as a final handback, so the continuation is released, not leased.
+     */
     private boolean flushAndContinue(boolean handback) {
         // A final handback needs nothing back but durability, so LOCAL_ASYNC routes it through
         // the worker's batcher -- concurrent runs land in one ReportSteps call. A mid-chain flush
         // needs the leased continuation id synchronously and stays a single call.
+        String taskId = serverTaskId;
         List<WiggleClient.StepReport> steps = List.copyOf(buffer);
-        ReportResult advanced = lease.deliver(() -> handback && maxBatch > 1 && w.options().crossInstanceBatching()
-                ? w.handbacks().handback(instanceId, serverTaskId, leaseOwner, steps)
-                : w.client().reportSteps(serverTaskId, leaseOwner, steps, handback));
+        ReportResult advanced = w.outbox().deliverOrPark(lease, taskId,
+                () -> handback && maxBatch > 1 && w.options().crossInstanceBatching()
+                        ? w.handbacks().handback(instanceId, taskId, leaseOwner, steps)
+                        : w.client().reportSteps(taskId, leaseOwner, steps, handback),
+                () -> w.client().reportSteps(taskId, leaseOwner, steps, true));
         buffer.clear();
-        if (!advanced.running() || handback || advanced.nextTaskId() == null) return false;
+        if (advanced == null || !advanced.running() || handback || advanced.nextTaskId() == null) return false;
         serverTaskId = advanced.nextTaskId();
         lease.renewed();
         return true;
@@ -187,15 +195,23 @@ final class LocalRun {
      */
     private void failRun(String message, boolean retryable) {
         if (!flushBeforeFailure()) return;
-        lease.deliver(() -> w.client().fail(serverTaskId, leaseOwner, message, retryable));
+        String taskId = serverTaskId;
+        w.outbox().deliverOrPark(lease, taskId, () -> w.client().fail(taskId, leaseOwner, message, retryable));
     }
 
-    /** @return true if the instance is still running (safe to report a failure) */
+    /**
+     * @return true if the instance is still running (safe to report a failure); false too when the
+     *         flush was held past the lease, as a final handback -- the failing step then re-runs
+     */
     private boolean flushBeforeFailure() {
         if (buffer.isEmpty()) return true;
+        String taskId = serverTaskId;
         List<WiggleClient.StepReport> steps = List.copyOf(buffer);
-        ReportResult advanced = lease.deliver(() -> w.client().reportSteps(serverTaskId, leaseOwner, steps, false));
+        ReportResult advanced = w.outbox().deliverOrPark(lease, taskId,
+                () -> w.client().reportSteps(taskId, leaseOwner, steps, false),
+                () -> w.client().reportSteps(taskId, leaseOwner, steps, true));
         buffer.clear();
+        if (advanced == null) return false;
         if (advanced.nextTaskId() != null) {
             serverTaskId = advanced.nextTaskId();
             lease.renewed();

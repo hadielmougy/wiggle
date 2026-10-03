@@ -66,12 +66,14 @@ final class ServerRun {
         }
         StepReport step = new StepReport(task.nodeId(), predicate ? null : result,
                 predicate ? (Boolean) result : null, startedAt, finishedAt, emitted);
-        lease.deliver(() -> w.client().reportSteps(task.taskId(), task.leaseOwner(), List.of(step), true));
+        w.outbox().deliverOrPark(lease, task.taskId(),
+                () -> w.client().reportSteps(task.taskId(), task.leaseOwner(), List.of(step), true));
     }
 
     private void reportFailure(Heartbeat lease, String message, boolean retryable) {
         try {
-            lease.deliver(() -> w.client().fail(task.taskId(), task.leaseOwner(), message, retryable));
+            w.outbox().deliverOrPark(lease, task.taskId(),
+                    () -> w.client().fail(task.taskId(), task.leaseOwner(), message, retryable));
         } catch (RuntimeException e) {
             // The lease will expire and the leader will reclaim the task; nothing else to do.
             LOG.log(System.Logger.Level.WARNING,
