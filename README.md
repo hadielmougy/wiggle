@@ -463,93 +463,61 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 5. Performance
 
-**The engine alone, one JVM** (embedded server, in-memory store, 20-step workflow, 4 workers):
+**7,200 durable step executions/sec (900 workflow instances/sec)**, sustained by one server node on
+Cloud SQL for PostgreSQL. Every step is committed to the database, and each instance completes in
+about 3 seconds end to end. At lighter load the end-to-end time is about 260ms: 5,600 steps/sec
+(700 instances/sec) holds flat with no backlog.
 
-| execution mode | throughput |
-|---|---|
-| `SERVER` (a round-trip per step) | 962 instances/sec · **19.2k durable step completions/sec** |
-| `LOCAL_SYNC` (chained, commit per step) | 1,379 instances/sec · 27.6k steps/sec |
-| `LOCAL_ASYNC` (chained, batched commits) | **4,402 instances/sec · 88.0k steps/sec** |
+Each instance is the 8-step `order-fulfilment` fork/join workflow: validate, a stock gate, two
+parallel branches, an explicit combine, notify and audit. It runs in `LOCAL_ASYNC` mode. The bench
+ramps the offered start rate and measures *probe sojourn*: the time a fresh instance takes from
+`start()` to `COMPLETED`. Flat sojourn means the node keeps up. Sojourn that keeps growing means
+arrivals are outrunning it.
 
-**A real deployment on one laptop** — one server node on one PostgreSQL 16, direct gRPC, no
-Kubernetes in the path. We ramp the offered start rate and watch *probe sojourn* — the
-end-to-end time of a fresh instance from `start()` to `COMPLETED`. Flat sojourn means the
-node is keeping up; monotonic growth means arrivals are outrunning it and backlog is
-compounding:
+| Cloud SQL | offered load | window | end-to-end latency | verdict |
+|---|---|---|---|---|
+| 8 vCPU | 4,000 steps/s (500/s) | 60s | flat **≈260ms** | ✅ sustained |
+| 8 vCPU | **4,800 steps/s (600/s)** | 30s | ≈2.3s, stable | ✅ ceiling |
+| 8 vCPU | 5,600 steps/s (700/s) | 60s | 9.5s → 15s, growing | ❌ queue piling |
+| 16 vCPU | 5,600 steps/s (700/s) | 30s | flat **≈260ms** | ✅ sustained |
+| 16 vCPU | **7,200 steps/s (900/s)** | 2 × 60s | ≈3s, stable | ✅ ceiling |
+| 16 vCPU | 8,800 steps/s (1,100/s) | 60s | 12s → 18s, growing | ❌ queue piling |
 
-![Probe sojourn over time: at 300 starts/sec latency stays near one second; at 350 a 60-second burst holds but latency compounds past 30s over 90 seconds; at 400 it compounds within a minute. Ceiling ≈ 300–350 starts/sec on one laptop.](docs/img/bench-sojourn.svg)
+**The database sets the ceiling, not the server.** At the ceiling, Cloud SQL ran at ≈90% CPU
+(8 vCPU) and ≈75% (16 vCPU). The server node stayed at 25–40% CPU and the workers had headroom.
+Under load the same statements slowed 4–5×: a `wf_token` update went from 0.4ms to 2ms. Doubling
+the database's vCPUs raised the ceiling 1.5×. Adding server nodes on the same database would not
+raise it.
 
-| offered rate | window | end-to-end latency | verdict |
-|---|---|---|---|
-| 250/s | 60s | flat **265ms** | ✅ sustained |
-| **300/s** | 60s | ≈**1s**, stable | ✅ sustained |
-| 350/s | 60s | plateau ≈5s, stable | ✅ holds a burst |
-| 350/s | 90s | 0.3s → 33s, monotonic | ❌ queue piling |
-| 400/s | 60s | 0.3s → 25s, monotonic | ❌ queue piling |
+**Size the connection pool to the load.** With `WIGGLE_JDBC_POOL_SIZE=32` (the default is 10),
+starts queued for a connection at ≈561/s while the server and database CPUs still had headroom.
+One instance makes ≈45 SQL statements, so at 600/s about 25 connections are busy at once.
+Raising the pool to 128 removed the limit.
 
-**≈300 durable workflow starts/sec — ≈2,400 durable step executions/sec — sustained through one
-node and one database with ≈1s completion latency** (sub-second at 250/s); ~350/s survives a
-one-minute burst before the backlog compounds. Submit latency p50 ≈ 12ms / p99 ≈ 130ms
-throughout. Each instance is the 8-step `order-fulfilment` fork/join workflow (validate → gate →
-2 parallel branches → explicit combine → notify → audit, `LOCAL_ASYNC` mode), every step durably
-committed to PostgreSQL.
-
-The previous edition of this measurement ran the multi-cell kind cluster — 2 server nodes, each
-with its own PostgreSQL, reached over `kubectl port-forward` — and found the same 300–340/s
-window. That is its own footnote confirmed: nodes multiply availability and API capacity, never
-database throughput; one node on one database now does what two of each did, because the ceiling
-is the machine.
-
-**Environment — deliberately modest, everything on one machine:**
+**Environment:**
 
 | | |
 |---|---|
-| Host | MacBook Pro, Apple M2 Pro (10 cores), 16 GB RAM |
-| Topology | **1 server node** (`dist` distribution) on **1 PostgreSQL 16** (fresh DB, Docker) — direct gRPC, no Kubernetes |
-| Server env | `WIGGLE_POLL_INTERVAL_MILLIS=200` · `WIGGLE_HOUSEKEEPING_BATCH=500` · `WIGGLE_JDBC_POOL_SIZE=50` |
-| Client side | submitter (24 threads) + 2 workers (`concurrency=100` each, `LOCAL_ASYNC` batch 64) on the host |
-| Runtime | OpenJDK 21 |
+| Region | GCP `us-central1-a`. Everything is in one zone, on a private VPC. |
+| Database | Cloud SQL Enterprise, PostgreSQL 16, zonal (no HA standby), 250 GB SSD, `db-custom-8-32768` and `db-custom-16-65536` |
+| Server | 1 node, `c3-standard-8`, `WIGGLE_JDBC_POOL_SIZE=128`, default settings otherwise |
+| Workers | own `c3-standard-8`: 4 processes × 256 slots, `LOCAL_ASYNC` batch 64 |
+| Load generator | own `c3-standard-8`: `RateCeilingBench`, 256 submitter threads |
+| Build | revision `dc7022c`, OpenJDK 21, fresh database |
 
-**Adaptive polling** (each reacts to what the last poll observed — never to queue depth — so an
-idle system pays nothing; adaptive housekeeping is on by default, the fallback ramp is opt-in):
+A regional (HA) Cloud SQL instance adds a synchronous standby to every commit, so expect a lower
+ceiling there.
 
-| what | fixed cadence | adaptive | flag |
-|---|---|---|---|
-| timer/schedule promotion under backlog (2,000 due timers, default 1s tick × batch 100) | 19.9s — **100 timers/sec**, pinned to the batch÷tick floor | **1.18s — ~1,700/sec** (10,000 due drain in 1.61s ≈ 6,200/sec) | `WIGGLE_ADAPTIVE_HOUSEKEEPING` |
-| cross-node dispatch latency (2-node cluster on one Postgres; submitter and the parked worker pinned to *different* nodes) | p50 **105ms** · p99 117ms | p50 **28ms** · p99 39ms | `WIGGLE_ADAPTIVE_FALLBACK_POLL` |
-
-The fallback ramp costs no throughput: with it enabled, the cluster still sustains the 300/s
-ceiling (re-validated after fixing an early version that re-claimed fast on busy nodes and
-measurably ate the ceiling — the fix and its A/B are in the repo history).
-
-![Adaptive polling before/after: draining 2,000 due timers falls from 19.9s (100/sec, the batch-per-tick floor) to 1.18s (~1,700/sec); cross-node dispatch latency falls from p50 105ms / p99 117ms to p50 28ms / p99 39ms.](docs/img/bench-adaptive.svg)
-
-Honest footnotes: the submitter, the workers, the server node, PostgreSQL and its Docker VM all
-share those 10 cores — a floor, not a ceiling.
-Nodes don't move it: an A/B run showed 2 nodes on one database on this single box does *not*
-raise the ceiling — nodes multiply availability and API capacity, never database throughput —
-and the previous 2-node / 2-database edition of this measurement found the same window.
-Measured on a **fresh database** deliberately: with accumulated benchmark history
-(~500k retained instances / ~900k token rows) the same setup has shown ~2× the latency at the
-ceiling — retention and purge cadence are part of capacity planning, not an afterthought.
-And short windows flatter: several rates that look sustainable over a 20-second stage pile up
-visibly over 60–90 seconds, which is why every verdict above uses the longer windows.
-
-Reproduce everything (the tools ship in the repo):
+Reproduce it end to end. The script provisions the environment, deploys a revision, runs the
+ladder, and collects `pg_stat_statements`, per-VM CPU and a server JFR:
 
 ```bash
-./gradlew :example:bench             # the embedded engine numbers (set WIGGLE_EXECUTION_MODE)
-
-WIGGLE_SERVER_URL=127.0.0.1:8080 \
-  ./gradlew :example:rateCeiling     # the deployment ceiling: ramps rates, judges by probe sojourn
-                                     # (point it at a running node with a worker attached)
-
-./gradlew :example:timerBench        # timer promotion (WIGGLE_ADAPTIVE_HOUSEKEEPING=false to compare)
-
-WIGGLE_SUBMIT_URL=… WIGGLE_WORKER_URL=… \
-  ./gradlew :example:fallbackProbe   # cross-node dispatch latency (pin two nodes of one cluster)
-
+export GCP_PROJECT=<sandbox-project>
+deploy/gcp/ceiling.sh up && deploy/gcp/ceiling.sh deploy && deploy/gcp/ceiling.sh run
+deploy/gcp/ceiling.sh down
 ```
+
+See [deploy/gcp/README.md](deploy/gcp/README.md) for every knob.
 
 ---
 
