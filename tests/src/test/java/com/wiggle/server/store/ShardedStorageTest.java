@@ -18,16 +18,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** What the sharded store itself guarantees: it routes, it refuses what it cannot route, and it owns its shards. */
 class ShardedStorageTest {
 
-    /** Records which shard a transaction reached, and whether it was migrated and closed. */
+    /** An in-memory store that records how many transactions reached it, and whether it was migrated
+     *  and closed. */
     private static final class Probe implements Storage {
         final AtomicInteger txs = new AtomicInteger();
+        final InMemoryStorage mem = new InMemoryStorage();
         boolean migrated, closed;
         final String fingerprint;
 
         Probe(String fingerprint) { this.fingerprint = fingerprint; }
 
         @Override public void migrate() { migrated = true; }
-        @Override public <R> R inTx(Function<Tx, R> work) { txs.incrementAndGet(); return null; }
+        @Override public <R> R inTx(Function<Tx, R> work) { txs.incrementAndGet(); return mem.inTx(work); }
         @Override public String fingerprint() { return fingerprint; }
         @Override public void close() { closed = true; }
     }
@@ -87,5 +89,80 @@ class ShardedStorageTest {
     void fingerprint() {
         assertEquals("7=a,2=b", new ShardedStorage(shards(new Probe("a"), new Probe("b")), 2).fingerprint());
         assertNull(new ShardedStorage(shards(new Probe("a"), new Probe(null)), 2).fingerprint());
+    }
+
+    // -- binding to what the databases record --
+
+    private static ShardedStorage.Member member(int id, ShardState state, Storage s) {
+        return new ShardedStorage.Member(id, state, true, s);
+    }
+
+    @Test @DisplayName("each database is claimed for its shard, and a database claimed for another shard is refused")
+    void identityIsClaimedAndChecked() {
+        InMemoryStorage a = new InMemoryStorage(), b = new InMemoryStorage();
+        new ShardedStorage(List.of(member(0, ShardState.ACTIVE, a), member(1, ShardState.ACTIVE, b)), 0).migrate();
+        assertEquals(0, a.inTx(tx -> tx.shardIdentity()).orElseThrow());
+        assertEquals(1, b.inTx(tx -> tx.shardIdentity()).orElseThrow());
+
+        ShardedStorage swapped = new ShardedStorage(
+                List.of(member(0, ShardState.ACTIVE, b), member(1, ShardState.ACTIVE, a)), 0);
+        IllegalStateException e = assertThrows(IllegalStateException.class, swapped::migrate);
+        assertTrue(e.getMessage().contains("points at the database of shard"), e.getMessage());
+    }
+
+    @Test @DisplayName("the registry on home remembers every shard, and a state only moves forward")
+    void registryMovesForward() {
+        InMemoryStorage home = new InMemoryStorage(), one = new InMemoryStorage();
+        new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
+        assertEquals(List.of(0, 1), home.inTx(tx -> tx.shardRegistry()).stream().map(Rows.ShardRecord::shardId).toList());
+
+        new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.DRAINING, one)), 0).migrate();
+        assertEquals(ShardState.DRAINING, home.inTx(tx -> tx.shardRegistry()).get(1).state());
+
+        IllegalStateException back = assertThrows(IllegalStateException.class, () -> new ShardedStorage(
+                List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate());
+        assertTrue(back.getMessage().contains("only moves forward"), back.getMessage());
+    }
+
+    @Test @DisplayName("a shard the registry still holds live cannot be left out of the topology")
+    void aLiveShardCannotBeOmitted() {
+        InMemoryStorage home = new InMemoryStorage(), one = new InMemoryStorage();
+        new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
+        IllegalStateException e = assertThrows(IllegalStateException.class, () ->
+                new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home)), 0).migrate());
+        assertTrue(e.getMessage().contains("not listed"), e.getMessage());
+    }
+
+    @Test @DisplayName("a shard is retired only once empty; after that, an id naming it is not found")
+    void retiring() {
+        InMemoryStorage home = new InMemoryStorage(), one = new InMemoryStorage();
+        new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
+        Rows.Instance live = new Rows.Instance();
+        live.id = "wfi.s1.live";
+        live.workflow = "w";
+        live.version = 1;
+        live.status = com.wiggle.core.InstanceStatus.RUNNING;
+        live.context = com.wiggle.core.Doc.EMPTY;
+        one.inTxVoid(tx -> tx.insertInstance(live));
+
+        IllegalStateException busy = assertThrows(IllegalStateException.class, () -> new ShardedStorage(
+                List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.RETIRED, one)), 0).migrate());
+        assertTrue(busy.getMessage().contains("live instance"), busy.getMessage());
+
+        one.inTxVoid(tx -> {
+            Rows.Instance done = tx.findInstance(live.id).orElseThrow();
+            done.status = com.wiggle.core.InstanceStatus.COMPLETED;
+            tx.updateInstance(done);
+        });
+        ShardedStorage s = new ShardedStorage(
+                List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.RETIRED, one)), 0);
+        s.migrate();
+        assertEquals(List.of(0), s.instanceShards(), "a retired shard is neither swept nor claimed from");
+        assertThrows(ShardRetiredException.class, () -> s.inTxFor("wfi.s1.live", tx -> null));
+
+        ShardedStorage dropped = new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home)), 0);
+        dropped.migrate();   // once retired, a shard may leave the topology
+        assertThrows(ShardRetiredException.class, () -> dropped.inTxFor("wfi.s1.live", tx -> null),
+                "and its ids are still not found, rather than unknown");
     }
 }

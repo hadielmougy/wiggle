@@ -15,6 +15,7 @@ import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
+import com.wiggle.server.store.ShardState;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
@@ -443,6 +444,21 @@ public final class JdbcStorage implements Storage {
             new Migration(22, "token-step-io", """
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS step_input TEXT;
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS step_output TEXT;
+            """),
+            // Sharding: which shard a database was claimed for, the registry of every shard the
+            // cluster has used (read on the home shard), and the topology generation each node runs.
+            new Migration(23, "shard-identity-and-registry", """
+            CREATE TABLE IF NOT EXISTS wf_shard (
+              k            VARCHAR(16)  PRIMARY KEY,
+              shard_id     INT          NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS wf_shard_registry (
+              shard_id     INT          PRIMARY KEY,
+              state        VARCHAR(16)  NOT NULL,
+              first_seen   BIGINT       NOT NULL,
+              retired_at   BIGINT
+            );
+            ALTER TABLE wf_node ADD COLUMN IF NOT EXISTS topology_generation BIGINT;
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -792,6 +808,7 @@ public final class JdbcStorage implements Storage {
         n.lastHeartbeat = rs.getLong("last_heartbeat");
         n.workers = rs.getInt("workers");
         n.leader = rs.getInt("leader") == 1;
+        n.topologyGeneration = rs.getLong("topology_generation");
         return n;
     }
 
@@ -1725,20 +1742,22 @@ public final class JdbcStorage implements Storage {
 
         @Override public void upsertNode(ServerNode n) {
             int updated = h.createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
-                            + "workers=:workers WHERE id=:id")
+                            + "workers=:workers,topology_generation=:gen WHERE id=:id")
                     .bind("name", n.name)
                     .bind("beat", n.lastHeartbeat)
                     .bind("workers", n.workers)
+                    .bind("gen", n.topologyGeneration)
                     .bind("id", n.id)
                     .execute();
             if (updated > 0) return;
-            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader) "
-                            + "VALUES (:id,:name,:first,:beat,:workers,0)")
+            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader,"
+                            + "topology_generation) VALUES (:id,:name,:first,:beat,:workers,0,:gen)")
                     .bind("id", n.id)
                     .bind("name", n.name)
                     .bind("first", n.firstHeartbeat)
                     .bind("beat", n.lastHeartbeat)
                     .bind("workers", n.workers)
+                    .bind("gen", n.topologyGeneration)
                     .execute();
         }
 
@@ -1752,6 +1771,49 @@ public final class JdbcStorage implements Storage {
             h.createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
                     .bind("before", before)
                     .execute();
+        }
+
+        @Override public OptionalInt shardIdentity() {
+            return h.createQuery("SELECT shard_id FROM wf_shard WHERE k='self'")
+                    .mapTo(Integer.class)
+                    .findOne()
+                    .map(OptionalInt::of)
+                    .orElse(OptionalInt.empty());
+        }
+
+        @Override public void claimShardIdentity(int shardId) {
+            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard (k,shard_id) VALUES ('self',:shard)"))
+                    .bind("shard", shardId)
+                    .execute();
+        }
+
+        @Override public List<Rows.ShardRecord> shardRegistry() {
+            return h.createQuery("SELECT shard_id,state,first_seen,retired_at FROM wf_shard_registry "
+                            + "ORDER BY shard_id")
+                    .map((rs, ctx) -> {
+                        long retired = rs.getLong("retired_at");
+                        Long retiredAt = rs.wasNull() ? null : retired;
+                        return new Rows.ShardRecord(rs.getInt("shard_id"),
+                                ShardState.valueOf(rs.getString("state")), rs.getLong("first_seen"), retiredAt);
+                    })
+                    .list();
+        }
+
+        @Override public void putShardRecord(Rows.ShardRecord r) {
+            String update = "UPDATE wf_shard_registry SET state=:state,first_seen=:first,retired_at=:retired "
+                    + "WHERE shard_id=:shard";
+            if (bindShard(h.createUpdate(update), r).execute() > 0) return;
+            if (bindShard(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard_registry "
+                    + "(shard_id,state,first_seen,retired_at) VALUES (:shard,:state,:first,:retired)")), r)
+                    .execute() > 0) return;
+            bindShard(h.createUpdate(update), r).execute();   // another node inserted it first
+        }
+
+        private static Update bindShard(Update u, Rows.ShardRecord r) {
+            return u.bind("shard", r.shardId())
+                    .bind("state", r.state().name())
+                    .bind("first", r.firstSeen())
+                    .bind("retired", r.retiredAt());
         }
 
         @Override public void setLeader(String nodeId, boolean leader) {
