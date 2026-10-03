@@ -1,10 +1,10 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.ExecutionMode;
-import com.wiggle.core.Ids;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.ObserveResult;
+import com.wiggle.core.ShardIds;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows;
@@ -178,7 +178,7 @@ final class ObservedRuns {
 
     private static void record(Tx tx, Instance inst, String kind, String expected, String reported,
                                String detail, long now) {
-        tx.insertAnomaly(new Rows.Anomaly(Ids.next("anm"), inst.id, inst.workflow, inst.version,
+        tx.insertAnomaly(new Rows.Anomaly(ShardIds.inherit("anm", inst.id), inst.id, inst.workflow, inst.version,
                 kind, expected, reported, detail, now));
     }
 }
