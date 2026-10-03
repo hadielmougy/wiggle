@@ -300,6 +300,25 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("lockTask locks a token's instance and reads the token; a missing token or instance is empty")
+    void lockTaskFindsBothRows() {
+        Instance owner = instance(id("wf"));
+        Token task = token(owner, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(owner, task);
+        Instance gone = instance(id("wf"));
+        Token orphan = token(gone, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        storage.inTxVoid(tx -> tx.insertToken(orphan));
+
+        Rows.LockedTask locked = storage.inTx(tx -> tx.lockTask(task.id)).orElseThrow();
+        assertEquals(owner.id, locked.inst().id);
+        assertEquals(owner.revision, locked.inst().revision);
+        assertEquals(task.id, locked.token().id);
+        assertEquals(TokenStatus.RUNNING, locked.token().status);
+        assertTrue(storage.inTx(tx -> tx.lockTask(id("tok"))).isEmpty(), "no such token");
+        assertTrue(storage.inTx(tx -> tx.lockTask(orphan.id)).isEmpty(), "a token whose instance is gone");
+    }
+
+    @Test
     @DisplayName("lockInstanceOf serialises a read-modify-write across threads, as lockInstance does")
     void lockInstanceOfSerialisesReadModifyWrite() throws Exception {
         Instance seed = instance(id("wf"));

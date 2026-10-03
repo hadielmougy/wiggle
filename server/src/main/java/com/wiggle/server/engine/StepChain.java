@@ -6,6 +6,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Tx;
 
@@ -43,7 +44,7 @@ final class StepChain {
      * {@code poll}); at the final step, at a handback, at a node the worker cannot run, or when
      * {@code chainsBack} is false, it is driven normally and the worker released.
      */
-    ReportOutcome apply(Tx tx, Tokens.LockedTask task, Run run, boolean chainsBack) {
+    ReportOutcome apply(Tx tx, LockedTask task, Run run, boolean chainsBack) {
         Instance inst = task.inst();
         long now = System.currentTimeMillis();
         long leaseExpiry = now + leaseMillis;

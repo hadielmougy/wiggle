@@ -26,6 +26,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 /**
  * Shared-database store. This is what makes multi-node operation work: instance
@@ -718,23 +719,33 @@ public final class JdbcStorage implements Storage {
     /** Row readers, shared by the registered JDBI mappers and by the statements not yet
      *  converted. Unchanged from when they lived inside the transaction. */
     static Instance readInstance(ResultSet rs) throws SQLException {
+        return readInstance(rs, "");
+    }
+
+    /** An instance row whose columns are each named {@code prefix} + the column name. */
+    static Instance readInstance(ResultSet rs, String prefix) throws SQLException {
         Instance i = new Instance();
-        i.id = rs.getString("id");
-        i.workflow = rs.getString("workflow");
-        i.version = rs.getInt("version");
-        i.correlationId = rs.getString("correlation_id");
-        i.status = InstanceStatus.valueOf(rs.getString("status"));
-        i.terminationReason = rs.getString("term_reason");
-        i.error = rs.getString("error");
-        i.context = Doc.parse(rs.getString("context"));
-        i.parentTokenId = rs.getString("parent_token_id");
-        i.createdAt = rs.getLong("created_at");
-        i.updatedAt = rs.getLong("updated_at");
-        i.revision = rs.getLong("revision");
-        long settleAt = rs.getLong("settle_at");
+        i.id = rs.getString(prefix + "id");
+        i.workflow = rs.getString(prefix + "workflow");
+        i.version = rs.getInt(prefix + "version");
+        i.correlationId = rs.getString(prefix + "correlation_id");
+        i.status = InstanceStatus.valueOf(rs.getString(prefix + "status"));
+        i.terminationReason = rs.getString(prefix + "term_reason");
+        i.error = rs.getString(prefix + "error");
+        i.context = Doc.parse(rs.getString(prefix + "context"));
+        i.parentTokenId = rs.getString(prefix + "parent_token_id");
+        i.createdAt = rs.getLong(prefix + "created_at");
+        i.updatedAt = rs.getLong(prefix + "updated_at");
+        i.revision = rs.getLong(prefix + "revision");
+        long settleAt = rs.getLong(prefix + "settle_at");
         i.settleAt = rs.wasNull() ? null : settleAt;
         return i;
     }
+
+    /** Every column {@link #readInstance} reads. */
+    private static final List<String> INSTANCE_COLUMNS = List.of("id", "workflow", "version", "correlation_id",
+            "status", "term_reason", "error", "context", "parent_token_id", "created_at", "updated_at",
+            "revision", "settle_at");
 
     static Token readToken(ResultSet rs) throws SQLException {
         Token t = new Token();
@@ -1151,6 +1162,20 @@ public final class JdbcStorage implements Storage {
                             + " FOR UPDATE")
                     .bind("id", tokenId)
                     .mapTo(Instance.class)
+                    .findFirst();
+        }
+
+        /** The token and its instance in one statement, both locked, instance first, so each is read
+         *  as it stands under its lock. */
+        private static final String LOCK_TASK = "SELECT t.*, "
+                + INSTANCE_COLUMNS.stream().map(c -> "i." + c + " AS i_" + c).collect(Collectors.joining(","))
+                + " FROM wf_instance i JOIN wf_token t ON t.instance_id=i.id WHERE t.id=:id FOR UPDATE OF i, t";
+
+        @Override public Optional<Rows.LockedTask> lockTask(String tokenId) {
+            if (!dialect.supportsJoinedLock()) return Tx.super.lockTask(tokenId);
+            return h.createQuery(LOCK_TASK)
+                    .bind("id", tokenId)
+                    .map((rs, ctx) -> new Rows.LockedTask(readInstance(rs, "i_"), recorded(readToken(rs))))
                     .findFirst();
         }
 

@@ -3,6 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.core.*;
 import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.TokenStatus;
@@ -220,7 +221,7 @@ public final class WorkflowEngine {
      * flow: it closes one entry of the reverse pass, and its instance is COMPENSATING rather than
      * RUNNING, so it never reaches the step chain.
      */
-    private boolean compensated(Tx tx, Tokens.LockedTask task, Run run) {
+    private boolean compensated(Tx tx, LockedTask task, Run run) {
         Long compSeq = Sagas.seqOf(task.token());
         if (compSeq == null) return false;
         if (run.steps().size() != 1) {
@@ -289,7 +290,7 @@ public final class WorkflowEngine {
     public ReportOutcome report(Run run) {
         if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
         return transactions.inTx(tx -> {
-            Tokens.LockedTask task = Tokens.lock(tx, run.startTaskId);
+            LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             if (mode == ExecutionMode.OBSERVED) {
                 throw EngineException.conflict("workflow " + task.inst().workflow
@@ -708,7 +709,7 @@ public final class WorkflowEngine {
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
         transactions.inTxVoid(tx -> {
-            Tokens.LockedTask locked = Tokens.lock(tx, taskId);
+            LockedTask locked = Tokens.lock(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
             Tokens.requireLease(t, leaseOwner);

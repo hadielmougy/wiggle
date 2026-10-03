@@ -26,6 +26,10 @@ public interface Dialect {
     /** Whether {@code UPDATE ... RETURNING} is available (PostgreSQL), letting the claim be one statement. */
     default boolean supportsReturning() { return false; }
 
+    /** Whether {@code SELECT ... FROM a JOIN b ... FOR UPDATE OF a, b} locks both rows, in that order,
+     *  and returns each as it stands under its lock (PostgreSQL). */
+    default boolean supportsJoinedLock() { return false; }
+
     /** Whether {@code CREATE INDEX ... WHERE} is available (PostgreSQL). A migration that needs it
      *  is recorded but not run elsewhere, leaving that database on the full indexes it replaces. */
     default boolean supportsPartialIndexes() { return false; }
