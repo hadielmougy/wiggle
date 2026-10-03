@@ -82,7 +82,7 @@ final class Instances {
     Instance observedRun(Tx tx, String workflow, Integer version, String key) {
         int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
-        ObservedRunningMode.requireObserved(definitions.executionMode(tx, workflow, v), workflow + ":" + v);
+        ObservedRuns.requireObserved(definitions.executionMode(tx, workflow, v), workflow + ":" + v);
         String id = idMinter.forKey(workflow, key);
         Instance found = tx.lockInstance(id).orElse(null);
         if (found != null) return found;

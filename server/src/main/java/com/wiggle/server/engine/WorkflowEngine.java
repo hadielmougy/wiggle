@@ -64,8 +64,9 @@ public final class WorkflowEngine {
     private final Schedules schedules;
     private final long defaultLeaseMillis;
     private final NodeBehaviourFactory nodeBehaviourFactory;
-    /** Built once: the factory reads the engine's collaborators lazily, per create(). */
-    private final RunningModeFactory modeFactory = new DefaultModeFactory();
+    private final StepChain stepChain;
+    private final LocalAsyncBatch localAsyncBatch;
+    private final ObservedRuns observedRuns;
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
@@ -81,6 +82,9 @@ public final class WorkflowEngine {
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules              = new Schedules(transactions, instances, sweeper);
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
+        this.stepChain              = new StepChain(instances, nodeBehaviourFactory, definitions, loopMaxIterations, defaultLeaseMillis);
+        this.localAsyncBatch        = new LocalAsyncBatch(stepChain, definitions);
+        this.observedRuns           = new ObservedRuns(instances, definitions, observeSettleMillis, observeStallMillis);
     }
 
     public DefinitionRegistry definitions() { return definitions; }
@@ -211,16 +215,10 @@ public final class WorkflowEngine {
         return until;
     }
 
-    class DefaultModeFactory extends RunningModeFactory {
-        @Override Instances instances() { return instances;}
-        @Override NodeBehaviourFactory nodeBehaviourFactory() { return nodeBehaviourFactory;}
-        @Override DefinitionRegistry definitions() {return definitions;}
-    }
-
     /**
      * A compensator reports through the same call as any other step, but it is not a step of the
      * flow: it closes one entry of the reverse pass, and its instance is COMPENSATING rather than
-     * RUNNING, so it never reaches a running mode.
+     * RUNNING, so it never reaches the step chain.
      */
     private boolean compensated(Tx tx, Tokens.LockedTask task, Run run) {
         Long compSeq = Sagas.seqOf(task.token());
@@ -230,7 +228,7 @@ public final class WorkflowEngine {
         }
         StepInput step = run.steps().getFirst();
         Tokens.requireLease(task.token(), run.leaseOwner());
-        BaseRunningMode.requireMatchingNode(task.token(), step);
+        StepChain.requireMatchingNode(task.token(), step);
         long now = System.currentTimeMillis();
         Events.emitted(tx, task.inst(), task.token().nodeId, step.events(), now);
         instances.compensatorCompleted(tx, task.inst(), task.token(), compSeq, now);
@@ -300,8 +298,7 @@ public final class WorkflowEngine {
             if (compensated(tx, task, run)) {
                 return new ReportOutcome(task.inst().status.name(), 0, null);
             }
-            return modeFactory.create(mode)
-                    .execute(new ReportStepsContext(task, run.leaseOwner, run.steps, run.finalHandback, tx, loopMaxIterations, defaultLeaseMillis));
+            return stepChain.apply(tx, task, run, ExecutionModes.chainsBack(mode));
         });
     }
 
@@ -315,8 +312,7 @@ public final class WorkflowEngine {
         requireWellFormed(runs);
         if (runs.size() == 1) return replaySingly(runs);
         try {
-            return transactions.inTx(tx -> modeFactory.create(ExecutionMode.LOCAL_ASYNC)
-                    .execute(new AdvanceBatchContext(runs, tx, loopMaxIterations, defaultLeaseMillis)));
+            return transactions.inTx(tx -> localAsyncBatch.apply(tx, runs));
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, () -> "reportSteps: batch of " + runs.size()
                     + " rolled back (" + e + "); replaying each run in its own transaction");
@@ -379,13 +375,10 @@ public final class WorkflowEngine {
             Instance inst;
             if (instanceId != null && !instanceId.isBlank()) {
                 inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-                ObservedRunningMode.requireObserved(
-                        definitions.executionMode(tx, inst.workflow, inst.version), inst.workflow + ":" + inst.version);
             } else {
                 inst = instances.observedRun(tx, workflow, version, key);
             }
-            return modeFactory.create(ExecutionMode.OBSERVED).execute(
-                    new ObserveRunContext(inst, reporter, steps, fin, tx, observeSettleMillis, observeStallMillis));
+            return observedRuns.observe(tx, inst, reporter, steps, fin);
         });
     }
 
@@ -411,7 +404,7 @@ public final class WorkflowEngine {
         WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
                 .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
         boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
-        modeFactory.create(ExecutionMode.OBSERVED).execute(new SettleContext(tx, inst, def, idle, now));
+        observedRuns.settle(tx, inst, def, idle, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "settled observed run " + inst.id + " -> " + inst.status
                 + (idle ? " (idle)" : ""));
     }

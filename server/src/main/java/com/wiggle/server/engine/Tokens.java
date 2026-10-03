@@ -91,7 +91,7 @@ final class Tokens {
     static Token insertSettled(Tx tx, Instance inst, Node node, TokenStatus status, String reporter,
                                WorkflowEngine.StepInput step, long seq, long now) {
         TokenPayload payload = step != null && step.predicateValue() != null
-                ? new TokenPayload(List.of(), java.util.Map.of(), java.util.Map.of(ObservedRunningMode.PREDICATE_KEY, step.predicateValue()))
+                ? new TokenPayload(List.of(), java.util.Map.of(), java.util.Map.of(ObservedRuns.PREDICATE_KEY, step.predicateValue()))
                 : TokenPayload.EMPTY;
         Token t = create(inst, node.id(), "", payload, now);
         t.kind = node.kind();
@@ -267,7 +267,7 @@ final class Tokens {
         }
         if (comp) return Optional.of(Sagas.activation(inst, t, workerId, until));
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
-        ExecutionMode mode = RunningMode.resolveMode(definitions.executionMode(tx, t.workflow, t.version));
+        ExecutionMode mode = ExecutionModes.resolve(definitions.executionMode(tx, t.workflow, t.version));
         Doc base = null;
         long itemIndex = 0;
         String itemMapKey = null;

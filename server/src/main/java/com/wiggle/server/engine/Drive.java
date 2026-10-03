@@ -8,7 +8,7 @@ import java.util.Deque;
 
 /**
  * The drive pump: advances tokens over server-side nodes until they park. Shared by the
- * engine's own sweeps (timers, signals) and by every {@link RunningMode}, so the runaway
+ * engine's own sweeps (timers, signals) and by {@link StepChain}, so the runaway
  * guard has exactly one definition.
  */
 final class Drive {

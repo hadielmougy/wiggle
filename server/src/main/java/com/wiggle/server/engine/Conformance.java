@@ -87,11 +87,11 @@ final class Conformance {
             }
             String expected = expectation();
             if (consumed.contains(node.id()) && !cyclic.contains(node.id())) {
-                findings.add(new Finding(ObservedRunningMode.DUPLICATE, expected, node.id(),
+                findings.add(new Finding(ObservedRuns.DUPLICATE, expected, node.id(),
                         node.name() + " ran again; the topology runs it once"));
                 return;
             }
-            findings.add(new Finding(ObservedRunningMode.OUT_OF_ORDER, expected, node.id(),
+            findings.add(new Finding(ObservedRuns.OUT_OF_ORDER, expected, node.id(),
                     "expected " + expectedNames() + ", got " + node.name()));
             frontier.clear();
             consumed.add(node.id());
@@ -103,7 +103,7 @@ final class Conformance {
             String stoppedAt = null;
             if (!completed && endReason == null && failedAt == null) {
                 stoppedAt = expectedNames();
-                findings.add(new Finding(ObservedRunningMode.INCOMPLETE, expectation(), null,
+                findings.add(new Finding(ObservedRuns.INCOMPLETE, expectation(), null,
                         "run ended before END, at " + stoppedAt));
             }
             return new Verdict(List.copyOf(findings), completed, endReason, stoppedAt, failedAt);

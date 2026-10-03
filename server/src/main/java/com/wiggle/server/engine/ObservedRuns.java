@@ -29,7 +29,7 @@ import java.util.Optional;
  * predicates, static forks and joins, and ends. Nothing here runs server-side, so nothing else
  * belongs in the graph.
  */
-public class ObservedRunningMode extends BaseRunningMode {
+final class ObservedRuns {
 
     static final String OUT_OF_ORDER = "OUT_OF_ORDER";
     static final String UNKNOWN_NODE = "UNKNOWN_NODE";
@@ -40,8 +40,18 @@ public class ObservedRunningMode extends BaseRunningMode {
     /** Where a reported predicate's value rides on its token, for the judge to read back. */
     static final String PREDICATE_KEY = "__observed.predicate";
 
-    ObservedRunningMode(Instances instances, NodeBehaviourFactory nodeBehaviourFactory, DefinitionRegistry definitions) {
-        super(instances, nodeBehaviourFactory, definitions);
+    private final Instances instances;
+    private final DefinitionRegistry definitions;
+    private final long settleMillis;
+    private final long stallMillis;
+
+    /** {@code settleMillis}/{@code stallMillis} are the windows a report reschedules judgement by:
+     *  the short grace once a run is closing, the stall threshold otherwise. */
+    ObservedRuns(Instances instances, DefinitionRegistry definitions, long settleMillis, long stallMillis) {
+        this.instances = instances;
+        this.definitions = definitions;
+        this.settleMillis = settleMillis;
+        this.stallMillis = stallMillis;
     }
 
     /** What an observed graph may contain: what the judge can walk. */
@@ -61,8 +71,8 @@ public class ObservedRunningMode extends BaseRunningMode {
     }
 
     static void requireObserved(ExecutionMode mode, String key) {
-        if (RunningMode.resolveMode(mode) != ExecutionMode.OBSERVED) {
-            throw EngineException.badRequest("workflow '" + key + "' runs " + RunningMode.resolveMode(mode)
+        if (ExecutionModes.resolve(mode) != ExecutionMode.OBSERVED) {
+            throw EngineException.badRequest("workflow '" + key + "' runs " + ExecutionModes.resolve(mode)
                     + ", not OBSERVED; its steps are reported by workers, not observed");
         }
     }
@@ -71,29 +81,26 @@ public class ObservedRunningMode extends BaseRunningMode {
      * Appends the reported steps to the run and reschedules its judgement. A step the graph does
      * not know is recorded as an anomaly at once; a step reported once the run is terminal is kept
      * for its timing and recorded as AFTER_END; a step that threw marks the run closing, and the
-     * judge fails it with that step's error once the run has settled.
+     * judge fails it with that step's error once the run has settled. {@code reporter} names the
+     * process that ran these steps; {@code fin} asks for judgement after the short grace.
      */
-    @Override
-    ObserveResult observe(ObserveRunContext ctx) {
-        Tx tx = ctx.tx();
-        Instance inst = ctx.inst();
-        long settleMillis = ctx.settleMillis();
-        long stallMillis = ctx.stallMillis();
+    ObserveResult observe(Tx tx, Instance inst, String reporter, List<StepInput> steps, boolean fin) {
+        requireObserved(definitions.executionMode(tx, inst.workflow, inst.version), inst.workflow + ":" + inst.version);
         long now = System.currentTimeMillis();
-        LazyGraph def = definitions().graph(tx, inst.workflow, inst.version);
+        LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
         int anomalies = 0;
         // Closing is sticky: once END was seen (or a report said final) a straggler keeps the short
         // grace rather than pushing the run back out to the stall threshold.
-        boolean closing = ctx.fin() || (inst.settleAt != null && inst.settleAt - inst.updatedAt <= settleMillis);
-        if (!inst.status.running() && !ctx.steps().isEmpty()) {
-            record(tx, inst, AFTER_END, null, ctx.steps().getFirst().nodeId(),
-                    ctx.steps().size() + " step(s) reported after the instance " + inst.status, now);
+        boolean closing = fin || (inst.settleAt != null && inst.settleAt - inst.updatedAt <= settleMillis);
+        if (!inst.status.running() && !steps.isEmpty()) {
+            record(tx, inst, AFTER_END, null, steps.getFirst().nodeId(),
+                    steps.size() + " step(s) reported after the instance " + inst.status, now);
             anomalies++;
         }
         // Arrival order within a report is the reporter's causal order: it breaks ties between
         // steps whose clocks agree to the millisecond. Later reports sort after earlier ones.
         long seq = now * 1000;
-        for (StepInput step : ctx.steps()) {
+        for (StepInput step : steps) {
             seq++;
             Optional<Node> reported = def.find(step.nodeId()).filter(Node::isWorkerDispatched);
             if (reported.isEmpty()) {
@@ -105,18 +112,18 @@ public class ObservedRunningMode extends BaseRunningMode {
             if (step.error() != null) {
                 // The run is over, but not judged here: another service's earlier steps may still
                 // be on their way, and they belong to this run, not after it.
-                Tokens.insertSettled(tx, inst, node, TokenStatus.FAILED, ctx.reporter(), step, seq, now);
+                Tokens.insertSettled(tx, inst, node, TokenStatus.FAILED, reporter, step, seq, now);
                 closing = true;
                 continue;
             }
-            Token t = Tokens.insertSettled(tx, inst, node, TokenStatus.DONE, ctx.reporter(), step, seq, now);
+            Token t = Tokens.insertSettled(tx, inst, node, TokenStatus.DONE, reporter, step, seq, now);
             if (step.merge() != null) Scopes.applyStepResult(inst, t, step.merge());
             String next = node.kind() == NodeKind.PREDICATE
                     ? (step.predicateValue() != null && step.predicateValue() ? node.next() : node.altNext())
                     : node.next();
             Node nextNode = next == null ? null : def.find(next).orElse(null);
             if (nextNode != null && nextNode.kind() == NodeKind.END) {
-                Tokens.insertSettled(tx, inst, nextNode, TokenStatus.DONE, ctx.reporter(), null, seq, now);
+                Tokens.insertSettled(tx, inst, nextNode, TokenStatus.DONE, reporter, null, seq, now);
                 closing = true;
             }
         }
@@ -132,13 +139,8 @@ public class ObservedRunningMode extends BaseRunningMode {
      * {@link Conformance}, writes the findings, and closes the instance. {@code idle} says the run
      * settled by going quiet rather than by reaching END or being reported final.
      */
-    @Override
-    void settle(SettleContext ctx) {
-        Tx tx = ctx.tx();
-        Instance inst = ctx.inst();
-        WorkflowDefinition def = ctx.def();
-        boolean idle = ctx.idle();
-        long now = ctx.now();
+    void settle(Tx tx, Instance inst, WorkflowDefinition def, boolean idle, long now) {
+        requireObserved(def.executionMode(), def.key());
         List<Token> reported = new ArrayList<>();
         for (Token t : tx.tokensOf(inst.id)) {
             if (!t.isActive() && t.kind != NodeKind.END && t.status != TokenStatus.CANCELLED) reported.add(t);
@@ -161,16 +163,16 @@ public class ObservedRunningMode extends BaseRunningMode {
         }
         inst.settleAt = null;
         if (verdict.completed()) {
-            instances().complete(tx, inst, null, now);
+            instances.complete(tx, inst, null, now);
         } else if (verdict.endReason() != null) {
-            instances().fail(tx, inst, verdict.endReason(), now);
+            instances.fail(tx, inst, verdict.endReason(), now);
         } else if (verdict.failedAt() != null) {
             Token thrown = reported.stream().filter(t -> t.status == TokenStatus.FAILED && t.nodeId.equals(verdict.failedAt()))
                     .findFirst().orElse(null);
-            instances().fail(tx, inst, def.node(verdict.failedAt()).name() + ": "
+            instances.fail(tx, inst, def.node(verdict.failedAt()).name() + ": "
                     + (thrown == null || thrown.lastError == null ? "failed" : thrown.lastError), now);
         } else {
-            instances().fail(tx, inst, "run ended before END, at " + verdict.stoppedAt(), now);
+            instances.fail(tx, inst, "run ended before END, at " + verdict.stoppedAt(), now);
         }
     }
 

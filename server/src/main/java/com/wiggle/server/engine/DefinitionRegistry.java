@@ -64,8 +64,8 @@ public final class DefinitionRegistry {
      * as a change to the graph.
      */
     public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
-        if (RunningMode.resolveMode(def.executionMode()) == ExecutionMode.OBSERVED) {
-            ObservedRunningMode.requireObservable(def);
+        if (ExecutionModes.resolve(def.executionMode()) == ExecutionMode.OBSERVED) {
+            ObservedRuns.requireObservable(def);
         }
         storage.inTxVoid(new Registration(def, force));
         modeCache.put(def.key(), def.executionMode());
