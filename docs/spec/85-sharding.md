@@ -225,10 +225,25 @@ connection.
 ## 4. Storage SPI
 
 **Status: implemented.** Every engine transaction is routed, and `Transactions` (the engine's wrapper)
-has no unrouted entry point left. Verified by `tests/RoutedConformanceTest`, which runs every engine
-scenario on a store that refuses an unrouted `inTx`. Two routes are interim until a later step: the
-event log reads and writes on the home shard until [§10](#10-event-log), and a schedule fires in one
-home transaction until [WGL-SHARD-104](#7-global-data) can mint off home.
+has no unrouted entry point left. `ShardedStorage` routes over one `Storage` per shard. Verified by:
+
+- `tests/RoutedConformanceTest`: every engine scenario on a store that refuses an unrouted `inTx`;
+- `tests/ShardedConformanceTest`: every engine scenario on two in-memory shards, the first instance
+  off the home shard;
+- `server/store/ShardedStorageTest` and `server/engine/ShardedEngineTest`: routing, unknown shards,
+  and each path that only branches with more than one shard (claims, report batches, merged reads,
+  sweeps, registration, schedule fires).
+
+Until a later step:
+
+- **Placement is round-robin.** Root instances take the instance shards in turn
+  ([WGL-SHARD-020](#22-choosing-a-shard)'s weights come with the topology), and every observed run is
+  minted on the first instance shard ([§9](#9-observed-runs)).
+- **The event log is home-only.** The feed reads, acknowledges and trims on the home shard, so events
+  appended on any other shard are not served until [§10](#10-event-log).
+- **A schedule fires on home.** The fire claims the schedule and starts its instance in one home
+  transaction, minting that instance on home, until [WGL-SHARD-104](#7-global-data) can mint it
+  elsewhere with an idempotent id.
 
 ### 4.1 Routed transactions
 
@@ -248,10 +263,11 @@ default <R> R readFor(String id, Freshness f, Function<ReadTx, R> work) { return
 
 Fan-out runs over `instanceShards()`, not a count: shard ids are permanent and may be sparse.
 
-**WGL-SHARD-071** (MUST) `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
+**WGL-SHARD-071** (MUST) *Implemented.* `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
 per shard primary, and MUST depend on no JDBC type, so it runs over in-memory shards in tests.
 
-**WGL-SHARD-072** (MUST) `ShardedStorage.inTx` (unrouted) MUST throw `IllegalStateException`. A
+**WGL-SHARD-072** (MUST) *Implemented.* `ShardedStorage.inTx` (unrouted) MUST throw
+`IllegalStateException`. A
 call site that was not moved to a routed entry point then fails every test that runs over two
 shards, instead of silently writing to the wrong database.
 
@@ -442,7 +458,8 @@ generation until `activeFrom`, then switch.
 row. At `activeFrom`, the leader MUST raise an anomaly naming every live node that has not loaded
 that generation.
 
-**WGL-SHARD-142** (MUST) A node asked to route an id to a shard it does not know MUST answer
+**WGL-SHARD-142** (MUST) *Implemented in `ShardedStorage` (a `TRANSIENT` storage failure).* A node
+asked to route an id to a shard it does not know MUST answer
 `UNAVAILABLE` (retryable), never *not found*, because the shard may only be missing from that node's
 older topology.
 

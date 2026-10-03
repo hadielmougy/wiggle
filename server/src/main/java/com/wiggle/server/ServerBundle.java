@@ -4,6 +4,7 @@ import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
 import com.wiggle.server.cluster.QueueLagMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
+import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.grpc.GrpcApi;
 import com.wiggle.server.http.HealthServer;
@@ -27,7 +28,8 @@ final class ServerBundle {
 
     ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
         super();
-        this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis());
+        this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
+                InstanceIds.across(storage.instanceShards()));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch(), Housekeeper.adaptiveByDefault(),
                 config.defaultLease());
