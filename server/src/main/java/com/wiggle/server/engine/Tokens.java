@@ -104,6 +104,10 @@ final class Tokens {
             t.finishedAt = step.finishedAt();
             t.lastError = step.error();
             if (step.error() != null) t.attempt = 1;
+            if (StepIo.ENABLED) {
+                StepIo.record(t, Scopes.dispatchContext(inst, t), step.error() != null ? null
+                        : step.predicateValue() != null ? step.predicateValue() : step.merge());
+            }
         }
         // What happened, in the state machine's terms: the step ran, then settled or failed.
         t.status = TokenState.of(t.status).moveTo(TokenStatus.RUNNING);

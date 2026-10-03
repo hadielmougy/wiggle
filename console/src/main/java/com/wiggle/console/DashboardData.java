@@ -68,7 +68,8 @@ public interface DashboardData {
 
     record TokenView(String id, String nodeId, String kind, String status, String activity,
                      String queue, int attempt, long availableAt, String leaseOwner,
-                     long leaseExpiresAt, String lastError, long updatedAt) {}
+                     long leaseExpiresAt, String lastError, long updatedAt,
+                     Long startedAt, Long finishedAt, long createdAt, Object input, Object output) {}
 
     record SignalView(String instanceId, String workflow, String signal, long deadline, long createdAt) {}
 

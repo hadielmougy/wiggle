@@ -90,9 +90,9 @@ inspected, traced and versioned like any other row in your database.
 - 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
   (PostgreSQL, or in-memory for dev). Embed the server in your JVM for tests, or run it as one
   process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
-- 🖥 **Operable from day one** — a web **ops console** (live trace of every instance over the
-  workflow diagram, cancel, deliver signals, schedules, search by instance or correlation id,
-  per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
+- 🖥 **Operable from day one** — a web **ops console** (every instance step by step — each
+  step's input, output, retries and timing — cancel, deliver signals, schedules, search by
+  instance or correlation id, per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
 - 🔍 **Governs steps you run yourself, too** — `OBSERVED` mode: your services report the steps
   they completed against a published topology, and the server checks every run for conformance
   (out of order, duplicate, incomplete, stalled) and ranks the bottlenecks — no worker, no
@@ -188,19 +188,20 @@ helm install wiggle deploy/helm/wiggle \
 ### 2.3 The ops console
 
 A standalone web UI that is a **pure gRPC client** — point it at a cluster with `WIGGLE_URL`.
-Live instance trace over the workflow diagram, cancel, deliver signals, schedules, and search by
+Every instance as a table of the steps it ran — click a step to expand its **input, output,
+retries and timing** — plus cancel, deliver signals, schedules, and search by
 **instance id or correlation id**. Optional login with an operator account and a **read-only
 viewer** account, and an admin can add further accounts of either role from the console itself,
 each able to change its own password. Server nodes themselves serve no UI — just a `/healthz`
 probe for Kubernetes.
 
-![The console's instance detail: an onboarding run traced over its own diagram — fork, join, a sub-workflow, and a signal step waiting on manager approval, with the token table and an inline deliver button.](docs/img/console-instance-trace.png)
+![The console's instance detail: an onboarding run as a table of its steps — fork, join, a sub-workflow, and a signal step waiting on manager approval — with the first step expanded to its input, output, retries and timing, and an inline deliver button.](docs/img/console-instance-trace.png)
 
 The **Performance** tab reads the same timings for every execution mode: each step's p50/p95
-by the handler's own clock, how long it waited to be claimed, the slowest step ringed on the
-diagram, and the anomalies of observed runs ([§2.4](#24-observed-execution--governing-steps-you-run-yourself)).
+by the handler's own clock, how long it waited to be claimed, slowest first, and the anomalies of
+observed runs ([§2.4](#24-observed-execution--governing-steps-you-run-yourself)).
 
-![The console's Performance tab for the checkout flow: the diagram rings reserve red as the slowest p95, the table ranks the five steps by p95 with mean, p50, max and queue wait, and the anomaly list below names a stalled run, two incomplete runs, an out-of-order run and a duplicated step.](docs/img/console-performance.png)
+![The console's Performance tab for the checkout flow: the table ranks the five steps by p95 with mean, p50, max, queue wait and a share bar, reserve slowest in red, and the anomaly list below names a stalled run, two incomplete runs, two out-of-order steps and a duplicated step.](docs/img/console-performance.png)
 
 ```bash
 WIGGLE_URL=localhost:8080 ./gradlew :console:run    # → http://localhost:8090
@@ -570,6 +571,8 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP max pool size |
 | `WIGGLE_JDBC_TX_ATTEMPTS` | `3` | replays for a transaction that rolled back on a momentary database failure; `1` disables |
 | `WIGGLE_LEASE_MILLIS` | `30000` | task lease before a stalled step is reclaimed |
+| `WIGGLE_RECORD_STEP_IO` | `true` | record each step's input and output for the console (`false` turns it off) |
+| `WIGGLE_STEP_IO_MAX_CHARS` | `65536` | cap per recorded input/output; longer ones keep their first 4096 characters |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `20000` | max server-side block of a worker poll |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `1000` | housekeeping / dispatch loop cadence |
 | `WIGGLE_HOUSEKEEPING_BATCH` | `100` | timers/signals/reclaims swept per pass |

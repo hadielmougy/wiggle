@@ -375,7 +375,8 @@ class ObservedModeTest {
                 WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
                 ObserveRunResult first = stub.observeRun(ObserveRunRequest.newBuilder()
                         .setWorkflow(spec.name()).setReporter(APP1).setCorrelationId("order-1")
-                        .addSteps(StepResult.newBuilder().setNodeId(ids.get(0)).setStartedAt(T0).setFinishedAt(T0 + 10))
+                        .addSteps(StepResult.newBuilder().setNodeId(ids.get(0)).setStartedAt(T0).setFinishedAt(T0 + 10)
+                                .setMerge(com.wiggle.proto.ProtoJson.toValue(Map.of("paid", true))))
                         .addSteps(StepResult.newBuilder().setNodeId(ids.get(3)).setStartedAt(T0 + 10).setFinishedAt(T0 + 40))
                         .build());
                 assertEquals("RUNNING", first.getInstanceStatus());
@@ -397,6 +398,10 @@ class ObservedModeTest {
                         .setInstanceId(first.getInstanceId()).build());
                 assertTrue(detail.getTokensList().stream().anyMatch(t -> t.getNodeId().equals(ids.get(3))
                         && t.getStartedAt() == T0 + 10 && t.getFinishedAt() == T0 + 40), "timings reach the API");
+                var paid = detail.getTokensList().stream().filter(t -> t.getNodeId().equals(ids.get(0))).findFirst().orElseThrow();
+                assertTrue(paid.hasInput(), "an observed step records what it ran with");
+                assertEquals(Map.of("paid", true), com.wiggle.proto.ProtoJson.fromValue(paid.getOutput()),
+                        "and what it returned");
             } finally {
                 channel.shutdownNow().awaitTermination(2, TimeUnit.SECONDS);
             }

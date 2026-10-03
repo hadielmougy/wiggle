@@ -714,6 +714,7 @@ public final class WorkflowEngine {
             Tokens.requireLease(t, leaseOwner);
             if (!inst.status.live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
+            if (StepIo.ENABLED) StepIo.record(t, Scopes.dispatchContext(inst, t), null);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
         });
     }

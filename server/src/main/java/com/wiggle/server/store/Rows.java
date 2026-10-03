@@ -74,6 +74,11 @@ public final class Rows {
          *  sees the flush. Null when the step was not timed. */
         public Long startedAt;
         public Long finishedAt;
+        /** What the step ran with and what it returned, as JSON for an operator to inspect (see
+         *  {@code StepIo}); null where nothing was recorded. A task's null output left the context
+         *  as it was; a predicate's output is its branch. */
+        public String stepInput;
+        public String stepOutput;
         /** Observed steps only: the order they were reported in, which breaks ties between steps
          *  whose clocks agree to the millisecond. Null elsewhere. */
         public Long seq;

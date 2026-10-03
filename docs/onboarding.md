@@ -402,6 +402,8 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_LEASE_MILLIS` | `wiggle.lease.millis` | `30000` | default task lease before a stalled step is reclaimed |
+| `WIGGLE_RECORD_STEP_IO` | `wiggle.stepIo.record` | `true` | record each step's input and output on its token, for the console |
+| `WIGGLE_STEP_IO_MAX_CHARS` | `wiggle.stepIo.maxChars` | `65536` | cap per recorded input/output; a longer one keeps its first 4096 characters and its length |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `wiggle.longpoll.maxMillis` | `20000` | server-side cap on how long a `PollTasks` may block |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `wiggle.poll.intervalMillis` | `1000` | housekeeping tick cadence (timers, lease reclaim, deadlines) |
 | `WIGGLE_HEARTBEAT_INTERVAL_MILLIS` | `wiggle.heartbeat.intervalMillis` | `5000` | cluster heartbeat/election interval |
@@ -526,17 +528,17 @@ WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
 ```
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
-has seven tabs: **Instances** (filter, search by **instance id or correlation id**, a live trace
-overlaying token status onto the workflow diagram, cancel, inline signal delivery), **Workflows**
-(render any compiled graph), **Schedules** (create/delete interval and cron schedules), **Signals**,
+has seven tabs: **Instances** (filter, search by **instance id or correlation id**, each instance's
+steps as a table — click one to expand its input, output, retries and timing — cancel, inline signal
+delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry policies), **Schedules** (create/delete interval and cron schedules), **Signals**,
 **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
 **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
-execution mode, the slowest step ringed on the diagram, and the anomalies of observed runs —
+execution mode, slowest first, and the anomalies of observed runs —
 [observed-execution.md](observed-execution.md)), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
 
-![The console's instance detail: an onboarding run traced over its own diagram, with its tokens and an inline signal form.](img/console-instance-trace.png)
+![The console's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
 
 **Auth.** Two roles: **admin** does everything, **viewer** sees everything but is refused any
 mutating call (cancel, signal, schedule, users — every non-GET `/api/*`). Browsers get a

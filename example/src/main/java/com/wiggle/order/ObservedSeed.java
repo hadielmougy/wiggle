@@ -19,7 +19,7 @@ import java.util.Random;
  * <pre>./gradlew :example:seedObserved                                       # terminal 1
  * WIGGLE_URL=localhost:8080 ./gradlew :console:run   ->   http://localhost:8090   # terminal 2</pre>
  *
- * <p>What to look for: {@code reserve} is the slowest step (its p95 rings red on the diagram),
+ * <p>What to look for: {@code reserve} is the slowest step (the top row, its p95 in red),
  * and the anomaly list shows an out-of-order run, a run that ended before END, a run whose step
  * threw, and a duplicated step. Every run is judged a few seconds after its last report.
  *

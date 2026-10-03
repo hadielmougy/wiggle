@@ -2,6 +2,7 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Doc;
 import com.wiggle.core.Node;
+import com.wiggle.core.NodeKind;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows.Instance;
@@ -65,9 +66,11 @@ final class StepChain {
             }
             stamp(current, step);
             NodeBehaviour behaviour = nodeBehaviourFactory.getNodeBehaviour(node.kind());
-            Doc compInput = node.compensable() ? Scopes.dispatchContext(inst, current) : null;
+            Doc input = node.compensable() || StepIo.ENABLED ? Scopes.dispatchContext(inst, current) : null;
+            Doc compInput = node.compensable() ? input : null;
             StepReport report = StepReport.of(step);
             String next = behaviour.route(inst, current, node, report);
+            StepIo.record(current, input, node.kind() == NodeKind.PREDICATE ? step.predicateValue() : step.merge());
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
             Overrun overrun = behaviour.overrun(current, node, report, loopMaxIterations);
             if (overrun.exceeded()) {
