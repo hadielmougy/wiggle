@@ -2,10 +2,10 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
-import com.wiggle.core.Ids;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
+import com.wiggle.core.ShardIds;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Instance;
@@ -54,7 +54,7 @@ final class Tokens {
     static Token create(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
         Token t = new Token();
         t.payload = payload == null ? TokenPayload.EMPTY : payload;
-        t.id = Ids.next("tok");
+        t.id = ShardIds.inherit("tok", inst.id);
         t.instanceId = inst.id;
         t.workflow = inst.workflow;
         t.version = inst.version;

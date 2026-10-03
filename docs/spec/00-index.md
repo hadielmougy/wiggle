@@ -93,9 +93,10 @@ instance write-lock, so any number of server nodes over one database may drive t
 semantics of [chapter 30](30-engine.md).
 
 **WGL-GEN-004** (MUST) A conforming **client library** may implement any subset of the RPCs, but
-whatever it implements MUST follow chapter 70. (Clients no longer mint or route instance ids; the
-placement fixture went with the coordinator. Sharding brings a shard-id fixture,
-[WGL-SHARD-165](85-sharding.md#15-dropping-the-coordinator).)
+whatever it implements MUST follow chapter 70, and — where it mints or reads instance ids — MUST
+pass the shared fixtures in `conformance/shard-ids-v1.json`
+([WGL-SHARD-165](85-sharding.md#15-dropping-the-coordinator)).
+*Verified by:* `core/ShardIdsConformanceTest`.
 
 **WGL-GEN-005** (MUST) A conforming **worker** implements the poll/report/fail/heartbeat contract of
 [chapter 20](20-worker.md), including honouring the server-resolved execution mode on each task

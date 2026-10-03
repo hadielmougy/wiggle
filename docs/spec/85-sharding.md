@@ -61,6 +61,11 @@ workflows keep running.
 
 ## 2. Ids
 
+**Status: implemented**, except shard choice by weight ([WGL-SHARD-020](#22-choosing-a-shard)):
+until the topology lands, every root instance is minted on shard `0`. `ShardIds` (in `core`) is the
+codec; `InstanceIds` mints instance ids. Verified by `core/ShardIdsConformanceTest` (the shared
+fixture) and `server/engine/ShardIdsEngineTest`.
+
 ### 2.1 Format
 
 **WGL-SHARD-010** (MUST) A sharded id MUST be `{prefix}.s{shard}.{ulid}`:
@@ -71,7 +76,10 @@ workflows keep running.
 | token | `tok.s3.01k6…` | its instance's |
 | child instance (sub-workflow) | `wfi.s3.01k6…` | its parent instance's |
 | observed run | `wfo.s3.<digest>` | derived from the key ([§9](#9-observed-runs)) |
-| anomaly, comp-log entry | `anm.s3.…` | its instance's |
+| anomaly | `anm.s3.…` | its instance's |
+
+Comp-log entries and events are keyed by `(instance id, seq)` and need no id of their own. Schedule and
+node ids are global rows on the home shard and stay bare (`sched_…`, `node_…`).
 
 **WGL-SHARD-011** (MUST) The shard segment MUST sit before the ulid, because a ulid is the only
 segment that may grow.
@@ -83,6 +91,11 @@ paths receive only a task (token) id, and MUST route on it without reading anyth
 
 **WGL-SHARD-014** (MUST) A child instance MUST be minted on its parent's shard, so the parent/child
 join ([chapter 30](30-engine.md)) stays inside one transaction on one database.
+
+**WGL-SHARD-015** (MUST) An id derived from another (a token from its instance, a child from the token
+that starts it, an anomaly from its instance) MUST inherit the owner's **form**: the owner's shard when
+its id carries one, and the bare form (`{prefix}_…`) when it carries none. A bare id belongs to the
+home shard, so the derived id lands with its owner without the minter knowing which shard is home.
 
 ### 2.2 Choosing a shard
 
@@ -99,9 +112,10 @@ shard. Upgrading a single-database deployment therefore rewrites no rows: its da
 home shard.
 
 **WGL-SHARD-031** (MUST) A namespaced id minted under the coordinator
-(`{ns}[.c{cell}].e{epoch}.s{shard}.{ulid}`, [WGL-COORD-010](90-ops.md)) MUST still parse. One
-carrying a cell label routes through the topology's `legacyCells` map (cell id → shard id); one
-without a label routes to the home shard. See [§15](#15-dropping-the-coordinator).
+(`{ns}[.c{cell}].e{epoch}.s{shard}.{ulid}`, [WGL-COORD-010](90-ops.md)) carries no shard and MUST route
+to the home shard, cell label or not. Its `.s` segment was a ring position, not a database, and the
+tokens of such an instance were always minted bare, so no label could route a report anyway. See
+[§15](#15-dropping-the-coordinator).
 
 ## 3. Topology and configuration
 
@@ -154,8 +168,7 @@ without a label routes to the home shard. See [§15](#15-dropping-the-coordinato
       "primary":  { "url": "jdbc:postgresql://pg-search-a:5432/wiggle" },
       "replicas": [ { "url": "jdbc:postgresql://pg-search-a-r1:5432/wiggle" } ]
     }
-  ],
-  "legacyCells": { }
+  ]
 }
 ```
 
@@ -365,7 +378,8 @@ than the horizon MAY be split in two; this MUST be stated in the operator docume
 first report and pass it on later reports (the API already accepts it), which bypasses the lookup.
 
 **WGL-SHARD-126** (MUST) A legacy `wfo_…` id MUST still be found: the lookup's last candidate is
-the home shard with the legacy id, until every legacy observed run has settled.
+the home shard with the legacy id. *Implemented with shard-carrying ids*, since that change is what
+gave observed runs a new id.
 
 ## 10. Event log
 
@@ -598,7 +612,7 @@ marked partial, at the caller's choice) and MUST NOT affect the engine
 
 **Status: implemented** (the first step of [§16](#16-delivery-plan)); WGL-SHARD-163 is verified by
 `dist/RemovedSettingsTest` and `dist/RoleTest`. The `wiggle` CLI, whose only commands managed the
-coordinator, was removed with it. WGL-SHARD-165 (the shard-id fixture) lands with shard-carrying ids.
+coordinator, was removed with it. WGL-SHARD-165 (the shard-id fixture) landed with shard-carrying ids.
 
 Sharding replaces the cell coordinator as the way to scale past one database. Cells, namespaces,
 epochs and the coordinator go, and so does [chapter 90 §9](90-ops.md).
@@ -621,10 +635,10 @@ epochs and the coordinator go, and so does [chapter 90 §9](90-ops.md).
 **WGL-SHARD-161** (MUST) The id parser MUST keep accepting namespaced ids forever
 ([WGL-SHARD-031](#23-ids-from-before-sharding)). Only the minter goes.
 
-**WGL-SHARD-162** (MUST) A multi-cell deployment converts by making each cell's database a shard and
-listing `cell id → shard id` in `legacyCells`. Ids with a cell label then route to the right
-database. A deployment that minted namespaced ids **without** a cell label on more than one cell
-MUST drain those cells before converting, because nothing in such an id says which database holds it.
+**WGL-SHARD-162** (MUST) A multi-cell deployment MUST drain every cell but one before converting; that
+cell's database becomes the home shard. Every id the others minted would route home
+([WGL-SHARD-031](#23-ids-from-before-sharding)): their tokens were minted bare, so nothing in a report
+says which database holds it.
 
 **WGL-SHARD-163** (MUST) Setting a removed variable MUST fail startup with a message naming its
 replacement, rather than being silently ignored.
@@ -633,9 +647,9 @@ replacement, rather than being silently ignored.
 coordinated-connection mode goes too. It MUST ship in a release whose notes say so.
 
 **WGL-SHARD-165** (MUST) `conformance/shard-ids-v1.json` MUST replace the placement fixture: id
-formatting and parsing, legacy and namespaced ids, the shard each routes to, and the observed-run
-rendezvous choice ([WGL-SHARD-120](#9-observed-runs)) for given weights. Every client that mints or
-parses ids MUST pass it ([WGL-GEN-004](00-index.md)).
+formatting and parsing, legacy and namespaced ids, the shard each carries, and how derived ids inherit
+it. The observed-run rendezvous choice ([WGL-SHARD-120](#9-observed-runs)) joins it with §9. Every
+client that mints or parses ids MUST pass it ([WGL-GEN-004](00-index.md)).
 
 **WGL-SHARD-166** (MUST) The server⊥coordinator source rule ([WGL-COORD-001](90-ops.md)) is
 withdrawn with the coordinator, and chapter 90 §9 is marked *withdrawn*, not deleted
