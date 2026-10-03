@@ -471,17 +471,18 @@ about 3 seconds end to end. At lighter load the end-to-end time is about 260ms: 
 Each instance is the 8-step `order-fulfilment` fork/join workflow: validate, a stock gate, two
 parallel branches, an explicit combine, notify and audit. It runs in `LOCAL_ASYNC` mode. The bench
 ramps the offered start rate and measures *probe sojourn*: the time a fresh instance takes from
-`start()` to `COMPLETED`. Flat sojourn means the node keeps up. Sojourn that keeps growing means
-arrivals are outrunning it.
+`start()` to `COMPLETED`. The ceiling is the highest load at which sojourn stays bounded.
 
-| Cloud SQL | offered load | window | end-to-end latency | verdict |
-|---|---|---|---|---|
-| 8 vCPU | 4,000 steps/s (500/s) | 60s | flat **≈260ms** | ✅ sustained |
-| 8 vCPU | **4,800 steps/s (600/s)** | 30s | ≈2.3s, stable | ✅ ceiling |
-| 8 vCPU | 5,600 steps/s (700/s) | 60s | 9.5s → 15s, growing | ❌ queue piling |
-| 16 vCPU | 5,600 steps/s (700/s) | 30s | flat **≈260ms** | ✅ sustained |
-| 16 vCPU | **7,200 steps/s (900/s)** | 2 × 60s | ≈3s, stable | ✅ ceiling |
-| 16 vCPU | 8,800 steps/s (1,100/s) | 60s | 12s → 18s, growing | ❌ queue piling |
+| Cloud SQL | sustained load | window | end-to-end latency |
+|---|---|---|---|
+| 8 vCPU | 4,000 steps/s (500/s) | 60s | flat **≈260ms** |
+| 8 vCPU | **4,800 steps/s (600/s)**, the ceiling | 30s | ≈2.5s |
+| 16 vCPU | 5,600 steps/s (700/s) | 30s | flat **≈260ms** |
+| 16 vCPU | **7,200 steps/s (900/s)**, the ceiling | 60s | ≈2.5–3.7s |
+
+![End-to-end latency over time at four sustained loads on Cloud SQL: 5,600 and 4,000 steps/sec stay flat near 260ms; 7,200 steps/sec on 16 vCPU holds at about 2.5 to 3.7 seconds and 4,800 steps/sec on 8 vCPU near 2.5 seconds.](docs/img/bench-gcp-sojourn.svg)
+
+![The ceiling follows the database: 4,800 durable step executions/sec (600 instances/sec) on an 8 vCPU Cloud SQL, 7,200 (900/s) on 16 vCPU, with flat 260ms latency up to 4,000 and 5,600 steps/sec respectively.](docs/img/bench-gcp-ceiling.svg)
 
 **The database sets the ceiling, not the server.** At the ceiling, Cloud SQL ran at ≈90% CPU
 (8 vCPU) and ≈75% (16 vCPU). The server node stayed at 25–40% CPU and the workers had headroom.
