@@ -7,6 +7,7 @@ import com.wiggle.server.store.Rows.Token;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 /**
  * The reads of one transaction: everything a caller may do on a read-only connection, such as a
@@ -14,6 +15,12 @@ import java.util.Optional;
  * {@code ReadTx} cannot write.
  */
 public interface ReadTx extends GraphReads {
+
+    /** The shard this database was claimed for, or empty when no shard has claimed it. */
+    OptionalInt shardIdentity();
+
+    /** Every shard the cluster has used, by id. Held on the home shard. */
+    List<Rows.ShardRecord> shardRegistry();
 
     Optional<Instance> findInstance(String id);
 

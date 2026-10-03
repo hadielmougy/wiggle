@@ -135,6 +135,8 @@ public final class Rows {
         public long lastHeartbeat;
         public int workers;
         public boolean leader;
+        /** The newest storage-topology generation this node has loaded; 0 when it runs without one. */
+        public long topologyGeneration;
 
         @Override public ServerNode clone() {
             try { return (ServerNode) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
@@ -186,6 +188,10 @@ public final class Rows {
      * Read-only, so unlike the row classes above this is a plain record.
      */
     public record QueueDepth(int readyCount, long oldestAvailableAt) { }
+
+    /** A shard the cluster has used, as the registry on the home shard remembers it. {@code retiredAt}
+     *  is null until it is retired. */
+    public record ShardRecord(int shardId, ShardState state, long firstSeen, Long retiredAt) { }
 
     /**
      * One slice of the dispatchable backlog, grouped by what decides who may claim it: the queue a
