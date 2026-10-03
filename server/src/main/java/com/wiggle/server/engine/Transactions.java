@@ -61,6 +61,11 @@ final class Transactions {
         return storage.shardOf(id);
     }
 
+    /** The shard holding the cluster-global rows. */
+    int home() {
+        return storage.home();
+    }
+
     /** The shards that hold instances. */
     List<Integer> instanceShards() {
         return storage.instanceShards();

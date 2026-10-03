@@ -3,6 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.core.Cron;
 import com.wiggle.core.Doc;
 import com.wiggle.core.Ids;
+import com.wiggle.core.ShardIds;
 import com.wiggle.server.store.Rows;
 
 import java.time.Duration;
@@ -94,8 +95,8 @@ final class Schedules {
     private boolean fire(Rows.Schedule sched, long now) {
         return transactions.inHome(tx -> {
             if (!tx.claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
-            String id = instances.start(tx, sched.workflow, null, sched.context.raw(),
-                    "schedule:" + sched.id, null);
+            String id = instances.start(tx, ShardIds.next("wfi", transactions.home()), sched.workflow, null,
+                    sched.context.raw(), "schedule:" + sched.id, null);
             LOG.log(System.Logger.Level.DEBUG, () -> "schedule " + sched.id + " fired -> instance " + id);
             return true;
         });

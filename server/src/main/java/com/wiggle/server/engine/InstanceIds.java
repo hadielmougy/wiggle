@@ -3,6 +3,9 @@ package com.wiggle.server.engine;
 import com.wiggle.core.Ids;
 import com.wiggle.core.ShardIds;
 
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /** Mints instance ids. Every id carries the shard its instance lives on ({@link ShardIds}). */
 public interface InstanceIds {
 
@@ -25,10 +28,24 @@ public interface InstanceIds {
 
     /** Mints every root instance and observed run on {@code shard}. */
     static InstanceIds onShard(int shard) {
+        return across(List.of(shard));
+    }
+
+    /**
+     * Mints root instances on {@code shards} in turn, starting with the first, and every observed run
+     * on the first of them -- an observed run's id is derived from its key, so it cannot take a turn.
+     */
+    static InstanceIds across(List<Integer> shards) {
+        if (shards.isEmpty()) throw new IllegalArgumentException("no shard to mint on");
+        List<Integer> pool = List.copyOf(shards);
+        int observed = pool.getFirst();
+        AtomicInteger turn = new AtomicInteger();
         return new InstanceIds() {
-            @Override public String next() { return ShardIds.next("wfi", shard); }
+            @Override public String next() {
+                return ShardIds.next("wfi", pool.get(Math.floorMod(turn.getAndIncrement(), pool.size())));
+            }
             @Override public String forKey(String workflow, String key) {
-                return ShardIds.format("wfo", shard, Ids.digest(workflow + ":" + key));
+                return ShardIds.format("wfo", observed, Ids.digest(workflow + ":" + key));
             }
         };
     }
