@@ -6,6 +6,7 @@ import com.wiggle.core.WorkflowVersion;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Handing work to workers: the long poll's pacing around {@link Tokens#claim}. Nothing
@@ -48,6 +49,8 @@ final class Dispatch {
     private final DispatchNotifier notifier;
     private final PollerRegistry pollers;
     private final long defaultLeaseMillis;
+    /** Where the next claim starts, so polls spread over the instance shards. */
+    private final AtomicInteger nextShard = new AtomicInteger();
 
     Dispatch(Transactions transactions, Tokens tokens, DispatchNotifier notifier,
              PollerRegistry pollers, long defaultLeaseMillis) {
@@ -101,11 +104,21 @@ final class Dispatch {
         return tasks;
     }
 
-    /** One atomic DB claim attempt, with a lease that starts now (not at the poll's arrival). */
+    /**
+     * One claim attempt, with a lease that starts now (not at the poll's arrival): one shard at a
+     * time, from a rotating start, taking the first shard that has work. Each shard's claim is atomic.
+     */
     private List<TaskActivation> claimNow(String workerId, Set<String> queues,
                                           Set<WorkflowVersion> versions, int max, long lease) {
-        long now = System.currentTimeMillis();
-        return transactions.read(tx -> tokens.claim(tx, workerId, queues, versions, max, now, now + lease));
+        List<Integer> shards = transactions.instanceShards();
+        int start = Math.floorMod(nextShard.getAndIncrement(), shards.size());
+        for (int i = 0; i < shards.size(); i++) {
+            long now = System.currentTimeMillis();
+            List<TaskActivation> got = transactions.readShard(shards.get((start + i) % shards.size()),
+                    tx -> tokens.claim(tx, workerId, queues, versions, max, now, now + lease));
+            if (!got.isEmpty()) return got;
+        }
+        return List.of();
     }
 
     /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so

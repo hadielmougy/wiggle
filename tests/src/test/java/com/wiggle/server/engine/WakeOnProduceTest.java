@@ -38,7 +38,7 @@ class WakeOnProduceTest {
             Node node = Node.task("one", "one", "one", QUEUE, null);
 
             Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
-            transactions.inTxVoid(tx -> {
+            transactions.inTxVoid("wfi_1", tx -> {
                 long now = 1_000L;
                 Instance inst = Instances.create(tx, "wfi_1", "w", 1, Map.of(), null, null, now);
                 Token t = Tokens.create(inst, "one", "", null, now);
@@ -68,7 +68,7 @@ class WakeOnProduceTest {
             Transactions transactions = new Transactions(storage, new DispatchNotifier());
 
             IllegalStateException nested = assertThrows(IllegalStateException.class,
-                    () -> transactions.inTxVoid(outer -> transactions.inTxVoid(inner -> { })));
+                    () -> transactions.inTxVoid("wfi_1", outer -> transactions.inTxVoid("wfi_1", inner -> { })));
             assertTrue(nested.getMessage().contains("nested transaction scope"), nested.getMessage());
         }
     }
@@ -82,10 +82,10 @@ class WakeOnProduceTest {
             Transactions transactions = new Transactions(storage, notifier);
 
             assertThrows(IllegalStateException.class,
-                    () -> transactions.inTxVoid(outer -> transactions.inTxVoid(inner -> { })));
+                    () -> transactions.inTxVoid("wfi_1", outer -> transactions.inTxVoid("wfi_1", inner -> { })));
 
             Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
-            transactions.inTxVoid(tx -> transactions.wake(QUEUE));
+            transactions.inTxVoid("wfi_1", tx -> transactions.wake(QUEUE));
             assertTrue(notifier.snapshot(Set.of(QUEUE)).getOrDefault(QUEUE, 0L)
                             > before.getOrDefault(QUEUE, 0L),
                     "the failed scope must not have left this thread's state stuck");

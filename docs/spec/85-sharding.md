@@ -224,20 +224,29 @@ connection.
 
 ## 4. Storage SPI
 
+**Status: implemented.** Every engine transaction is routed, and `Transactions` (the engine's wrapper)
+has no unrouted entry point left. Verified by `tests/RoutedConformanceTest`, which runs every engine
+scenario on a store that refuses an unrouted `inTx`. Two routes are interim until a later step: the
+event log reads and writes on the home shard until [§10](#10-event-log), and a schedule fires in one
+home transaction until [WGL-SHARD-104](#7-global-data) can mint off home.
+
 ### 4.1 Routed transactions
 
 **WGL-SHARD-070** (MUST) `Storage` MUST gain routed entry points. The existing single-database
 implementations satisfy them through the defaults:
 
 ```java
-default int shards() { return 1; }
-default int shardOf(String id) { return 0; }
+default int home() { return 0; }
+default List<Integer> instanceShards() { return List.of(home()); }
+default int shardOf(String id) { return ShardIds.shardOf(id).orElse(home()); }
 default <R> R inShard(int shard, Function<Tx, R> work) { return inTx(work); }
 default <R> R inTxFor(String id, Function<Tx, R> work) { return inShard(shardOf(id), work); }
 default <R> R inHome(Function<Tx, R> work) { return inShard(home(), work); }
 default <R> R readShard(int shard, Freshness f, Function<ReadTx, R> work) { return inShard(shard, work::apply); }
 default <R> R readFor(String id, Freshness f, Function<ReadTx, R> work) { return readShard(shardOf(id), f, work); }
 ```
+
+Fan-out runs over `instanceShards()`, not a count: shard ids are permanent and may be sparse.
 
 **WGL-SHARD-071** (MUST) `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
 per shard primary, and MUST depend on no JDBC type, so it runs over in-memory shards in tests.
@@ -255,9 +264,12 @@ shards, instead of silently writing to the wrong database.
 extend it. A replica connection MUST be opened read-only and MUST be handed out only as a `ReadTx`, so
 a write through a replica does not compile.
 
-**WGL-SHARD-081** (MUST) `ReadTx` MUST contain at least: `findInstance`, `tokensOf`,
+**WGL-SHARD-081** (MUST) `ReadTx` MUST contain at least: `findInstance`, `findToken`, `tokensOf`,
 `listInstances`, `findByCorrelation`, `countInstances`, `pendingSignals`, `backlogByVersion`,
-`queueDepth`, `countProcessedSince`, `childInstanceIds`, and the `GraphStore` reads.
+`queueDepth`, `countProcessedSince`, `childInstanceIds`, `schedules`, `nodes`, `anomalies`,
+`compensationLog`, `stepDurations`, the event-log reads, and the graph reads (`GraphReads`, split
+out of `GraphStore`). Locking reads (`lockInstance`, `lockTask`, `definitionFingerprint`) stay on
+`Tx`.
 
 **WGL-SHARD-082** (MUST) `Freshness` MUST be `PRIMARY` or `REPLICA_OK`, chosen **per call site**,
 not per method: the same `findInstance` is a primary read inside start and a replica read in the
@@ -291,7 +303,7 @@ read RPCs (`GetInstance`, `ListInstances`), so a console can show read-your-writ
 
 ## 6. Claims
 
-**WGL-SHARD-095** (MUST) A claim MUST NOT scatter-gather. It MUST try one shard at a time, starting
+**WGL-SHARD-095** (MUST) *Implemented with the routed SPI.* A claim MUST NOT scatter-gather. It MUST try one shard at a time, starting
 from a per-node rotating cursor, and MUST return the first non-empty result.
 
 **WGL-SHARD-096** (SHOULD) The dispatch notifier SHOULD carry the shard that produced a ready token,

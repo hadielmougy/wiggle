@@ -1,7 +1,6 @@
 package com.wiggle.server.store;
 
 import com.wiggle.server.store.Rows.Instance;
-import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows.ServerNode;
@@ -14,11 +13,11 @@ import java.util.Set;
 
 /**
  * The mutable runtime state of one transaction: instances, tokens, leases, schedules, and cluster
- * nodes. It also extends {@link GraphStore} -- the immutable definition/graph reference data -- so a
- * single transaction can read the graph and mutate runtime state atomically. Every engine mutation
- * runs inside {@link Storage#inTx}.
+ * nodes. It extends {@link ReadTx} with the writes and the locking reads, and {@link GraphStore} -- the
+ * immutable definition/graph reference data -- so a single transaction can read the graph and mutate
+ * runtime state atomically. Every engine mutation runs inside a {@link Storage} transaction.
  */
-public interface Tx extends GraphStore {
+public interface Tx extends ReadTx, GraphStore {
 
     /**
      * Whether a throw rolls this transaction's writes back. The in-memory store answers false:
@@ -35,6 +34,7 @@ public interface Tx extends GraphStore {
      * taken. Two reporters can create the same keyed observed run at once; the loser re-reads.
      */
     boolean insertInstanceIfAbsent(Instance instance);
+
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
 
@@ -64,7 +64,6 @@ public interface Tx extends GraphStore {
         for (String id : ids) lockInstance(id).ifPresent(out::add);
         return out;
     }
-    Optional<Instance> findInstance(String id);
 
     /**
      * Writes back the fields of an instance that change as it runs: status, termination reason,
@@ -87,10 +86,6 @@ public interface Tx extends GraphStore {
     default void updateInstances(List<Instance> instances) {
         for (Instance i : instances) updateInstance(i);
     }
-    List<Instance> listInstances(String workflow, InstanceStatus status, int limit);
-    /** Instances started with {@code correlationId} (a business key), newest first. */
-    List<Instance> findByCorrelation(String correlationId, int limit);
-    int countInstances(InstanceStatus status);
 
     void insertToken(Token token);
 
@@ -99,16 +94,7 @@ public interface Tx extends GraphStore {
     default void insertTokens(List<Token> tokens) {
         for (Token t : tokens) insertToken(t);
     }
-    Optional<Token> findToken(String id);
 
-    /** {@code findToken} for a set of ids: any order, missing ids absent. The default loops; a
-     *  JDBC backend overrides it with one {@code WHERE id IN} read. */
-    default List<Token> findTokens(List<String> ids) {
-        List<Token> out = new java.util.ArrayList<>(ids.size());
-        for (String id : ids) findToken(id).ifPresent(out::add);
-        return out;
-    }
-    List<Token> tokensOf(String instanceId);
     void updateToken(Token token);
 
     /** {@code updateToken} for a set of rows; same contract as {@link #insertTokens}. */
@@ -160,22 +146,16 @@ public interface Tx extends GraphStore {
      *  out, earliest first. */
     List<Token> dueRetries(long now, int max);
 
-    /** AWAITING signal tokens, oldest first -- what the pending-signals list shows. */
-    List<Token> pendingSignals(int max);
-
     /** AWAITING signal tokens with a deadline (availableAt > 0) that has passed. */
     List<Token> dueSignals(long now, int max);
 
-    /** Instances whose parent token belongs to {@code parentInstanceId} -- its sub-workflows. */
-    List<String> childInstanceIds(String parentInstanceId);
-
     void putSchedule(Rows.Schedule schedule);
+
     void deleteSchedule(String id);
-    List<Rows.Schedule> schedules();
-    /** The schedule for a workflow, if one exists -- workflow is a unique key for schedules. */
-    java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow);
+
     /** Schedules whose fire time has passed. */
     List<Rows.Schedule> dueSchedules(long now, int max);
+
     /**
      * Advances a schedule's fire time iff it still reads {@code expectedFireAt} -- the
      * compare-and-set that keeps overlapping leaders from double-firing.
@@ -188,32 +168,16 @@ public interface Tx extends GraphStore {
     /** RUNNING observed runs whose settle time has passed, soonest first. */
     List<Instance> dueSettle(long now, int max);
 
-    /** Snapshot of the dispatchable backlog, for lag monitoring. */
-    Rows.QueueDepth queueDepth(long now);
-
-    /**
-     * The dispatchable backlog split by (workflow, version, queue) -- everything that decides which
-     * workers may claim a token. Read-only and console-facing, so it is not on the hot path.
-     */
-    List<Rows.BacklogSlice> backlogByVersion(long now, int max);
-
-    /**
-     * Worker-dispatched tokens (TASK/PREDICATE) that finished (DONE) since {@code since} --
-     * the throughput signal for lag monitoring. DB-driven rather than an in-process counter,
-     * so it reflects consumption across every node in the cluster, not just this one.
-     */
-    int countProcessedSince(long since);
-
     void upsertNode(ServerNode node);
-    List<ServerNode> nodes();
+
     void deleteNodesOlderThan(long lastHeartbeatBefore);
+
     void setLeader(String nodeId, boolean leader);
 
     int deleteTerminalInstancesBefore(long updatedBefore, int limit);
 
     void appendCompensation(Rows.CompLog entry);
-    /** The instance's compensation log, ordered by seq ascending. */
-    java.util.List<Rows.CompLog> compensationLog(String instanceId);
+
     void markCompensated(String instanceId, long seq);
 
     /** Cancels every active token of an instance, stamping {@code now} as their update time. */
@@ -221,30 +185,8 @@ public interface Tx extends GraphStore {
 
     void insertAnomaly(Rows.Anomaly anomaly);
 
-    /** Anomalies newest first, narrowed by workflow and/or instance when either is non-null. */
-    List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit);
-
     /** Appends to the event log and returns the seq the store assigned; visible with the transaction. */
     long appendEvent(Rows.Event event);
-
-    /** Up to {@code max} events with seq greater than {@code afterSeq}, ascending. */
-    default List<Rows.Event> eventsAfter(long afterSeq, int max) {
-        return eventsAfter(afterSeq, Long.MAX_VALUE, max);
-    }
-
-    /**
-     * {@link #eventsAfter(long, int)} restricted to events appended before {@code createdBefore}.
-     * The feed holds this line back from now: seq is store-assigned, so an uncommitted append may
-     * still hold a seq below one already visible, and a consumer that read past it would never be
-     * offered it. Waiting out the window costs latency, not correctness.
-     */
-    List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max);
-
-    /** The highest seq the log has assigned, or 0 when it is empty. */
-    long latestEventSeq();
-
-    /** One consumer's cursor, or null when it has never polled. */
-    Rows.EventCursor eventCursor(String consumer);
 
     /** Registers {@code cursor} if that consumer has none; leaves an existing one untouched. */
     void createEventCursorIfAbsent(Rows.EventCursor cursor);
@@ -252,20 +194,10 @@ public interface Tx extends GraphStore {
     /** Moves the consumer's cursor to {@code ackedSeq}, never backwards, and stamps {@code now}. */
     void advanceEventCursor(String consumer, long ackedSeq, long now);
 
-    /** The lowest seq any consumer cursor has acknowledged, or null when no cursor exists. */
-    Long oldestAckedSeq();
-
     /**
      * Deletes up to {@code max} of the oldest events created before {@code createdBefore}; when
      * {@code upToSeq} is non-null, only events with seq at or below it, so an unacknowledged
      * event outlives the age cap for as long as a consumer is still on its way to it.
      */
     int deleteEvents(long createdBefore, Long upToSeq, int max);
-
-    /**
-     * The durations of the newest {@code max} settled, timed steps of one workflow version that
-     * finished after {@code since}. Bounded so the percentiles are computed over a sample the
-     * server can hold, not a table scan the console waits on.
-     */
-    List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max);
 }

@@ -9,7 +9,9 @@ import com.wiggle.core.TokenStatus;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,6 +61,7 @@ public final class WorkflowEngine {
     private final DispatchNotifier notifier = new DispatchNotifier();
     private final Transactions transactions;
     private final Instances instances;
+    private final InstanceIds idMinter;
     private final Tokens tokens;
     private final Dispatch dispatch;
     private final Schedules schedules;
@@ -78,6 +81,7 @@ public final class WorkflowEngine {
         this.defaultLeaseMillis     = defaultLeaseMillis;
         this.transactions           = new Transactions(storage, notifier);
         this.tokens                 = new Tokens(definitions, transactions::wake);
+        this.idMinter               = idMinter;
         this.instances              = new Instances(definitions, tokens, idMinter, this::drive);
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules              = new Schedules(transactions, instances, sweeper);
@@ -127,11 +131,12 @@ public final class WorkflowEngine {
     }
 
     public String start(String workflow, Integer version, Object context, String correlationId) {
-        return transactions.inTx(tx -> instances.start(tx, workflow, version, context, correlationId, null));
+        String id = idMinter.next();
+        return transactions.inTx(id, tx -> instances.start(tx, id, workflow, version, context, correlationId, null));
     }
 
     public void cancel(String instanceId, String reason) {
-        List<String> children = transactions.inTx(tx -> instances.cancel(tx, instanceId, reason));
+        List<String> children = transactions.inTx(instanceId, tx -> instances.cancel(tx, instanceId, reason));
         // Cancelling in separate transactions keeps lock ordering one-way (child -> parent only).
         for (String child : children) {
             try {
@@ -195,7 +200,7 @@ public final class WorkflowEngine {
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
-        long until = transactions.read(tx -> Tokens.extendLease(tx, taskId, leaseOwner, extraMillis));
+        long until = transactions.read(taskId, tx -> Tokens.extendLease(tx, taskId, leaseOwner, extraMillis));
         LOG.log(System.Logger.Level.DEBUG, () ->
                 "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
         return until;
@@ -274,7 +279,7 @@ public final class WorkflowEngine {
      */
     public ReportOutcome report(Run run) {
         if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
-        return transactions.inTx(tx -> {
+        return transactions.inTx(run.startTaskId, tx -> {
             LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             if (mode == ExecutionMode.OBSERVED) {
@@ -297,8 +302,20 @@ public final class WorkflowEngine {
     public Map<String, RunResult> report(List<Run> runs) {
         requireWellFormed(runs);
         if (runs.size() == 1) return replaySingly(runs);
+        Map<Integer, List<Run>> byShard = new LinkedHashMap<>();
+        for (Run run : runs) {
+            byShard.computeIfAbsent(transactions.shardOf(run.startTaskId()), s -> new ArrayList<>()).add(run);
+        }
+        if (byShard.size() > 1) {
+            Map<String, RunResult> merged = new HashMap<>();
+            byShard.values().forEach(group -> merged.putAll(report(group)));
+            Map<String, RunResult> results = new LinkedHashMap<>();
+            for (Run run : runs) results.put(run.startTaskId(), merged.get(run.startTaskId()));
+            return results;
+        }
+        int shard = byShard.keySet().iterator().next();
         try {
-            return transactions.inTx(tx -> localAsyncBatch.apply(tx, runs));
+            return transactions.inShard(shard, tx -> localAsyncBatch.apply(tx, runs));
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, () -> "reportSteps: batch of " + runs.size()
                     + " rolled back (" + e + "); replaying each run in its own transaction");
@@ -357,9 +374,10 @@ public final class WorkflowEngine {
         if (steps.isEmpty() && !fin) throw EngineException.badRequest("observe requires at least one step");
         if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
         String key = correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId;
-        return transactions.inTx(tx -> {
+        boolean byId = instanceId != null && !instanceId.isBlank();
+        return transactions.inTx(byId ? instanceId : idMinter.forKey(workflow, key), tx -> {
             Instance inst;
-            if (instanceId != null && !instanceId.isBlank()) {
+            if (byId) {
                 inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             } else {
                 inst = instances.observedRun(tx, workflow, version, key);
@@ -370,9 +388,9 @@ public final class WorkflowEngine {
 
     /** Leader duty: judge observed runs whose settle time has passed. */
     public int settleObservedRuns(int max) {
-        List<Instance> due = transactions.read(tx -> tx.dueSettle(System.currentTimeMillis(), max));
+        List<Instance> due = transactions.readEach(tx -> tx.dueSettle(System.currentTimeMillis(), max));
         return sweeper.run(due, probe -> "settle of observed run " + probe.id, probe -> {
-            transactions.inTxVoid(tx -> settleObservedRun(tx, probe.id));
+            transactions.inTxVoid(probe.id, tx -> settleObservedRun(tx, probe.id));
             return true;
         });
     }
@@ -436,7 +454,7 @@ public final class WorkflowEngine {
         WorkflowDefinition def = (version == null || version <= 0
                 ? definitions.latest(workflow) : definitions.lookup(workflow, version))
                 .orElseThrow(() -> EngineException.notFound("workflow '" + workflow + "'"));
-        List<Rows.StepDuration> durations = transactions.read(
+        List<Rows.StepDuration> durations = transactions.readEach(
                 tx -> tx.stepDurations(def.name(), def.version(), since, sample));
         return StepStatistics.summarise(durations, id -> {
             Node n = def.nodes().get(id);
@@ -447,7 +465,7 @@ public final class WorkflowEngine {
     /** Departures of observed runs from their topology, newest first; either filter may be null. */
     /** Up to {@code max} entries of the event log after {@code afterSeq}, oldest first. */
     public List<EventView> events(long afterSeq, int max) {
-        return view(transactions.read(tx -> tx.eventsAfter(afterSeq, max)));
+        return view(transactions.readHome(tx -> tx.eventsAfter(afterSeq, max)));
     }
 
     /**
@@ -463,12 +481,12 @@ public final class WorkflowEngine {
                                       Cancellation cancelled) {
         String name = requireConsumer(consumer);
         int limit = max > 0 ? max : 1;
-        long from = transactions.read(tx -> cursorSeq(tx, name, startFrom, System.currentTimeMillis()));
+        long from = transactions.readHome(tx -> cursorSeq(tx, name, startFrom, System.currentTimeMillis()));
         long interval = Math.max(10, Math.min(eventVisibilityMillis, 200));
         while (true) {
             if (cancelled.cancelled()) return List.of();
             long visibleBefore = System.currentTimeMillis() - eventVisibilityMillis;
-            List<Rows.Event> batch = transactions.read(tx -> tx.eventsAfter(from, visibleBefore, limit));
+            List<Rows.Event> batch = transactions.readHome(tx -> tx.eventsAfter(from, visibleBefore, limit));
             if (!batch.isEmpty()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "pollEvents: consumer " + name + " served "
                         + batch.size() + " event(s) after seq " + from);
@@ -492,7 +510,7 @@ public final class WorkflowEngine {
      */
     public long ackEvents(String consumer, long ackedSeq) {
         String name = requireConsumer(consumer);
-        return transactions.read(tx -> {
+        return transactions.readHome(tx -> {
             long target = Math.max(0, Math.min(ackedSeq, tx.latestEventSeq()));
             tx.advanceEventCursor(name, target, System.currentTimeMillis());
             Rows.EventCursor cursor = tx.eventCursor(name);
@@ -532,13 +550,17 @@ public final class WorkflowEngine {
      */
     public int trimEvents(int max) {
         long cutoff = System.currentTimeMillis() - eventRetentionMillis;
-        int trimmed = transactions.read(tx -> tx.deleteEvents(cutoff, tx.oldestAckedSeq(), max));
+        int trimmed = transactions.readHome(tx -> tx.deleteEvents(cutoff, tx.oldestAckedSeq(), max));
         if (trimmed > 0) LOG.log(System.Logger.Level.DEBUG, () -> "trimEvents: removed " + trimmed + " event(s)");
         return trimmed;
     }
 
     public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
-        return transactions.read(tx -> tx.anomalies(workflow, instanceId, limit)).stream()
+        List<Rows.Anomaly> found = instanceId != null
+                ? transactions.read(instanceId, tx -> tx.anomalies(workflow, instanceId, limit))
+                : transactions.readEach(tx -> tx.anomalies(workflow, null, limit)).stream()
+                        .sorted(Comparator.comparingLong(Rows.Anomaly::at).reversed()).limit(limit).toList();
+        return found.stream()
                 .map(a -> new AnomalyView(a.instanceId(), a.workflow(), a.version(), a.kind(),
                         a.expectedNode(), a.reportedNode(), a.detail(), a.at()))
                 .toList();
@@ -555,7 +577,7 @@ public final class WorkflowEngine {
      * {@code payload} merges into the context and the flow advances down the signal's path.
      */
     public void signal(String instanceId, String name, Object payload) {
-        transactions.inTxVoid(tx -> {
+        transactions.inTxVoid(instanceId, tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             Instances.requireRunning(inst);
             Token t = tx.awaitingSignal(instanceId, name)
@@ -582,7 +604,7 @@ public final class WorkflowEngine {
     /** Runs {@code action} once per token, each in its own transaction, isolating failures. */
     private int sweep(List<Token> due, String what, SweepAction action) {
         return sweeper.run(due, token -> what + " " + token.id, token -> {
-            transactions.inTxVoid(tx -> action.apply(tx, token));
+            transactions.inTxVoid(token.id, tx -> action.apply(tx, token));
             return true;
         });
     }
@@ -595,7 +617,7 @@ public final class WorkflowEngine {
 
     /** Leader duty: advance sleep timers that have come due. */
     public int fireDueTimers(int max) {
-        List<Token> due = transactions.read(tx -> tx.dueTimers(System.currentTimeMillis(), max));
+        List<Token> due = transactions.readEach(tx -> tx.dueTimers(System.currentTimeMillis(), max));
         logDue("fireDueTimers", due);
         return sweep(due, "timer", this::fireTimer);
     }
@@ -617,7 +639,7 @@ public final class WorkflowEngine {
 
     /** Leader duty: retries parked for their backoff become dispatchable once it has run out. */
     public int promoteDueRetries(int max) {
-        List<Token> due = transactions.read(tx -> tx.dueRetries(System.currentTimeMillis(), max));
+        List<Token> due = transactions.readEach(tx -> tx.dueRetries(System.currentTimeMillis(), max));
         logDue("promoteDueRetries", due);
         return sweep(due, "retry promotion of", this::promoteRetry);
     }
@@ -635,7 +657,7 @@ public final class WorkflowEngine {
 
     /** Leader duty: signal waits whose deadline has passed escalate (to {@code altNext}) or fail. */
     public int fireDueSignalDeadlines(int max) {
-        List<Token> due = transactions.read(tx -> tx.dueSignals(System.currentTimeMillis(), max));
+        List<Token> due = transactions.readEach(tx -> tx.dueSignals(System.currentTimeMillis(), max));
         logDue("fireDueSignalDeadlines", due);
         return sweep(due, "signal deadline", this::escalateOrFailSignal);
     }
@@ -672,7 +694,7 @@ public final class WorkflowEngine {
      * their lease may have run out only because their worker could not reach the cell, so it stays put.
      */
     public int reclaimExpiredLeases(int max, long spareClaimedBefore) {
-        List<Token> orphans = transactions.read(tx -> tx.expiredLeases(System.currentTimeMillis(), max)).stream()
+        List<Token> orphans = transactions.readEach(tx -> tx.expiredLeases(System.currentTimeMillis(), max)).stream()
                 .filter(t -> t.startedAt == null || t.startedAt >= spareClaimedBefore)
                 .toList();
         logDue("reclaimExpiredLeases", orphans);
@@ -693,7 +715,7 @@ public final class WorkflowEngine {
 
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
-        transactions.inTxVoid(tx -> {
+        transactions.inTxVoid(taskId, tx -> {
             LockedTask locked = Tokens.lock(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
@@ -750,7 +772,7 @@ public final class WorkflowEngine {
 
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
         long cutoff = System.currentTimeMillis() - retentionMillis;
-        int purged = transactions.read(tx -> Instances.purgeTerminalBefore(tx, cutoff, max));
+        int purged = transactions.sumEach(tx -> Instances.purgeTerminalBefore(tx, cutoff, max));
         if (purged > 0) {
             LOG.log(System.Logger.Level.DEBUG, () -> "purgeTerminalInstancesOlderThan: removed " + purged
                     + " instance(s) updated before " + cutoff);

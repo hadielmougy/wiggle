@@ -8,8 +8,10 @@ import com.wiggle.server.store.GraphStore;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -59,6 +61,10 @@ public final class DefinitionRegistry {
      * only honours when it is configured to (see {@code WIGGLE_ALLOW_GRAPH_REPLACE}); the gRPC
      * layer rejects an unpermitted force before reaching here.
      *
+     * <p>It is written to every instance shard and the home shard, one transaction each, so an
+     * instance's transaction reads its graph from its own database. Each write is idempotent, so a
+     * registration that fails part-way is completed by registering again.
+     *
      * <p>A stored fingerprint from a different algorithm is treated as unknown rather than as a
      * mismatch, and is upgraded in place: a change to how the topology is serialised must not read
      * as a change to the graph.
@@ -67,7 +73,15 @@ public final class DefinitionRegistry {
         if (ExecutionModes.resolve(def.executionMode()) == ExecutionMode.OBSERVED) {
             ObservedRuns.requireObservable(def);
         }
-        storage.inTxVoid(new Registration(def, force));
+        Registration registration = new Registration(def, force);
+        Set<Integer> shards = new LinkedHashSet<>(storage.instanceShards());
+        shards.add(storage.home());
+        for (int shard : shards) {
+            storage.inShard(shard, tx -> {
+                registration.accept(tx);
+                return null;
+            });
+        }
         modeCache.put(def.key(), def.executionMode());
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
         return def;
@@ -100,7 +114,7 @@ public final class DefinitionRegistry {
     }
 
     public Optional<WorkflowDefinition> lookup(String name, int version) {
-        return storage.inTx(tx -> load(tx, name, version));
+        return storage.inHome(tx -> load(tx, name, version));
     }
 
     private Optional<WorkflowDefinition> load(GraphStore graphs, String name, int version) {
@@ -108,11 +122,11 @@ public final class DefinitionRegistry {
     }
 
     public Optional<WorkflowDefinition> latest(String name) {
-        return storage.inTx(tx -> tx.latestVersion(name).flatMap(v -> load(tx, name, v)));
+        return storage.inHome(tx -> tx.latestVersion(name).flatMap(v -> load(tx, name, v)));
     }
 
     public List<String> names() {
-        return storage.inTx(Tx::definitionNames);
+        return storage.inHome(Tx::definitionNames);
     }
 
     private static final class Registration implements Consumer<Tx> {

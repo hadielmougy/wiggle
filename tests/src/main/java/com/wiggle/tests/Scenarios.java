@@ -14,6 +14,7 @@ import com.wiggle.server.WiggleServer;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
+import com.wiggle.server.store.StorageFactory;
 
 import java.time.Duration;
 import java.util.*;
@@ -108,11 +109,21 @@ public final class Scenarios {
         void run(WiggleServer server, WiggleClient client) throws Exception;
     }
 
+    /** The store a scenario's server runs on, per thread so suites can run in parallel. */
+    private static final ThreadLocal<StorageFactory> STORAGE =
+            ThreadLocal.withInitial(() -> config -> new InMemoryStorage());
+
+    /** Runs the scenarios this thread starts on stores from {@code factory}; null restores in-memory. */
+    public static void useStorage(StorageFactory factory) {
+        if (factory == null) STORAGE.remove();
+        else STORAGE.set(factory);
+    }
+
     private static void withServer(Body body) throws Exception {
         ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = new WiggleServer(config, STORAGE.get()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             body.run(server, client);
         }

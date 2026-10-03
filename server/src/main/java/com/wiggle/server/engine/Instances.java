@@ -59,11 +59,18 @@ final class Instances {
      */
     String start(Tx tx, String workflow, Integer version, Object context,
                  String correlationId, String parentTokenId) {
+        String id = parentTokenId == null ? idMinter.next() : idMinter.childOf(parentTokenId);
+        return start(tx, id, workflow, version, context, correlationId, parentTokenId);
+    }
+
+    /** {@link #start(Tx, String, Integer, Object, String, String)} under an id the caller minted, so
+     *  the transaction could be opened on the shard it carries. */
+    String start(Tx tx, String id, String workflow, Integer version, Object context,
+                 String correlationId, String parentTokenId) {
         int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         LazyGraph def = definitions.graph(tx, workflow, v);
         long now = System.currentTimeMillis();
-        String id = parentTokenId == null ? idMinter.next() : idMinter.childOf(parentTokenId);
         Instance inst = Instances.create(tx, id, def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
         Token t = Tokens.create(inst, def.startNode(), "", null, now);
