@@ -4,6 +4,7 @@ import com.wiggle.jdbc.Dialect;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.server.store.ReplicatedStorage;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
@@ -33,6 +34,8 @@ import java.util.List;
  */
 public class PostgresStorageFactory implements StorageFactory {
 
+    private static final System.Logger LOG = System.getLogger(PostgresStorageFactory.class.getName());
+
     @Override public Storage create(ServerConfig config) {
         if (config.topology() != null) return sharded(config.topology());
         String url = config.jdbcUrl();
@@ -52,9 +55,11 @@ public class PostgresStorageFactory implements StorageFactory {
             for (Topology.Shard s : topology.shards()) {
                 boolean instances = s.has(Topology.Role.INSTANCES);
                 if (!instances && !s.has(Topology.Role.HOME)) continue;
-                Topology.Connection c = s.primary();
-                members.add(new ShardedStorage.Member(s.id(), s.state(), instances,
-                        new JdbcStorage(c.url(), c.user(), c.password(), c.pool(), dialect(c.url()))));
+                members.add(new ShardedStorage.Member(s.id(), s.state(), instances, shard(s)));
+                int replicaConnections = s.replicas().stream().mapToInt(Topology.Connection::pool).sum();
+                LOG.log(System.Logger.Level.INFO, () -> "shard " + s.id() + ": up to " + s.primary().pool()
+                        + " primary and " + replicaConnections + " replica connection(s) per node, over "
+                        + s.replicas().size() + " replica(s)");
             }
             return new ShardedStorage(members, topology.home());
         } catch (RuntimeException e) {
@@ -63,6 +68,26 @@ public class PostgresStorageFactory implements StorageFactory {
             });
             throw e;
         }
+    }
+
+    /** A shard's primary, behind a {@link ReplicatedStorage} when it lists read replicas. */
+    private static Storage shard(Topology.Shard s) {
+        Topology.Connection p = s.primary();
+        JdbcStorage primary = new JdbcStorage(p.url(), p.user(), p.password(), p.pool(), dialect(p.url()));
+        if (s.replicas().isEmpty()) return primary;
+        List<ReplicatedStorage.Named> replicas = new ArrayList<>();
+        try {
+            for (Topology.Connection r : s.replicas()) {
+                // named by position: a JDBC url can carry a password parameter, and names reach logs
+                replicas.add(new ReplicatedStorage.Named("#" + (replicas.size() + 1),
+                        JdbcStorage.readReplica(r.url(), r.user(), r.password(), r.pool(), dialect(r.url()))));
+            }
+        } catch (RuntimeException e) {
+            primary.close();
+            replicas.forEach(r -> r.store().close());
+            throw e;
+        }
+        return new ReplicatedStorage(s.id(), primary, replicas, s.maxReplicaLagMillis(), s.replicaFallback());
     }
 
     /** The dialect for a JDBC URL, or a clear failure naming what is supported. */

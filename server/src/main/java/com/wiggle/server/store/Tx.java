@@ -31,6 +31,9 @@ public interface Tx extends ReadTx, GraphStore {
      *  alone, so the caller compares {@link #shardIdentity} afterwards. */
     void claimShardIdentity(int shardId);
 
+    /** Stamps the replica-lag heartbeat with {@code now}. Needs a claimed shard identity. */
+    void writeShardBeat(long now);
+
     /** Writes a shard's registry row, replacing any it had. */
     void putShardRecord(Rows.ShardRecord record);
 

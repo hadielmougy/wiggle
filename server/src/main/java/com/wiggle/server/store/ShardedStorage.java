@@ -19,6 +19,8 @@ import java.util.function.Function;
  */
 public final class ShardedStorage implements Storage {
 
+    private static final System.Logger LOG = System.getLogger(ShardedStorage.class.getName());
+
     /**
      * One shard this store routes to.
      *
@@ -168,6 +170,30 @@ public final class ShardedStorage implements Storage {
     }
 
     /** The shard ids with each shard's own fingerprint, in order; null when any shard has none. */
+    @Override public boolean hasReplicas() {
+        return members.stream().anyMatch(m -> m.storage().hasReplicas());
+    }
+
+    @Override public void beatPrimaries(long now) {
+        eachLive(s -> s.beatPrimaries(now), "heartbeat");
+    }
+
+    @Override public void probeReplicas(long now) {
+        eachLive(s -> s.probeReplicas(now), "replica probe");
+    }
+
+    /** Runs {@code action} on every shard not retired; one shard failing does not stop the others. */
+    private void eachLive(java.util.function.Consumer<Storage> action, String what) {
+        for (Member m : members) {
+            if (retired.contains(m.id())) continue;
+            try {
+                action.accept(m.storage());
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, () -> what + " of shard " + m.id() + " failed: " + e);
+            }
+        }
+    }
+
     @Override public String fingerprint() {
         List<String> parts = new ArrayList<>();
         for (Map.Entry<Integer, Storage> e : shards.entrySet()) {

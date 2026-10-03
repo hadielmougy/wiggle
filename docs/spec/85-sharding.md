@@ -121,8 +121,6 @@ tokens of such an instance were always minted bare, so no label could route a re
 
 **Status: implemented**, with these limits until later steps:
 
-- **Replicas.** A document that lists replicas, or a set `WIGGLE_JDBC_REPLICA_*` variable, is refused
-  until [§8](#8-read-replicas).
 - **Shards that only carry auth or search** are parsed and validated but not opened; nothing reads
   them yet.
 - **Schemas.** Every opened shard gets the whole `wf_*` schema; [WGL-SHARD-007](#1-model)'s per-role
@@ -327,8 +325,9 @@ console.
 **WGL-SHARD-091** (MUST) A fan-out read MUST run its per-shard queries concurrently and merge them on
 a keyset `(created_at, id)`. A page cursor MUST carry that key, not an offset. Counts MUST be summed.
 
-**WGL-SHARD-092** (MUST) The control-plane API MUST let a caller ask for a `PRIMARY` read on the
-read RPCs (`GetInstance`, `ListInstances`), so a console can show read-your-writes after an action.
+**WGL-SHARD-092** (MUST) A console MUST be able to show read-your-writes after an action. `GetInstance`
+(the view after cancel, retry or signal) always reads the primary; lists and searches may lag by the
+replica bound.
 
 ## 6. Claims
 
@@ -364,6 +363,16 @@ concurrently. A shard that fails its sweep MUST NOT stop the others.
 minted like any other root instance ([WGL-SHARD-020](#22-choosing-a-shard)).
 
 ## 8. Read replicas
+
+**Status: implemented.** `ReplicatedStorage` holds one shard's primary and its replicas (read-only
+`JdbcStorage` connections that open even while a replica is down), and `ReplicaMonitor` runs the
+heartbeat and the probes once a second. Verified by `server/store/ReplicatedStorageTest`,
+`server/cluster/ReplicaMonitorTest`, the storage contract, and `postgres/PostgresReplicaTest`, which
+runs against a real hot standby: it serves replica reads, refuses writes, drops out once paused replay
+puts it over its lag bound, and serves again after it catches up.
+
+The lag is measured against the probing node's clock, so clock skew between nodes counts as lag;
+keep `maxReplicaLagMillis` well above the skew NTP leaves.
 
 **WGL-SHARD-110** (MUST) Each shard MUST keep its own pool per replica, in addition to its primary
 pool.
