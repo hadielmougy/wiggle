@@ -61,7 +61,7 @@ class ConsoleUsersTest {
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             ConsoleUsers users = new ConsoleUsers(file);
             ConsoleAuth auth = new ConsoleAuth("admin", builtinPassword, "viewer", null, false, users);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 body.run("http://localhost:" + console.port(), HttpClient.newHttpClient(), users);
             }

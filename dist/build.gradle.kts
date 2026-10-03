@@ -10,7 +10,7 @@ plugins {
 // assembled distribution carries them all.
 dependencies {
     implementation(project(":server"))
-    implementation(project(":console"))   // the ops console runs as WIGGLE_ROLE=console in the one image
+    implementation(project(":console"))   // the portal, on WIGGLE_PORTAL_PORT
     implementation(project(":jdbc"))
     implementation(project(":postgres"))
 

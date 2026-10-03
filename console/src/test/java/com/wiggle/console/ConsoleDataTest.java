@@ -22,9 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The console's gRPC-backed {@link DashboardData}: it lists, details and cancels instances of one
- * cluster. Instances are started without a worker, so they sit RUNNING at their first step -- enough
- * to exercise the read/ops surface.
+ * The portal's {@link DashboardData} over the engine of the server it runs in: it lists, details and
+ * cancels instances. Instances are started without a worker, so they sit RUNNING at their first
+ * step -- enough to exercise the read/ops surface.
  */
 class ConsoleDataTest {
 
@@ -45,7 +45,7 @@ class ConsoleDataTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Test @DisplayName("direct mode: lists, details, and cancels instances against one cluster")
+    @Test @DisplayName("lists, details, and cancels instances")
     void directMode() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
@@ -54,7 +54,7 @@ class ConsoleDataTest {
             for (int i = 0; i < 3; i++) c.start("wf", Map.of("i", i), null, null);
             String target = c.start("wf", Map.of(), null, "cust-B");
 
-            GrpcDashboardData data = new GrpcDashboardData(conn.client());
+            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
 
             assertEquals(4, data.listInstances(null, null, 100).size(), "all instances");
             assertEquals(4, data.listInstances("wf", "RUNNING", 100).size(), "filtered by workflow+status");
@@ -72,7 +72,28 @@ class ConsoleDataTest {
 
             data.cancel(target, "from test");
             assertEquals("CANCELLED", data.instance(target).orElseThrow().instance().status(), "cancel routed");
-            assertEquals(0, data.pendingSignals(10).size(), "pending signals degrade to empty over gRPC");
+            assertFalse(detail.tokens().get(0).queue() == null && detail.tokens().get(0).updatedAt() == 0,
+                    "token fields the wire Token lacked are present");
+        }
+    }
+
+    @Test @DisplayName("pending signal waits are listed, and a signal delivered through the seam clears one")
+    void pendingSignals() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
+            WiggleClient c = conn.client();
+            c.register(FlowSpec.define("waits", 1, Map.class, Steps.class, (f, s) -> f.thenAwait("approved")));
+            String id = c.start("waits", Map.of(), null, null);
+
+            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
+            List<DashboardData.SignalView> pending = data.pendingSignals(10);
+            assertEquals(1, pending.size(), pending.toString());
+            assertEquals(id, pending.get(0).instanceId());
+            assertEquals("approved", pending.get(0).signal());
+
+            data.signal(id, "approved", Map.of("by", "ops"));
+            assertTrue(data.pendingSignals(10).isEmpty());
+            assertEquals("COMPLETED", data.instance(id).orElseThrow().instance().status());
         }
     }
 
@@ -95,14 +116,14 @@ class ConsoleDataTest {
         }
     }
 
-    @Test @DisplayName("direct mode: step stats read through the seam, slowest first")
+    @Test @DisplayName("step stats read through the seam, slowest first")
     void stepStats() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             long before = System.currentTimeMillis();
             runTimed(conn.client(), 2);
 
-            GrpcDashboardData data = new GrpcDashboardData(conn.client());
+            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
             List<NodeStats> stats = data.stepStats("timed", null, 0, 100);
             assertEquals(2, stats.size());
             assertEquals("more", stats.get(0).name(), "slowest p95 first");

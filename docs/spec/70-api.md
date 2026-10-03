@@ -3,7 +3,7 @@
 ← [Event log](60-event-log.md) · [Index](00-index.md) · Next: [Storage](80-storage.md)
 
 One gRPC service, `com.wiggle.proto.WiggleControlPlane`, is the whole contract between a server and
-everything else: submitters, workers, the console, and the clients in other languages.
+everything else: submitters, workers, and the clients in other languages.
 Nothing is ever pushed to a worker, so workers need no inbound connectivity.
 
 The definition of record is `proto/src/main/proto/wiggle.proto`. This chapter specifies each RPC's
@@ -224,10 +224,10 @@ explanation when a registration is refused.
 
 *Verified by:* `tests/ScheduleClientTest`, `tests/VersioningTest`, `tests/RpcRetryFailoverTest`.
 
-## 10. The console's HTTP surface
+## 10. The portal's HTTP surface
 
-The console is a separate process and a pure gRPC client; these endpoints are its own, not a server
-node's ([WGL-OPS-040](90-ops.md)).
+A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
+([WGL-SHARD-170](85-sharding.md#12-the-portal-in-the-server)), through the engine in process.
 
 **WGL-API-100** (MUST) The JSON API MUST be exactly:
 
@@ -235,7 +235,7 @@ node's ([WGL-OPS-040](90-ops.md)).
 |---|---|---|
 | `GET` | `/api/auth` | who am I, and which role |
 | `POST` | `/api/login` · `/logout` · `GET /login` | session cookie login and the browser form |
-| `GET` | `/healthz` | the console pod's own probe |
+| `GET` | `/healthz` | a probe on the portal port |
 | `GET` | `/api/cluster` | cluster view |
 | `GET` | `/api/workflows` · `/api/workflows/{name}` | names, and one compiled graph as JSON |
 | `GET` | `/api/instances` | list, filtered by workflow/status/limit or searched by instance or correlation id |
@@ -255,8 +255,14 @@ be 405.
 **WGL-API-102** (MUST) A viewer MUST be refused every non-`GET` `/api/*` call except `/api/password`.
 
 **WGL-API-103** (MUST) The backend MUST sit behind one neutral seam (`DashboardData`) carrying no engine
-or storage types, so the same JSON is produced whether it is served in process or over gRPC.
+or storage types, so the SPA's JSON does not follow engine or storage changes.
 
 **WGL-API-104** *Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).*
 
-*Verified by:* `console/ConsoleWebTest`, `console/ConsoleDataTest`, `console/ConsoleUsersTest`.
+**WGL-API-105** (MUST) A failed `/api/*` call MUST answer with the engine's status (400, 404, 409)
+when the engine refused it, 404 for a retired shard, 503 for a storage failure that applied nothing,
+and 500 otherwise. A 503 or 500 MUST NOT carry the cause's message, which can hold SQL or host
+names; it carries a reference that the node's log pairs with the full cause.
+
+*Verified by:* `console/ConsoleWebTest`, `console/ConsoleDataTest`, `console/ConsoleUsersTest`,
+`console/PortalTest`.
