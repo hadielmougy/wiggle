@@ -69,7 +69,6 @@ public final class WorkflowEngine {
     private final NodeBehaviourFactory nodeBehaviourFactory;
     private final StepChain stepChain;
     private final LocalAsyncBatch localAsyncBatch;
-    private final ObservedRuns observedRuns;
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, InstanceIds.onShard(0));
@@ -88,7 +87,6 @@ public final class WorkflowEngine {
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
         this.stepChain              = new StepChain(instances, nodeBehaviourFactory, definitions, loopMaxIterations, defaultLeaseMillis);
         this.localAsyncBatch        = new LocalAsyncBatch(stepChain, definitions);
-        this.observedRuns           = new ObservedRuns(instances, definitions, observeSettleMillis, observeStallMillis);
     }
 
     public DefinitionRegistry definitions() { return definitions; }
@@ -227,11 +225,11 @@ public final class WorkflowEngine {
     }
 
     /**
-     * One step reported after it ran: a task's complete next context, a predicate's value, or the
-     * error it threw (observed runs only). {@code startedAt}/{@code finishedAt} are the step's own
-     * clock in epoch millis, or null when the reporter did not time it.
+     * One step reported after it ran: a task's complete next context, or a predicate's value.
+     * {@code startedAt}/{@code finishedAt} are the step's own clock in epoch millis, or null when the
+     * reporter did not time it.
      */
-    public record StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
+    public record StepInput(String nodeId, Object merge, Boolean predicateValue,
                             Long startedAt, Long finishedAt, List<EmittedEvent> events) {
 
         public StepInput {
@@ -239,12 +237,11 @@ public final class WorkflowEngine {
         }
 
         public StepInput(String nodeId, Object merge, Boolean predicateValue) {
-            this(nodeId, merge, predicateValue, null, null, null, List.of());
+            this(nodeId, merge, predicateValue, null, null, List.of());
         }
 
-        public StepInput(String nodeId, Object merge, Boolean predicateValue, String error,
-                         Long startedAt, Long finishedAt) {
-            this(nodeId, merge, predicateValue, error, startedAt, finishedAt, List.of());
+        public StepInput(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt) {
+            this(nodeId, merge, predicateValue, startedAt, finishedAt, List.of());
         }
     }
 
@@ -282,10 +279,6 @@ public final class WorkflowEngine {
         return transactions.inTx(run.startTaskId, tx -> {
             LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
-            if (mode == ExecutionMode.OBSERVED) {
-                throw EngineException.conflict("workflow " + task.inst().workflow
-                        + " runs OBSERVED; its steps are reported through observe, not by a worker");
-            }
             if (compensated(tx, task, run)) {
                 return new ReportOutcome(task.inst().status.name(), 0, null);
             }
@@ -353,96 +346,15 @@ public final class WorkflowEngine {
         return results;
     }
 
-    /** How long after END, or a final report, an observed run waits for stragglers before it is judged. */
-    private final long observeSettleMillis = ServerEnv.envLong("wiggle.observe.settleMillis", "WIGGLE_OBSERVE_SETTLE_MILLIS", 5_000);
     /** How long an event stays in the log past its append, once every consumer has acknowledged it. */
     private final long eventRetentionMillis = ServerEnv.envLong("wiggle.events.retentionMillis", "WIGGLE_EVENTS_RETENTION_MILLIS", 7L * 24 * 3_600_000);
     /** How long an appended event is held back from the feed, covering appends still in flight. */
     private final long eventVisibilityMillis = ServerEnv.envLong("wiggle.events.visibilityMillis", "WIGGLE_EVENTS_VISIBILITY_MILLIS", 50);
-    /** How long an observed run may go without a report before it is judged as stalled. */
-    private final long observeStallMillis = ServerEnv.envLong("wiggle.observe.stallMillis", "WIGGLE_OBSERVE_STALL_MILLIS", 600_000);
-
-    /**
-     * Appends a run of steps an instrumented application already executed (OBSERVED execution)
-     * to the run {@code correlationId} names, creating it on first sight; a blank key mints one,
-     * for a run only this reporter will ever report. Nothing is judged here -- the settle sweep
-     * does that once the run has gone quiet -- so the only refusals are a workflow that is not
-     * OBSERVED or does not exist.
-     */
-    public ObserveResult observe(String workflow, Integer version, String instanceId, String correlationId,
-                                 String reporter, List<StepInput> steps, boolean fin) {
-        if (steps.isEmpty() && !fin) throw EngineException.badRequest("observe requires at least one step");
-        if (reporter == null || reporter.isBlank()) throw EngineException.badRequest("observe requires a reporter");
-        String key = correlationId == null || correlationId.isBlank() ? Ids.token() : correlationId;
-        boolean byId = instanceId != null && !instanceId.isBlank();
-        return transactions.inTx(byId ? instanceId : idMinter.forKey(workflow, key), tx -> {
-            Instance inst;
-            if (byId) {
-                inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
-            } else {
-                inst = instances.observedRun(tx, workflow, version, key);
-            }
-            return observedRuns.observe(tx, inst, reporter, steps, fin);
-        });
-    }
-
-    /** Leader duty: judge observed runs whose settle time has passed. */
-    public int settleObservedRuns(int max) {
-        List<Instance> due = transactions.readEach(tx -> tx.dueSettle(System.currentTimeMillis(), max));
-        return sweeper.run(due, probe -> "settle of observed run " + probe.id, probe -> {
-            transactions.inTxVoid(probe.id, tx -> settleObservedRun(tx, probe.id));
-            return true;
-        });
-    }
 
     /** Whether a leader sweep should act on this item: its instance is still there, and still
      *  running the forward flow. A swept item whose instance moved on is dropped, not failed. */
     private static boolean sweepable(Instance inst) {
         return inst != null && inst.status.running();
-    }
-
-    private void settleObservedRun(Tx tx, String id) {
-        Instance inst = tx.lockInstance(id).orElse(null);
-        long now = System.currentTimeMillis();
-        if (!sweepable(inst) || inst.settleAt == null || inst.settleAt > now) return;
-        WorkflowDefinition def = definitions.lookup(inst.workflow, inst.version)
-                .orElseThrow(() -> EngineException.notFound("workflow '" + inst.workflow + ":" + inst.version + "'"));
-        boolean idle = inst.settleAt - inst.updatedAt > observeSettleMillis;
-        observedRuns.settle(tx, inst, def, idle, now);
-        LOG.log(System.Logger.Level.DEBUG, () -> "settled observed run " + inst.id + " -> " + inst.status
-                + (idle ? " (idle)" : ""));
-    }
-
-    /** One run of an observe batch: exactly the arguments of {@link #observe}. */
-    public record ObservedRun(String workflow, Integer version, String instanceId, String correlationId,
-                              String reporter, List<StepInput> steps, boolean fin) {}
-
-    /** A run's fate in an observe batch: its result, or the status and message it would have thrown. */
-    public record ObserveOutcome(ObserveResult result, Integer errorStatus, String error) {
-
-        public boolean ok() {
-            return result != null;
-        }
-    }
-
-    /**
-     * Applies N observed runs, each in its own transaction, and answers every one in submission
-     * order. Observation needs no atomicity across runs: a run that is refused is refused alone,
-     * and the ones around it stand.
-     */
-    public List<ObserveOutcome> observeMany(List<ObservedRun> runs) {
-        List<ObserveOutcome> out = new ArrayList<>(runs.size());
-        for (ObservedRun r : runs) {
-            try {
-                out.add(new ObserveOutcome(observe(r.workflow(), r.version(), r.instanceId(), r.correlationId(),
-                        r.reporter(), r.steps(), r.fin()), null, null));
-            } catch (EngineException e) {
-                out.add(new ObserveOutcome(null, e.statusCode(), e.getMessage()));
-            } catch (RuntimeException e) {
-                out.add(new ObserveOutcome(null, 500, e.toString()));
-            }
-        }
-        return out;
     }
 
     /**
@@ -650,17 +562,6 @@ public final class WorkflowEngine {
         int removed = trimmed;
         if (removed > 0) LOG.log(System.Logger.Level.DEBUG, () -> "trimEvents: removed " + removed + " event(s)");
         return removed;
-    }
-
-    public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
-        List<Rows.Anomaly> found = instanceId != null
-                ? transactions.read(instanceId, tx -> tx.anomalies(workflow, instanceId, limit))
-                : transactions.readEach(tx -> tx.anomalies(workflow, null, limit)).stream()
-                        .sorted(Comparator.comparingLong(Rows.Anomaly::at).reversed()).limit(limit).toList();
-        return found.stream()
-                .map(a -> new AnomalyView(a.instanceId(), a.workflow(), a.version(), a.kind(),
-                        a.expectedNode(), a.reportedNode(), a.detail(), a.at()))
-                .toList();
     }
 
     /** The signal waits currently pending an external delivery, oldest first. */

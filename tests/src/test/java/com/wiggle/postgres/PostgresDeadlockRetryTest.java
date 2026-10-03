@@ -71,8 +71,8 @@ class PostgresDeadlockRetryTest {
 
         try (JdbcStorage storage = storage()) {
             storage.inTxVoid(tx -> {
-                tx.insertInstanceIfAbsent(instance(a));
-                tx.insertInstanceIfAbsent(instance(b));
+                tx.insertInstance(instance(a));
+                tx.insertInstance(instance(b));
             });
 
             ExecutorService pool = Executors.newFixedThreadPool(2);

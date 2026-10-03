@@ -493,6 +493,20 @@ public final class JdbcStorage implements Storage {
               acked_seq      BIGINT       NOT NULL,
               PRIMARY KEY (consumer, shard_id)
             );
+            """),
+            // OBSERVED execution was removed. A run still open would stay RUNNING forever with
+            // nothing left to settle it, so it is cancelled; then its settle time, the anomaly table
+            // and the order its steps were reported in go.
+            new Migration(26, "drop-observed-execution", """
+            UPDATE wf_instance SET status='CANCELLED',
+              term_reason='OBSERVED execution was removed', revision=revision+1
+              WHERE settle_at IS NOT NULL AND status='RUNNING';
+            DROP INDEX IF EXISTS ix_instance_settle;
+            ALTER TABLE wf_instance DROP COLUMN IF EXISTS settle_at;
+            DROP INDEX IF EXISTS ix_anomaly_instance;
+            DROP INDEX IF EXISTS ix_anomaly_workflow;
+            DROP TABLE IF EXISTS wf_anomaly;
+            ALTER TABLE wf_token DROP COLUMN IF EXISTS seq;
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -788,15 +802,13 @@ public final class JdbcStorage implements Storage {
         i.createdAt = rs.getLong(prefix + "created_at");
         i.updatedAt = rs.getLong(prefix + "updated_at");
         i.revision = rs.getLong(prefix + "revision");
-        long settleAt = rs.getLong(prefix + "settle_at");
-        i.settleAt = rs.wasNull() ? null : settleAt;
         return i;
     }
 
     /** Every column {@link #readInstance} reads. */
     private static final List<String> INSTANCE_COLUMNS = List.of("id", "workflow", "version", "correlation_id",
             "status", "term_reason", "error", "context", "parent_token_id", "created_at", "updated_at",
-            "revision", "settle_at");
+            "revision");
 
     static Token readToken(ResultSet rs) throws SQLException {
         Token t = new Token();
@@ -826,8 +838,6 @@ public final class JdbcStorage implements Storage {
         t.startedAt = rs.wasNull() ? null : startedAt;
         long finishedAt = rs.getLong("finished_at");
         t.finishedAt = rs.wasNull() ? null : finishedAt;
-        long seq = rs.getLong("seq");
-        t.seq = rs.wasNull() ? null : seq;
         t.stepInput = rs.getString("step_input");
         t.stepOutput = rs.getString("step_output");
         t.createdAt = rs.getLong("created_at");
@@ -1177,16 +1187,12 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_INSTANCE = "INSERT INTO wf_instance "
                 + "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,"
-                + "revision,parent_token_id,settle_at) VALUES "
+                + "revision,parent_token_id) VALUES "
                 + "(:id,:workflow,:version,:correlationId,:status,:termReason,:error,:context,:createdAt,"
-                + ":updatedAt,:revision,:parentTokenId,:settleAt)";
+                + ":updatedAt,:revision,:parentTokenId)";
 
         @Override public void insertInstance(Instance i) {
             bindInstance(h.createUpdate(INSERT_INSTANCE), i).execute();
-        }
-
-        @Override public boolean insertInstanceIfAbsent(Instance i) {
-            return bindInstance(h.createUpdate(dialect.insertIgnore(INSERT_INSTANCE)), i).execute() > 0;
         }
 
         private static <S extends SqlStatement<S>> S bindInstance(S s, Instance i) {
@@ -1201,8 +1207,7 @@ public final class JdbcStorage implements Storage {
                     .bind("createdAt", i.createdAt)
                     .bind("updatedAt", i.updatedAt)
                     .bind("revision", i.revision)
-                    .bind("parentTokenId", i.parentTokenId)
-                    .bindByType("settleAt", i.settleAt, Long.class);
+                    .bind("parentTokenId", i.parentTokenId);
         }
 
         @Override public Optional<Instance> lockInstance(String id) { return loadInstance(id, true); }
@@ -1240,7 +1245,7 @@ public final class JdbcStorage implements Storage {
 
         private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=:status,"
                 + "term_reason=:termReason,error=:error,context=:context,updated_at=:updatedAt,"
-                + "settle_at=:settleAt,revision=revision+1 WHERE id=:id";
+                + "revision=revision+1 WHERE id=:id";
 
         @Override public void updateInstance(Instance i) {
             bindInstanceUpdate(h.createUpdate(UPDATE_INSTANCE), i).execute();
@@ -1276,7 +1281,6 @@ public final class JdbcStorage implements Storage {
                     .bind("error", i.error)
                     .bind("context", i.context.json())
                     .bind("updatedAt", i.updatedAt)
-                    .bindByType("settleAt", i.settleAt, Long.class)
                     .bind("id", i.id);
         }
 
@@ -1311,11 +1315,11 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
                 + "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,"
-                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,inst_created_at,"
+                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,inst_created_at,"
                 + "step_input,step_output) VALUES "
                 + "(:id,:instanceId,:workflow,:version,:nodeId,:kind,:status,:activity,:queue,:attempt,"
                 + ":availableAt,:leaseOwner,:leaseExpires,:joinStack,:lastError,:createdAt,:updatedAt,:payload,"
-                + ":compSeq,:startedAt,:finishedAt,:seq,:instCreatedAt,:stepInput,:stepOutput)";
+                + ":compSeq,:startedAt,:finishedAt,:instCreatedAt,:stepInput,:stepOutput)";
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
@@ -1360,7 +1364,6 @@ public final class JdbcStorage implements Storage {
                     .bindByType("compSeq", t.compSeq, Long.class)
                     .bindByType("startedAt", t.startedAt, Long.class)
                     .bindByType("finishedAt", t.finishedAt, Long.class)
-                    .bindByType("seq", t.seq, Long.class)
                     .bindByType("stepInput", t.stepInput, String.class)
                     .bindByType("stepOutput", t.stepOutput, String.class);
         }
@@ -1402,7 +1405,7 @@ public final class JdbcStorage implements Storage {
                 + "status=:status,activity=:activity,queue=:queue,attempt=:attempt,"
                 + "available_at=:availableAt,lease_owner=:leaseOwner,lease_expires=:leaseExpires,"
                 + "join_stack=:joinStack,last_error=:lastError,updated_at=:updatedAt,payload=:payload,"
-                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq,"
+                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,"
                 + "step_input=:stepInput,step_output=:stepOutput WHERE id=:id";
 
         /** {@link #UPDATE_TOKEN} minus the payload column, for a row whose payload is unchanged. */
@@ -1646,15 +1649,6 @@ public final class JdbcStorage implements Storage {
         @Override public List<Token> dueTimers(long now, int max) {
             return query("SELECT * FROM wf_token WHERE status='WAITING' AND kind='SLEEP' AND available_at<=? " +
                     "ORDER BY available_at LIMIT ?", now, max);
-        }
-
-        @Override public List<Instance> dueSettle(long now, int max) {
-            return h.createQuery("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
-                            + "AND settle_at <= :now ORDER BY settle_at LIMIT :max")
-                    .bind("now", now)
-                    .bind("max", max)
-                    .mapTo(Instance.class)
-                    .list();
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {
@@ -1925,38 +1919,6 @@ public final class JdbcStorage implements Storage {
                     .list();
         }
 
-        @Override public void insertAnomaly(Rows.Anomaly a) {
-            h.createUpdate("INSERT INTO wf_anomaly (id,instance_id,workflow,version,kind,"
-                            + "expected_node,reported_node,detail,observed_at) VALUES "
-                            + "(:id,:instanceId,:workflow,:version,:kind,:expected,:reported,:detail,:at)")
-                    .bind("id", a.id())
-                    .bind("instanceId", a.instanceId())
-                    .bind("workflow", a.workflow())
-                    .bind("version", a.version())
-                    .bind("kind", a.kind())
-                    .bind("expected", a.expectedNode())
-                    .bind("reported", a.reportedNode())
-                    .bind("detail", a.detail())
-                    .bind("at", a.at())
-                    .execute();
-        }
-
-        @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
-            Query q = h.createQuery("SELECT id,instance_id,workflow,version,kind,expected_node,"
-                    + "reported_node,detail,observed_at FROM wf_anomaly WHERE 1=1"
-                    + (workflow != null ? " AND workflow=:workflow" : "")
-                    + (instanceId != null ? " AND instance_id=:instanceId" : "")
-                    + " ORDER BY observed_at DESC, id DESC LIMIT :limit");
-            q.bind("limit", limit);
-            if (workflow != null) q.bind("workflow", workflow);
-            if (instanceId != null) q.bind("instanceId", instanceId);
-            return q.map((rs, ctx) -> new Rows.Anomaly(rs.getString("id"), rs.getString("instance_id"),
-                            rs.getString("workflow"), rs.getInt("version"), rs.getString("kind"),
-                            rs.getString("expected_node"), rs.getString("reported_node"),
-                            rs.getString("detail"), rs.getLong("observed_at")))
-                    .list();
-        }
-
         @Override public long appendEvent(Rows.Event e) {
             return h.createUpdate("INSERT INTO wf_event (instance_id,workflow,version,correlation_id,type,"
                             + "node_id,payload_ver,payload,created_at) VALUES "
@@ -2086,7 +2048,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
-            return h.createQuery("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
+            return h.createQuery("SELECT node_id, started_at, finished_at, available_at FROM wf_token "
                             + "WHERE workflow=:workflow AND version=:version AND status='DONE' "
                             + "AND finished_at > :since AND started_at IS NOT NULL "
                             + "ORDER BY finished_at DESC LIMIT :max")
@@ -2095,12 +2057,8 @@ public final class JdbcStorage implements Storage {
                     .bind("since", since)
                     .bind("max", max)
                     .map((rs, ctx) -> {
-                        rs.getLong("seq");
-                        // An observed step waited for nothing: it was never dispatched from a queue.
-                        boolean observed = !rs.wasNull();
                         long ran = Math.max(0, rs.getLong("finished_at") - rs.getLong("started_at"));
-                        long waited = observed ? 0
-                                : Math.max(0, rs.getLong("started_at") - rs.getLong("available_at"));
+                        long waited = Math.max(0, rs.getLong("started_at") - rs.getLong("available_at"));
                         return new Rows.StepDuration(rs.getString("node_id"), ran, waited);
                     })
                     .list();

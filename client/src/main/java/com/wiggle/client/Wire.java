@@ -71,16 +71,6 @@ final class Wire {
         return out;
     }
 
-    static List<com.wiggle.core.AnomalyView> anomalies(com.wiggle.proto.AnomalyList res) {
-        List<com.wiggle.core.AnomalyView> out = new ArrayList<>(res.getAnomaliesCount());
-        for (com.wiggle.proto.Anomaly a : res.getAnomaliesList()) {
-            out.add(new com.wiggle.core.AnomalyView(a.getInstanceId(), a.getWorkflow(), a.getVersion(), a.getKind(),
-                    a.hasExpectedNode() ? a.getExpectedNode() : null, a.hasReportedNode() ? a.getReportedNode() : null,
-                    a.hasDetail() ? a.getDetail() : null, a.getAt()));
-        }
-        return out;
-    }
-
     static com.wiggle.proto.EmittedEvent emitted(com.wiggle.core.EmittedEvent e) {
         com.wiggle.proto.EmittedEvent.Builder b = com.wiggle.proto.EmittedEvent.newBuilder().setType(e.type());
         if (e.payload() != null) b.setPayload(com.wiggle.proto.ProtoJson.toValue(e.payload()));

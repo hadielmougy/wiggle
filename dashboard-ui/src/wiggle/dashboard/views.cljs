@@ -536,9 +536,8 @@
      [:h2 "Step durations" [:span.count (count nodes)]]
      [:p.muted
       "How long each step takes by the handler's own clock, over the newest timed steps in the"
-      " window. A worker-run step also shows how long it waited to be claimed, so a slow step and a"
-      " starved one read differently; an observed step waits for nothing. Slowest p95 first, so the"
-      " top row is the bottleneck."]
+      " window, with how long it waited to be claimed, so a slow step and a starved one read"
+      " differently. Slowest p95 first, so the top row is the bottleneck."]
      (cond
        (empty? (:workflow perf)) [:div.empty "choose a workflow to see its step durations"]
        (nil? stats) [:div.empty "loading…"]
@@ -566,48 +565,12 @@
               [:div.bar [:span {:style {:width (str (* 100 (get heat (:nodeId n) 0)) "%")
                                         :background (heat-colour (get heat (:nodeId n)))}}]]]])]]])]))
 
-(def ^:private anomaly-hint
-  {"OUT_OF_ORDER" "a step ran where another was due; the run was resynchronised at the reported step"
-   "UNKNOWN_NODE" "a step the graph has no node for; skipped"
-   "AFTER_END"    "steps reported after the instance had already ended"
-   "INCOMPLETE"   "the run closed before reaching END; the instance was failed"
-   "DUPLICATE"    "a step already run ran again outside any loop: at-least-once delivery, most likely; ignored"
-   "STALLED"      "no report arrived for longer than the stall threshold; judged as it stood and failed"})
-
-(defn anomalies-panel []
-  (let [{:keys [anomalies perf]} @db]
-    [:section.panel
-     [:h2 "Anomalies" [:span.count (count anomalies)]]
-     [:p.muted
-      "Where an observed run departed from its declared topology. The server records these instead"
-      " of refusing the report, so the rest of the run still yields its timings."]
-     (if-not (seq anomalies)
-       [:div.empty (if (empty? (:workflow perf))
-                     "no anomalies recorded"
-                     (str "no anomalies recorded for " (:workflow perf)))]
-       [:table
-        [:thead [:tr [:th "kind"] [:th "workflow"] [:th "instance"] [:th "expected"] [:th "reported"]
-                 [:th "detail"] [:th "when"]]]
-        [:tbody
-         (for [a anomalies]
-           ^{:key (str (:instanceId a) ":" (:at a) ":" (:kind a))}
-           [:tr {:title (get anomaly-hint (:kind a))
-                 :on-click #(do (act/load-detail! (:instanceId a)) (st/open-window! :detail))}
-            [:td [:span.badge.FAILED (:kind a)]]
-            [:td (:workflow a) [:span.muted " v" (:version a)]]
-            [:td [:code (:instanceId a)]]
-            [:td [:code (:expectedNode a)]]
-            [:td [:code (:reportedNode a)]]
-            [:td.muted {:title (:detail a)} (:detail a)]
-            [:td.muted (u/ago (:at a)) " ago"]])]])]))
-
 (defn performance-tab []
   [:div
    [:section.panel
     [:h2 "Performance"]
     [perf-toolbar]]
    [stats-panel]
-   [anomalies-panel]
    (when (= :detail (get-in @db [:window :kind]))
      (let [i (get-in @db [:detail :instance])]
        [floating-window {:title [:span "Detail"

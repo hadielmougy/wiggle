@@ -46,16 +46,8 @@ service WiggleControlPlane {
     rpc PollEvents(PollEventsRequest) returns (EventList);
     rpc AckEvents(AckEventsRequest) returns (Ack);
 
-    // Reports steps an instrumented application already ran (OBSERVED execution). The server
-    // never dispatches such a workflow: the first report of a run mints its instance, later
-    // reports name it, and each step is checked against the topology and kept with its timings.
-    rpc ObserveRun(ObserveRunRequest) returns (ObserveRunResult);
-    // Reports N runs in one call, each applied on its own; the answers are in submission order.
-    rpc ObserveMany(ObserveManyRequest) returns (ObserveManyResult);
     // Per-node duration statistics over recently settled steps of one workflow version.
     rpc GetStepStats(StepStatsRequest) returns (StepStats);
-    // Departures of observed runs from their topology, newest first.
-    rpc ListAnomalies(ListAnomaliesRequest) returns (AnomalyList);
 }
 
 message Empty {}
@@ -176,7 +168,7 @@ message Token {
     int64 available_at = 7;
     optional string lease_owner = 8;
     optional string last_error = 9;
-    // When the step ran on the reporting side (LOCAL_* and OBSERVED); absent when not reported.
+    // When the step ran on the reporting side (LOCAL_*); absent when not reported.
     optional int64 started_at = 10;
     optional int64 finished_at = 11;
     // What the step ran with and returned, where the server recorded it. A task's absent output left
@@ -304,8 +296,9 @@ message StepResult {
     oneof outcome {
         google.protobuf.Value merge = 2;   // TASK: the complete next context
         bool predicate_value = 3;          // PREDICATE: branch selector
-        string error = 4;                  // the step threw (OBSERVED only): fails the instance
     }
+    reserved 4;                            // was the error of a step OBSERVED execution reported
+    reserved "error";
     // When the step ran, epoch millis; 0 = not reported. Kept on the token for duration stats.
     int64 started_at = 5;
     int64 finished_at = 6;
@@ -354,36 +347,6 @@ message ReportStepsResult {
     repeated RunOutcome results = 1;       // one per submitted run, in submission order
 }
 
-message ObserveRunRequest {
-    string workflow = 1;
-    int32 version = 2;                     // 0 = the latest registered version
-    string instance_id = 3;                // blank on a run's first report; the result carries the id
-    string correlation_id = 4;             // a business key for the run, first report only
-    string reporter = 5;                   // the observing process, stamped as the tokens' lease owner
-    repeated StepResult steps = 6;         // ordered, as they ran
-    bool final = 7;                        // the run is over: closing without reaching END is an anomaly
-}
-
-message ObserveRunResult {
-    string instance_id = 1;
-    string instance_status = 2;            // any InstanceStatus; RUNNING = more steps may follow
-    int32 anomalies = 3;                   // recorded by this report
-}
-
-message ObserveManyRequest {
-    repeated ObserveRunRequest runs = 1;
-}
-
-message ObserveOutcome {
-    ObserveRunResult outcome = 1;          // set when the run applied (error_status == 0)
-    int32 error_status = 2;                // 0 ok; else the status the single path would throw
-    string error = 3;
-}
-
-message ObserveManyResult {
-    repeated ObserveOutcome results = 1;   // one per submitted run, in submission order
-}
-
 message StepStatsRequest {
     string workflow = 1;
     int32 version = 2;                     // 0 = the latest registered version
@@ -399,7 +362,7 @@ message NodeStats {
     int64 p50_millis = 5;
     int64 p95_millis = 6;
     int64 max_millis = 7;
-    // How long the step waited to be claimed by a worker (ready -> claimed); 0 for observed steps.
+    // How long the step waited to be claimed by a worker (ready -> claimed).
     int64 wait_p50_millis = 8;
     int64 wait_p95_millis = 9;
 }
@@ -408,27 +371,6 @@ message StepStats {
     string workflow = 1;
     int32 version = 2;
     repeated NodeStats nodes = 3;          // graph order is not implied; sort by p95 for a bottleneck view
-}
-
-message ListAnomaliesRequest {
-    optional string workflow = 1;
-    optional string instance_id = 2;
-    int32 limit = 3;                       // 0 = a server default
-}
-
-message Anomaly {
-    string instance_id = 1;
-    string workflow = 2;
-    int32 version = 3;
-    string kind = 4;                       // OUT_OF_ORDER | UNKNOWN_NODE | AFTER_END | INCOMPLETE
-    optional string expected_node = 5;
-    optional string reported_node = 6;
-    optional string detail = 7;
-    int64 at = 8;
-}
-
-message AnomalyList {
-    repeated Anomaly anomalies = 1;
 }
 
 message TaskFailureRequest {

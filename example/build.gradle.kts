@@ -4,7 +4,6 @@ plugins {
 
 dependencies {
     implementation(project(":client"))
-    implementation(project(":observe"))
     // Only the single-JVM Demo needs the server on its classpath.
     implementation(project(":server"))
     // So the benchmark can run against a real database (WIGGLE_JDBC_URL) to show LOCAL_ASYNC's
@@ -23,13 +22,6 @@ tasks.register<JavaExec>("seedDashboard") {
     description = "Starts a server (:8080) seeded with data across every console tab; explore with :console:run."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.DashboardSeed")
-}
-
-tasks.register<JavaExec>("seedObserved") {
-    group = "application"
-    description = "Starts a server, publishes a checkout flow as OBSERVED and reports sixty runs to it; explore in the console."
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.wiggle.order.ObservedSeed")
 }
 
 tasks.register<JavaExec>("runWorker") {

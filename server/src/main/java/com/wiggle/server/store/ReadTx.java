@@ -89,9 +89,6 @@ public interface ReadTx extends GraphReads {
     /** The instance's compensation log, ordered by seq ascending. */
     java.util.List<Rows.CompLog> compensationLog(String instanceId);
 
-    /** Anomalies newest first, narrowed by workflow and/or instance when either is non-null. */
-    List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit);
-
     /** Up to {@code max} events with seq greater than {@code afterSeq}, ascending. */
     default List<Rows.Event> eventsAfter(long afterSeq, int max) {
         return eventsAfter(afterSeq, Long.MAX_VALUE, max);

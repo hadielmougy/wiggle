@@ -1,11 +1,8 @@
 package com.wiggle.server.topology;
 
-import com.wiggle.core.Ids;
 import com.wiggle.core.ShardIds;
 import com.wiggle.server.engine.InstanceIds;
-import com.wiggle.server.store.ShardState;
 import com.wiggle.server.topology.Topology.Generation;
-import com.wiggle.server.topology.Topology.Role;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,16 +18,12 @@ public final class Placement implements InstanceIds {
 
     private final Topology topology;
     private final LongSupplier clock;
-    private final int observedShard;
     private Generation generation;
     private List<int[]> wheel;   // {shard, weight, current}
 
     public Placement(Topology topology, LongSupplier clock) {
         this.topology = topology;
         this.clock = clock;
-        this.observedShard = topology.shards().stream()
-                .filter(s -> s.has(Role.INSTANCES) && s.state() == ShardState.ACTIVE)
-                .findFirst().orElseThrow().id();
     }
 
     /** The shard the next root instance goes to. */
@@ -56,11 +49,5 @@ public final class Placement implements InstanceIds {
 
     @Override public String next() {
         return ShardIds.next("wfi", nextShard());
-    }
-
-    /** Every observed run goes to the first ACTIVE instance shard the document lists: its id is derived
-     *  from its key, so it cannot take a weighted turn. */
-    @Override public String forKey(String workflow, String key) {
-        return ShardIds.format("wfo", observedShard, Ids.digest(workflow + ":" + key));
     }
 }

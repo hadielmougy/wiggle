@@ -2,7 +2,6 @@ package com.wiggle.console;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
-import com.wiggle.core.AnomalyView;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.NodeStats;
 
@@ -85,12 +84,6 @@ public final class GrpcDashboardData implements DashboardData {
     @Override public List<NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
         List<NodeStats> out = new ArrayList<>(client.stepStats(workflow, version, since, sample));
         out.sort(Comparator.comparingLong(NodeStats::p95Millis).reversed());
-        return out;
-    }
-
-    @Override public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
-        List<AnomalyView> out = new ArrayList<>(client.anomalies(workflow, instanceId, limit));
-        out.sort(Comparator.comparingLong(AnomalyView::at).reversed());
         return out;
     }
 

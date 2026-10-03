@@ -64,7 +64,6 @@ class PlacementTest {
         now.set(T2);
         assertEquals(Map.of(0, 2, 2, 2), picks(p, 4), "generation 2: shard 1 gets nothing new");
         assertTrue(ShardIds.shardOf(p.next()).isPresent());
-        assertEquals("wfo.s0." , p.forKey("w", "k").substring(0, 7), "observed runs on the first ACTIVE instance shard");
     }
 
     interface Steps { Map<String, Object> work(Map<String, Object> ctx); }

@@ -30,7 +30,7 @@ users and roles move into a database on a dedicated **auth shard**, and vector s
 | **replica** | A read-only streaming replica of a shard's primary, used only for reads that tolerate bounded staleness. |
 
 **WGL-SHARD-001** (MUST) Every row that belongs to an instance — the instance, its tokens, its
-comp-log, its anomalies, its events — MUST live on that instance's shard. No engine transaction may
+comp-log, its events — MUST live on that instance's shard. No engine transaction may
 span two shards.
 
 **WGL-SHARD-002** (MUST) An instance's shard MUST be decided once, when its id is minted, and MUST be
@@ -75,8 +75,6 @@ fixture) and `server/engine/ShardIdsEngineTest`.
 | instance | `wfi.s3.01k6…` | minted ([§2.2](#22-choosing-a-shard)) |
 | token | `tok.s3.01k6…` | its instance's |
 | child instance (sub-workflow) | `wfi.s3.01k6…` | its parent instance's |
-| observed run | `wfo.s3.<digest>` | derived from the key ([§9](#9-observed-runs)) |
-| anomaly | `anm.s3.…` | its instance's |
 
 Comp-log entries and events are keyed by `(instance id, seq)` and need no id of their own. Schedule and
 node ids are global rows on the home shard and stay bare (`sched_…`, `node_…`).
@@ -93,7 +91,7 @@ paths receive only a task (token) id, and MUST route on it without reading anyth
 join ([chapter 30](30-engine.md)) stays inside one transaction on one database.
 
 **WGL-SHARD-015** (MUST) An id derived from another (a token from its instance, a child from the token
-that starts it, an anomaly from its instance) MUST inherit the owner's **form**: the owner's shard when
+that starts it) MUST inherit the owner's **form**: the owner's shard when
 its id carries one, and the bare form (`{prefix}_…`) when it carries none. A bare id belongs to the
 home shard, so the derived id lands with its owner without the minter knowing which shard is home.
 
@@ -107,7 +105,7 @@ and MUST NOT be recomputed from the topology.
 
 ### 2.3 Ids from before sharding
 
-**WGL-SHARD-030** (MUST) A legacy bare id (`wfi_…`, `tok_…`, `wfo_…`) MUST route to the home
+**WGL-SHARD-030** (MUST) A legacy bare id (`wfi_…`, `tok_…`) MUST route to the home
 shard. Upgrading a single-database deployment therefore rewrites no rows: its database becomes the
 home shard.
 
@@ -247,9 +245,8 @@ has no unrouted entry point left. `ShardedStorage` routes over one `Storage` per
 
 Until a later step:
 
-- **Placement is round-robin.** Root instances take the instance shards in turn
-  ([WGL-SHARD-020](#22-choosing-a-shard)'s weights come with the topology), and every observed run is
-  minted on the first instance shard ([§9](#9-observed-runs)).
+- **Placement is round-robin** without a topology document: root instances take the instance shards
+  in turn. With one, [WGL-SHARD-020](#22-choosing-a-shard)'s weights apply.
 - **A schedule fires on home.** The fire claims the schedule and starts its instance in one home
   transaction, minting that instance on home, until [WGL-SHARD-104](#7-global-data) can mint it
   elsewhere with an idempotent id.
@@ -291,7 +288,7 @@ a write through a replica does not compile.
 
 **WGL-SHARD-081** (MUST) `ReadTx` MUST contain at least: `findInstance`, `findToken`, `tokensOf`,
 `listInstances`, `findByCorrelation`, `countInstances`, `pendingSignals`, `backlogByVersion`,
-`queueDepth`, `countProcessedSince`, `childInstanceIds`, `schedules`, `nodes`, `anomalies`,
+`queueDepth`, `countProcessedSince`, `childInstanceIds`, `schedules`, `nodes`,
 `compensationLog`, `stepDurations`, the event-log reads, and the graph reads (`GraphReads`, split
 out of `GraphStore`). Locking reads (`lockInstance`, `lockTask`, `definitionFingerprint`) stay on
 `Tx`.
@@ -306,9 +303,9 @@ console.
 
 | Operation | Route | Freshness |
 |---|---|---|
-| start, report, fail, heartbeat, signal, cancel, observe | `inTxFor(id)` | primary |
+| start, report, fail, heartbeat, signal, cancel | `inTxFor(id)` | primary |
 | claim | rotation over shards ([§6](#6-claims)) | primary |
-| leader sweeps: timers, retries, signal deadlines, lease reclaim, observed settle, retention | each shard, in parallel | primary |
+| leader sweeps: timers, retries, signal deadlines, lease reclaim, retention | each shard, in parallel | primary |
 | register workflow (definition and `wf_graph_*` rows) | every shard ([WGL-SHARD-100](#7-global-data)) | primary |
 | schedules, node table, leadership, event cursors, shard registry | `inHome` | primary |
 | event feed poll | every shard, merged ([§10](#10-event-log)) | primary |
@@ -396,7 +393,10 @@ searches are neither cancelled by replay nor left running forever.
 `pool + Σ replicaPool`. Operators size each database's `max_connections` from it times the node
 count.
 
-## 9. Observed runs
+## 9. Observed runs (withdrawn)
+
+*Withdrawn: OBSERVED execution was removed, and with it the ids derived from a run's key. The ids
+WGL-SHARD-120 to 126 are kept so they are never reused.*
 
 An observed run's id is derived from its correlation key, so that every reporter lands on the same
 instance ([WGL-OBS-010](40-execution-modes.md)). A derived id cannot be minted by weighted random
@@ -484,7 +484,7 @@ generation until `activeFrom`, then switch.
 
 **WGL-SHARD-141** (MUST) Every node MUST publish the newest generation it has loaded in its node
 row. Once a generation is in force, the leader MUST log a warning, once per node, naming every live
-node that has not loaded it. (Anomalies are per instance, so a log line is where this belongs.)
+node that has not loaded it.
 
 **WGL-SHARD-142** (MUST) *Implemented in `ShardedStorage` (a `TRANSIENT` storage failure).* A node
 asked to route an id to a shard it does not know MUST answer
@@ -498,7 +498,7 @@ older topology.
    Migrations run on it, it enters the registry, and it receives every registered definition
    ([WGL-SHARD-101](#7-global-data)). Every node can now route to it; nothing is minted there.
 3. Append a generation that gives it a weight, with `activeFrom` after the rollout will be
-   complete, and roll that out. At `activeFrom`, new root instances and new observed runs start
+   complete, and roll that out. At `activeFrom`, new root instances start
    landing on it.
 
 **WGL-SHARD-145** (MUST) No existing row moves. Instances stay on the shard they were minted on until
@@ -705,7 +705,7 @@ coordinated-connection mode goes too. It MUST ship in a release whose notes say 
 
 **WGL-SHARD-165** (MUST) `conformance/shard-ids-v1.json` MUST replace the placement fixture: id
 formatting and parsing, legacy and namespaced ids, the shard each carries, and how derived ids inherit
-it. The observed-run rendezvous choice ([WGL-SHARD-120](#9-observed-runs)) joins it with §9. Every
+it. Every
 client that mints or parses ids MUST pass it ([WGL-GEN-004](00-index.md)).
 
 **WGL-SHARD-166** (MUST) The server⊥coordinator source rule ([WGL-COORD-001](90-ops.md)) is
@@ -728,7 +728,7 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
 6. **Topology document** with roles, the registry, `wf_shard`, startup validation, and generations.
 7. **Claims, sweeps, registration fan-out and portal fan-out.**
 8. **Read replicas**: pools, the lag probe, fallback, and the per-call-site freshness table.
-9. **Observed runs** under rendezvous hashing.
+9. ~~**Observed runs** under rendezvous hashing.~~ Withdrawn with OBSERVED execution.
 10. **Event log** per-shard cursors and the wire fields.
 11. **Measure**: `deploy/gcp/ceiling.sh` on two and on four Cloud SQL shards, steps/s first.
 12. **Accounts on the auth shard** ([§13](#13-users-and-authorization)): schema, file import,
@@ -743,7 +743,8 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
   shard, so a fan-out of thousands of children loads one shard. Spreading them would need a
   cross-shard join protocol (outbox and signal). Out of scope until a workload needs it.
 - **Correlation lookups** (`findByCorrelation`) fan out to every shard. A start-time idempotency
-  key, if one is added, would need its own routing rule like [§9](#9-observed-runs).
+  key, if one is added, would need its own routing rule: an id derived from a key cannot be placed by
+weight.
 - **Home shard load.** Schedules, node heartbeats, event cursors and the leader's beat writes all
   land on the home shard. They are small, but should be measured at high shard counts.
 - **Which instance fields are searchable.** Context and step I/O may hold personal data. Whether

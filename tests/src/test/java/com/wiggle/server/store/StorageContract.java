@@ -451,7 +451,6 @@ abstract class StorageContract {
         i.error = "boom";
         i.context = doc("stage", "paid");
         i.parentTokenId = id("tok");
-        i.settleAt = now + 60_000;
         i.revision = 7;
         store(i);
 
@@ -465,7 +464,6 @@ abstract class StorageContract {
         assertEquals("boom", back.error);
         assertEquals(i.context.json(), back.context.json());
         assertEquals(i.parentTokenId, back.parentTokenId);
-        assertEquals(i.settleAt, back.settleAt);
         assertEquals(now, back.createdAt);
         assertEquals(now, back.updatedAt);
         assertEquals(7, back.revision);
@@ -473,31 +471,15 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("a null settleAt and a null correlation id are stored as absent, not as text")
+    @DisplayName("a null correlation id is stored as absent, not as text")
     void instanceNullablesStayNull() {
         Instance i = instance(id("wf"));
         store(i);
         Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
-        assertNull(back.settleAt, "only an observed run has a settle time");
         assertNull(back.correlationId);
         assertNull(back.parentTokenId);
         assertNull(back.terminationReason);
         assertNull(back.error);
-    }
-
-    @Test
-    @DisplayName("insertInstanceIfAbsent leaves the winner's row standing")
-    void insertIfAbsentIsIdempotent() {
-        Instance first = instance(id("wf"));
-        first.context = doc("reporter", "a");
-        assertTrue(inTxBoolean(tx -> tx.insertInstanceIfAbsent(first)), "the first reporter creates the run");
-
-        Instance second = instance(first.workflow);
-        second.id = first.id;
-        second.context = doc("reporter", "b");
-        assertFalse(inTxBoolean(tx -> tx.insertInstanceIfAbsent(second)), "the second is told it lost");
-        assertEquals(first.context.json(), storage.inTx(tx -> tx.findInstance(first.id)).orElseThrow().context.json(),
-                "and the loser overwrote nothing -- it re-reads instead");
     }
 
     @Test
@@ -512,7 +494,6 @@ abstract class StorageContract {
         live.terminationReason = "step failed";
         live.error = "handler threw";
         live.context = doc("stage", "failed");
-        live.settleAt = 42L;
         live.updatedAt = now + 5;
         storage.inTxVoid(tx -> tx.updateInstance(live));
 
@@ -522,7 +503,6 @@ abstract class StorageContract {
         assertEquals("step failed", back.terminationReason);
         assertEquals("handler threw", back.error);
         assertEquals(doc("stage", "failed").json(), back.context.json());
-        assertEquals(42L, back.settleAt);
         assertEquals(now + 5, back.updatedAt);
         assertEquals(before + 1, back.revision);
     }
@@ -688,7 +668,6 @@ abstract class StorageContract {
         t.compSeq = 3L;
         t.startedAt = now + 1;
         t.finishedAt = now + 2;
-        t.seq = 11L;
         t.stepInput = "{\"order\":1}";
         t.stepOutput = "{\"order\":1,\"paid\":true}";
         t.payload = TokenPayload.EMPTY
@@ -718,7 +697,6 @@ abstract class StorageContract {
         assertEquals(3L, back.compSeq);
         assertEquals(now + 1, back.startedAt);
         assertEquals(now + 2, back.finishedAt);
-        assertEquals(11L, back.seq);
         assertEquals("{\"order\":1}", back.stepInput);
         assertEquals("{\"order\":1,\"paid\":true}", back.stepOutput);
         assertEquals(now, back.createdAt);
@@ -763,7 +741,6 @@ abstract class StorageContract {
         assertNull(back.compSeq, "null comp seq is what tells forward work from an undo");
         assertNull(back.startedAt);
         assertNull(back.finishedAt);
-        assertNull(back.seq);
         assertNull(back.leaseOwner);
     }
 
@@ -1139,27 +1116,6 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("dueSettle is the running observed runs whose settle time has passed, soonest first")
-    void dueSettleIsSoonestFirst() {
-        String wf = id("wf");
-        Instance soon = instance(wf);
-        soon.settleAt = ANCIENT;
-        Instance later = instance(wf);
-        later.settleAt = ANCIENT + 1;
-        Instance notObserved = instance(wf);
-        Instance finished = instance(wf);
-        finished.status = InstanceStatus.COMPLETED;
-        finished.settleAt = ANCIENT;
-        for (Instance i : List.of(soon, later, notObserved, finished)) store(i);
-
-        List<String> ids = List.of(soon.id, later.id, notObserved.id, finished.id);
-        List<String> swept = storage.inTx(tx -> tx.dueSettle(ANCIENT + 2, 10_000)).stream()
-                .map(i -> i.id).filter(ids::contains).toList();
-        assertEquals(List.of(soon.id, later.id), swept,
-                "soonest first; an instance with no settle time and a finished one are not judged");
-    }
-
-    @Test
     @DisplayName("the retention pass takes a terminal instance with its tokens and its comp log")
     void retentionTakesTheWholeInstance() {
         String wf = id("wf");
@@ -1325,7 +1281,7 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("stepDurations are newest first, and a step that was never queued waited for nothing")
+    @DisplayName("stepDurations are newest first, with the time each step waited to be claimed")
     void stepDurationsMeasureRunAndWait() {
         Instance i = instance(id("wf"));
         Token dispatched = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
@@ -1333,22 +1289,21 @@ abstract class StorageContract {
         dispatched.availableAt = 1_000;
         dispatched.startedAt = 1_200L;
         dispatched.finishedAt = 1_500L;
-        Token observed = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
-        observed.nodeId = "n-observed";
-        observed.availableAt = 1_000;
-        observed.startedAt = 2_000L;
-        observed.finishedAt = 2_050L;
-        observed.seq = 1L;
+        Token later = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
+        later.nodeId = "n-later";
+        later.availableAt = 1_990;
+        later.startedAt = 2_000L;
+        later.finishedAt = 2_050L;
         Token unfinished = token(i, NodeKind.TASK, TokenStatus.RUNNING, id("q"));
         unfinished.nodeId = "n-running";
         unfinished.startedAt = 3_000L;
-        store(i, dispatched, observed, unfinished);
+        store(i, dispatched, later, unfinished);
 
         List<Rows.StepDuration> steps = storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 0, 10));
-        assertEquals(List.of("n-observed", "n-dispatched"), steps.stream().map(Rows.StepDuration::nodeId).toList(),
+        assertEquals(List.of("n-later", "n-dispatched"), steps.stream().map(Rows.StepDuration::nodeId).toList(),
                 "newest first by finish time, and nothing still running");
         assertEquals(50, steps.getFirst().millis());
-        assertEquals(0, steps.getFirst().waitMillis(), "a reported step was never dispatched from a queue");
+        assertEquals(10, steps.getFirst().waitMillis());
         assertEquals(300, steps.getLast().millis());
         assertEquals(200, steps.getLast().waitMillis(), "ready to claimed");
         assertTrue(storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 1_600, 10)).size() == 1,
@@ -1518,47 +1473,6 @@ abstract class StorageContract {
         e.input = doc("before", seq);
         e.result = doc("after", seq);
         return e;
-    }
-
-    // -- observed-run anomalies --
-
-    @Test
-    @DisplayName("anomalies are newest first, and narrowed by workflow or by instance")
-    void anomaliesAreNewestFirstAndFilterable() {
-        String wf = id("wf");
-        Instance a = instance(wf);
-        Instance b = instance(wf);
-        store(a);
-        store(b);
-        Rows.Anomaly older = anomaly(a, "UNEXPECTED_STEP", ANCIENT);
-        Rows.Anomaly newer = anomaly(b, "SKIPPED_STEP", ANCIENT + 1);
-        storage.inTxVoid(tx -> {
-            tx.insertAnomaly(older);
-            tx.insertAnomaly(newer);
-        });
-
-        assertEquals(List.of(newer.id(), older.id()),
-                storage.inTx(tx -> tx.anomalies(wf, null, 10)).stream().map(Rows.Anomaly::id).toList(),
-                "newest first");
-        assertEquals(List.of(older.id()),
-                storage.inTx(tx -> tx.anomalies(null, a.id, 10)).stream().map(Rows.Anomaly::id).toList(),
-                "one instance's departures");
-        assertEquals(List.of(newer.id()),
-                storage.inTx(tx -> tx.anomalies(wf, null, 1)).stream().map(Rows.Anomaly::id).toList(),
-                "the limit keeps the newest");
-
-        Rows.Anomaly back = storage.inTx(tx -> tx.anomalies(null, b.id, 10)).getFirst();
-        assertEquals("SKIPPED_STEP", back.kind());
-        assertEquals("n-expected", back.expectedNode());
-        assertEquals("n-reported", back.reportedNode());
-        assertEquals("reported out of order", back.detail());
-        assertEquals(ANCIENT + 1, back.at());
-        assertEquals(1, back.version());
-    }
-
-    private Rows.Anomaly anomaly(Instance of, String kind, long at) {
-        return new Rows.Anomaly(id("anom"), of.id, of.workflow, of.version, kind,
-                "n-expected", "n-reported", "reported out of order", at);
     }
 
     // -- WGL-STOR-005: the store's own identity --

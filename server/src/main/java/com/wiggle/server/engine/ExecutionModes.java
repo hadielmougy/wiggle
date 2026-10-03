@@ -14,7 +14,7 @@ final class ExecutionModes {
 
     /**
      * Whether a worker-reported run may lease its continuation straight back to the reporting
-     * worker. SERVER hands back; the local modes chain. OBSERVED has no worker-reported runs.
+     * worker. SERVER hands back; the local modes chain.
      */
     static boolean chainsBack(ExecutionMode mode) {
         return switch (resolve(mode)) {

@@ -12,15 +12,13 @@ a reader of `wf_instance` can never disagree. Nothing is reconstructed after the
 nothing is lost when a node dies between the change and the notification.
 
 It is an outbound feed. Other systems react to what Wiggle decided, without polling instances,
-tailing logs, or being handed a webhook that may or may not arrive. It is not the inbound
-direction: reports of steps your services ran themselves are
-[observed execution](observed-execution.md).
+tailing logs, or being handed a webhook that may or may not arrive.
 
 ## 2. What is in it
 
 | Type | When |
 |---|---|
-| `wf.started` | an instance is created, including an observed run's first report |
+| `wf.started` | an instance is created |
 | `wf.completed` | it ran out of flow at an END with nothing left |
 | `wf.failed` | it failed with nothing to undo |
 | `wf.cancelled` | someone cancelled it |

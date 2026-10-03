@@ -20,9 +20,6 @@ public final class Rows {
         public Doc context = Doc.EMPTY;
         /** When this instance is a sub-workflow: the parent's waiting token; null otherwise. */
         public String parentTokenId;
-        /** Observed runs only: when the run is due to be judged. Every report pushes it out by the
-         *  stall threshold; reaching END pulls it in to a short grace. Null on every other instance. */
-        public Long settleAt;
         public long createdAt;
         public long updatedAt;
         public long revision;
@@ -70,7 +67,7 @@ public final class Rows {
         public Long compSeq;
         public String lastError;
         /** When the step ran. A worker-run step is stamped by the server: claimed, then settled.
-         *  A locally-chained or observed step carries its own clock instead, since the server only
+         *  A locally-chained step carries its own clock instead, since the server only
          *  sees the flush. Null when the step was not timed. */
         public Long startedAt;
         public Long finishedAt;
@@ -79,9 +76,6 @@ public final class Rows {
          *  as it was; a predicate's output is its branch. */
         public String stepInput;
         public String stepOutput;
-        /** Observed steps only: the order they were reported in, which breaks ties between steps
-         *  whose clocks agree to the millisecond. Null elsewhere. */
-        public Long seq;
         public long createdAt;
         public long updatedAt;
 
@@ -201,13 +195,6 @@ public final class Rows {
      */
     public record BacklogSlice(String workflow, int version, String queue,
                                int readyCount, long oldestAvailableAt) { }
-
-    /**
-     * One departure of an observed run from its topology, written once and never updated.
-     * {@code kind} is one of the names {@link com.wiggle.core.AnomalyView} lists.
-     */
-    public record Anomaly(String id, String instanceId, String workflow, int version, String kind,
-                          String expectedNode, String reportedNode, String detail, long at) { }
 
     /**
      * One entry of the event log. {@code seq} is assigned by the store on append (0 before);
