@@ -63,9 +63,6 @@ SOURCES = {
     "decode": FIXTURES / "docs/decode/OrderHandlers.java",
     "queues": FIXTURES / "docs/QueuesSnippet.java",
     "local-execution": FIXTURES / "docs/LocalExecutionSnippet.java",
-    # docs that quote the implementation itself, so the quote cannot drift from it
-    "id-codec": ROOT / "placement/src/main/java/com/wiggle/placement/IdCodec.java",
-    "coordinated-connection": ROOT / "client/src/main/java/com/wiggle/client/CoordinatedConnection.java",
 }
 
 MARKER = re.compile(r"^(?P<indent>[ \t]*)<!-- snippet: (?P<source>[\w-]+)/(?P<regions>[\w,-]+) -->$")

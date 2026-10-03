@@ -3,8 +3,8 @@
 ← [Storage](80-storage.md) · [Index](00-index.md)
 
 Everything a deployment decides: how settings are supplied, what the cluster does with them, what the
-console shows, how the channel is secured, what the distribution runs, and the optional coordinator
-that shards one namespace across several cells.
+console shows, how the channel is secured, and what the distribution runs. §9, the cell coordinator,
+is withdrawn and kept for its requirement ids.
 
 ## 1. Configuration
 
@@ -21,7 +21,7 @@ conventions, not the library's.
 
 | Variable | Property | Default | Meaning |
 |---|---|---|---|
-| `WIGGLE_ROLE` | — | `server` | which process the image runs: `server`, `coordinator` or `console` (`cell` is the old name for `server`) |
+| `WIGGLE_ROLE` | — | `server` | which process the image runs: `server` or `console` (`cell` is the old name for `server`; `coordinator` is refused) |
 | `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port; `0` picks a free one |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | unset = in-memory single node; set to cluster on a database |
@@ -76,7 +76,10 @@ conventions, not the library's.
 | `WIGGLE_LOG_FILE` | — | *(unset)* | also log to a rotating file (5 × 10 MB) |
 | `WIGGLE_LOG_LEVEL` | — | `INFO` | file level in `System.Logger` names |
 
-### 1.5 Coordinator and placement (optional)
+### 1.5 Coordinator and placement (withdrawn)
+
+*Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).* A node refuses to start while any of these is set, and names it
+([WGL-SHARD-163](85-sharding.md#15-dropping-the-coordinator)).
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -305,7 +308,10 @@ p50 ≈ 105 ms to ≈ 28 ms, without costing the throughput ceiling.
 **WGL-OPS-094** (SHOULD) Accumulated history costs latency: the same setup with ~500k retained instances
 has shown ≈ 2× the latency at the ceiling, so retention cadence is part of capacity planning.
 
-## 9. The optional cell coordinator
+## 9. The optional cell coordinator (withdrawn)
+
+*Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).* Every requirement in this section is withdrawn; the ids are kept so they are never reused
+([chapter 00 §2](00-index.md)).
 
 Off by default. A standalone or clustered server never involves it; `WIGGLE_COORDINATOR_URL` is what
 turns it on. It shards one namespace's instances across **cells** (each a cluster over its own

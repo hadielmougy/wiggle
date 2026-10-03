@@ -18,38 +18,24 @@ IMAGE = os.environ.get("WIGGLE_LAB_IMAGE", "wiggle:local")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # In-cluster ports.
-COORD_GRPC_PORT = 8099          # CoordinatorServer (CellCoordinator gRPC)
-COORD_DEFAULT_REPLICAS = 1      # coordinators are stateless; any number, they elect one leader
 CELL_GRPC_PORT = 8080           # WiggleControlPlane gRPC on a cell node
 CELL_DASHBOARD_PORT = 8090      # cell /healthz probe port (the dashboard moved to the console)
 CONSOLE_HTTP_PORT = 8090        # the standalone ops console (Tomcat) web UI
 DB_PORT = 5432
 
 # Host-side local ports the lab forwards to (kubectl port-forward).
-COORD_LOCAL_PORT = int(os.environ.get("WIGGLE_LAB_COORD_LOCAL_PORT", "18099"))
 CELL_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CELL_LOCAL_PORT_BASE", "18100"))
 CONSOLE_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CONSOLE_LOCAL_PORT_BASE", "18300"))
 POD_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_POD_LOCAL_PORT_BASE", "18500"))
 
-# The coordinator's own small database -- separate from every cell's on purpose: a cell must never
-# know about coordinators, and the two are linked by nothing but the gRPC contract. Replicas share
-# it, which is what lets several of them elect a leader and serve the same state.
-COORD_DB_NAME = "db-coord"
-COORD_DB = "wiggle_coord"
-COORD_DB_USER = "wiggle"
-COORD_DB_PASSWORD = "wiggle"
-COORD_STORE_URI = f"jdbc:postgresql://{COORD_DB_NAME}:{DB_PORT}/{COORD_DB}"
-
 PART_OF = "wiggle-lab"
 
 
-def labels(role: str, cell: str | None = None, namespace: str | None = None) -> dict[str, str]:
-    """Standard label set. ``role`` is coordinator | cell | db."""
+def labels(role: str, cell: str | None = None) -> dict[str, str]:
+    """Standard label set. ``role`` is cell | db | console."""
     lb = {"app.kubernetes.io/part-of": PART_OF, "wiggle-lab/role": role}
     if cell:
         lb["wiggle-lab/cell"] = cell
-    if namespace:
-        lb["wiggle-lab/namespace"] = namespace
     return lb
 
 
@@ -67,8 +53,7 @@ def dns_name(prefix: str, value: str) -> str:
 # Every operational config the UI shows/edits and applies (→ pod redeploy), by raw WIGGLE_* env name.
 # Each spec: {key, kind: int|float|bool|enum, default (the server's own default, shown as the current
 # value when unset), help, choices? (enum), pin? (always emit even at default)}. Structural env the lab
-# wires itself -- JDBC URL/user/pass, ports, cell id, namespace, coordinator URL, advertise host,
-# region, TLS -- is deliberately NOT here and stays locked.
+# wires itself -- JDBC URL/user/pass, ports, TLS -- is deliberately NOT here and stays locked.
 #
 # Emit model: a var is written to the pod only when it's a `pin` (the lab's own baseline, e.g. a snappy
 # 200ms poll) or when the user overrides its default; otherwise it's left off so the server uses its own
@@ -118,12 +103,6 @@ CELL_TUNABLES = [
      "help": "Random jitter added to the shed-poll hold-off."},
     {"key": "WIGGLE_LOG_LEVEL", "kind": "enum", "default": "INFO", "choices": LOG_LEVELS,
      "help": "File log level (only takes effect with WIGGLE_LOG_FILE set)."},
-]
-
-COORD_TUNABLES = [
-    {"key": "WIGGLE_LOG_LEVEL", "kind": "enum", "default": "INFO", "choices": LOG_LEVELS,
-     "help": "Coordinator file log level (only with WIGGLE_LOG_FILE). The coordinator runs the control "
-             "plane, not the engine, so it has no engine tunables."},
 ]
 
 

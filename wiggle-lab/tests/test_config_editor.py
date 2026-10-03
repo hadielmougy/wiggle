@@ -44,41 +44,12 @@ def test_defaults_cover_every_knob_incl_linger():
 
 def test_cell_manifest_baseline_and_override():
     env = _env_map(_cell_container(
-        manifests.cell_manifests("cellA", "orders", 1, "eu", {"WIGGLE_DISPATCH_LINGER_MILLIS": 10})))
+        manifests.cell_manifests("cellA", 1, {"WIGGLE_DISPATCH_LINGER_MILLIS": 10})))
     assert env["WIGGLE_DISPATCH_LINGER_MILLIS"] == "10"  # override applied as pod env
     assert env["WIGGLE_POLL_INTERVAL_MILLIS"] == "200"   # baseline pinned
     assert "WIGGLE_LEASE_MILLIS" not in env              # unset ⇒ server default
     # structural env intact and never editable
-    assert env["WIGGLE_CELL_ID"] == "cellA"
-    assert env["WIGGLE_NAMESPACE"] == "orders"
-    assert env["WIGGLE_REGION"] == "eu"
     assert env["WIGGLE_JDBC_URL"].startswith("jdbc:postgresql://")
-
-
-def test_coordinator_tunables_merge():
-    docs = manifests.coordinator_manifests(1, {"WIGGLE_LOG_LEVEL": "DEBUG"})
-    dep = next(d for d in docs if d["kind"] == "Deployment")
-    env = {e["name"]: e["value"] for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]
-           if "value" in e}
-    assert env["WIGGLE_LOG_LEVEL"] == "DEBUG"
-    assert env["WIGGLE_ROLE"] == "coordinator"           # structural env intact
-    assert env["WIGGLE_COORD_STORE"].startswith("jdbc:postgresql://")
-
-
-def test_coordinator_is_stateless():
-    """The control plane holds no per-pod state, so none of the Raft-era scaffolding should return:
-    no StatefulSet, no volumes, no peer-transport port, no headless Service."""
-    docs = manifests.coordinator_manifests(3)
-    assert {d["kind"] for d in docs} == {"Deployment", "Service"}
-    dep = next(d for d in docs if d["kind"] == "Deployment")
-    pod = dep["spec"]["template"]["spec"]
-    assert dep["spec"]["replicas"] == 3                  # a plain scale, not a fixed group size
-    assert "volumeClaimTemplates" not in dep["spec"]
-    assert "volumes" not in pod and "volumeMounts" not in pod["containers"][0]
-    assert [p["name"] for p in pod["containers"][0]["ports"]] == ["grpc"]
-    svc = next(d for d in docs if d["kind"] == "Service")
-    assert svc["spec"].get("clusterIP") != "None"        # not headless
-    assert "publishNotReadyAddresses" not in svc["spec"]
 
 
 def test_state_roundtrip(tmp_path, monkeypatch):
@@ -87,26 +58,7 @@ def test_state_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(controller, "STATE_FILE", tmp_path / "state.json")
     lab = controller.Lab()
     lab.cell_config = {"cellA": {"WIGGLE_DISPATCH_LINGER_MILLIS": 10}}
-    lab.coord_config = {"WIGGLE_LOG_LEVEL": "DEBUG"}
     lab._save_state()
 
     reloaded = controller.Lab()   # __init__ -> _load_state() from the same tmp state file
     assert reloaded.cell_config == {"cellA": {"WIGGLE_DISPATCH_LINGER_MILLIS": 10}}
-    assert reloaded.coord_config == {"WIGGLE_LOG_LEVEL": "DEBUG"}
-
-
-def test_reset_is_recorded_and_replayable():
-    """The reset is a recorded action, so a session that clears the control plane replays it -- and
-    replay must wait for the coordinators afterwards, since the reset rolls them."""
-    import inspect
-    from wigglelab import controller
-
-    assert hasattr(controller.Lab, "reset_coordinator_store")
-    # @record wraps the method; functools.wraps keeps __name__, and the wrapper is what makes the
-    # call show up in a recording.
-    assert controller.Lab.reset_coordinator_store.__name__ == "reset_coordinator_store"
-    assert controller.Lab.reset_coordinator_store.__wrapped__ is not None
-
-    src = inspect.getsource(controller.Lab.replay)
-    assert '"deploy_coordinator", "reset_coordinator_store"' in src, \
-        "replay must put a readiness barrier after a reset, as it does after a deploy"

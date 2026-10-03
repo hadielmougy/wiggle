@@ -119,9 +119,7 @@ statistics are computed in the server over the newest N timed `DONE` tokens of a
 The ops console's **Performance** tab reads both RPCs. Pick a workflow and a window (last 15
 minutes to everything sampled): the table ranks steps by p95 with a bar for each step's share of
 the slowest, and the
-anomaly list shows every departure newest first; clicking one opens the instance. Under a
-coordinator the console asks every cell and merges: counts add up, means are weighted, and a
-merged row keeps the worst cell's p50 and p95, since percentiles cannot be recombined exactly.
+anomaly list shows every departure newest first; clicking one opens the instance.
 
 ![The Performance tab for the checkout flow: the step table ranked by p95 with reserve slowest in red, and the anomaly list naming a stalled run, two incomplete runs, two out-of-order steps and a duplicated step.](img/console-performance.png)
 

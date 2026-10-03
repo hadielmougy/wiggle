@@ -3,8 +3,7 @@ package com.wiggle.election;
 import java.util.List;
 
 /**
- * The durable roster an election runs on. Implemented once per side -- over the cell's node table,
- * over the coordinator's -- so the election rule lives in one place.
+ * The durable roster an election runs on, implemented over the server's node table.
  *
  * <p>One method, and it must run in a single transaction: split into "upsert, then read, then write
  * the verdict" and two nodes can interleave and reach different answers from different snapshots.

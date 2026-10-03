@@ -403,7 +403,7 @@ public final class WiggleClient implements AutoCloseable {
     private interface Call<T> { T run(); }
 
     // Every client and worker operation routes through call(), so the shared UNAVAILABLE retry
-    // ({@link RpcRetry}) covers them all — a call issued while a cell is momentarily gone (restart /
+    // ({@link RpcRetry}) covers them all — a call issued while the server is momentarily gone (restart /
     // failover) rides out the outage. Permanent errors map straight through; exhausted retries map to
     // WiggleApiException(status 0), as before.
     private <T> T call(Call<T> call) {

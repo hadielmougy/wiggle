@@ -1,23 +1,20 @@
 """The lab's orchestration brain. The Streamlit app holds one Lab instance and calls these methods;
 all cluster/gRPC state lives here so the logic is usable without the UI.
 
-Cluster state (which cells exist, their pods) is discovered live from Kubernetes labels, so it
-survives app restarts. Placement policy (per-namespace ring) is cached from OpenEpoch responses and
-persisted to disk, since the coordinator exposes no read-policy RPC.
+Cluster state (which servers exist, their pods) is discovered live from Kubernetes labels, so it
+survives app restarts. Each server's tunables are persisted to disk.
 """
 from __future__ import annotations
 
 import json
 import os
 import pathlib
-import random
 import time
 import uuid
 
 from . import config as C
 from . import k8s, kind, manifests
 from .cell_client import CellClient
-from .coord_client import CoordinatorClient
 from .portforward import PortForwards
 from .recorder import Event, Recording, record
 
@@ -29,9 +26,7 @@ RECORDINGS_DIR = STATE_DIR / "recordings"
 class Lab:
     def __init__(self):
         self.pf = PortForwards()
-        self.policies: dict[str, dict] = {}
         self.cell_config: dict[str, dict] = {}   # cell -> {WIGGLE_*: value} applied to that cell
-        self.coord_config: dict = {}             # {WIGGLE_*: value} applied to the coordinator
         self.recording: Recording | None = None
         self._load_state()
 
@@ -67,23 +62,17 @@ class Lab:
         RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
         (RECORDINGS_DIR / f"{rec.id}.json").write_text(rec.to_json())
 
-    # ---- persisted policy cache ----
+    # ---- persisted state ----
     def _load_state(self):
         try:
             state = json.loads(STATE_FILE.read_text())
         except (OSError, json.JSONDecodeError):
             state = {}
-        self.policies = state.get("policies", {})
         self.cell_config = state.get("cell_config", {})
-        self.coord_config = state.get("coord_config", {})
 
     def _save_state(self):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps({
-            "policies": self.policies,
-            "cell_config": self.cell_config,
-            "coord_config": self.coord_config,
-        }, indent=2))
+        STATE_FILE.write_text(json.dumps({"cell_config": self.cell_config}, indent=2))
 
     # ---- live container env (source of truth for "current config" in the UI) ----
     def _live_env(self, selector: str, resource: str = "deployment") -> dict[str, str]:
@@ -133,82 +122,7 @@ class Lab:
         self.pf.stop_all()
         kind.delete_cluster()
 
-    # ---- coordinator ----
-    @record
-    def deploy_coordinator(self, replicas: int = C.COORD_DEFAULT_REPLICAS, tunables: dict | None = None):
-        """(Re)deploy the coordinator as ``replicas`` pods over one shared database.
-
-        Coordinators are stateless, so this is an ordinary Deployment and a redeploy is NOT
-        destructive: policies, epochs, the node roster and the definition registry live in the
-        control-plane database and survive it. Changing the replica count is likewise just a scale --
-        there is no group to re-form and no size to pin at deploy time. To start blank, use
-        :meth:`reset_coordinator_store`."""
-        self.ensure_namespace()
-        self.pf.stop("coordinator")
-        # The database first: the coordinator migrates its schema on startup and needs it reachable.
-        if not k8s.get_json("deployment", "wiggle-lab/role=coord-db").get("items"):
-            k8s.apply(manifests.to_yaml(manifests.coordinator_db_manifests())).check()
-        self._wait(self.coordinator_db_ready, 180, "control-plane database ready")
-        self.coord_config = {k: v for k, v in (tunables or {}).items() if v is not None}
-        self._save_state()
-        k8s.apply(manifests.to_yaml(manifests.coordinator_manifests(replicas, self.coord_config))).check()
-
-    @record
-    def reset_coordinator_store(self):
-        """Wipe the control plane: drop the database pod (its storage is the container filesystem, as
-        with every database in this lab) and let it come back empty. Deliberate, because a redeploy no
-        longer does it by accident."""
-        self.pf.stop("coordinator")
-        k8s.delete_by_label("wiggle-lab/role=coord-db")
-        self._wait(lambda: not self.pods(role="coord-db"), 120, "control-plane database removed")
-        self.policies.clear()
-        self._save_state()
-        k8s.apply(manifests.to_yaml(manifests.coordinator_db_manifests())).check()
-        self._wait(self.coordinator_db_ready, 180, "control-plane database ready")
-        # Restart the coordinators so none of them keeps a connection to the database that just went.
-        if self.pods(role="coordinator"):
-            k8s.rollout_restart("coordinator")
-
-    def coordinator_config(self) -> dict:
-        """The coordinator's current tunables for the UI: live pod env wins, else the persisted config."""
-        keys = {s["key"] for s in C.COORD_TUNABLES}
-        env = self._live_env("wiggle-lab/role=coordinator", resource="deployment")
-        live = {k: v for k, v in env.items() if k in keys}
-        return live or dict(self.coord_config)
-
-    def coordinator_ready(self) -> bool:
-        return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coordinator"))
-
-    def coordinator_db_ready(self) -> bool:
-        return any(p["ready"] for p in k8s.pods(selector="wiggle-lab/role=coord-db"))
-
-    def coordinator_replicas(self) -> int:
-        items = k8s.get_json("deployment", "wiggle-lab/role=coordinator").get("items", [])
-        return items[0].get("spec", {}).get("replicas", 0) if items else 0
-
-    def dump_coordinator_store(self) -> dict:
-        """The coordinator store's logical contents (policies/namespaces/nodes/definitions) via the Dump
-        RPC -- served by whichever coordinator pod the Service routes to. With more than one, they all
-        answer the same because they read the same database."""
-        with self.coord_client() as cc:
-            return cc.dump()
-
-    def coordinator_roster(self) -> str:
-        """Who is in the coordinator election and who currently leads, read straight from the
-        control-plane database. This is the election the cells run too: every process announces itself
-        and heartbeats, and the longest-running live one leads."""
-        pods = self.pods(role="coord-db")
-        if not pods:
-            return "(no control-plane database)"
-        sql = ("SELECT id, first_heartbeat, last_heartbeat, leader FROM coord_member "
-               "ORDER BY first_heartbeat, id;")
-        return k8s.exec_sh(pods[0]["name"],
-                           f"psql -U {C.COORD_DB_USER} -d {C.COORD_DB} -c \"{sql}\" 2>&1")
-
     # ---- readiness waits (used by replay to reproduce faithfully) ----
-    def wait_coordinator_ready(self, timeout: int = 180):
-        self._wait(self.coordinator_ready, timeout, "coordinator ready")
-
     def wait_cell_ready(self, cell: str, timeout: int = 180):
         def ready():
             ps = self.pods(role="cell", cell=cell)
@@ -224,10 +138,6 @@ class Lab:
             time.sleep(2)
         raise TimeoutError(f"timed out after {timeout}s waiting for {what}")
 
-    def coord_client(self) -> CoordinatorClient:
-        target = self.pf.ensure("coordinator", "coordinator", C.COORD_GRPC_PORT, C.COORD_LOCAL_PORT)
-        return CoordinatorClient(target)
-
     # ---- cells ----
     def cells(self) -> list[dict]:
         """Live cell inventory from Kubernetes deployment labels."""
@@ -236,7 +146,6 @@ class Lab:
             lb = d["labels"]
             out.append({
                 "cell": lb.get("wiggle-lab/cell", d["name"]),
-                "namespace": lb.get("wiggle-lab/namespace", ""),
                 "deployment": d["name"],
                 "desired": d["desired"],
                 "ready": d["ready"],
@@ -303,29 +212,26 @@ class Lab:
         return r.out if r.ok else (r.err.strip() or r.out.strip() or "(no output)")
 
     @record
-    def create_cell(self, cell: str, namespace: str, replicas: int = 1, region: str = "",
-                    tunables: dict | None = None):
-        self._apply_cell(cell, namespace, replicas, region, tunables)
+    def create_cell(self, cell: str, replicas: int = 1, tunables: dict | None = None):
+        self._apply_cell(cell, replicas, tunables)
 
-    def _apply_cell(self, cell: str, namespace: str, replicas: int, region: str, tunables: dict | None):
+    def _apply_cell(self, cell: str, replicas: int, tunables: dict | None):
         """(Re)apply a cell's DB + node manifests. Persisting the tunables and re-applying updates the
         Deployment spec, so k8s rolls the pods with the new config."""
         self.ensure_namespace()
         self.cell_config[cell] = {k: v for k, v in (tunables or {}).items() if v is not None}
         self._save_state()
         docs = (manifests.cell_db_manifests(cell)
-                + manifests.cell_manifests(cell, namespace, replicas, region, self.cell_config[cell]))
+                + manifests.cell_manifests(cell, replicas, self.cell_config[cell]))
         k8s.apply(manifests.to_yaml(docs)).check()
 
     @record
     def update_cell_config(self, cell: str, tunables: dict):
-        """Apply edited config to an existing cell and redeploy it, keeping its namespace/replicas/region.
-        Region isn't a label, so it is read back from the running spec's env."""
+        """Apply edited config to an existing cell and redeploy it, keeping its replica count."""
         c = next((x for x in self.cells() if x["cell"] == cell), None)
         if c is None:
             raise RuntimeError(f"unknown cell '{cell}'")
-        env = self._live_env(f"wiggle-lab/role=cell,wiggle-lab/cell={cell}")
-        self._apply_cell(cell, c["namespace"], int(c["desired"]) or 1, env.get("WIGGLE_REGION", ""), tunables)
+        self._apply_cell(cell, int(c["desired"]) or 1, tunables)
 
     def cell_config(self, cell: str) -> dict:
         """The cell's current tunables for the UI: live pod env wins (source of truth), else the persisted
@@ -355,8 +261,8 @@ class Lab:
 
     @record
     def restart_cell(self, cell: str):
-        """Roll the cell's pods (e.g. after reloading a new image so nodes re-register with a fresh
-        pod IP). Drops the stale port-forwards since the pods are being replaced."""
+        """Roll the cell's pods (e.g. after reloading a new image). Drops the stale port-forwards since
+        the pods are being replaced."""
         self.pf.stop(f"cell:{cell}")
         self.pf.stop(f"dash:{cell}")
         k8s.rollout_restart(C.dns_name("cell", cell)).check()
@@ -389,17 +295,10 @@ class Lab:
         return CellClient(target)
 
     # ---- port-forwards (so host-run workers/clients can reach in-cluster gRPC) ----
-    def forward_coordinator(self) -> str:
-        self.pf.ensure("coordinator", "coordinator", C.COORD_GRPC_PORT, C.COORD_LOCAL_PORT)
-        return self.pf.target("coordinator") or ""
-
     def forward_cell(self, cell: str) -> str:
         self.pf.ensure(f"cell:{cell}", C.dns_name("cell", cell), C.CELL_GRPC_PORT,
                        self._cell_local_port(cell))
         return self.pf.target(f"cell:{cell}") or ""
-
-    def stop_forward_coordinator(self):
-        self.pf.stop("coordinator")
 
     def stop_forward_cell(self, cell: str):
         self.pf.stop(f"cell:{cell}")
@@ -426,14 +325,13 @@ class Lab:
         return {p["name"]: self.pf.target(f"pod:{p['name']}")
                 for p in self.pods(role="cell", cell=cell)}
 
-    # ---- ops console (per-namespace pod: a gRPC client of the coordinator + the web UI) ----
+    # ---- ops console (per-server pod: a gRPC client of the server + the web UI) ----
     @record
     def deploy_console(self, target: str, password: str | None = None,
-                       viewer_password: str | None = None, server: str | None = None):
-        """A console for one ``target``: a standalone ``server`` (no coordinator, no namespace), or a
-        namespace whose cells a coordinator places."""
+                       viewer_password: str | None = None):
+        """A console for the server ``target``."""
         self.ensure_namespace()
-        docs = manifests.console_manifests(target, password or None, viewer_password or None, server)
+        docs = manifests.console_manifests(target, password or None, viewer_password or None)
         k8s.apply(manifests.to_yaml(docs)).check()
 
     @record
@@ -445,11 +343,9 @@ class Lab:
         out = []
         for d in k8s.deployments(selector="wiggle-lab/role=console"):
             lb = d["labels"]
-            ns = lb.get("wiggle-lab/namespace", "")
             server = lb.get("wiggle-lab/cell", "")
-            out.append({"target": lb.get("wiggle-lab/console", ns or server),
-                        "namespace": ns, "server": server, "deployment": d["name"],
-                        "desired": d["desired"], "ready": d["ready"]})
+            out.append({"target": lb.get("wiggle-lab/console", server), "server": server,
+                        "deployment": d["name"], "desired": d["desired"], "ready": d["ready"]})
         return sorted(out, key=lambda c: c["target"])
 
     def _console_local_port(self, target: str) -> int:
@@ -469,105 +365,53 @@ class Lab:
     def console_target(self, target: str) -> str | None:
         return self.pf.target(f"console:{target}")
 
-    def endpoint_rewrite_spec(self, namespace: str | None = None) -> str:
-        """Build a WIGGLE_ENDPOINT_REWRITE value that maps each cell's live pod IP(s) to that cell's own
-        port-forward, so a host-run client/worker routes to the RIGHT cell (not all to one). Ensures a
-        forward per cell first. Restrict to one namespace with ``namespace``."""
-        entries = []
-        for c in self.cells():
-            if namespace and c["namespace"] != namespace:
-                continue
-            cell = c["cell"]
-            local = self.forward_cell(cell).split(":")[-1]   # ensure the forward; take its local port
-            for p in self.pods(role="cell", cell=cell):
-                if p.get("ip"):
-                    entries.append(f"{p['ip']}:{C.CELL_GRPC_PORT}=127.0.0.1:{local}")
-        return "WIGGLE_ENDPOINT_REWRITE=" + ",".join(entries) if entries else "WIGGLE_ENDPOINT_REWRITE="
-
     def forward_status(self) -> dict[str, str | None]:
-        """Live local addresses for the coordinator and each cell forward (None if not forwarded)."""
-        status: dict[str, str | None] = {"coordinator": self.pf.target("coordinator")}
+        """Live local address of each cell forward (None if not forwarded)."""
+        status: dict[str, str | None] = {}
         for c in self.cells():
             status[c["cell"]] = self.pf.target(f"cell:{c['cell']}")
         return status
 
-    # ---- placement (epochs / rings) ----
-    @record
-    def open_epoch(self, namespace: str, ring: list[tuple[int, str, str]]) -> dict:
-        with self.coord_client() as cc:
-            policy = cc.open_epoch(namespace, ring)
-        self.policies[namespace] = policy
-        self._save_state()
-        return policy
-
-    def policy(self, namespace: str) -> dict | None:
-        return self.policies.get(namespace)
-
-    def current_ring(self, namespace: str) -> list[dict]:
-        """The shard->cell slots of the namespace's current (OPEN) epoch, from the cached policy."""
-        pol = self.policies.get(namespace)
-        if not pol:
-            return []
-        epochs = pol.get("epochs", {})
-        cur = str(pol.get("current_epoch", 0))
-        return epochs.get(cur, {}).get("ring", [])
-
     # ---- workflows / client scenarios ----
     @record
-    def allocate(self, namespace: str, name: str, definition: dict) -> dict:
-        with self.coord_client() as cc:
-            return cc.register_workflow(namespace, name, definition)
+    def register(self, cell: str, definition: dict) -> dict:
+        with self.cell_client(cell) as cc:
+            return cc.register_workflow(definition)
 
-    def list_allocations(self, namespace: str) -> list[dict]:
-        with self.coord_client() as cc:
-            return cc.list_workflows(namespace)
+    def list_workflows(self, cell: str) -> list[str]:
+        with self.cell_client(cell) as cc:
+            return cc.list_workflow_names()
 
     @record
-    def start_instances(self, namespace: str, workflow: str, count: int) -> dict:
-        """Start ``count`` instances, spread across the current epoch's ring cells (mirrors how the
-        coordinator picks a random slot per new start). Returns per-cell counts and any errors."""
-        ring = self.current_ring(namespace)
-        if not ring:
-            raise RuntimeError(f"namespace '{namespace}' has no open epoch yet — open one first")
-        cells = sorted({s["cell_id"] for s in ring})
-        started: dict[str, int] = {c: 0 for c in cells}
-        errors: list[str] = []
-        for _ in range(count):
-            cell = random.choice(ring)["cell_id"]
-            try:
-                self.cell_client(cell).start_instance(workflow)
-                started[cell] += 1
-            except Exception as e:  # noqa: BLE001 - surface to UI
-                errors.append(f"{cell}: {e}")
+    def start_instances(self, cell: str, workflow: str, count: int) -> dict:
+        """Start ``count`` instances on one server. Returns how many started and any errors."""
+        started, errors = 0, []
+        with self.cell_client(cell) as cc:
+            for _ in range(count):
+                try:
+                    cc.start_instance(workflow)
+                    started += 1
+                except Exception as e:  # noqa: BLE001 - surface to UI
+                    errors.append(str(e))
         return {"started": started, "errors": errors}
 
-    def observe(self, namespace: str, workflow: str | None = None) -> dict:
-        """Aggregate instance state per cell (each cell owns its own instances in its own DB)."""
-        per_cell: dict[str, dict] = {}
-        totals: dict[str, int] = {}
-        cells = [c["cell"] for c in self.cells() if c["namespace"] == namespace]
-        for cell in cells:
-            try:
-                instances = self.cell_client(cell).list_instances(workflow=workflow, limit=500)
-            except Exception as e:  # noqa: BLE001
-                per_cell[cell] = {"error": str(e)}
-                continue
-            counts: dict[str, int] = {}
-            for i in instances:
-                st = i.get("status", "?")
-                counts[st] = counts.get(st, 0) + 1
-                totals[st] = totals.get(st, 0) + 1
-            per_cell[cell] = {"total": len(instances), "by_status": counts}
-        return {"per_cell": per_cell, "totals": totals}
+    def observe(self, cell: str, workflow: str | None = None) -> dict:
+        """Instance counts by status on one server."""
+        with self.cell_client(cell) as cc:
+            instances = cc.list_instances(workflow=workflow, limit=500)
+        counts: dict[str, int] = {}
+        for i in instances:
+            st = i.get("status", "?")
+            counts[st] = counts.get(st, 0) + 1
+        return {"total": len(instances), "by_status": counts}
 
     # ---- replay (reproduce a recording) ----
     def replay(self, recording: dict, on_event=None, wait: bool = True, settle: float = 2.0) -> list[dict]:
         """Re-run a recording's events in order against the current machine. Stops at the first step
         that errors (the reproduction point). ``on_event`` gets each step result as it runs.
 
-        Infra steps get a readiness barrier after them (coordinator deploy/reset, cell), so
-        timing-sensitive sequences reproduce faithfully. Recording is off during replay, so nothing is
-        re-captured.
+        Creating a cell gets a readiness barrier after it, so timing-sensitive sequences reproduce
+        faithfully. Recording is off during replay, so nothing is re-captured.
         """
         results = []
         for ev in recording.get("events", []):
@@ -581,8 +425,6 @@ class Lab:
                 continue
             args = list(ev.get("args", []))
             kwargs = dict(ev.get("kwargs", {}))
-            if method == "open_epoch" and len(args) >= 2:
-                args[1] = [tuple(s) for s in args[1]]   # rings serialize to lists
             fn = getattr(self, method, None)
             status, err = "ok", None
             if not callable(fn):
@@ -590,11 +432,7 @@ class Lab:
             else:
                 try:
                     fn(*args, **kwargs)
-                    if wait and method in ("deploy_coordinator", "reset_coordinator_store"):
-                        # A reset rolls the coordinators (they were talking to a database that just
-                        # went), so the next step must wait for them the same way a deploy does.
-                        self.wait_coordinator_ready()
-                    elif wait and method == "create_cell" and args:
+                    if wait and method == "create_cell" and args:
                         self.wait_cell_ready(args[0])
                     time.sleep(settle)
                 except Exception as e:  # noqa: BLE001

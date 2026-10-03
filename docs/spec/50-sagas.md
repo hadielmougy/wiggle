@@ -105,8 +105,8 @@ redelivers an in-flight compensator exactly as it does a forward step.
 NOT be reported as either success or a plain failure. The original failure MUST be preserved on the
 instance.
 
-**WGL-SAGA-042** (MUST) A `COMPENSATING` instance MUST count as live for purge, for the coordinator's
-retire census, and for every other "is this finished" test.
+**WGL-SAGA-042** (MUST) A `COMPENSATING` instance MUST count as live for purge and for every other
+"is this finished" test.
 
 ## 5. Interaction with other features
 

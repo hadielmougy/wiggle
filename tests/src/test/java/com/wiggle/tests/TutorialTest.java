@@ -1,24 +1,14 @@
 package com.wiggle.tests;
 
-import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
-import com.wiggle.placement.IdCodec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.core.Tls;
 import com.wiggle.dist.WiggleStorageFactory;
-import com.wiggle.proto.RegisteredNode;
-import com.wiggle.proto.RingSlot;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.coord.CoordinatorApi;
-import com.wiggle.server.coord.CoordinatorService;
-import com.wiggle.server.coord.InMemoryCoordinatorStore;
-import com.wiggle.tutorial.Coordinated;
 import com.wiggle.tutorial.OrderHandlers;
 import com.wiggle.tutorial.Orders;
 import org.junit.jupiter.api.DisplayName;
@@ -33,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Runs each of the three tutorials' shapes against a real server.
+ * Runs each of the tutorials' shapes against a real server.
  *
  * <p>A tutorial is the one document a reader types out verbatim and expects to work first time, so
  * "it compiles" is not enough: the steps have to bind, the fan-out has to fan out, and the combine
@@ -43,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>What is and is not covered. The Java is covered exactly -- the same classes the pages show. The
  * container and compose fragments are not executed here; they are configuration, and testing them
  * would mean running Docker from a unit test. Where a tutorial's own {@code main} would reach a
- * process that only exists on the reader's machine (a server on :8080, a coordinator on :8099), the
+ * process that only exists on the reader's machine (a server on :8080), the
  * test stands an equivalent up in-process and drives the same client code.
  */
 class TutorialTest {
@@ -107,58 +97,6 @@ class TutorialTest {
                          .registerHandler(new OrderHandlers()).start()) {   // the worker owns no flow
                 assertPriced(client.awaitCompletion(id, Duration.ofSeconds(30)));
             }
-        }
-    }
-
-
-    @Test @DisplayName("tutorial 3 -- coordinator places the namespace; ids are self-routing")
-    void coordinated() throws Exception {
-        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (WiggleServer cell = new WiggleServer(config().withNamespace("orders"),
-                new WiggleStorageFactory()).start();
-             CoordinatorService svc = new CoordinatorService(store);
-             CoordinatorApi coord = new CoordinatorApi(svc, TestPorts.free(), Tls.Options.DISABLED)) {
-            coord.start();
-            // what a cell started with WIGGLE_COORDINATOR_URL does for itself at boot
-            svc.doRegister("orders", RegisteredNode.newBuilder().setCellId("cell-a")
-                    .setName("node-0").setEndpoint(cell.baseUrl()).setRegion("eu-west").build());
-
-            try (CoordinatedConnection wiggle = WiggleConnection.coordinator(
-                    "127.0.0.1:" + coord.port(), Tls.Options.DISABLED, "eu-west")) {
-
-                Coordinated.placeNamespace(wiggle, "orders", "cell-a");   // the tutorial's own call
-
-                WiggleClient client = wiggle.clientForNamespace("orders");
-                FlowSpec orders = Orders.spec();
-                client.register(orders);
-
-                try (Worker worker = new Worker(client, "tut-" + Ids.next("x"))
-                        .registerHandler(new OrderHandlers()).start()) {
-
-                    String id = client.start(orders, twoItems());
-                    IdCodec.Placement p = IdCodec.parse(id).orElseThrow(
-                            () -> new AssertionError("expected an epoch-aware id, got " + id));
-                    assertEquals("orders", p.namespace(), "the id carries its namespace");
-
-                    assertPriced(wiggle.clientForInstance(id).awaitCompletion(id, Duration.ofSeconds(30)));
-                }
-            }
-        }
-    }
-
-    @Test @DisplayName("a namespace with no ring is on standby -- the step the tutorial says has no default")
-    void withoutAnEpochTheCellIsOnStandby() throws Exception {
-        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (WiggleServer cell = new WiggleServer(config().withNamespace("orders"),
-                new WiggleStorageFactory()).start();
-             CoordinatorService svc = new CoordinatorService(store);
-             CoordinatorApi coord = new CoordinatorApi(svc, TestPorts.free(), Tls.Options.DISABLED)) {
-            coord.start();
-            var resp = svc.doRegister("orders", RegisteredNode.newBuilder().setCellId("cell-a")
-                    .setName("node-0").setEndpoint(cell.baseUrl()).setRegion("eu-west").build());
-
-            assertEquals(0, resp.getShardsCount(),
-                    "no ring yet, so the cell owns no shards and mints nothing -- openEpoch is required");
         }
     }
 

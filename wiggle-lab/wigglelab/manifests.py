@@ -1,8 +1,6 @@
 """Kubernetes manifest builders. Everything is one image (the wiggle dist), specialised by env.
 
-A server deployment is its own Postgres plus one or more wiggle nodes pointed at that DB. Give it a
-namespace and it also joins a coordinator for multi-cell placement; leave the namespace blank and it
-is a standalone server, which is the ordinary way to run wiggle."""
+A server deployment is its own Postgres plus one or more wiggle nodes pointed at that DB."""
 from __future__ import annotations
 
 import yaml
@@ -21,13 +19,6 @@ def _env(pairs: dict) -> list[dict]:
 
 def _node_name_env() -> dict:
     return {"name": "WIGGLE_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}}
-
-
-def _pod_ip_env() -> dict:
-    # The node advertises its pod IP to the coordinator, which fans workflows out to n.endpoint()
-    # pod-to-pod. Without this it advertises 127.0.0.1 (the server default) and the coordinator dials
-    # its own pod → INTERNAL on RegisterWorkflow.
-    return {"name": "WIGGLE_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}}
 
 
 def _deployment(name, labels, replicas, container) -> dict:
@@ -58,63 +49,6 @@ def namespace_manifest() -> dict:
             "metadata": {"name": C.K8S_NAMESPACE, "labels": {"app.kubernetes.io/part-of": C.PART_OF}}}
 
 
-def coordinator_db_manifests() -> list[dict]:
-    """The control plane's own Postgres. Separate from every cell's database on purpose -- a cell must
-    never know about coordinators -- and, like the cell databases here, it has no volume: this is a lab,
-    and deleting the pod is how you reset the control plane."""
-    labels = C.labels("coord-db")
-    container = {
-        "name": "postgres", "image": "postgres:16-alpine",
-        "env": _env({"POSTGRES_DB": C.COORD_DB, "POSTGRES_USER": C.COORD_DB_USER,
-                     "POSTGRES_PASSWORD": C.COORD_DB_PASSWORD}),
-        "ports": [{"containerPort": C.DB_PORT}],
-        # TCP probe, not the unix socket -- see cell_db_manifests for why.
-        "readinessProbe": {"exec": {"command": ["pg_isready", "-h", "127.0.0.1", "-U", C.COORD_DB_USER]},
-                           "initialDelaySeconds": 3, "periodSeconds": 3},
-    }
-    return [_deployment(C.COORD_DB_NAME, labels, 1, container),
-            _service(C.COORD_DB_NAME, labels, C.DB_PORT, C.DB_PORT)]
-
-
-def coordinator_manifests(replicas: int = C.COORD_DEFAULT_REPLICAS,
-                          tunables: dict | None = None) -> list[dict]:
-    """``replicas`` coordinator pods over one shared database, as an ordinary Deployment behind an
-    ordinary Service.
-
-    Coordinators hold no state of their own, so there is nothing here that used to be needed when the
-    control plane was an embedded Raft group: no StatefulSet, no per-pod volume, no peer transport
-    port, no headless Service publishing not-ready addresses to break a bootstrap deadlock, and no
-    fixed peer list pinning the size at deploy time. Any pod serves the same state because they read
-    the same database, and scaling is just a replica count.
-
-    They elect one leader between themselves -- the same announce-and-heartbeat election the cells run
-    -- and only the leader runs the reconcile/retire loop."""
-    labels = C.labels("coordinator")
-
-    container = {
-        "name": "coordinator", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
-        "ports": [{"containerPort": C.COORD_GRPC_PORT, "name": "grpc"}],
-        "env": [
-            # The id this pod announces in the coordinator roster, and so what the election names.
-            {"name": "WIGGLE_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
-            *_env({
-                "WIGGLE_ROLE": "coordinator",
-                "WIGGLE_PORT": C.COORD_GRPC_PORT,
-                "WIGGLE_COORD_STORE": C.COORD_STORE_URI,
-                "WIGGLE_COORD_JDBC_USER": C.COORD_DB_USER,
-                "WIGGLE_COORD_JDBC_PASSWORD": C.COORD_DB_PASSWORD,
-            }),
-            # Operational tunables from the UI (thin for the coordinator -- it runs CoordinatorServer,
-            # not the engine); unset ones fall back to server defaults.
-            *_env(C.to_env(C.COORD_TUNABLES, tunables)),
-        ],
-        "readinessProbe": {"tcpSocket": {"port": C.COORD_GRPC_PORT},
-                           "initialDelaySeconds": 5, "periodSeconds": 3},
-    }
-    return [_service("coordinator", labels, C.COORD_GRPC_PORT, C.COORD_GRPC_PORT),
-            _deployment("coordinator", labels, replicas, container)]
-
-
 def cell_db_manifests(cell: str) -> list[dict]:
     name = C.dns_name("db", cell)
     labels = C.labels("db", cell=cell)
@@ -132,19 +66,16 @@ def cell_db_manifests(cell: str) -> list[dict]:
     return [_deployment(name, labels, 1, container), _service(name, labels, C.DB_PORT, C.DB_PORT)]
 
 
-def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
-                   tunables: dict | None = None) -> list[dict]:
-    """``replicas`` wiggle nodes over one Postgres. A blank ``namespace`` deploys a standalone
-    server: no placement, no coordinator, ids minted as ``wfi_...``."""
+def cell_manifests(cell: str, replicas: int, tunables: dict | None = None) -> list[dict]:
+    """``replicas`` wiggle nodes over one Postgres -- one server cluster."""
     name = C.dns_name("cell", cell)
     db = C.dns_name("db", cell)
-    labels = C.labels("cell", cell=cell, namespace=namespace)
+    labels = C.labels("cell", cell=cell)
     container = {
         "name": "wiggle", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
         "ports": [{"containerPort": C.CELL_GRPC_PORT}, {"containerPort": C.CELL_DASHBOARD_PORT}],
         "env": [
             _node_name_env(),
-            _pod_ip_env(),
             # Structural env the lab wires itself (never user-editable).
             *_env({
                 "WIGGLE_PORT": C.CELL_GRPC_PORT,
@@ -152,12 +83,6 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
                 "WIGGLE_JDBC_URL": f"jdbc:postgresql://{db}:{C.DB_PORT}/wiggle",
                 "WIGGLE_JDBC_USER": "wiggle",
                 "WIGGLE_JDBC_PASSWORD": "wiggle",
-                "WIGGLE_CELL_ID": cell,
-                # No namespace => a plain standalone server: it mints wfi_ ids, needs no placement
-                # and never dials a coordinator. _env drops None, so both keys simply vanish.
-                "WIGGLE_NAMESPACE": namespace or None,
-                "WIGGLE_COORDINATOR_URL": (f"coordinator:{C.COORD_GRPC_PORT}" if namespace else None),
-                "WIGGLE_REGION": region or None,
             }),
             # Operational tunables from the UI (poll interval + housekeeping default here); unset ones
             # are dropped by _env ⇒ the server falls back to its own defaults.
@@ -180,31 +105,23 @@ def cell_manifests(cell: str, namespace: str, replicas: int, region: str = "",
     return [_deployment(name, labels, replicas, container), svc]
 
 
-def console_manifests(target: str, password: str | None = None,
-                      viewer_password: str | None = None,
-                      server: str | None = None) -> list[dict]:
-    """The ops console (one image, WIGGLE_ROLE=console): a pure gRPC client serving the web UI on 8090.
-    Runs in-cluster, so it reaches pod IPs directly -- no endpoint rewrite.
-
-    ``server`` points it at one standalone server (WIGGLE_URL), which needs no coordinator and no
-    namespace. Without it the console is the coordinated kind: it fans queries across a namespace's
-    cells. ``target`` is the key it is named and forwarded by -- the server id or the namespace.
+def console_manifests(server: str, password: str | None = None,
+                      viewer_password: str | None = None) -> list[dict]:
+    """The ops console (one image, WIGGLE_ROLE=console) for one server: a pure gRPC client serving the
+    web UI on 8090, pointed at the server's Service with WIGGLE_URL.
 
     With no ``password`` the console is open (full access). Set ``password`` for an operator login;
     ``viewer_password`` additionally enables a read-only account (can view, but not cancel/signal/schedule)
     -- only meaningful alongside an operator password."""
-    name = C.dns_name("console", target)
-    labels = C.labels("console", cell=server or None, namespace=None if server else target)
-    labels["wiggle-lab/console"] = C.dns_safe(target)   # the key it is named and forwarded by
-    wiring = ({"WIGGLE_URL": f"{C.dns_name('cell', server)}:{C.CELL_GRPC_PORT}"} if server
-              else {"WIGGLE_COORDINATOR_URL": f"coordinator:{C.COORD_GRPC_PORT}",
-                    "WIGGLE_NAMESPACE": target})
+    name = C.dns_name("console", server)
+    labels = C.labels("console", cell=server)
+    labels["wiggle-lab/console"] = C.dns_safe(server)   # the key it is named and forwarded by
     container = {
         "name": "console", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
         "ports": [{"containerPort": C.CONSOLE_HTTP_PORT}],
         "env": _env({
             "WIGGLE_ROLE": "console",
-            **wiring,
+            "WIGGLE_URL": f"{C.dns_name('cell', server)}:{C.CELL_GRPC_PORT}",
             "WIGGLE_DASHBOARD_PORT": C.CONSOLE_HTTP_PORT,
             "WIGGLE_DASHBOARD_PASSWORD": password or None,
             "WIGGLE_DASHBOARD_VIEWER_PASSWORD": viewer_password or None,

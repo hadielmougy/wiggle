@@ -9,8 +9,6 @@ dependencies {
     testImplementation(project(":client"))
     testImplementation(project(":observe"))
     testImplementation(project(":server"))
-    // The coordinator control plane (moved out of :server): its runtime + SPI (spi comes transitively).
-    testImplementation(project(":coordinator"))
     // The JDBC-backed store lives in its own module now; the JDBC/migration tests need it, and
     // :postgres supplies both dialects -- PostgreSQL, and H2 for the runs with nothing installed.
     testImplementation(project(":jdbc"))

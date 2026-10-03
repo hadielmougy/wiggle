@@ -28,8 +28,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * What makes that safe is that leader-only duties are idempotent and re-entrant -- a brief overlap
  * during a failover duplicates work but cannot corrupt state. An election that had to hand out
  * exclusive access would need real consensus; this one does not.
- *
- * <p>Both the cell engine and the control plane run this, each over its own {@link ElectionStore}.
  */
 public final class LeaderElection implements AutoCloseable {
 
@@ -52,7 +50,7 @@ public final class LeaderElection implements AutoCloseable {
     private final ScheduledExecutorService scheduler;
 
     /**
-     * @param role              short label for thread name and logs, e.g. {@code "node"} or {@code "coordinator"}
+     * @param role              short label for thread name and logs, e.g. {@code "node"}
      * @param heartbeatIntervalMillis how often to check in
      * @param missedHeartbeatsBeforeDead how many missed beats before a process counts as dead
      */

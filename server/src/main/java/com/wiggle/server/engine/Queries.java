@@ -1,26 +1,19 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.InstanceView;
-import com.wiggle.placement.IdCodec;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 /** Read-only views over the store and the poller roster. Nothing here moves a token. */
 final class Queries {
-
-    /** Cap per live status on the set scanned for the epoch census; a draining epoch shrinks, so
-     *  this is ample. */
-    private static final int LIVE_CENSUS_CAP = 100_000;
 
     private final Storage storage;
     private final PollerRegistry pollers;
@@ -57,20 +50,6 @@ final class Queries {
 
     List<Token> tokens(String instanceId) {
         return storage.inTx(tx -> tx.tokensOf(instanceId));
-    }
-
-    Map<Long, Integer> liveCountByEpoch() {
-        return storage.inTx(tx -> {
-            Map<Long, Integer> out = new HashMap<>();
-            for (InstanceStatus status : InstanceStatus.values()) {
-                if (!status.live()) continue;
-                for (Instance i : tx.listInstances(null, status, LIVE_CENSUS_CAP)) {
-                    long epoch = IdCodec.parse(i.id).map(IdCodec.Placement::epoch).orElse(0L);
-                    out.merge(epoch, 1, Integer::sum);
-                }
-            }
-            return out;
-        });
     }
 
     Rows.QueueDepth queueDepth() {

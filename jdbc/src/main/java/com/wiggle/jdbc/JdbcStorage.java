@@ -496,8 +496,8 @@ public final class JdbcStorage implements Storage {
     /**
      * As {@link #runMigrations(Connection, List, Dialect)}, but if {@code expectedBaseline} is
      * non-null it first verifies the recorded V1 name matches -- so migrating a database whose
-     * baseline belongs to the other role (a coordinator pointed at a cell's DB, or vice versa) fails
-     * fast instead of silently skipping every migration because the version counter is already ahead.
+     * baseline belongs to another schema fails fast instead of silently skipping every migration
+     * because the version counter is already ahead.
      */
     public static void runMigrations(Connection c, List<Migration> migrations, Dialect dialect,
                                      String expectedBaseline) throws SQLException {
@@ -528,7 +528,7 @@ public final class JdbcStorage implements Storage {
                     if (existing != null && !existing.equals(expectedBaseline)) {
                         throw new SQLException("schema baseline mismatch: this database was initialised as '"
                                 + existing + "' but is being migrated as '" + expectedBaseline
-                                + "'. A coordinator must use its own database, separate from any cell.");
+                                + "'. Each schema needs its own database.");
                     }
                 }
             }

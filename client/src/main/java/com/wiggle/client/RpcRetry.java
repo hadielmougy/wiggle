@@ -10,8 +10,7 @@ import io.grpc.StatusRuntimeException;
 import java.util.function.Supplier;
 
 /**
- * Transient-failure retry for gRPC calls to a cell or the coordinator, shared by {@link WiggleClient}
- * and {@link CoordinatedConnection}. Retries only on {@code UNAVAILABLE} — "the server isn't
+ * Transient-failure retry for {@link WiggleClient}'s gRPC calls. Retries only on {@code UNAVAILABLE} — "the server isn't
  * reachable" (down, restarting, or an active/passive failover in flight), where the RPC almost
  * certainly never executed, so retrying is safe even for non-idempotent operations. Permanent errors
  * (NOT_FOUND, INVALID_ARGUMENT, …) and {@code DEADLINE_EXCEEDED} (which may have run server-side) are

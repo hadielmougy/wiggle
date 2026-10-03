@@ -71,7 +71,7 @@ class ConsoleWebTest {
             String b = c.start("wf", Map.of(), null, null);
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);   // no password -> open
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -112,7 +112,7 @@ class ConsoleWebTest {
             String other = c.start("wf", Map.of(), null, "order-99");
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -147,7 +147,7 @@ class ConsoleWebTest {
             String id = c.start(stranded, Map.of());
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -188,7 +188,7 @@ class ConsoleWebTest {
             String id = c.start("wf", Map.of(), null, null);
 
             ConsoleAuth auth = new ConsoleAuth("admin", "op-pass", "viewer", "view-pass", false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -223,7 +223,7 @@ class ConsoleWebTest {
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             conn.client().register(wf());
             ConsoleAuth auth = new ConsoleAuth("admin", "s3cret", false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
@@ -265,7 +265,7 @@ class ConsoleWebTest {
             server.engine().settleObservedRuns(10);   // the leader's sweep, run by hand: judges both runs
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(new ConsoleBackend.Direct(conn)),
+            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();

@@ -35,7 +35,7 @@ def delete_pod(pod: str) -> shell.Result:
 
 def delete_by_label(selector: str) -> shell.Result:
     # statefulset/pvc are kept in the sweep so a teardown also clears anything left by an older lab
-    # deployment -- nothing here creates them any more (the coordinator is a stateless Deployment).
+    # deployment -- nothing here creates them any more.
     return kubectl(["delete", "deployment,statefulset,service,pod,pvc", "-l", selector, "--wait=false"],
                    timeout=120)
 
