@@ -483,6 +483,16 @@ public final class JdbcStorage implements Storage {
             // back from the replicas.
             new Migration(24, "shard-beat", """
             ALTER TABLE wf_shard ADD COLUMN IF NOT EXISTS beat_at BIGINT;
+            """),
+            // A consumer's event position on each shard other than home (its home position stays in
+            // wf_event_cursor.acked_seq). Held on the home shard.
+            new Migration(25, "event-cursor-per-shard", """
+            CREATE TABLE IF NOT EXISTS wf_event_cursor_shard (
+              consumer       VARCHAR(200) NOT NULL,
+              shard_id       INT          NOT NULL,
+              acked_seq      BIGINT       NOT NULL,
+              PRIMARY KEY (consumer, shard_id)
+            );
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -2021,6 +2031,36 @@ public final class JdbcStorage implements Storage {
                     .bind("now", now)
                     .bind("consumer", consumer)
                     .execute();
+        }
+
+        @Override public Map<Integer, Long> eventPositions(String consumer) {
+            Map<Integer, Long> out = new HashMap<>();
+            h.createQuery("SELECT shard_id, acked_seq FROM wf_event_cursor_shard WHERE consumer=:consumer")
+                    .bind("consumer", consumer)
+                    .map((rs, ctx) -> Map.entry(rs.getInt("shard_id"), rs.getLong("acked_seq")))
+                    .forEach(e -> out.put(e.getKey(), e.getValue()));
+            return out;
+        }
+
+        @Override public Long oldestEventPosition(int shard) {
+            // MIN over no cursors is NULL; a consumer with no row for the shard holds 0.
+            return h.createQuery("SELECT MIN(COALESCE(p.acked_seq, 0)) FROM wf_event_cursor c "
+                            + "LEFT JOIN wf_event_cursor_shard p ON p.consumer=c.consumer AND p.shard_id=:shard")
+                    .bind("shard", shard)
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElse(null);
+        }
+
+        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
+            String move = "UPDATE wf_event_cursor_shard SET acked_seq=CASE WHEN acked_seq<:acked THEN :acked "
+                    + "ELSE acked_seq END WHERE consumer=:consumer AND shard_id=:shard";
+            if (h.createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard)
+                    .execute() > 0) return;
+            if (h.createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor_shard (consumer,shard_id,acked_seq) "
+                    + "VALUES (:consumer,:shard,:acked)")).bind("consumer", consumer).bind("shard", shard)
+                    .bind("acked", ackedSeq).execute() > 0) return;
+            h.createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard).execute();
         }
 
         @Override public Long oldestAckedSeq() {

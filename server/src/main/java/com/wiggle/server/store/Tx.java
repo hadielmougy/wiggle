@@ -34,6 +34,10 @@ public interface Tx extends ReadTx, GraphStore {
     /** Stamps the replica-lag heartbeat with {@code now}. Needs a claimed shard identity. */
     void writeShardBeat(long now);
 
+    /** Moves a consumer's event position on {@code shard}, a shard other than home, to
+     *  {@code ackedSeq}, never backwards. Held on the home shard. */
+    void advanceEventPosition(String consumer, int shard, long ackedSeq);
+
     /** Writes a shard's registry row, replacing any it had. */
     void putShardRecord(Rows.ShardRecord record);
 

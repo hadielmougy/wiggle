@@ -41,8 +41,8 @@ service WiggleControlPlane {
     rpc HeartbeatTask(HeartbeatRequest) returns (HeartbeatResult);
 
     // The event feed: pull-and-ack over the durable event log. A consumer is a named cursor;
-    // PollEvents long-polls like PollTasks, AckEvents advances the cursor. Contract only until
-    // the server serves it: a call today answers UNIMPLEMENTED.
+    // PollEvents long-polls like PollTasks and merges every shard's log, AckEvents advances the
+    // cursor to the one an entry carries.
     rpc PollEvents(PollEventsRequest) returns (EventList);
     rpc AckEvents(AckEventsRequest) returns (Ack);
 
@@ -461,7 +461,7 @@ message PollEventsRequest {
 // that made it. type is wf.started | wf.completed | wf.failed | wf.cancelled | wf.compensating
 // | wf.compensated | wf.compensation_failed; the wf. prefix is reserved for the engine.
 message EventView {
-    int64 seq = 1;                // strictly increasing per log; gaps are possible
+    int64 seq = 1;                // strictly increasing within one shard's log; gaps are possible
     string instance_id = 2;
     string workflow = 3;
     int32 version = 4;
@@ -470,6 +470,8 @@ message EventView {
     int64 created_at = 7;
     google.protobuf.Value payload = 8;
     string node_id = 9;           // the step that emitted it; empty for a lifecycle entry
+    int32 shard = 10;             // the shard whose log holds it; (shard, seq) identifies it
+    string cursor = 11;           // opaque: the consumer's place just after this entry, for AckEvents
 }
 
 message EventList {
@@ -480,6 +482,11 @@ message EventList {
 
 message AckEventsRequest {
     string consumer = 1;
-    int64 acked_seq = 2;          // cumulative: acknowledges every event with seq <= this
+    // Cumulative: acknowledges every event with seq <= this. Only for a log on one shard; a sharded
+    // log refuses it as INVALID_ARGUMENT.
+    int64 acked_seq = 2;
+    // Cumulative: the cursor of the last event handled, acknowledging it and everything before it.
+    // Takes precedence over acked_seq when set.
+    string acked_cursor = 3;
 }
 

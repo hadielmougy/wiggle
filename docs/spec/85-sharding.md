@@ -250,8 +250,6 @@ Until a later step:
 - **Placement is round-robin.** Root instances take the instance shards in turn
   ([WGL-SHARD-020](#22-choosing-a-shard)'s weights come with the topology), and every observed run is
   minted on the first instance shard ([§9](#9-observed-runs)).
-- **The event log is home-only.** The feed reads, acknowledges and trims on the home shard, so events
-  appended on any other shard are not served until [§10](#10-event-log).
 - **A schedule fires on home.** The fire claims the schedule and starts its instance in one home
   transaction, minting that instance on home, until [WGL-SHARD-104](#7-global-data) can mint it
   elsewhere with an idempotent id.
@@ -433,6 +431,12 @@ gave observed runs a new id.
 
 ## 10. Event log
 
+**Status: implemented.** A consumer's home-shard position stays in `wf_event_cursor.acked_seq`, so a
+deployment on one database migrates nothing; its positions on other shards are in
+`wf_event_cursor_shard` (migration 25). Verified by `tests/ShardedEventFeedTest` (two shards, over
+gRPC), `server/engine/FeedCursorTest`, the storage contract, and the unchanged single-shard event
+suites.
+
 `seq` is one store-generated sequence per database today ([WGL-EVT-040](60-event-log.md)). Over
 several shards there is no single sequence, and a time-ordered substitute cannot be made safe:
 node clocks disagree by more than the visibility window ([WGL-EVT-026](60-event-log.md)), so a
@@ -442,7 +446,9 @@ consumer would step over entries forever.
 written in the instance's transaction on its shard, as today.
 
 **WGL-SHARD-131** (MUST) A consumer cursor MUST be a vector: one acknowledged seq per shard, stored
-on the home shard as `wf_event_cursor_shard(consumer, shard_id, acked_seq)`.
+on the home shard: the home shard's in `wf_event_cursor`, every other shard's as
+`wf_event_cursor_shard(consumer, shard_id, acked_seq)`. A shard the consumer has no position on yet
+is read from its start.
 
 **WGL-SHARD-132** (MUST) `PollEvents` MUST read every shard beyond that shard's position, apply the
 visibility window per shard, and merge the results by `created_at`.
