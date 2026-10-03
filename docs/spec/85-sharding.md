@@ -596,6 +596,10 @@ marked partial, at the caller's choice) and MUST NOT affect the engine
 
 ## 15. Dropping the coordinator
 
+**Status: implemented** (the first step of [§16](#16-delivery-plan)); WGL-SHARD-163 is verified by
+`dist/RemovedSettingsTest` and `dist/RoleTest`. The `wiggle` CLI, whose only commands managed the
+coordinator, was removed with it. WGL-SHARD-165 (the shard-id fixture) lands with shard-carrying ids.
+
 Sharding replaces the cell coordinator as the way to scale past one database. Cells, namespaces,
 epochs and the coordinator go, and so does [chapter 90 §9](90-ops.md).
 

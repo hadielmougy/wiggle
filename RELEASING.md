@@ -17,7 +17,7 @@ under the group `sh.wiggle`:
 | `bom`        | `wiggle-bom`         | version-alignment platform (`java-platform`)      |
 | `client-all` | `wiggle-client-all`  | shaded client — gRPC/protobuf/Guava relocated     |
 
-`example`, `tests`, `dist`, `cli`, `console`, and `coordinator` are not published.
+`example`, `tests`, `dist`, and `console` are not published.
 
 Publishing is wired up with the [Vanniktech Maven Publish plugin](https://vanniktech.github.io/gradle-maven-publish-plugin/),
 which builds sources + javadoc jars, signs every artifact, and uploads a deployment
@@ -118,8 +118,7 @@ airgapped / locked-down environments (one HTTPS download, verify, extract, run).
 `wiggle-server-<version>.{tar,zip}` (`bin/wiggle` launcher + `lib/`), writes `SHA-256SUMS`,
 signs the checksums **keyless** (Sigstore/cosign — no stored key; uses the workflow's OIDC token),
 and creates the Release with all of it attached. It first checks whether the Release already exists
-and uploads with `--clobber` if so, so it composes with the CLI step below (which attaches to the
-same `vx.y.z` Release). The tarball's version comes from the Gradle project version; the workflow
+and uploads with `--clobber` if so. The tarball's version comes from the Gradle project version; the workflow
 fails fast if the tag doesn't match. Run it by hand from the Actions tab (`workflow_dispatch`) to
 build + download the archives as a run artifact without cutting a Release.
 
@@ -164,22 +163,3 @@ cosign verify ghcr.io/hadielmougy/wiggle:0.0.1 \
   --certificate-identity-regexp '^https://github.com/hadielmougy/wiggle' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
-
-## Releasing the `wiggle` CLI
-
-The CLI (the coordinator namespace/epoch tool — see the README's "Command-line tool" section) ships
-as a self-contained archive attached to the GitHub Release (not to Maven Central). It's a JVM app, so
-users need Java 21 on their machine.
-
-1. After tagging `vx.y.z` and creating the GitHub Release, build the archives and print their
-   checksums:
-   ```sh
-   scripts/cli-release.sh                 # -> cli/build/distributions/wiggle-x.y.z.{zip,tar} + SHA-256
-   UPLOAD=true scripts/cli-release.sh     # also attaches them to release vx.y.z (needs the gh CLI)
-   ```
-2. Update the Homebrew formula in [`HomebrewFormula/wiggle.rb`](HomebrewFormula/wiggle.rb): bump the
-   `url` version and paste the **`.tar` SHA-256** printed above. Commit it (and mirror it into the
-   `homebrew-tap` repo if you keep one).
-
-Users then install per the "Command-line tool (`wiggle`)" section of the
-[README](README.md#command-line-tool-wiggle).

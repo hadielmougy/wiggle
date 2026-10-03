@@ -5,7 +5,6 @@ import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.TokenStatus;
 
 import java.util.ArrayDeque;
@@ -158,20 +157,6 @@ public final class WorkflowEngine {
 
     public List<Token> tokens(String instanceId) {
         return queries.tokens(instanceId);
-    }
-
-    /**
-     * Live instance count grouped by the epoch encoded in each instance id -- this cell's
-     * contribution to the coordinator's retire census (R21). A DRAINING epoch that reaches zero here on
-     * every cell can be retired. Legacy ids (no epoch) count as the genesis epoch 0.
-     *
-     * <p>Live means {@link InstanceStatus#live}, so COMPENSATING counts: its undo tokens are still
-     * dispatched against the epoch's ring, and an epoch retired underneath them strands the reverse
-     * pass. The statuses come from the enum rather than a list here, so a new live status is
-     * censused without anyone remembering to add it.
-     */
-    public Map<Long, Integer> liveCountByEpoch() {
-        return queries.liveCountByEpoch();
     }
 
     /** Snapshot of the dispatchable backlog right now: how many tasks are queued and waiting. */

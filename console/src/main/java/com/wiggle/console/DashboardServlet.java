@@ -213,7 +213,7 @@ public final class DashboardServlet extends HttpServlet {
         String correlation = trimToNull(req.getParameter("correlation"));
         List<InstanceView> found;
         if (id != null) {
-            // Exact instance-id lookup: one row (or none), routed to the owning cell.
+            // Exact instance-id lookup: one row (or none).
             found = data.instance(id).map(d -> List.of(d.instance())).orElse(List.of());
         } else if (correlation != null) {
             found = data.findByCorrelation(correlation, limit);

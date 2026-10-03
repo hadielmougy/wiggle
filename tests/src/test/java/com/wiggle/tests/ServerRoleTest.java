@@ -1,10 +1,7 @@
 package com.wiggle.tests;
 
-import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.coord.CoordinatorServer;
-import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -13,10 +10,7 @@ import java.time.Duration;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * A {@link WiggleServer} is a cell (the engine + control plane); the coordinator is a separate,
- * engine-free {@link CoordinatorServer}. The two share nothing in source but the gRPC contract.
- */
+/** A {@link WiggleServer} runs the engine and serves the control plane on a bound gRPC port. */
 class ServerRoleTest {
 
     private static ServerConfig config() {
@@ -26,19 +20,11 @@ class ServerRoleTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Test @DisplayName("a cell serves the engine on a bound gRPC port")
+    @Test @DisplayName("a server serves the engine on a bound gRPC port")
     void cellServesEngine() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start()) {
-            assertNotNull(server.engine(), "a cell exposes the engine");
-            assertTrue(server.port() > 0, "a cell binds the WiggleControlPlane port");
-        }
-    }
-
-    @Test @DisplayName("the coordinator is a standalone, engine-free server on its own gRPC port")
-    void coordinatorServerStandalone() throws Exception {
-        try (CoordinatorServer coordinator = new CoordinatorServer(
-                new InMemoryCoordinatorStore(), 0, Tls.Options.DISABLED, 3, "coord-1").start()) {
-            assertTrue(coordinator.port() > 0, "coordinator binds its CellCoordinator gRPC port");
+            assertNotNull(server.engine(), "a server exposes the engine");
+            assertTrue(server.port() > 0, "a server binds the WiggleControlPlane port");
         }
     }
 }

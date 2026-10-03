@@ -4,8 +4,6 @@ include(
     "core",
     "proto",
     "election",
-    "placement",
-    "coordinator",
     "server",
     "jdbc",
     "postgres",
@@ -16,6 +14,5 @@ include(
     "dist",
     "example",
     "tests",
-    "cli",
     "console"
 )

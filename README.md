@@ -551,7 +551,6 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
-| `WIGGLE_NAMESPACE` | *(unset)* | opt-in placement namespace; unset for an ordinary server |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint (the UI moved to the console) |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
@@ -564,7 +563,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | direct mode: the one cluster to serve |
+| `WIGGLE_URL` | `localhost:8080` | the cluster to serve |
 | `WIGGLE_DASHBOARD_PORT` | `8090` | HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |

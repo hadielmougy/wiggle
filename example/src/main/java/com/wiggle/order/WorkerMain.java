@@ -11,9 +11,7 @@ import java.time.Duration;
  * A standalone worker process. Run as many as you like against the same server; each
  * one pulls only as much work as it has free capacity.
  *
- * <p>Connecting starts from {@link WiggleConnection} -- the single entry point: {@code direct(url)} for a
- * standalone server (here), {@code coordinator(...)} for a sharded namespace (see
- * {@link NamespaceWorkerMain}). Swapping the factory is the only change to go distributed.
+ * <p>Connecting starts from {@link WiggleConnection#direct(String)}, the single entry point.
  */
 public final class WorkerMain {
 

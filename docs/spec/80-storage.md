@@ -18,8 +18,7 @@ that unit atomic.
 **WGL-STOR-003** (MUST) An implementation MUST honour `Tx.lockInstance` as a mutual-exclusion point for
 one workflow instance, held for the rest of the transaction.
 
-**WGL-STOR-004** (MUST) The engine MUST know nothing of the coordinator. A storage adapter that can also
-back a coordinator MUST expose that separately (`CoordinatorStoreProvider`).
+**WGL-STOR-004** *Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).*
 
 **WGL-STOR-005** (MUST) `fingerprint()` MUST be a stable identity of the underlying storage, so two
 cells that reuse a cell id are still distinguishable.
@@ -151,8 +150,7 @@ migration is pending, naming how many and how to apply them.
 even when the environment otherwise pins verify — so it can run as an init container or a CI step.
 
 **WGL-STOR-047** (MUST) A database initialised under one baseline MUST NOT be migrated as another: a
-baseline-name mismatch MUST fail with a message saying a coordinator needs its own database, separate
-from any cell.
+baseline-name mismatch MUST fail with a message saying each schema needs its own database.
 
 *Verified by:* `postgres/SchemaMigrationTest`, `tests/JdbcMigrationTest`.
 

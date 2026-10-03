@@ -21,18 +21,17 @@ here first, and the requirement names the test that holds it.
 | 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the console's HTTP surface | `WGL-API` |
 | 80 | [Storage](80-storage.md) | the schema, migrations, dialects, claim mechanics, retention | `WGL-STOR` |
 | 85 | [Sharding](85-sharding.md) *(proposed)* | shard-carrying ids, the topology and shard roles, read replicas, adding shards, the portal in the server, the auth shard, search shards, dropping the coordinator | `WGL-SHARD` |
-| 90 | [Operations](90-ops.md) | configuration, cluster and leadership, console, TLS, deployment, coordinator | `WGL-OPS`, `WGL-COORD` |
+| 90 | [Operations](90-ops.md) | configuration, cluster and leadership, console, TLS, deployment; the withdrawn coordinator | `WGL-OPS`, `WGL-COORD` (withdrawn) |
 
 ## 1. Scope
 
 **In scope.** The durable workflow engine (the `server` module), the authoring and worker library
 (`client`), the observed-execution reporter (`observe`), the wire contract (`proto`), storage
-(`jdbc`, `postgres`), the runnable distribution (`dist`), the ops console (`console`), the
-command-line tool (`cli`), and the optional cell coordinator (`coordinator`, `placement`,
-`election`).
+(`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the ops
+console (`console`).
 
 **Out of scope.** The Go and Python client libraries (separate repositories; they implement the same
-wire contract and the shared conformance fixtures in `conformance/`), the example and benchmark
+wire contract), the example and benchmark
 programs (`example`), and the site generator (separate repository).
 
 ## 2. Requirement language
@@ -74,8 +73,6 @@ behaviour, and the disagreement is recorded in [§6](#6-known-documentation-drif
 | **worker** | A process that polls for tasks, runs handlers, and reports results. Holds no durable state. |
 | **submitter** | A process that only starts instances. Needs the workflow name and the context shape, nothing else. |
 | **observer** | A process that runs its own steps and reports them after the fact (`OBSERVED`). |
-| **cell** | One server cluster over one database. The unit the optional coordinator shards across. |
-| **namespace** | A coordinator-managed set of cells sharing a placement policy. |
 
 ## 4. Architecture in one paragraph
 
@@ -85,7 +82,7 @@ The server drives tokens over the graph until each parks on something external: 
 (`READY`), a timer (`WAITING`), a signal or child instance (`AWAITING`), or a join barrier
 (`JOINED`). Workers long-poll over gRPC, claim `READY` tokens for the queues they serve under a
 lease, run the bound handler, and report the result; the server applies it and drives on. A single
-elected leader per cell runs the clock-driven duties (timers, signal deadlines, schedules, lease
+elected leader per cluster runs the clock-driven duties (timers, signal deadlines, schedules, lease
 reclaim, observed-run settling, retention). Every mutation for one instance is serialised by an
 instance write-lock, so any number of server nodes over one database may drive the same instance.
 
@@ -96,9 +93,9 @@ instance write-lock, so any number of server nodes over one database may drive t
 semantics of [chapter 30](30-engine.md).
 
 **WGL-GEN-004** (MUST) A conforming **client library** may implement any subset of the RPCs, but
-whatever it implements MUST follow chapter 70, and — where it mints or routes instance ids — MUST
-pass the shared fixtures in `conformance/placement-v1.json`.
-*Verified by:* `placement/…/ConformanceTest`.
+whatever it implements MUST follow chapter 70. (Clients no longer mint or route instance ids; the
+placement fixture went with the coordinator. Sharding brings a shard-id fixture,
+[WGL-SHARD-165](85-sharding.md#15-dropping-the-coordinator).)
 
 **WGL-GEN-005** (MUST) A conforming **worker** implements the poll/report/fail/heartbeat contract of
 [chapter 20](20-worker.md), including honouring the server-resolved execution mode on each task

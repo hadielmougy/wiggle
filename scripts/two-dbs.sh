@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 #
-# Standalone PostgreSQL instances (separate containers) for local testing: two cell shards plus a
-# separate coordinator database (the coordinator runs on its OWN database, not a cell's). All use
-# database "wiggle", user "wiggle", password "wiggle".
+# Two standalone PostgreSQL instances (separate containers) for local testing. Both use database
+# "wiggle", user "wiggle", password "wiggle".
 #
-#   ds_0   -> localhost:5442   jdbc:postgresql://127.0.0.1:5442/wiggle   (cell shard 0)
-#   ds_1   -> localhost:5443   jdbc:postgresql://127.0.0.1:5443/wiggle   (cell shard 1)
-#   coord  -> localhost:5444   jdbc:postgresql://127.0.0.1:5444/wiggle   (coordinator)
+#   ds_0   -> localhost:5442   jdbc:postgresql://127.0.0.1:5442/wiggle
+#   ds_1   -> localhost:5443   jdbc:postgresql://127.0.0.1:5443/wiggle
 #
 # Usage:
 #   scripts/two-dbs.sh up          # start all, wait until ready, print connection info
 #   scripts/two-dbs.sh down        # stop and remove all
 #   scripts/two-dbs.sh status      # show container + readiness state
-#   scripts/two-dbs.sh psql 0      # psql shell into ds_0 (also: psql 1, psql coord)
+#   scripts/two-dbs.sh psql 0      # psql shell into ds_0 (also: psql 1)
 #
-# Override via env: PG_IMAGE, PORT0, PORT1, PORT_COORD, DB, DB_USER, DB_PASSWORD, NAME0, NAME1, NAME_COORD.
+# Override via env: PG_IMAGE, PORT0, PORT1, DB, DB_USER, DB_PASSWORD, NAME0, NAME1.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,10 +22,8 @@ DB_USER=${DB_USER:-wiggle}
 DB_PASSWORD=${DB_PASSWORD:-wiggle}
 PORT0=${PORT0:-5442}
 PORT1=${PORT1:-5443}
-PORT_COORD=${PORT_COORD:-5444}
 NAME0=${NAME0:-wiggle-ds0}
 NAME1=${NAME1:-wiggle-ds1}
-NAME_COORD=${NAME_COORD:-wiggle-coord}
 
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 
@@ -63,30 +59,27 @@ case "${1:-up}" in
   up)
     start_one "$NAME0" "$PORT0"
     start_one "$NAME1" "$PORT1"
-    start_one "$NAME_COORD" "$PORT_COORD"
     wait_ready "$NAME0" || exit 1
     wait_ready "$NAME1" || exit 1
-    wait_ready "$NAME_COORD" || exit 1
     cat <<EOF
 
 Postgres instances are up (db=${DB}, user=${DB_USER}, password=${DB_PASSWORD}):
 
-  ds_0   ${NAME0}   jdbc:postgresql://127.0.0.1:${PORT0}/${DB}   (cell shard 0)
-  ds_1   ${NAME1}   jdbc:postgresql://127.0.0.1:${PORT1}/${DB}   (cell shard 1)
-  coord  ${NAME_COORD}  jdbc:postgresql://127.0.0.1:${PORT_COORD}/${DB}   (coordinator)
+  ds_0   ${NAME0}   jdbc:postgresql://127.0.0.1:${PORT0}/${DB}
+  ds_1   ${NAME1}   jdbc:postgresql://127.0.0.1:${PORT1}/${DB}
 
 Stop them with: scripts/two-dbs.sh down
 EOF
     ;;
   down)
-    echo "== removing ${NAME0}, ${NAME1} and ${NAME_COORD} =="
-    docker rm -f "$NAME0" "$NAME1" "$NAME_COORD" >/dev/null 2>&1
+    echo "== removing ${NAME0} and ${NAME1} =="
+    docker rm -f "$NAME0" "$NAME1" >/dev/null 2>&1
     echo "done"
     ;;
   status)
-    docker ps -a --filter "name=${NAME0}" --filter "name=${NAME1}" --filter "name=${NAME_COORD}" \
+    docker ps -a --filter "name=${NAME0}" --filter "name=${NAME1}" \
       --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-    for n in "$NAME0" "$NAME1" "$NAME_COORD"; do
+    for n in "$NAME0" "$NAME1"; do
       if [ -n "$(docker ps -q -f name="^${n}$")" ]; then
         docker exec "$n" pg_isready -U "$DB_USER" -d "$DB" 2>/dev/null | sed "s/^/${n}: /"
       fi
@@ -95,13 +88,12 @@ EOF
   psql)
     case "${2:-0}" in
       1)       name=$NAME1 ;;
-      coord|2) name=$NAME_COORD ;;
       *)       name=$NAME0 ;;
     esac
     exec docker exec -it "$name" psql -U "$DB_USER" -d "$DB"
     ;;
   *)
-    echo "usage: scripts/two-dbs.sh {up|down|status|psql [0|1|coord]}" >&2
+    echo "usage: scripts/two-dbs.sh {up|down|status|psql [0|1]}" >&2
     exit 2
     ;;
 esac

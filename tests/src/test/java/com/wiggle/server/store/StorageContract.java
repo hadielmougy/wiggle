@@ -1503,9 +1503,7 @@ abstract class StorageContract {
     void fingerprintIsStableOrAbsent() {
         String fp = storage.fingerprint();
         if (fp == null) {
-            // In-memory: no cross-node identity exists, and the coordinator skips its guard for
-            // such a node rather than being handed a value that cannot mean what it claims.
-            return;
+            return;   // in-memory: no cross-node identity exists
         }
         assertFalse(fp.isBlank(), "a fingerprint is a value or it is null, never blank");
         assertEquals(fp, storage.fingerprint(), "and it does not change under a running node");

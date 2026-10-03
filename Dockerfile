@@ -45,10 +45,9 @@ RUN chmod +x gradlew \
 # ---- runtime stage: distroless (glibc, no shell, non-root) ----
 # gcr.io/distroless/java21-debian12 ships only a JRE on a minimal glibc base — no shell, no package
 # manager, a tiny CVE surface — and the :nonroot tag runs as an unprivileged NUMERIC uid (65532), so
-# the image satisfies a `runAsNonRoot: true` admission policy with no extra config. glibc (not musl)
-# keeps the coordinator's RocksDB native lib working. There is no shell, so we launch the JVM
-# directly (not the generated bin/wiggle script) and copy only lib/; health is a Kubernetes httpGet
-# probe on /healthz (see deploy/helm), not a shell HEALTHCHECK.
+# the image satisfies a `runAsNonRoot: true` admission policy with no extra config. There is no
+# shell, so we launch the JVM directly (not the generated bin/wiggle script) and copy only lib/;
+# health is a Kubernetes httpGet probe on /healthz (see deploy/helm), not a shell HEALTHCHECK.
 FROM gcr.io/distroless/java21-debian12:nonroot AS runtime
 
 WORKDIR /opt/wiggle

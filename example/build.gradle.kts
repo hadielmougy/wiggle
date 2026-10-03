@@ -92,26 +92,10 @@ tasks.register<JavaExec>("timerBench") {
     mainClass.set("com.wiggle.order.TimerBench")
 }
 
-tasks.register<JavaExec>("namespaceWorker") {
-    group = "application"
-    description = "Runs the coordinator-routed namespace worker (one worker per active cell). " +
-            "Set WIGGLE_COORDINATOR_URL/WIGGLE_NAMESPACE/WIGGLE_ENDPOINT_REWRITE."
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.wiggle.order.NamespaceWorkerMain")
-}
-
-tasks.register<JavaExec>("coordFailover") {
-    group = "application"
-    description = "Coordinator resiliency under load: fixed-rate starts + probes; kill the coordinator " +
-            "mid-run. Set WIGGLE_COORDINATOR_URL/WIGGLE_NAMESPACE/WIGGLE_ENDPOINT_REWRITE, BENCH_RATE etc."
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.wiggle.order.CoordinatorFailoverBench")
-}
-
 tasks.register<JavaExec>("rateCeiling") {
     group = "application"
     description = "Find the sustainable start-rate ceiling of a deployment (needs a running worker). " +
-            "Set WIGGLE_COORDINATOR_URL/WIGGLE_NAMESPACE/WIGGLE_ENDPOINT_REWRITE; tune BENCH_RATES etc."
+            "Set WIGGLE_SERVER_URL; tune BENCH_RATES etc."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.RateCeilingBench")
 }
@@ -119,8 +103,7 @@ tasks.register<JavaExec>("rateCeiling") {
 tasks.register<JavaExec>("sagaLoad") {
     group = "application"
     description = "Saga reverse-pass load test: N failing instances with two compensable steps each; " +
-            "asserts every one lands COMPENSATED. Set WIGGLE_COORDINATOR_URL/WIGGLE_NAMESPACE/" +
-            "WIGGLE_ENDPOINT_REWRITE; tune BENCH_COUNT/BENCH_RATE/BENCH_THREADS."
+            "asserts every one lands COMPENSATED. Set WIGGLE_SERVER_URL; tune BENCH_COUNT/BENCH_RATE/BENCH_THREADS."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.SagaLoadBench")
 }

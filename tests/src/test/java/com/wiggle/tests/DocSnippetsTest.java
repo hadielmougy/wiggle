@@ -1,6 +1,5 @@
 package com.wiggle.tests;
 
-import com.wiggle.placement.IdCodec;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -52,7 +51,6 @@ class DocSnippetsTest {
         EXPECTED.put("RetriesSnippet.java", List.of("retry-line", "gate-chain", "poll-loop"));
         EXPECTED.put("RetriesHandlers.java", List.of("gate-handler", "poll-handlers"));
         EXPECTED.put("ScheduledSnippet.java", List.of("contract", "topology"));
-        EXPECTED.put("CellsSnippet.java", List.of("connect"));
         EXPECTED.put("ErrorHandlingSnippet.java", List.of("wrap", "policies", "permanent", "cancel"));
         EXPECTED.put("VersioningSnippet.java",
                 List.of("contract-v1", "topology-v1", "topology-v2", "start", "scoped-workers", "decode"));
@@ -75,18 +73,13 @@ class DocSnippetsTest {
         EXPECTED.put("../tutorial/OrderHandlers.java", List.of("handlers"));
         EXPECTED.put("../tutorial/Embedded.java", List.of("main"));
         EXPECTED.put("../tutorial/Standalone.java", List.of("submitter", "worker"));
-        EXPECTED.put("../tutorial/Coordinated.java", List.of("open-epoch", "main"));
     }
 
     /** Regions the main repo's own docs draw on, beyond the site fixtures above. */
     private static final Map<String, List<String>> DOC_SOURCES = Map.of(
             "../example/src/main/java/com/wiggle/cookbook/Cookbook.java",
             List.of("linear-gate", "choose-fork", "foreach-queues", "poll-until-ready",
-                    "approval-escalation", "parent", "batched-loop", "kitchen-sink"),
-            // docs that quote the implementation itself, so the quote cannot drift from it
-            "../placement/src/main/java/com/wiggle/placement/IdCodec.java", List.of("shard-for"),
-            "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java",
-            List.of("resolve", "invalidate"));
+                    "approval-escalation", "parent", "batched-loop", "kitchen-sink"));
 
     private static final Path DIR = Path.of("../example/src/main/java/com/wiggle/docs");
 
@@ -295,14 +288,10 @@ class DocSnippetsTest {
             Map.entry("tutorial-handlers", "tutorial/OrderHandlers.java"),
             Map.entry("tut-embedded", "tutorial/Embedded.java"),
             Map.entry("tut-standalone", "tutorial/Standalone.java"),
-            Map.entry("tut-coordinated", "tutorial/Coordinated.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
             Map.entry("observed", "docs/ObservedSnippet.java"),
-            Map.entry("event-log", "docs/EventLogSnippet.java"),
-            Map.entry("id-codec", "../placement/src/main/java/com/wiggle/placement/IdCodec.java"),
-            Map.entry("coordinated-connection",
-                    "../client/src/main/java/com/wiggle/client/CoordinatedConnection.java"));
+            Map.entry("event-log", "docs/EventLogSnippet.java"));
 
     private static Path sourcePath(String source) {
         String path = SOURCE_FILES.get(source);
@@ -393,7 +382,7 @@ class DocSnippetsTest {
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(31, EXPECTED.size(), "every wired page and doc should have a fixture");
+        assertEquals(29, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }
