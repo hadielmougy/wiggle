@@ -109,17 +109,17 @@ ReportSteps(task, steps, final)
     OBSERVED    ->  refuse: an observed run is reported through ObserveRun, not by a worker
 ```
 
-The important consequence: there is now one context shape, `ReportStepsContext`, and one procedure
-that applies it. The hole in §1 was a mode receiving a context it had no override for; with one
-context and one shared procedure there is no such pairing left to get wrong. It stopped being
+The important consequence: there is now one procedure that applies a reported run, `StepChain`.
+The hole in §1 was a mode receiving a context it had no override for; with one shared procedure
+there is no such pairing left to get wrong. It stopped being
 reachable rather than being reported, which is why this is better than adding a guard.
 
 A `SERVER`-mode workflow reporting several steps at once is then well defined rather than
 undefined, and the forgiving reading is the one that landed: the server applies every step in
 order and hands the continuation back after the last one. The modes share one procedure,
-`BaseRunningMode.chainSteps`, and differ in a single boolean, `chainsBack()`. `SERVER` answers
-no, so its handback branch is taken at the last step; the local modes answer yes and keep the
-continuation leased to the reporting worker.
+`StepChain.apply`, and differ in a single boolean derived once from the mode,
+`ExecutionModes.chainsBack`. `SERVER` answers no, so its handback branch is taken at the last
+step; the local modes answer yes and keep the continuation leased to the reporting worker.
 
 ## 5. What it changes on the client
 

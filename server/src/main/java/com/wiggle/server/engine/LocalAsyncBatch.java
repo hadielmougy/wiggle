@@ -17,24 +17,31 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
+/**
+ * A cross-instance batch of LOCAL_ASYNC runs, applied under one transaction and one commit. Each
+ * run is admitted only where batching is sound; a refused run gets its answer and writes nothing.
+ */
+final class LocalAsyncBatch {
 
-public class LocalAsyncRunningMode extends LocalSyncRunningMode {
+    private static final boolean CHAINS_BACK = ExecutionModes.chainsBack(ExecutionMode.LOCAL_ASYNC);
 
-    LocalAsyncRunningMode(Instances instances, NodeBehaviourFactory nodeBehaviourFactory, DefinitionRegistry definitions) {
-        super(instances, nodeBehaviourFactory, definitions);
+    private final StepChain chain;
+    private final DefinitionRegistry definitions;
+
+    LocalAsyncBatch(StepChain chain, DefinitionRegistry definitions) {
+        this.chain = chain;
+        this.definitions = definitions;
     }
 
-    @Override
-    public Map<String, RunResult> advanceMany(AdvanceBatchContext ctx) {
-        Tx tx = ctx.tx();
+    Map<String, RunResult> apply(Tx tx, List<Run> runs) {
         Map<String, RunResult> results = new LinkedHashMap<>();
 
         Map<String, Token> probes = byId(tx.findTokens(
-                ctx.runs().stream().map(Run::startTaskId).toList()));
+                runs.stream().map(Run::startTaskId).toList()));
         List<Run> probed = new ArrayList<>();
         Map<String, String> instanceOf = new HashMap<>();
         Set<String> owned = new HashSet<>();
-        for (Run run : ctx.runs()) {
+        for (Run run : runs) {
             Token probe = probes.get(run.startTaskId());
             if (probe == null) {
                 results.put(run.startTaskId(), RunResult.reject(EngineException.notFound("task")));
@@ -70,9 +77,8 @@ public class LocalAsyncRunningMode extends LocalSyncRunningMode {
         }
         Tx applyTx = tx.transactional() ? BufferedTx.of(tx) : tx;
         for (Run run : survivors) {
-            results.put(run.startTaskId(), RunResult.of(chainSteps(new ReportStepsContext(
-                    tasks.get(run.startTaskId()), run.leaseOwner(), run.steps(), run.finalHandback(),
-                    applyTx, ctx.loopMaxIterations(), ctx.leaseMillis()))));
+            results.put(run.startTaskId(), RunResult.of(
+                    chain.apply(applyTx, tasks.get(run.startTaskId()), run, CHAINS_BACK)));
         }
         if (applyTx instanceof BufferedTx buffered) buffered.flush();
         return results;
@@ -97,7 +103,7 @@ public class LocalAsyncRunningMode extends LocalSyncRunningMode {
         }
         try {
             Tokens.requireLease(t, run.leaseOwner());
-            requireMatchingNode(t, run.steps().getFirst());
+            StepChain.requireMatchingNode(t, run.steps().getFirst());
         } catch (EngineException e) {
             return RunResult.reject(e);
         }
@@ -105,8 +111,8 @@ public class LocalAsyncRunningMode extends LocalSyncRunningMode {
             return RunResult.reject(EngineException.conflict("instance " + inst.id
                     + " is a sub-workflow of another instance -- report this run singly"));
         }
-        ExecutionMode mode = RunningMode.resolveMode(
-                definitions().executionMode(tx, inst.workflow, inst.version));
+        ExecutionMode mode = ExecutionModes.resolve(
+                definitions.executionMode(tx, inst.workflow, inst.version));
         if (mode != ExecutionMode.LOCAL_ASYNC) {
             return RunResult.reject(EngineException.conflict("definition " + inst.workflow
                     + ":" + inst.version + " runs " + mode
