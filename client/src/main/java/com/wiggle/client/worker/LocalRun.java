@@ -35,6 +35,7 @@ final class LocalRun {
     private final List<WiggleClient.StepReport> buffer = new ArrayList<>();
     /** The token the server currently has leased to us; read by the heartbeat thread. */
     private volatile String serverTaskId;
+    private final Heartbeat lease;
     private Node node;
     private Object ctx;
     private int attempt;
@@ -52,12 +53,12 @@ final class LocalRun {
         this.itemIndex = task.itemIndex();
         this.itemMapKey = task.itemMapKey();
         this.attempt = task.attempt();   // 1-based; continuation tokens are fresh (attempt 1)
+        this.lease = new Heartbeat(w.heartbeatPool(),
+                extend -> w.client().heartbeat(serverTaskId, leaseOwner, extend),
+                w.options().lease().toMillis(), serverTaskId);
     }
 
     void run() {
-        Heartbeat lease = new Heartbeat(w.heartbeatPool(),
-                extend -> w.client().heartbeat(serverTaskId, leaseOwner, extend),
-                w.options().lease().toMillis(), serverTaskId);
         lease.start();
         try {
             boolean chaining = true;
@@ -83,7 +84,7 @@ final class LocalRun {
     private void drainOnShutdown() {
         if (buffer.isEmpty()) return;   // nothing computed yet; the claimed lease simply expires and is reclaimed
         try {
-            w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), true);
+            lease.deliver(() -> w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), true));
             int drained = buffer.size();
             buffer.clear();
             LOG.log(System.Logger.Level.DEBUG, () -> "drained " + drained
@@ -169,12 +170,14 @@ final class LocalRun {
         // A final handback needs nothing back but durability, so LOCAL_ASYNC routes it through
         // the worker's batcher -- concurrent runs land in one ReportSteps call. A mid-chain flush
         // needs the leased continuation id synchronously and stays a single call.
-        ReportResult advanced = handback && maxBatch > 1 && w.options().crossInstanceBatching()
-                ? w.handbacks().handback(instanceId, serverTaskId, leaseOwner, List.copyOf(buffer))
-                : w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), handback);
+        List<WiggleClient.StepReport> steps = List.copyOf(buffer);
+        ReportResult advanced = lease.deliver(() -> handback && maxBatch > 1 && w.options().crossInstanceBatching()
+                ? w.handbacks().handback(instanceId, serverTaskId, leaseOwner, steps)
+                : w.client().reportSteps(serverTaskId, leaseOwner, steps, handback));
         buffer.clear();
         if (!advanced.running() || handback || advanced.nextTaskId() == null) return false;
         serverTaskId = advanced.nextTaskId();
+        lease.renewed();
         return true;
     }
 
@@ -184,15 +187,19 @@ final class LocalRun {
      */
     private void failRun(String message, boolean retryable) {
         if (!flushBeforeFailure()) return;
-        w.client().fail(serverTaskId, leaseOwner, message, retryable);
+        lease.deliver(() -> w.client().fail(serverTaskId, leaseOwner, message, retryable));
     }
 
     /** @return true if the instance is still running (safe to report a failure) */
     private boolean flushBeforeFailure() {
         if (buffer.isEmpty()) return true;
-        ReportResult advanced = w.client().reportSteps(serverTaskId, leaseOwner, List.copyOf(buffer), false);
+        List<WiggleClient.StepReport> steps = List.copyOf(buffer);
+        ReportResult advanced = lease.deliver(() -> w.client().reportSteps(serverTaskId, leaseOwner, steps, false));
         buffer.clear();
-        if (advanced.nextTaskId() != null) serverTaskId = advanced.nextTaskId();
+        if (advanced.nextTaskId() != null) {
+            serverTaskId = advanced.nextTaskId();
+            lease.renewed();
+        }
         return advanced.running();
     }
 
