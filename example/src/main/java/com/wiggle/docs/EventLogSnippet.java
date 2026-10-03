@@ -16,9 +16,9 @@ public final class EventLogSnippet {
             List<EventView> batch = client.pollEvents("billing", 100, 20_000, -1);
             if (batch.isEmpty()) continue;                 // the long poll expired: ask again
             for (EventView e : batch) {
-                handle(e);                                 // your side of it, idempotent by instance + seq
+                handle(e);                                 // your side of it, idempotent by shard + seq
             }
-            client.ackEvents("billing", batch.getLast().seq());
+            client.ackEvents("billing", batch.getLast().cursor());
         }
         // docs:end consume
     }

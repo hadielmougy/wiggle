@@ -519,9 +519,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void ackEvents(AckEventsRequest req, StreamObserver<Ack> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc AckEvents consumer=" + req.getConsumer()
-                + " ackedSeq=" + req.getAckedSeq());
+                + " ackedSeq=" + req.getAckedSeq() + " ackedCursor=" + req.getAckedCursor());
         run(resp, () -> {
-            engine.ackEvents(req.getConsumer(), req.getAckedSeq());
+            if (req.getAckedCursor().isEmpty()) engine.ackEvents(req.getConsumer(), req.getAckedSeq());
+            else engine.ackEvents(req.getConsumer(), req.getAckedCursor());
             return Ack.newBuilder().setOk(true).build();
         });
     }
@@ -529,7 +530,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private static EventView eventProto(com.wiggle.core.EventView e) {
         EventView.Builder b = EventView.newBuilder()
                 .setSeq(e.seq()).setInstanceId(e.instanceId()).setWorkflow(e.workflow())
-                .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt());
+                .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt()).setShard(e.shard());
+        if (e.cursor() != null) b.setCursor(e.cursor());
         if (e.correlationId() != null) b.setCorrelationId(e.correlationId());
         if (e.nodeId() != null) b.setNodeId(e.nodeId());
         if (e.payload() != null && !e.payload().isEmpty()) b.setPayload(ProtoJson.toValue(e.payload()));

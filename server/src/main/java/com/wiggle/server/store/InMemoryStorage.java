@@ -106,6 +106,8 @@ public final class InMemoryStorage implements Storage {
     private long eventSeq;
     /** consumer -> its place in the log. */
     private final Map<String, Rows.EventCursor> eventCursors = new ConcurrentHashMap<>();
+    /** consumer -> shard -> acknowledged seq, for shards other than home. */
+    private final Map<String, Map<Integer, Long>> eventPositions = new ConcurrentHashMap<>();
 
     private final class MemTx implements Tx {
 
@@ -591,6 +593,23 @@ public final class InMemoryStorage implements Storage {
             eventCursors.compute(consumer, (k, cur) -> cur == null
                     ? new Rows.EventCursor(k, ackedSeq, now, now)
                     : new Rows.EventCursor(k, Math.max(cur.ackedSeq(), ackedSeq), now, cur.createdAt()));
+        }
+
+        @Override public Map<Integer, Long> eventPositions(String consumer) {
+            return Map.copyOf(eventPositions.getOrDefault(consumer, Map.of()));
+        }
+
+        @Override public Long oldestEventPosition(int shard) {
+            if (eventCursors.isEmpty()) return null;
+            long min = Long.MAX_VALUE;
+            for (String consumer : eventCursors.keySet()) {
+                min = Math.min(min, eventPositions.getOrDefault(consumer, Map.of()).getOrDefault(shard, 0L));
+            }
+            return min;
+        }
+
+        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
+            eventPositions.computeIfAbsent(consumer, k -> new ConcurrentHashMap<>()).merge(shard, ackedSeq, Math::max);
         }
 
         @Override public Long oldestAckedSeq() {

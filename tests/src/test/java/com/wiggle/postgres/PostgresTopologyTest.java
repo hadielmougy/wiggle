@@ -97,7 +97,16 @@ class PostgresTopologyTest {
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(flow);
             for (int i = 0; i < 6; i++) minted.merge(ShardIds.shardOf(client.start(flow, Map.of())).getAsInt(), 1, Integer::sum);
+
+            Thread.sleep(120);   // the feed's visibility window
+            List<com.wiggle.core.EventView> events = client.pollEvents("pg-feed", 100, 2_000, -1);
+            assertEquals(6, events.size(), "every shard's log, in one poll");
+            assertEquals(java.util.Set.of(0, 1), new java.util.HashSet<>(events.stream().map(com.wiggle.core.EventView::shard).toList()));
+            client.ackEvents("pg-feed", events.getLast().cursor());
+            assertEquals(0, client.pollEvents("pg-feed", 100, 300, -1).size(), "acknowledged on both shards");
         }
+        assertEquals(1, count(databases.get(0), "SELECT COUNT(*) FROM wf_event_cursor_shard WHERE consumer='pg-feed' AND shard_id=1"),
+                "the position on shard 1 is held on home");
         assertEquals(Map.of(0, 3, 1, 3), minted);
         for (int shard = 0; shard < 2; shard++) {
             String db = databases.get(shard);

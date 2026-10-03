@@ -1369,6 +1369,22 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("a consumer's position on another shard only moves forward, and every consumer is counted for retention")
+    void eventPositionsOnOtherShards() {
+        String consumer = id("consumer");
+        int shard = (int) (System.nanoTime() & 0x3fffffff);
+        storage.inTxVoid(tx -> tx.createEventCursorIfAbsent(new Rows.EventCursor(consumer, 0, now, now)));
+        Long oldest = storage.inTx(tx -> tx.oldestEventPosition(shard));
+        assertEquals(Long.valueOf(0), oldest, "a consumer with no row holds 0");
+        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 7));
+        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 3));
+        assertEquals(Map.of(shard, 7L), storage.inTx(tx -> tx.eventPositions(consumer)), "never backwards");
+        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 9));
+        assertEquals(Long.valueOf(9), storage.inTx(tx -> tx.eventPositions(consumer).get(shard)));
+        assertTrue(storage.inTx(tx -> tx.eventPositions(id("nobody"))).isEmpty());
+    }
+
+    @Test
     @DisplayName("the replica heartbeat reads back what the primary last stamped")
     void theShardBeatReadsBack() {
         storage.inTxVoid(tx -> tx.claimShardIdentity(7));
