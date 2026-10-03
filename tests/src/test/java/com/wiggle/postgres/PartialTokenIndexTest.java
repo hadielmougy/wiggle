@@ -85,7 +85,7 @@ class PartialTokenIndexTest {
                 + " ORDER BY lease_expires LIMIT 10", Set.of("ix_token_running"));
         PLANS.put("SELECT COUNT(*) FROM wf_token WHERE kind IN ('TASK','PREDICATE') AND status='DONE'"
                 + " AND updated_at>1000", DONE);
-        PLANS.put("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token WHERE workflow='w'"
+        PLANS.put("SELECT node_id, started_at, finished_at, available_at FROM wf_token WHERE workflow='w'"
                 + " AND version=1 AND status='DONE' AND finished_at > 1000 AND started_at IS NOT NULL"
                 + " ORDER BY finished_at DESC LIMIT 10", DONE);
     }

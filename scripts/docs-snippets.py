@@ -63,7 +63,6 @@ SOURCES = {
     "decode": FIXTURES / "docs/decode/OrderHandlers.java",
     "queues": FIXTURES / "docs/QueuesSnippet.java",
     "local-execution": FIXTURES / "docs/LocalExecutionSnippet.java",
-    "observed": FIXTURES / "docs/ObservedSnippet.java",
     "event-log": FIXTURES / "docs/EventLogSnippet.java",
 }
 

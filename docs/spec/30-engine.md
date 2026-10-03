@@ -366,7 +366,7 @@ reports through the same entry point and a run of steps walks the same transitio
 
 **WGL-ENG-120** (MUST) Exactly one node per cell MUST run the clock-driven duties, each bounded by a
 batch size per tick: fire due timers, reclaim expired leases, fire due signal deadlines, fire due
-schedules, settle observed runs.
+schedules.
 
 **WGL-ENG-121** (MUST) A separate, slower sweep MUST purge terminal instances older than the retention
 window and trim the event log.

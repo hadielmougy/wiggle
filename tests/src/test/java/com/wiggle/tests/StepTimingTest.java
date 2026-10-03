@@ -23,9 +23,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Worker-run steps get the same performance model as observed ones: the worker reports the
- * handler's own start and finish with every completion, in every mode, and the server keeps how
- * long the step waited to be claimed, so the Performance view covers every execution mode.
+ * Every step gets the same performance model: the worker reports the handler's own start and
+ * finish with every completion, in every mode, and the server keeps how long the step waited to be
+ * claimed, so the Performance view covers every execution mode.
  */
 class StepTimingTest {
 

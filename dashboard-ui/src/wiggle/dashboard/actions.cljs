@@ -53,14 +53,8 @@
           (.then #(swap! db assoc :stats %))
           (.catch st/on-error)))))
 
-(defn load-anomalies! []
-  (-> (api/anomalies (get-in @db [:perf :workflow]) 200)
-      (.then #(swap! db assoc :anomalies (:anomalies %)))
-      (.catch st/on-error)))
-
 (defn load-perf! []
-  (load-stats!)
-  (load-anomalies!))
+  (load-stats!))
 
 (defn load-graph! [name]
   (-> (api/workflow-graph name)

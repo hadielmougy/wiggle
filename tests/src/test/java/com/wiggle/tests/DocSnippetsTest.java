@@ -61,7 +61,6 @@ class DocSnippetsTest {
         EXPECTED.put("SagaDocHandlers.java", List.of("handlers"));
         EXPECTED.put("QueuesSnippet.java", List.of("topology", "specialised-worker", "general-worker"));
         EXPECTED.put("LocalExecutionSnippet.java", List.of("execution-mode"));
-        EXPECTED.put("ObservedSnippet.java", List.of("topology", "report"));
         EXPECTED.put("EventLogSnippet.java", List.of("consume", "emit"));
         EXPECTED.put("onboarding/OnboardingSnippet.java",
                 List.of("contract", "register-line", "topology", "client-lifecycle",
@@ -290,7 +289,6 @@ class DocSnippetsTest {
             Map.entry("tut-standalone", "tutorial/Standalone.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
-            Map.entry("observed", "docs/ObservedSnippet.java"),
             Map.entry("event-log", "docs/EventLogSnippet.java"));
 
     private static Path sourcePath(String source) {
@@ -382,7 +380,7 @@ class DocSnippetsTest {
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(29, EXPECTED.size(), "every wired page and doc should have a fixture");
+        assertEquals(28, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }

@@ -7,7 +7,6 @@ dependencies {
     implementation(project(":server"))
 
     testImplementation(project(":client"))
-    testImplementation(project(":observe"))
     testImplementation(project(":server"))
     // The JDBC-backed store lives in its own module now; the JDBC/migration tests need it, and
     // :postgres supplies both dialects -- PostgreSQL, and H2 for the runs with nothing installed.

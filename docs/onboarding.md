@@ -413,7 +413,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed, covering appends still in flight |
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `true` | a sweep that fills its batch runs again immediately (drain mode) — removes the batch÷tick promotion ceiling under backlog (measured: 100 → ~1,700 timers/sec at defaults); idle cost unchanged. `false` restores one batch per tick |
-| `WIGGLE_SWEEP_PARALLELISM` | `wiggle.sweep.parallelism` | `4` | how many of a housekeeping sweep's due items (timers, retries, expired leases, signal deadlines, schedules, observed-run settles) run at once, each in its own transaction; each holds a pooled connection while it runs. `1` runs them one at a time |
+| `WIGGLE_SWEEP_PARALLELISM` | `wiggle.sweep.parallelism` | `4` | how many of a housekeeping sweep's due items (timers, retries, expired leases, signal deadlines, schedules) run at once, each in its own transaction; each holds a pooled connection while it runs. `1` runs them one at a time |
 | `WIGGLE_RETRY_TIMER_MIN_MILLIS` | `wiggle.retry.timerMinMillis` | `1000` | a retry backing off at least this long waits off the dispatch queue (WAITING) and is made dispatchable by the housekeeper once due, so it can land up to one housekeeping tick late; a shorter backoff waits READY. Keep it at or above `WIGGLE_POLL_INTERVAL_MILLIS` |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
 | `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `repeatWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `repeatWhile(guard, maxIterations, body)` |
@@ -518,9 +518,8 @@ One binary, two modes, chosen by env:
 WIGGLE_URL=localhost:8080 ./gradlew :console:run          # → http://localhost:8090
 
 # something to look at: a seeded server on :8080 (a completed run, two runs parked on a
-# signal, two schedules), or one with sixty observed checkout runs for the Performance tab
+# signal, two schedules)
 ./gradlew :example:seedDashboard
-./gradlew :example:seedObserved
 
 
 # or via the Docker image
@@ -533,8 +532,7 @@ steps as a table — click one to expand its input, output, retries and timing �
 delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry policies), **Schedules** (create/delete interval and cron schedules), **Signals**,
 **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
 **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
-execution mode, slowest first, and the anomalies of observed runs —
-[observed-execution.md](observed-execution.md)), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
+execution mode, slowest first), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
 

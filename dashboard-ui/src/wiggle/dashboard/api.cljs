@@ -53,10 +53,6 @@
 (defn stats [workflow since]
   (GET (str "/api/stats?workflow=" (enc workflow) "&since=" (or since 0))))
 
-(defn anomalies [workflow limit]
-  (GET (str "/api/anomalies?limit=" (or limit 200)
-            (when (seq workflow) (str "&workflow=" (enc workflow))))))
-
 (defn users           [] (GET "/api/users"))
 (defn create-user     [body] (POST "/api/users" body))
 (defn delete-user     [name] (DELETE (str "/api/users/" (enc name))))

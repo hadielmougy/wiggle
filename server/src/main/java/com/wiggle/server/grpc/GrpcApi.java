@@ -132,8 +132,12 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void registerWorkflow(WorkflowDefinition req, StreamObserver<RegisterWorkflowResult> resp) {
         LOG.log(System.Logger.Level.DEBUG, "rpc RegisterWorkflow");
         run(resp, () -> {
-            com.wiggle.core.WorkflowDefinition def =
-                    com.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(req.getDefinition()));
+            Map<String, Object> raw = com.wiggle.core.Json.asObject(ProtoJson.fromStruct(req.getDefinition()));
+            if ("OBSERVED".equals(raw.get("executionMode"))) {
+                throw new IllegalArgumentException("OBSERVED execution was removed; register the workflow "
+                        + "as SERVER, LOCAL_SYNC or LOCAL_ASYNC");
+            }
+            com.wiggle.core.WorkflowDefinition def = com.wiggle.core.WorkflowDefinition.fromJson(raw);
             if (req.getForce() && !ServerConfig.allowGraphReplace()) {
                 throw EngineException.conflict("replacing the graph of '" + def.key()
                         + "' was requested but this server does not allow it; set "
@@ -400,8 +404,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                     ? ProtoJson.fromValue(s.getMerge()) : null;
             Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
                     ? s.getPredicateValue() : null;
-            String error = s.getOutcomeCase() == StepResult.OutcomeCase.ERROR ? s.getError() : null;
-            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate, error,
+            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate,
                     s.getStartedAt() == 0 ? null : s.getStartedAt(),
                     s.getFinishedAt() == 0 ? null : s.getFinishedAt(),
                     emitted(s.getEventsList())));
@@ -420,44 +423,6 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void observeRun(ObserveRunRequest req, StreamObserver<ObserveRunResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ObserveRun workflow=" + req.getWorkflow()
-                + " instanceId=" + req.getInstanceId() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
-        run(resp, () -> observeProto(engine.observe(req.getWorkflow(), req.getVersion() == 0 ? null : req.getVersion(),
-                req.getInstanceId(), req.getCorrelationId().isEmpty() ? null : req.getCorrelationId(),
-                req.getReporter(), stepInputs(req.getStepsList()), req.getFinal())));
-    }
-
-    @Override
-    public void observeMany(ObserveManyRequest req, StreamObserver<ObserveManyResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ObserveMany runs=" + req.getRunsCount());
-        run(resp, () -> {
-            List<WorkflowEngine.ObservedRun> runs = new ArrayList<>(req.getRunsCount());
-            for (ObserveRunRequest r : req.getRunsList()) {
-                runs.add(new WorkflowEngine.ObservedRun(r.getWorkflow(), r.getVersion() == 0 ? null : r.getVersion(),
-                        r.getInstanceId(), r.getCorrelationId().isEmpty() ? null : r.getCorrelationId(),
-                        r.getReporter(), stepInputs(r.getStepsList()), r.getFinal()));
-            }
-            ObserveManyResult.Builder out = ObserveManyResult.newBuilder();
-            for (WorkflowEngine.ObserveOutcome o : engine.observeMany(runs)) {
-                ObserveOutcome.Builder one = ObserveOutcome.newBuilder();
-                if (o.ok()) one.setOutcome(observeProto(o.result()));
-                else one.setErrorStatus(o.errorStatus()).setError(o.error() == null ? "" : o.error());
-                out.addResults(one);
-            }
-            return out.build();
-        });
-    }
-
-    private static ObserveRunResult observeProto(com.wiggle.core.ObserveResult r) {
-        return ObserveRunResult.newBuilder()
-                .setInstanceId(r.instanceId())
-                .setInstanceStatus(r.instanceStatus())
-                .setAnomalies(r.anomalies())
-                .build();
-    }
-
-    @Override
     public void getStepStats(StepStatsRequest req, StreamObserver<StepStats> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetStepStats workflow=" + req.getWorkflow()
                 + " version=" + req.getVersion() + " since=" + req.getSince());
@@ -470,26 +435,6 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                         .setCount(n.count()).setMeanMillis(n.meanMillis())
                         .setP50Millis(n.p50Millis()).setP95Millis(n.p95Millis()).setMaxMillis(n.maxMillis())
                         .setWaitP50Millis(n.waitP50Millis()).setWaitP95Millis(n.waitP95Millis()));
-            }
-            return out.build();
-        });
-    }
-
-    @Override
-    public void listAnomalies(ListAnomaliesRequest req, StreamObserver<AnomalyList> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ListAnomalies workflow="
-                + (req.hasWorkflow() ? req.getWorkflow() : null) + " limit=" + req.getLimit());
-        run(resp, () -> {
-            int limit = req.getLimit() > 0 ? req.getLimit() : 100;
-            AnomalyList.Builder out = AnomalyList.newBuilder();
-            for (com.wiggle.core.AnomalyView a : engine.anomalies(req.hasWorkflow() ? req.getWorkflow() : null,
-                    req.hasInstanceId() ? req.getInstanceId() : null, limit)) {
-                Anomaly.Builder one = Anomaly.newBuilder().setInstanceId(a.instanceId()).setWorkflow(a.workflow())
-                        .setVersion(a.version()).setKind(a.kind()).setAt(a.at());
-                if (a.expectedNode() != null) one.setExpectedNode(a.expectedNode());
-                if (a.reportedNode() != null) one.setReportedNode(a.reportedNode());
-                if (a.detail() != null) one.setDetail(a.detail());
-                out.addAnomalies(one);
             }
             return out.build();
         });

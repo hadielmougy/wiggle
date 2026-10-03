@@ -8,15 +8,15 @@ worker; the fourth inverts it: the steps run inside the application and are repo
 
 ## 1. The modes
 
-**WGL-MODE-001** (MUST) The modes MUST be exactly `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC`, `OBSERVED`
-and `DEFAULT`.
+**WGL-MODE-001** (MUST) The modes MUST be exactly `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC` and `DEFAULT`.
+(`OBSERVED` was removed; a definition stored under it loads as `DEFAULT`, and registering one is
+refused.)
 
 | Mode | Who drives | Status writes | Crash blast radius | For |
 |---|---|---|---|---|
 | `SERVER` | server, one node per claim | per step | one step | anything non-idempotent |
 | `LOCAL_SYNC` | worker chains locally | per step, before the next runs | one step (as `SERVER`) | most workflows — a safe speedup |
 | `LOCAL_ASYNC` | worker chains and buffers | batched at handback | the whole batch re-runs | idempotent, throughput-critical |
-| `OBSERVED` | the application itself | one append per report | n/a — nothing is dispatched | governing steps you already run |
 | `DEFAULT` | resolves to `SERVER` | — | — | saying nothing, and taking the default |
 
 **WGL-MODE-002** (MUST) `DEFAULT` MUST be a stable, hashable sentinel and MUST resolve to `SERVER`.
@@ -30,10 +30,9 @@ every task activation. A worker MUST NOT re-derive it.
 version ([WGL-AUTH-102](10-authoring.md)).
 
 **WGL-MODE-005** (MUST) The DSL MUST offer `executeInServer()`, `executeInLocalSync()` and
-`executeInLocalAsync()` and nothing else: `OBSERVED` is stamped by an observer when it publishes, so a
-spec cannot be handed to a worker in a mode no worker serves.
+`executeInLocalAsync()` and nothing else.
 
-**WGL-MODE-006** (MUST) All four modes MUST be at-least-once. What differs is how much re-executes
+**WGL-MODE-006** (MUST) All three modes MUST be at-least-once. What differs is how much re-executes
 after an unclean worker death.
 
 ## 2. `SERVER`
@@ -113,7 +112,10 @@ batch it with.
 *Verified by:* `server/engine/AdvanceManyTest`, `tests/CrossInstanceBatchTest`,
 `server/engine/AdvanceManyBench`.
 
-## 4. `OBSERVED`
+## 4. `OBSERVED` (withdrawn)
+
+*Withdrawn: OBSERVED execution was removed.* Every requirement in this section is withdrawn; the ids are kept so they are never reused
+([chapter 00 §2](00-index.md)). The timing statistics that were §4.6 apply to every mode and are §5.
 
 ### 4.1 What it is
 
@@ -219,26 +221,6 @@ by workflow and/or instance.
 
 *Verified by:* `server/engine/ConformanceTest`, `tests/ObservedModeTest`, `tests/ObserveApiTest`.
 
-### 4.6 Timing statistics
-
-**WGL-OBS-050** (MUST) Every execution mode MUST feed the same per-step statistics: the handler's own
-`startedAt`/`finishedAt` as reported. The server's claimed-to-settled stamps MUST stand in only for a
-worker that reports none.
-
-**WGL-OBS-051** (MUST) Statistics MUST be per node: count, mean, p50, p95 and max duration, computed in
-the server over the newest N timed settled tokens of one workflow version (default 10 000), so no
-percentile SQL has to be portable.
-
-**WGL-OBS-052** (MUST) Worker-run steps MUST additionally carry **queue wait** (ready → claimed,
-measured by the server) as p50/p95, so a slow step is distinguishable from a starved one. A step a
-local worker chained without a round trip, and an observed step, were never queued and MUST report
-zero wait.
-
-**WGL-OBS-053** (MUST) Graph order MUST NOT be implied by the statistics response; a bottleneck view
-sorts by p95.
-
-*Verified by:* `tests/StepTimingTest`.
-
 ### 4.7 The reporting module (`sh.wiggle:wiggle-observe`)
 
 **WGL-OBS-060** (MUST) The reporter MUST be a separate module from the client: an observed service
@@ -267,3 +249,22 @@ linger, the queue capacity, and TLS with the client's semantics.
 judged incomplete.
 
 *Verified by:* `tests/ObserveApiTest`, `tests/ObservedModeTest`.
+
+## 5. Timing statistics
+
+**WGL-OBS-050** (MUST) Every execution mode MUST feed the same per-step statistics: the handler's own
+`startedAt`/`finishedAt` as reported. The server's claimed-to-settled stamps MUST stand in only for a
+worker that reports none.
+
+**WGL-OBS-051** (MUST) Statistics MUST be per node: count, mean, p50, p95 and max duration, computed in
+the server over the newest N timed settled tokens of one workflow version (default 10 000), so no
+percentile SQL has to be portable.
+
+**WGL-OBS-052** (MUST) Worker-run steps MUST additionally carry **queue wait** (ready → claimed,
+measured by the server) as p50/p95, so a slow step is distinguishable from a starved one. A step a
+local worker chained without a round trip was never queued and MUST report zero wait.
+
+**WGL-OBS-053** (MUST) Graph order MUST NOT be implied by the statistics response; a bottleneck view
+sorts by p95.
+
+*Verified by:* `tests/StepTimingTest`.

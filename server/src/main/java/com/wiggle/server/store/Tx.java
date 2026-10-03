@@ -43,12 +43,6 @@ public interface Tx extends ReadTx, GraphStore {
 
     void insertInstance(Instance instance);
 
-    /**
-     * {@code insertInstance} that leaves an existing row alone: false when the id was already
-     * taken. Two reporters can create the same keyed observed run at once; the loser re-reads.
-     */
-    boolean insertInstanceIfAbsent(Instance instance);
-
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
 
@@ -81,7 +75,7 @@ public interface Tx extends ReadTx, GraphStore {
 
     /**
      * Writes back the fields of an instance that change as it runs: status, termination reason,
-     * error, context and {@code settleAt}, stamped with {@code updatedAt}.
+     * error and context, stamped with {@code updatedAt}.
      *
      * <p>It writes nothing else. An instance's identity and provenance -- {@code workflow},
      * {@code version}, {@code correlationId}, {@code parentTokenId}, {@code createdAt} -- are
@@ -179,9 +173,6 @@ public interface Tx extends ReadTx, GraphStore {
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
 
-    /** RUNNING observed runs whose settle time has passed, soonest first. */
-    List<Instance> dueSettle(long now, int max);
-
     void upsertNode(ServerNode node);
 
     void deleteNodesOlderThan(long lastHeartbeatBefore);
@@ -196,8 +187,6 @@ public interface Tx extends ReadTx, GraphStore {
 
     /** Cancels every active token of an instance, stamping {@code now} as their update time. */
     void cancelActiveTokens(String instanceId, long now);
-
-    void insertAnomaly(Rows.Anomaly anomaly);
 
     /** Appends to the event log and returns the seq the store assigned; visible with the transaction. */
     long appendEvent(Rows.Event event);

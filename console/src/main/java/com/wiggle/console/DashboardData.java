@@ -1,6 +1,5 @@
 package com.wiggle.console;
 
-import com.wiggle.core.AnomalyView;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.NodeStats;
 
@@ -46,12 +45,9 @@ public interface DashboardData {
     /**
      * Per-node duration statistics for a workflow (null or zero version = latest) over its newest
      * {@code sample} timed steps finished after {@code since}; slowest p95 first. Steps are timed
-     * where they ran, so this covers OBSERVED workflows and locally-chained runs alike.
+     * where they ran, so this covers worker-dispatched and locally-chained runs alike.
      */
     List<NodeStats> stepStats(String workflow, Integer version, long since, int sample);
-
-    /** Departures of observed runs from their topology, newest first; either filter may be null. */
-    List<AnomalyView> anomalies(String workflow, String instanceId, int limit);
 
     List<ScheduleView> schedules();
 
