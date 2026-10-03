@@ -3,7 +3,9 @@ package com.wiggle.server.engine;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -12,7 +14,10 @@ import java.util.Map;
  * the {@link DispatchNotifier} once -- and only once -- the work is durable, so a woken poller
  * never claims against uncommitted state.
  *
- * <p>Scopes do not nest, and {@link #inTx} refuses to open one inside another. A storage
+ * <p>Every transaction is routed: to the shard an instance or token id carries, to one shard, to the
+ * home shard, or to each instance shard in turn.
+ *
+ * <p>Scopes do not nest, and {@link #inShard} refuses to open one inside another. A storage
  * transaction is a borrowed connection, so a nested call would be a second connection running an
  * independent transaction: it would commit on its own regardless of the outer one, it could not
  * see the outer's uncommitted writes, and -- since the engine takes instance row locks -- it would
@@ -51,8 +56,37 @@ final class Transactions {
         if (ready != null && queue != null) ready.merge(queue, 1, Integer::sum);
     }
 
-    /** Runs {@code body} in a transaction, then (post-commit) wakes pollers for any queue it marked. */
-    <T> T inTx(TxBody<T> body) {
+    /** The shard the instance or token {@code id} lives on. */
+    int shardOf(String id) {
+        return storage.shardOf(id);
+    }
+
+    /** The shards that hold instances. */
+    List<Integer> instanceShards() {
+        return storage.instanceShards();
+    }
+
+    /** Runs {@code body} on the shard holding {@code id}, then (post-commit) wakes pollers for any
+     *  queue it marked. */
+    <T> T inTx(String id, TxBody<T> body) {
+        return inShard(storage.shardOf(id), body);
+    }
+
+    /** {@link #inTx(String, TxBody)} for a body with no return value. */
+    void inTxVoid(String id, TxWork body) {
+        inTx(id, tx -> {
+            body.run(tx);
+            return null;
+        });
+    }
+
+    /** {@link #inTx(String, TxBody)} on the home shard. */
+    <T> T inHome(TxBody<T> body) {
+        return inShard(storage.home(), body);
+    }
+
+    /** Runs {@code body} on {@code shard}, then (post-commit) wakes pollers for any queue it marked. */
+    <T> T inShard(int shard, TxBody<T> body) {
         if (readyQueues.get() != null) {
             throw new IllegalStateException("nested transaction scope: this thread is already inside "
                     + "inTx. A nested call would run on a second connection and deadlock against the "
@@ -62,7 +96,7 @@ final class Transactions {
         readyQueues.set(mine);
         T result;
         try {
-            result = storage.inTx(tx -> {
+            result = storage.inShard(shard, tx -> {
                 mine.clear();   // a replayed attempt counts its own tokens, not the rolled-back one's too
                 return body.run(tx);
             });
@@ -73,21 +107,41 @@ final class Transactions {
         return result;
     }
 
-    /** {@link #inTx} for a body with no return value. */
-    void inTxVoid(TxWork body) {
-        inTx(tx -> {
+    /** A transaction with no wake-on-produce scope -- reads, and claims that park nothing READY -- on
+     *  the shard holding {@code id}. */
+    <T> T read(String id, TxBody<T> body) {
+        return readShard(storage.shardOf(id), body);
+    }
+
+    /** {@link #read} on {@code shard}. */
+    <T> T readShard(int shard, TxBody<T> body) {
+        return storage.inShard(shard, body::run);
+    }
+
+    /** {@link #read} on the home shard. */
+    <T> T readHome(TxBody<T> body) {
+        return readShard(storage.home(), body);
+    }
+
+    /** {@link #readHome} for a body with no return value. */
+    void readHomeVoid(TxWork body) {
+        readHome(tx -> {
             body.run(tx);
             return null;
         });
     }
 
-    /** A transaction with no wake-on-produce scope: reads, and claims that park nothing READY. */
-    <T> T read(TxBody<T> body) {
-        return storage.inTx(body::run);
+    /** {@link #read} on every instance shard in turn, the lists concatenated in shard order. */
+    <T> List<T> readEach(TxBody<List<T>> body) {
+        List<T> out = new ArrayList<>();
+        for (int shard : storage.instanceShards()) out.addAll(readShard(shard, body));
+        return out;
     }
 
-    /** {@link #read} for a body with no return value. */
-    void readVoid(TxWork body) {
-        storage.inTxVoid(body::run);
+    /** {@link #read} on every instance shard in turn, the counts summed. */
+    int sumEach(TxBody<Integer> body) {
+        int total = 0;
+        for (int shard : storage.instanceShards()) total += readShard(shard, body);
+        return total;
     }
 }

@@ -49,7 +49,7 @@ public final class ClusterManager implements AutoCloseable {
 
     /** The full node rows -- worker counts and leader flag included -- for the dashboard. */
     public List<ServerNode> members() {
-        return storage.inTx(tx -> tx.nodes());
+        return storage.inHome(tx -> tx.nodes());
     }
 
     @Override public void close() { election.close(); }
@@ -60,7 +60,7 @@ public final class ClusterManager implements AutoCloseable {
         @Override
         public List<Member> step(Member me, long pruneBefore, ElectionRule elect) {
             self.lastHeartbeat = me.lastHeartbeat();
-            return storage.inTx(tx -> {
+            return storage.inHome(tx -> {
                 tx.upsertNode(self);
                 tx.deleteNodesOlderThan(pruneBefore);
                 List<Member> roster = tx.nodes().stream().map(ClusterManager::member).toList();
@@ -74,14 +74,15 @@ public final class ClusterManager implements AutoCloseable {
             // Backdate our heartbeat so the rest of the cell re-elects immediately rather than
             // waiting out the whole timeout window.
             self.lastHeartbeat = 0;
-            storage.inTxVoid(tx -> {
+            storage.inHome(tx -> {
                 tx.upsertNode(self);
                 tx.setLeader(self.id, false);
+                return null;
             });
         }
 
         @Override public List<Member> members() {
-            return storage.inTx(tx -> tx.nodes().stream().map(ClusterManager::member).toList());
+            return storage.inHome(tx -> tx.nodes().stream().map(ClusterManager::member).toList());
         }
     }
 
