@@ -91,6 +91,8 @@ create_vm() {
     rm -f "$err"; return 1
 }
 
+peering_of() { gc services vpc-peerings list --network "$1" --format='value(peering)' 2>/dev/null; }
+
 db_ip() { gc sql instances describe "$DB" --format='value(ipAddresses[0].ipAddress)'; }
 
 load_state() {
@@ -386,16 +388,22 @@ cmd_down() {
     log "deleting everything named $PREFIX-* in $GCP_PROJECT"
     gc compute instances delete "${ALL_VMS[@]}" --zone "$ZONE" 2>/dev/null || true
     exists gc sql instances describe "$DB" && gc sql instances delete "$DB"
-    for _ in $(seq 12); do
-        gc services vpc-peerings delete --service servicenetworking.googleapis.com --network "$NET" 2>/dev/null && break
+    local err; err=$(mktemp)
+    for attempt in $(seq 12); do
         exists gc compute networks describe "$NET" || break
+        [ -z "$(peering_of "$NET")" ] && break
+        gc services vpc-peerings delete --service servicenetworking.googleapis.com --network "$NET" 2>"$err" && break
+        if [ "$attempt" = 12 ]; then cat "$err" >&2; break; fi
         echo "peering still in use (Cloud SQL releases it a few minutes after deletion); retrying in 30s" >&2
         sleep 30
     done
+    rm -f "$err"
     gc compute addresses delete "$PSA_RANGE" --global 2>/dev/null || true
     gc compute firewall-rules delete "$PREFIX-internal" "$PREFIX-iap-ssh" 2>/dev/null || true
     gc compute networks subnets delete "$SUBNET" --region "$REGION" 2>/dev/null || true
-    gc compute networks delete "$NET" 2>/dev/null || echo "network $NET not deleted yet; re-run '$0 down' in a few minutes" >&2
+    if exists gc compute networks describe "$NET"; then
+        gc compute networks delete "$NET" 2>/dev/null || echo "network $NET not deleted yet; re-run '$0 down' in a few minutes" >&2
+    fi
     rm -f "$STATE"
     cmd_status
 }
