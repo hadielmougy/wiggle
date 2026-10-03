@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -103,7 +104,7 @@ class TopologyParserTest {
         refused(with("\"state\": \"active\"", "\"state\": \"PAUSED\""), "PAUSED");
         refused(with("[\"search\"]", "[\"cache\"]"), "cache");
         refused(with("[\"search\"]", "[]"), "no roles");
-        refused(with("{ \"url\": \"jdbc:postgresql://pg-s2/wiggle\" }", "{ }"), "primary url");
+        refused(with("{ \"url\": \"jdbc:postgresql://pg-s2/wiggle\" }", "{ }"), "primary needs a url");
         refused(with("\"pool\": 8", "\"pool\": 0"), "pool");
         refused("{ not json", "not valid JSON");
     }
@@ -122,13 +123,55 @@ class TopologyParserTest {
                 "no generations");
     }
 
-    @Test @DisplayName("replicas are refused until read-replica support lands")
-    void replicasNotYet() {
-        refused(with("\"primary\": { \"url\": \"jdbc:postgresql://pg-s2/wiggle\" }",
-                "\"primary\": { \"url\": \"jdbc:postgresql://pg-s2/wiggle\" }, \"replicas\": [ { \"url\": \"x\" } ]"),
-                "replicas");
-        assertThrows(IllegalArgumentException.class, () ->
-                TopologyParser.fromEnvironment(Map.of("WIGGLE_JDBC_REPLICA_URLS", "jdbc:postgresql://r1/w")));
+    @Test @DisplayName("replicas inherit user and password, take replicaPool unless they set a pool, and carry the shard's lag and fallback")
+    void replicas() {
+        String doc = with("\"primary\": { \"url\": \"jdbc:postgresql://pg-s2/wiggle\" }",
+                "\"primary\": { \"url\": \"jdbc:postgresql://pg-s2/wiggle\" }, \"maxReplicaLagMillis\": 750, "
+                        + "\"replicaFallback\": \"fail\", \"replicas\": [ { \"url\": \"jdbc:postgresql://r1/wiggle\" }, "
+                        + "{ \"url\": \"jdbc:postgresql://r2/wiggle\", \"pool\": 3 } ]")
+                .replace("\"pool\": 32 }", "\"pool\": 32, \"replicaPool\": 12 }");
+        Topology.Shard s2 = TopologyParser.parse(doc, ENV).shard(2).orElseThrow();
+        assertEquals(2, s2.replicas().size());
+        assertEquals("wiggle", s2.replicas().get(0).user());
+        assertEquals("s3cret", s2.replicas().get(0).password());
+        assertEquals(12, s2.replicas().get(0).pool(), "replicaPool from the defaults");
+        assertEquals(3, s2.replicas().get(1).pool(), "a replica's own pool wins");
+        assertEquals(750, s2.maxReplicaLagMillis());
+        assertEquals(com.wiggle.server.store.ReplicatedStorage.Fallback.FAIL, s2.replicaFallback());
+        Topology.Shard s0 = TopologyParser.parse(doc, ENV).shard(0).orElseThrow();
+        assertEquals(5_000, s0.maxReplicaLagMillis(), "the default bound");
+        assertEquals(com.wiggle.server.store.ReplicatedStorage.Fallback.PRIMARY, s0.replicaFallback());
+        refused(doc.replace("\"fail\"", "\"retry\""), "retry");
+        refused(doc.replace("750", "-1"), "maxReplicaLagMillis");
+    }
+
+    @Test @DisplayName("WIGGLE_JDBC_REPLICA_URLS gives one database its replicas, as a one-shard topology")
+    void oneDatabaseWithReplicas() {
+        Topology t = TopologyParser.fromEnvironment(Map.of(
+                "WIGGLE_JDBC_URL", "jdbc:postgresql://primary/wiggle", "WIGGLE_JDBC_USER", "u",
+                "WIGGLE_JDBC_PASSWORD", "p", "WIGGLE_JDBC_POOL_SIZE", "20",
+                "WIGGLE_JDBC_REPLICA_URLS", "jdbc:postgresql://r1/wiggle, jdbc:postgresql://r2/wiggle",
+                "WIGGLE_JDBC_REPLICA_POOL_SIZE", "6", "WIGGLE_JDBC_MAX_REPLICA_LAG_MILLIS", "900",
+                "WIGGLE_JDBC_REPLICA_FALLBACK", "fail")).orElseThrow();
+        Topology.Shard s = t.shard(0).orElseThrow();
+        assertEquals(0, t.home());
+        assertEquals(Set.of(Role.INSTANCES, Role.HOME, Role.AUTH), s.roles());
+        assertEquals(20, s.primary().pool());
+        assertEquals(List.of("jdbc:postgresql://r1/wiggle", "jdbc:postgresql://r2/wiggle"),
+                s.replicas().stream().map(Topology.Connection::url).toList());
+        assertEquals(6, s.replicas().get(1).pool());
+        assertEquals("u", s.replicas().get(1).user());
+        assertEquals(900, s.maxReplicaLagMillis());
+        assertEquals(com.wiggle.server.store.ReplicatedStorage.Fallback.FAIL, s.replicaFallback());
+
+        assertThrows(IllegalArgumentException.class, () -> TopologyParser.fromEnvironment(Map.of(
+                "WIGGLE_JDBC_REPLICA_URLS", "jdbc:postgresql://r1/wiggle")), "replicas of no primary");
+        assertThrows(IllegalArgumentException.class, () -> TopologyParser.fromEnvironment(Map.of(
+                "WIGGLE_JDBC_URL", "jdbc:postgresql://primary/wiggle", "WIGGLE_JDBC_REPLICA_POOL_SIZE", "4")),
+                "replica settings without replica urls");
+        assertThrows(IllegalArgumentException.class, () -> TopologyParser.fromEnvironment(Map.of(
+                "WIGGLE_STORAGE_TOPOLOGY", DOC, "WIGGLE_JDBC_REPLICA_URLS", "jdbc:postgresql://r1/wiggle",
+                "PG_USER", "u", "PG_PASS", "p", "S1_PASS", "q")), "a sharded deployment lists replicas per shard");
     }
 
     @Test @DisplayName("the environment names the document as a path or inline, and never alongside WIGGLE_JDBC_URL")

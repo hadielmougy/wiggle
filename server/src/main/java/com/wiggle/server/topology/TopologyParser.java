@@ -1,6 +1,7 @@
 package com.wiggle.server.topology;
 
 import com.wiggle.core.Json;
+import com.wiggle.server.store.ReplicatedStorage;
 import com.wiggle.server.store.ShardState;
 import com.wiggle.server.topology.Topology.Connection;
 import com.wiggle.server.topology.Topology.Generation;
@@ -35,12 +36,14 @@ public final class TopologyParser {
     /** Names the document: a file path, or the document itself when it starts with {@code '{'}. */
     public static final String ENV = "WIGGLE_STORAGE_TOPOLOGY";
 
-    /** Settings for read replicas, which arrive with read-replica support and are refused until then. */
+    /** Read replicas of a deployment on one database, named by {@code WIGGLE_JDBC_REPLICA_URLS}. */
     private static final List<String> REPLICA_ENV = List.of("WIGGLE_JDBC_REPLICA_URLS",
             "WIGGLE_JDBC_REPLICA_POOL_SIZE", "WIGGLE_JDBC_MAX_REPLICA_LAG_MILLIS", "WIGGLE_JDBC_REPLICA_FALLBACK");
 
     private static final Pattern VAR = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}");
     private static final int DEFAULT_POOL = 10;
+    private static final int DEFAULT_REPLICA_POOL = 16;
+    private static final long DEFAULT_MAX_REPLICA_LAG_MILLIS = 5_000;
 
     private TopologyParser() {}
 
@@ -49,19 +52,54 @@ public final class TopologyParser {
      * configured with {@code WIGGLE_JDBC_URL}, as before sharding.
      */
     public static Optional<Topology> fromEnvironment(Map<String, String> env) {
-        for (String name : REPLICA_ENV) {
-            if (set(env.get(name))) {
-                throw new IllegalArgumentException(name + " is set, but read replicas are not supported yet");
-            }
-        }
         String value = env.get(ENV);
-        if (!set(value)) return Optional.empty();
+        boolean replicaEnv = REPLICA_ENV.stream().anyMatch(n -> set(env.get(n)));
+        if (!set(value)) return replicaEnv ? Optional.of(oneDatabase(env)) : Optional.empty();
+        if (replicaEnv) {
+            throw new IllegalArgumentException("WIGGLE_JDBC_REPLICA_* is set alongside " + ENV
+                    + "; a sharded deployment lists each shard's replicas in the topology");
+        }
         if (set(env.get("WIGGLE_JDBC_URL"))) {
             throw new IllegalArgumentException("both " + ENV + " and WIGGLE_JDBC_URL are set; a sharded "
                     + "deployment names every database in the topology, so unset WIGGLE_JDBC_URL");
         }
         String document = value.stripLeading().startsWith("{") ? value : read(Path.of(value.trim()));
         return Optional.of(parse(document, env));
+    }
+
+    /**
+     * The one-shard topology of a deployment on one database with read replicas: {@code WIGGLE_JDBC_*}
+     * for the primary, {@code WIGGLE_JDBC_REPLICA_URLS} (comma-separated) for the replicas.
+     */
+    private static Topology oneDatabase(Map<String, String> env) {
+        String url = env.get("WIGGLE_JDBC_URL");
+        if (!set(url)) throw bad("WIGGLE_JDBC_REPLICA_* is set without WIGGLE_JDBC_URL, the primary they replicate");
+        String urls = env.get("WIGGLE_JDBC_REPLICA_URLS");
+        if (!set(urls)) throw bad("a WIGGLE_JDBC_REPLICA_* setting is set without WIGGLE_JDBC_REPLICA_URLS");
+        String user = env.get("WIGGLE_JDBC_USER"), password = env.get("WIGGLE_JDBC_PASSWORD");
+        int replicaPool = poolOf(number(env, "WIGGLE_JDBC_REPLICA_POOL_SIZE"), "a replica",
+                DEFAULT_REPLICA_POOL);
+        List<Connection> replicas = new ArrayList<>();
+        for (String r : urls.split(",")) {
+            if (!r.isBlank()) replicas.add(new Connection(r.trim(), user, password, replicaPool));
+        }
+        Shard shard = new Shard(0, ShardState.ACTIVE, EnumSet.of(Role.INSTANCES, Role.HOME, Role.AUTH),
+                new Connection(url, user, password, poolOf(number(env, "WIGGLE_JDBC_POOL_SIZE"), "the primary", 10)),
+                replicas, lagOf(number(env, "WIGGLE_JDBC_MAX_REPLICA_LAG_MILLIS"), "the replicas"),
+                fallbackOf(env.get("WIGGLE_JDBC_REPLICA_FALLBACK"), "WIGGLE_JDBC_REPLICA_FALLBACK"));
+        Topology t = new Topology(List.of(shard), List.of(new Generation(1, 0, Map.of(0, 1))));
+        validate(t);
+        return t;
+    }
+
+    private static Object number(Map<String, String> env, String name) {
+        String v = env.get(name);
+        if (!set(v)) return null;
+        try {
+            return Long.parseLong(v.trim());
+        } catch (NumberFormatException e) {
+            throw bad(name + " is not a whole number: '" + v + "'");
+        }
     }
 
     private static String read(Path path) {
@@ -97,20 +135,51 @@ public final class TopologyParser {
         Set<Role> roles = EnumSet.noneOf(Role.class);
         for (Object r : array(s, "roles")) roles.add(enumOf(Role.class, String.valueOf(r), what + " role"));
         if (roles.isEmpty()) throw bad(what + " has no roles");
-        if (!array(s, "replicas").isEmpty()) {
-            throw bad(what + " lists replicas, but read replicas are not supported yet");
-        }
         Map<String, Object> primary = object(s, "primary");
         Connection conn = null;
         if (!primary.isEmpty() || roles.contains(Role.INSTANCES) || roles.contains(Role.HOME)) {
-            String url = interpolate(string(primary, "url", what + " primary"), env, what + " primary url");
-            if (url == null || url.isBlank()) throw bad(what + " needs a primary url");
-            conn = new Connection(url,
-                    interpolate(setting("user", primary, s, defaults), env, what + " user"),
-                    interpolate(setting("password", primary, s, defaults), env, what + " password"),
-                    poolOf(setting("pool", primary, s, defaults), what));
+            conn = connection(primary, s, defaults, env, what + " primary", "pool", DEFAULT_POOL);
         }
-        return new Shard(id, state, roles, conn);
+        List<Connection> replicas = new ArrayList<>();
+        List<Object> listed = array(s, "replicas");
+        for (int i = 0; i < listed.size(); i++) {
+            replicas.add(connection(Json.asObject(listed.get(i)), s, defaults, env, what + " replica " + (i + 1),
+                    "replicaPool", DEFAULT_REPLICA_POOL));
+        }
+        if (!replicas.isEmpty() && conn == null) throw bad(what + " lists replicas but has no primary");
+        Object lag = s.containsKey("maxReplicaLagMillis") ? s.get("maxReplicaLagMillis") : defaults.get("maxReplicaLagMillis");
+        Object fallback = s.containsKey("replicaFallback") ? s.get("replicaFallback") : defaults.get("replicaFallback");
+        return new Shard(id, state, roles, conn, replicas, lagOf(lag, what),
+                fallbackOf(fallback == null ? null : String.valueOf(fallback), what + " replicaFallback"));
+    }
+
+    /**
+     * A connection: its url from {@code own}, and user, password and pool from {@code own}, else the
+     * shard, else the defaults. A replica's own {@code pool} overrides the inherited {@code replicaPool}.
+     */
+    private static Connection connection(Map<String, Object> own, Map<String, Object> shard,
+                                         Map<String, Object> defaults, Map<String, String> env, String what,
+                                         String poolKey, int defaultPool) {
+        String url = interpolate(string(own, "url", what), env, what + " url");
+        if (url == null || url.isBlank()) throw bad(what + " needs a url");
+        Object pool = own.containsKey("pool") ? own.get("pool") : setting(poolKey, own, shard, defaults);
+        return new Connection(url,
+                interpolate(setting("user", own, shard, defaults), env, what + " user"),
+                interpolate(setting("password", own, shard, defaults), env, what + " password"),
+                poolOf(pool, what, defaultPool));
+    }
+
+    private static long lagOf(Object v, String what) {
+        if (v == null) return DEFAULT_MAX_REPLICA_LAG_MILLIS;
+        if (!(v instanceof Number n) || n.longValue() < 0 || n.doubleValue() != n.longValue()) {
+            throw bad(what + " maxReplicaLagMillis must be a non-negative integer, got " + v);
+        }
+        return n.longValue();
+    }
+
+    private static ReplicatedStorage.Fallback fallbackOf(String v, String what) {
+        if (v == null || v.isBlank()) return ReplicatedStorage.Fallback.PRIMARY;
+        return enumOf(ReplicatedStorage.Fallback.class, v, what);
     }
 
     /** A connection setting: the primary's, else the shard's, else the document default. */
@@ -121,8 +190,8 @@ public final class TopologyParser {
         return defaults.get(key);
     }
 
-    private static int poolOf(Object v, String what) {
-        if (v == null) return DEFAULT_POOL;
+    private static int poolOf(Object v, String what, int defaultPool) {
+        if (v == null) return defaultPool;
         if (!(v instanceof Number n) || n.intValue() < 1 || n.doubleValue() != n.intValue()) {
             throw bad(what + " pool must be a positive integer, got " + v);
         }
@@ -165,7 +234,8 @@ public final class TopologyParser {
             }
             Set<Role> roles = EnumSet.copyOf(s.roles());
             roles.add(Role.AUTH);
-            out.add(new Shard(s.id(), s.state(), roles, s.primary()));
+            out.add(new Shard(s.id(), s.state(), roles, s.primary(), s.replicas(), s.maxReplicaLagMillis(),
+                    s.replicaFallback()));
         }
         return out;
     }

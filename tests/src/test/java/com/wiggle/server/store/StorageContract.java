@@ -1369,6 +1369,16 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("the replica heartbeat reads back what the primary last stamped")
+    void theShardBeatReadsBack() {
+        storage.inTxVoid(tx -> tx.claimShardIdentity(7));
+        storage.inTxVoid(tx -> tx.writeShardBeat(now));
+        assertEquals(now, storage.inTx(tx -> tx.shardBeat()).orElseThrow());
+        storage.inTxVoid(tx -> tx.writeShardBeat(now + 1));
+        assertEquals(now + 1, storage.inTx(tx -> tx.shardBeat()).orElseThrow());
+    }
+
+    @Test
     @DisplayName("the shard registry keeps one row per shard, replaced in place")
     void theShardRegistryKeepsOneRowPerShard() {
         int shard = (int) (System.nanoTime() & 0x3fffffff);

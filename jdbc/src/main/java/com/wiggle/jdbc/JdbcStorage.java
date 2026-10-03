@@ -47,6 +47,7 @@ public final class JdbcStorage implements Storage {
     private final HikariDataSource ds;
     private final Jdbi jdbi;
     private final String fingerprint;
+    private final boolean readOnly;
 
     /** Attempts a transaction gets when it rolled back on a momentary failure; 1 disables the replay. */
     private final int txAttempts = (int) envLong("wiggle.jdbc.txAttempts", "WIGGLE_JDBC_TX_ATTEMPTS", 3);
@@ -57,7 +58,21 @@ public final class JdbcStorage implements Storage {
 
     /** Explicit-dialect constructor used by the per-database modules. */
     public JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect) {
+        this(url, user, password, poolSize, dialect, false);
+    }
+
+    /**
+     * A store over a read replica: its connections are read-only, it is never migrated, and it opens
+     * even while the replica is unreachable, so a replica that is down at startup costs reads from it
+     * rather than the node.
+     */
+    public static JdbcStorage readReplica(String url, String user, String password, int poolSize, Dialect dialect) {
+        return new JdbcStorage(url, user, password, poolSize, dialect, true);
+    }
+
+    private JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect, boolean readOnly) {
         this.dialect = Objects.requireNonNull(dialect, "dialect");
+        this.readOnly = readOnly;
         this.fingerprint = fingerprintOf(dialect.id() + ':' + url);
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(url);
@@ -68,7 +83,11 @@ public final class JdbcStorage implements Storage {
         // stays in manual-commit, read-committed mode.
         cfg.setAutoCommit(false);
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
-        cfg.setPoolName("wiggle-" + dialect.id());
+        cfg.setPoolName("wiggle-" + dialect.id() + (readOnly ? "-replica" : ""));
+        if (readOnly) {
+            cfg.setReadOnly(true);
+            cfg.setInitializationFailTimeout(-1);
+        }
         this.ds = new HikariDataSource(cfg);
         this.jdbi = Jdbi.create(this.ds)
                 .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
@@ -459,6 +478,11 @@ public final class JdbcStorage implements Storage {
               retired_at   BIGINT
             );
             ALTER TABLE wf_node ADD COLUMN IF NOT EXISTS topology_generation BIGINT;
+            """),
+            // The replica-lag heartbeat: the leader stamps it on every primary, and each node reads it
+            // back from the replicas.
+            new Migration(24, "shard-beat", """
+            ALTER TABLE wf_shard ADD COLUMN IF NOT EXISTS beat_at BIGINT;
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -474,6 +498,7 @@ public final class JdbcStorage implements Storage {
      * with the distribution's {@code WIGGLE_MIGRATE_ONLY=true}, then run the app in {@code verify}.
      */
     @Override public void migrate() {
+        if (readOnly) throw new IllegalStateException("a read replica is not migrated; its primary is");
         applyMigrations(MIGRATIONS, "baseline", modeFromEnv());
     }
 
@@ -1785,6 +1810,17 @@ public final class JdbcStorage implements Storage {
             h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard (k,shard_id) VALUES ('self',:shard)"))
                     .bind("shard", shardId)
                     .execute();
+        }
+
+        @Override public OptionalLong shardBeat() {
+            List<Long> beats = h.createQuery("SELECT beat_at FROM wf_shard WHERE k='self' AND beat_at IS NOT NULL")
+                    .mapTo(Long.class)
+                    .list();
+            return beats.isEmpty() ? OptionalLong.empty() : OptionalLong.of(beats.getFirst());
+        }
+
+        @Override public void writeShardBeat(long now) {
+            h.createUpdate("UPDATE wf_shard SET beat_at=:now WHERE k='self'").bind("now", now).execute();
         }
 
         @Override public List<Rows.ShardRecord> shardRegistry() {
