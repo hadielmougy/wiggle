@@ -15,26 +15,51 @@ import java.util.function.Function;
  */
 public final class ShardedStorage implements Storage {
 
+    /**
+     * One shard this store routes to.
+     *
+     * @param instances whether it holds instances, so that sweeps, claims and console reads visit it
+     */
+    public record Member(int id, ShardState state, boolean instances, Storage storage) {}
+
     private final Map<Integer, Storage> shards;
+    private final List<Member> members;
     private final List<Integer> instanceShards;
     private final int home;
 
-    /**
-     * @param shards every shard by its permanent id, in the order fan-out visits them; each one holds
-     *               instances
-     * @param home   the shard holding the cluster-global rows
-     */
+    /** Every shard ACTIVE and holding instances, by its permanent id, in the order fan-out visits them. */
     public ShardedStorage(Map<Integer, Storage> shards, int home) {
-        if (shards.isEmpty()) throw new IllegalArgumentException("a sharded store needs at least one shard");
-        if (!shards.containsKey(home)) {
-            throw new IllegalArgumentException("home shard " + home + " is not one of " + shards.keySet());
+        this(shards.entrySet().stream()
+                .map(e -> new Member(e.getKey(), ShardState.ACTIVE, true, e.getValue())).toList(), home);
+    }
+
+    /**
+     * @param members the shards, in the order fan-out visits them
+     * @param home    the shard holding the cluster-global rows
+     */
+    public ShardedStorage(List<Member> members, int home) {
+        if (members.isEmpty()) throw new IllegalArgumentException("a sharded store needs at least one shard");
+        Map<Integer, Storage> byId = new LinkedHashMap<>();
+        for (Member m : members) {
+            if (m.id() < 0) throw new IllegalArgumentException("a shard id is not negative: " + m.id());
+            if (byId.put(m.id(), m.storage()) != null) {
+                throw new IllegalArgumentException("shard " + m.id() + " is listed twice");
+            }
         }
-        shards.keySet().forEach(id -> {
-            if (id < 0) throw new IllegalArgumentException("a shard id is not negative: " + id);
-        });
-        this.shards = new LinkedHashMap<>(shards);
-        this.instanceShards = List.copyOf(this.shards.keySet());
+        if (!byId.containsKey(home)) {
+            throw new IllegalArgumentException("home shard " + home + " is not one of " + byId.keySet());
+        }
+        this.shards = byId;
+        this.members = List.copyOf(members);
+        this.instanceShards = members.stream()
+                .filter(m -> m.instances() && m.state() != ShardState.RETIRED).map(Member::id).toList();
+        if (instanceShards.isEmpty()) throw new IllegalArgumentException("no shard holds instances");
         this.home = home;
+    }
+
+    /** The shards, in the order fan-out visits them. */
+    public List<Member> members() {
+        return members;
     }
 
     @Override public void migrate() {

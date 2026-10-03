@@ -34,7 +34,7 @@ public final class Main {
                 storage.migrate();
             }
             System.out.println("Wiggle schema migrated ("
-                    + (config.isInMemory() ? "in-memory (no-op)" : config.jdbcUrl()) + "); exiting (WIGGLE_MIGRATE_ONLY).");
+                    + storage(config) + "); exiting (WIGGLE_MIGRATE_ONLY).");
             return;
         }
 
@@ -42,11 +42,16 @@ public final class Main {
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle server '" + config.nodeName() + "' on port " + server.port()
                 + " (gRPC: " + (tls ? "TLS" : "plaintext")
-                + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
+                + ", storage: " + storage(config) + ")");
         String logFile = System.getenv("WIGGLE_LOG_FILE");
         if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         Thread.currentThread().join();
+    }
+
+    private static String storage(ServerConfig config) {
+        if (config.topology() != null) return config.topology().shards().size() + " shards";
+        return config.isInMemory() ? "in-memory" : config.jdbcUrl();
     }
 }
