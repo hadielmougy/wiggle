@@ -9,6 +9,7 @@ import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
@@ -228,14 +229,10 @@ final class Tokens {
         return tx.hasActiveTokens(instanceId);
     }
 
-    record LockedTask(Instance inst, Token token) {}
-
     /** The task's instance, locked, and the task as it stands under that lock. */
     static LockedTask lock(Tx tx, String taskId) {
-        Instance inst = tx.lockInstanceOf(taskId).orElseThrow(() -> tx.findToken(taskId).isPresent()
+        return tx.lockTask(taskId).orElseThrow(() -> tx.findToken(taskId).isPresent()
                 ? EngineException.notFound("instance") : EngineException.notFound("task"));
-        Token token   = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
-        return new LockedTask(inst, token);
     }
 
     static void requireLease(Token t, String leaseOwner) {

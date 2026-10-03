@@ -4,6 +4,7 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.BufferedTx;
 import com.wiggle.server.store.Tx;
@@ -63,7 +64,7 @@ final class LocalAsyncBatch {
                 probed.stream().map(Run::startTaskId).toList()));
 
         List<Run> survivors = new ArrayList<>();
-        Map<String, Tokens.LockedTask> tasks = new HashMap<>();
+        Map<String, LockedTask> tasks = new HashMap<>();
         for (Run run : probed) {
             Instance inst = locked.get(instanceOf.get(run.startTaskId()));
             Token t = inst == null ? null : tokens.get(run.startTaskId());
@@ -71,7 +72,7 @@ final class LocalAsyncBatch {
             if (refusal != null) {
                 results.put(run.startTaskId(), refusal);
             } else {
-                tasks.put(run.startTaskId(), new Tokens.LockedTask(inst, t));
+                tasks.put(run.startTaskId(), new LockedTask(inst, t));
                 survivors.add(run);
             }
         }

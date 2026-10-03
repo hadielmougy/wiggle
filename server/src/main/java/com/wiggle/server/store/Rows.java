@@ -177,6 +177,9 @@ public final class Rows {
         }
     }
 
+    /** A task's instance, locked, and the task as it stands under that lock. */
+    public record LockedTask(Instance inst, Token token) { }
+
     /**
      * A snapshot of the dispatchable backlog: how many worker-dispatched tokens (TASK/PREDICATE)
      * are READY and due right now, and the {@code availableAt} of the oldest of them (0 if none).

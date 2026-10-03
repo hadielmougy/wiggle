@@ -44,6 +44,12 @@ public interface Tx extends GraphStore {
         return findToken(tokenId).flatMap(t -> lockInstance(t.instanceId));
     }
 
+    /** {@code lockInstanceOf}, and token {@code tokenId} read under that lock; empty when either the
+     *  token or its instance is missing. */
+    default Optional<Rows.LockedTask> lockTask(String tokenId) {
+        return lockInstanceOf(tokenId).flatMap(i -> findToken(tokenId).map(t -> new Rows.LockedTask(i, t)));
+    }
+
     /**
      * {@code lockInstance} for a set of rows, {@code ids} already sorted ascending. The default
      * loops -- exactly today's one-lock-per-statement, in the caller's order. A JDBC backend
