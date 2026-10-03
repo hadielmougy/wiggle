@@ -6,6 +6,7 @@ dependencies {
     implementation(project(":client"))
     // Only the single-JVM Demo needs the server on its classpath.
     implementation(project(":server"))
+    implementation(project(":console"))   // the portal the dashboard seed serves
     // So the benchmark can run against a real database (WIGGLE_JDBC_URL) to show LOCAL_ASYNC's
     // commit-batching win. Storage is an explicit StorageFactory (no ServiceLoader), so Benchmark
     // wires JdbcStorage + a dialect itself -- these must be on the compile classpath.
@@ -19,7 +20,7 @@ application {
 
 tasks.register<JavaExec>("seedDashboard") {
     group = "application"
-    description = "Starts a server (:8080) seeded with data across every console tab; explore with :console:run."
+    description = "Starts a server (:8080) seeded with data across every portal tab, serving the portal on :8070."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.wiggle.order.DashboardSeed")
 }

@@ -111,8 +111,8 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=server ∣ console`,
-every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
+The `Dockerfile` builds one image: the server, with the portal behind `WIGGLE_PORTAL_PORT` and
+every storage backend bundled, picked from the URL scheme; it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
 keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
 and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whichever you prefer.
@@ -122,19 +122,19 @@ and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whic
 docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.9            # Docker Hub
 # docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.9  # …or GHCR
 
-# the ops console against it (same image, different role) → http://localhost:8090
-docker run --rm -p 8090:8090 -e WIGGLE_ROLE=console -e WIGGLE_URL=host.docker.internal:8080 \
+# the same, serving the portal → http://localhost:8070
+docker run --rm -p 8080:8080 -p 8070:8070 -e WIGGLE_PORTAL_PORT=8070 \
   -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.9
 
-# a complete stack: server + Postgres + console with login, durable volume, no TLS
-docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
+# a complete stack: server with the portal + Postgres, login, durable volume, no TLS
+docker compose -f docker-compose.full.yml up -d      # → http://localhost:8070 (admin / change-me)
 
 # build locally / publish multi-arch
 docker build -t wiggle .
 scripts/docker-release.sh                             # buildx amd64+arm64, pushes to a registry
 ```
 
-The image is the control plane (+ optional console role) only; run **workers** as separate
+The image is the control plane (+ the optional portal) only; run **workers** as separate
 processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:runWorker`).
 
 ### 4.5 Handy scripts
@@ -388,7 +388,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
-| `WIGGLE_ROLE` | — | `server` | which process this image runs: `server` or `console`. `cell` is the old name for `server` and still works; an unrecognised value fails at startup |
+| `WIGGLE_ROLE` | — | `server` | which process this image runs: only `server`. `cell` is the old name for it and still works; `console` and `coordinator` were removed and are refused, as is any unrecognised value |
 | `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port (`0` = pick a free one) |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name shown in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | **unset = in-memory, single node**; set to cluster on a database |
@@ -402,7 +402,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_LEASE_MILLIS` | `wiggle.lease.millis` | `30000` | default task lease before a stalled step is reclaimed |
-| `WIGGLE_RECORD_STEP_IO` | `wiggle.stepIo.record` | `true` | record each step's input and output on its token, for the console |
+| `WIGGLE_RECORD_STEP_IO` | `wiggle.stepIo.record` | `true` | record each step's input and output on its token, for the portal |
 | `WIGGLE_STEP_IO_MAX_CHARS` | `wiggle.stepIo.maxChars` | `65536` | cap per recorded input/output; a longer one keeps its first 4096 characters and its length |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `wiggle.longpoll.maxMillis` | `20000` | server-side cap on how long a `PollTasks` may block |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `wiggle.poll.intervalMillis` | `1000` | housekeeping tick cadence (timers, lease reclaim, deadlines) |
@@ -504,27 +504,28 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 
 ## 7. Operations
 
-### 7.1 The ops console (web UI)
+### 7.1 The portal (web UI)
 
-The web UI is the standalone **ops console** — the `console` module, a separate process that is a
-**pure gRPC client** (embedded Tomcat + servlets). Server nodes serve **no UI**; a node's
-`WIGGLE_DASHBOARD_PORT` (default `0` = off) exposes only the **`/healthz`** probe for
-liveness/readiness checks.
+The web UI is the **portal**, served by the server process itself on `WIGGLE_PORTAL_PORT`
+(default `0` = off), separate from the gRPC port (the `console` module, embedded Tomcat +
+servlets). It reads and acts through the engine in process, so any node with the portal on
+serves the whole cluster, and nothing it does goes over gRPC. A node's `WIGGLE_DASHBOARD_PORT`
+(default `0` = off) still serves only the **`/healthz`** probe for liveness/readiness checks.
 
-One binary, two modes, chosen by env:
+To keep heavy portal use off the claim path, run a node or two with the portal on and route no
+workers to them; they are ordinary server nodes.
 
 ```bash
-# direct mode: one cluster
-WIGGLE_URL=localhost:8080 ./gradlew :console:run          # → http://localhost:8090
+# something to look at: a seeded server on :8080 with the portal on :8070 (a completed run,
+# two runs parked on a signal, two schedules)
+./gradlew :example:seedDashboard                         # → http://localhost:8070
 
-# something to look at: a seeded server on :8080 (a completed run, two runs parked on a
-# signal, two schedules)
-./gradlew :example:seedDashboard
-
-
-# or via the Docker image
-WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
+# or on any server node, e.g. the Docker image
+docker run -p 8080:8080 -p 8070:8070 -e WIGGLE_PORTAL_PORT=8070 -e WIGGLE_DASHBOARD_PASSWORD=… hadielmougy/wiggle
 ```
+
+Sessions are held by the node that signed you in, so a load balancer in front of several portal
+nodes needs sticky sessions for now.
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
 has seven tabs: **Instances** (filter, search by **instance id or correlation id**, each instance's
@@ -534,21 +535,21 @@ delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry p
 **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
 execution mode, slowest first), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
-npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
+npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a portal on :8070).
 
-![The console's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
+![The portal's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
 
 **Auth.** Two roles: **admin** does everything, **viewer** sees everything but is refused any
 mutating call (cancel, signal, schedule, users — every non-GET `/api/*`). Browsers get a
 `/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
 auth. Credentials travel cleartext over plain HTTP, so serve over TLS for anything exposed.
 
-Accounts come from two places. **Built-in** accounts are configured where the console is
-deployed: `WIGGLE_DASHBOARD_PASSWORD` for the admin (`WIGGLE_DASHBOARD_USER`, default `admin`)
+Accounts come from two places. **Built-in** accounts are configured in the environment of the
+nodes serving the portal: `WIGGLE_DASHBOARD_PASSWORD` for the admin (`WIGGLE_DASHBOARD_USER`, default `admin`)
 and optionally `WIGGLE_DASHBOARD_VIEWER_PASSWORD` for a viewer (`WIGGLE_DASHBOARD_VIEWER_USER`,
-default `viewer`). Nothing in the running console can change them. **Managed** accounts are the
-ones an admin creates in the console itself (§7.1a). With neither a built-in password nor a
-managed account, the console is open and every request is an admin (warning at startup).
+default `viewer`). Nothing in the running portal can change them. **Managed** accounts are the
+ones an admin creates in the portal itself (§7.1a). With neither a built-in password nor a
+managed account, the portal is open and every request is an admin (warning at startup).
 
 ### 7.1a Users an admin manages
 
@@ -558,19 +559,18 @@ a managed account can change their own password from the header, proving their c
 first. A viewer may do that too — it is the one write a viewer is allowed, since it changes
 nothing but their own account.
 
-Accounts live in a JSON file the console owns, `WIGGLE_CONSOLE_USERS_FILE` (default
-`wiggle-users.json` in the working directory), **not** in the workflow database. The gRPC
-control plane has no per-RPC authorization yet, so anything stored behind it is reachable by
-every worker that can dial the server; console credentials stay out of that blast radius. In
-Kubernetes that means mounting a volume for the file, or the accounts go when the pod does.
+Accounts live in a JSON file the node serving the portal owns, `WIGGLE_CONSOLE_USERS_FILE`
+(default `wiggle-users.json` in the working directory), **not** in the workflow database; each
+portal node keeps its own. In Kubernetes that means mounting a volume for the file, or the
+accounts go when the pod does.
 
 Passwords are stored as PBKDF2-HMAC-SHA256 hashes over a per-account random salt, never in the
 clear, and the file is rewritten atomically and kept owner-only where the filesystem allows.
 
-Three rules keep a console reachable:
+Three rules keep a portal reachable:
 
 - A managed account cannot take a built-in account's name, and built-in accounts cannot be
-  deleted or re-passworded from the console — they are set in the environment.
+  deleted or re-passworded from the portal — they are set in the environment.
 - The last remaining admin cannot be deleted when there is no built-in admin to fall back on.
 - Creating the first managed account **turns authentication on**, even if no password was
   configured. Sign in with the account you just made.
@@ -580,21 +580,20 @@ changing stays signed in. Deleting an account signs it out everywhere.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | direct mode: the one cluster to serve |
-| `WIGGLE_DASHBOARD_PORT` | `8090` | console HTTP port |
+| `WIGGLE_PORTAL_PORT` | `0` (off) | portal HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
-| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where accounts an admin creates in the console are kept ([§7.1a](#71a-users-an-admin-manages)) |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console + the client certs it presents to the server |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where accounts an admin creates in the portal are kept ([§7.1a](#71a-users-an-admin-manages)) |
+| `WIGGLE_TLS_*` | *(unset)* | the server's keystore serves the portal over HTTPS too; with a truststore, the portal requires client certificates as gRPC does |
 
 ### 7.1a Transport security (TLS / mTLS)
 
-Opt-in and shared by the gRPC API and the console's HTTP. A **keystore** turns TLS on for both;
+Opt-in and shared by the gRPC API and the portal's HTTP. A **keystore** turns TLS on for both;
 a **truststore** additionally requires client certificates (mTLS on the server) and presents a
 client certificate (on a worker/client). Unset ⇒ plaintext for both. Stores are PKCS12 by default;
 a `.jks` path is loaded as JKS. Clients/workers read the same variables. TLS secures the channel
 and (with mTLS) authenticates the peer, but it is **not authorization** — any trusted peer may call
-any RPC; layer the console's login/Basic auth or an external gateway on top for role separation.
+any RPC; layer the portal's login/Basic auth or an external gateway on top for role separation.
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
@@ -633,7 +632,7 @@ loses.
 ### 7.3 Signals, sub-workflows and schedules
 
 `thenAwait(name)` parks an instance until the named signal arrives; no worker is held. Deliver
-via `client.signal(instanceId, name, payload)` (gRPC), the console's Signals tab, or
+via `client.signal(instanceId, name, payload)` (gRPC), the portal's Signals tab, or
 `POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
 `thenAwait(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
 branch instead. Signals are not buffered -- an early delivery is a retryable conflict.

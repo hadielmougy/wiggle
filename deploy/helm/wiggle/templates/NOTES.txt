@@ -11,6 +11,12 @@ Port-forward it to your machine:
 Then point a client at localhost:{{ .Values.service.grpcPort }}.
 
 Liveness/readiness use the always-open /healthz on port {{ .Values.service.healthPort }}.
+{{- if gt (int .Values.service.portalPort) 0 }}
+
+The portal is on port {{ .Values.service.portalPort }} of every pod:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.portalPort }}:{{ .Values.service.portalPort }}
+Sessions are held by the pod that signed you in, so put sticky sessions on any load balancer in front.
+{{- end }}
 
 {{- if not (or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret) }}
 

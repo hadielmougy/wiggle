@@ -90,7 +90,7 @@ inspected, traced and versioned like any other row in your database.
 - 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
   (PostgreSQL, or in-memory for dev). Embed the server in your JVM for tests, or run it as one
   process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
-- 🖥 **Operable from day one** — a web **ops console** (every instance step by step — each
+- 🖥 **Operable from day one** — a web **portal** served by the server (every instance step by step — each
   step's input, output, retries and timing — cancel, deliver signals, schedules, search by
   instance or correlation id, per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
 
@@ -181,24 +181,22 @@ helm install wiggle deploy/helm/wiggle \
   --set replicaCount=3
 ```
 
-### 2.3 The ops console
+### 2.3 The portal
 
-A standalone web UI that is a **pure gRPC client** — point it at a cluster with `WIGGLE_URL`.
-Every instance as a table of the steps it ran — click a step to expand its **input, output,
+A web UI the server serves on its own port when `WIGGLE_PORTAL_PORT` is set, reading the engine
+in process — any node with it on serves the whole cluster. Every instance as a table of the steps it ran — click a step to expand its **input, output,
 retries and timing** — plus cancel, deliver signals, schedules, and search by
 **instance id or correlation id**. Optional login with an operator account and a **read-only
-viewer** account, and an admin can add further accounts of either role from the console itself,
-each able to change its own password. Server nodes themselves serve no UI — just a `/healthz`
-probe for Kubernetes.
+viewer** account, and an admin can add further accounts of either role from the portal itself,
+each able to change its own password. The `/healthz` probe for Kubernetes stays on its own port.
 
-![The console's instance detail: an onboarding run as a table of its steps — fork, join, a sub-workflow, and a signal step waiting on manager approval — with the first step expanded to its input, output, retries and timing, and an inline deliver button.](docs/img/console-instance-trace.png)
+![The portal's instance detail: an onboarding run as a table of its steps — fork, join, a sub-workflow, and a signal step waiting on manager approval — with the first step expanded to its input, output, retries and timing, and an inline deliver button.](docs/img/console-instance-trace.png)
 
 The **Performance** tab reads the same timings for every execution mode: each step's p50/p95
 by the handler's own clock and how long it waited to be claimed, slowest first.
 
 ```bash
-WIGGLE_URL=localhost:8080 ./gradlew :console:run    # → http://localhost:8090
-./gradlew :example:seedDashboard                    # a seeded server to point it at (:8080)
+./gradlew :example:seedDashboard                    # a seeded server with the portal → http://localhost:8070
 ```
 
 ---
@@ -390,20 +388,20 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 4. Architecture
 
-![Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; a standalone ops console is another gRPC client.](docs/img/architecture.svg)
+![Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; operators reach the portal each node can serve over HTTP.](docs/img/architecture.svg)
 
 | Component | Module | What it does |
 |---|---|---|
 | **Engine (server)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
-| **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
-| **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=server ∣ console`, every storage backend bundled. |
+| **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
+| **Distribution** | `dist` | The one runnable image: the server with the portal, every storage backend bundled. |
 
 **The mechanics that make it hold together:**
 
 - **Tokens over a graph** — an instance is rows, not a call stack: tokens mark where execution
-  is on the compiled graph. Crash-safe by construction; the console renders it live.
+  is on the compiled graph. Crash-safe by construction; the portal renders it live.
 - **Leases, not locks** — a claimed step carries a lease; if the worker dies, the lease expires
   and the step is redelivered. At-least-once execution, exactly-once dispatch.
 - **Declared, immutable versions** — you publish a topology at a version you choose
@@ -497,7 +495,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP max pool size |
 | `WIGGLE_JDBC_TX_ATTEMPTS` | `3` | replays for a transaction that rolled back on a momentary database failure; `1` disables |
 | `WIGGLE_LEASE_MILLIS` | `30000` | task lease before a stalled step is reclaimed |
-| `WIGGLE_RECORD_STEP_IO` | `true` | record each step's input and output for the console (`false` turns it off) |
+| `WIGGLE_RECORD_STEP_IO` | `true` | record each step's input and output for the portal (`false` turns it off) |
 | `WIGGLE_STEP_IO_MAX_CHARS` | `65536` | cap per recorded input/output; longer ones keep their first 4096 characters |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `20000` | max server-side block of a worker poll |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `1000` | housekeeping / dispatch loop cadence |
@@ -508,7 +506,8 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
-| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint (the UI moved to the console) |
+| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint |
+| `WIGGLE_PORTAL_PORT` | `0` (off) | port for the web **portal** (below) |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
@@ -516,18 +515,18 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
 
-### Ops console
+### Portal
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | the cluster to serve |
-| `WIGGLE_DASHBOARD_PORT` | `8090` | HTTP port |
+| `WIGGLE_PORTAL_PORT` | `0` (off) | HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS + the client certs it presents to the server |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | accounts an admin creates in the portal, held by that node |
+| `WIGGLE_TLS_*` | *(unset)* | the same keystore serves the portal over HTTPS |
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
-> upgrades it to mTLS; the console adds operator/viewer authorization. TLS authenticates the
+> upgrades it to mTLS; the portal adds operator/viewer authorization. TLS authenticates the
 > connection — per-RPC authorization is on the [roadmap](#7-roadmap).
 
 ---
@@ -536,10 +535,8 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 Where it's going — the honest list:
 
-- [ ] **Pending-signals over gRPC** — enumerate parked signal waits from the console
-      (a `PendingSignals` RPC).
 - [ ] **Per-RPC authorization** — identity-based (client-certificate) allow-listing and role
-      separation on the control plane itself; SSO for the console.
+      separation on the control plane itself; SSO for the portal.
 - [x] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
       stops; it does not roll back).
 - [x] **Worker-reported timings** — every execution mode lands in the same Performance view,

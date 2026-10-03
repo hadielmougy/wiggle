@@ -1,8 +1,10 @@
 package com.wiggle.console;
 
-import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.server.engine.EngineException;
+import com.wiggle.server.store.ShardRetiredException;
+import com.wiggle.server.store.StorageException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * The console's whole HTTP surface as one servlet (mapped to {@code /}): the JSON {@code /api/*}
@@ -24,6 +27,7 @@ import java.util.Map;
 public final class DashboardServlet extends HttpServlet {
 
     private static final long serialVersionUID = 1L;
+    private static final System.Logger LOG = System.getLogger(DashboardServlet.class.getName());
     private static final String HTML = "text/html; charset=utf-8";
     private static final String JSON = "application/json; charset=utf-8";
 
@@ -58,13 +62,28 @@ public final class DashboardServlet extends HttpServlet {
         } catch (IllegalArgumentException | IllegalStateException e) {
             // A rejected user name, password or role: the caller's mistake, not the console's.
             error(res, 400, e.getMessage());
-        } catch (WiggleApiException e) {
-            error(res, e.status(), e.getMessage());
+        } catch (EngineException e) {
+            error(res, e.statusCode(), e.getMessage());
+        } catch (ShardRetiredException e) {
+            error(res, 404, e.getMessage());
+        } catch (StorageException e) {
+            if (e.repeatable()) {
+                error(res, 503, "storage temporarily unavailable (ref " + logged(e) + ")");
+            } else {
+                error(res, 500, "internal error (ref " + logged(e) + ")");
+            }
         } catch (RuntimeException e) {
-            error(res, 500, e.getMessage());
+            error(res, 500, "internal error (ref " + logged(e) + ")");
         }
     }
 
+
+    /** Logs {@code e} with its detail and returns the reference the response carries in its place. */
+    private static String logged(RuntimeException e) {
+        String ref = UUID.randomUUID().toString().substring(0, 8);
+        LOG.log(System.Logger.Level.WARNING, "portal request failed [" + ref + "]", e);
+        return ref;
+    }
 
     private void authInfo(HttpServletRequest req, HttpServletResponse res) throws IOException {
         ConsoleAuth.Role role = auth.role(req);   // null if auth is required and the caller isn't authenticated

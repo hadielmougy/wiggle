@@ -71,6 +71,10 @@ def render_tunables(specs: list[dict], current: dict, key_prefix: str, cols: int
             val = col.checkbox(key, value=seed, key=wkey, help=s["help"])
             if val != default:
                 out[key] = val
+        elif kind_ == "secret":
+            raw = col.text_input(key, value=cur or "", key=wkey, type="password", help=s["help"]).strip()
+            if raw:
+                out[key] = raw
         elif kind_ == "enum":
             choices = s["choices"]
             seed = cur if cur in choices else (default if default in choices else choices[0])
@@ -373,48 +377,27 @@ with forwards:
                 st.rerun()
 
     st.divider()
-    st.markdown("**Ops console (web UI)**")
-    st.caption("The console is a pod serving the web UI: a pure gRPC client of one server. Deploy one, "
-               "forward it, and open the link. (Server nodes serve no dashboard — "
-               "they expose only a /healthz probe.) Leave passwords blank for open access; set an "
-               "**operator** password to require login, and optionally a **viewer** password for a "
-               "read-only account (can view, but not cancel/signal/schedule).")
-    consoles = {cn["target"]: cn for cn in lab.consoles()}
+    st.markdown("**Portal (web UI)**")
+    st.caption("Every server node serves the portal; forward a server's and open the link. Set "
+               "WIGGLE_DASHBOARD_PASSWORD (and optionally WIGGLE_DASHBOARD_VIEWER_PASSWORD) in the "
+               "server's config to require a login; blank leaves it open. Sessions are held by the node "
+               "that signed you in, so with several nodes a sign-in may not stick across requests.")
     if not cells:
         st.caption("No servers yet — deploy one on the Servers tab first.")
     for ns in sorted(c["cell"] for c in cells):
-        cn = consoles.get(C.dns_safe(ns))
         k1, k2, k3 = st.columns([2, 3, 1.3])
-        deployed = cn is not None
-        ready = deployed and cn["ready"] == cn["desired"] and cn["desired"] > 0
-        k1.markdown(f"**{ns}** · {'✅ ready' if ready else ('⏳ pending' if deployed else '— not deployed —')}")
-        if not deployed:
-            op = k2.text_input("operator password", key=f"console-op-{ns}", type="password",
-                               placeholder="operator password (blank = open access)",
-                               label_visibility="collapsed")
-            vw = k2.text_input("viewer password", key=f"console-vw-{ns}", type="password",
-                               placeholder="viewer password (read-only, optional)",
-                               label_visibility="collapsed")
-            if vw and not op:
-                k2.caption("⚠️ a viewer password needs an operator password too — it's ignored otherwise")
-            if k3.button("Deploy", key=f"console-deploy-{ns}"):
-                action(f"Deploy console for {ns}", lab.deploy_console, ns, op or None, vw or None)
-                st.rerun()
-            continue
-        addr = lab.console_target(ns)
+        k1.markdown(f"**{ns}**")
+        addr = lab.portal_target(ns)
         if addr:
             k2.markdown(f"[http://{addr}](http://{addr})")
-            if k3.button("Stop", key=f"console-stop-{ns}"):
-                lab.stop_forward_console(ns)
+            if k3.button("Stop", key=f"portal-stop-{ns}"):
+                lab.stop_forward_portal(ns)
                 st.rerun()
         else:
             k2.code("— not forwarded —", language=None)
-            if ready and k3.button("Forward", key=f"console-fw-{ns}"):
-                action(f"Forward console for {ns}", lab.forward_console, ns)
+            if k3.button("Forward", key=f"portal-fw-{ns}"):
+                action(f"Forward portal for {ns}", lab.forward_portal, ns)
                 st.rerun()
-        if st.button("Remove", key=f"console-rm-{ns}"):
-            action(f"Remove console for {ns}", lab.remove_console, ns)
-            st.rerun()
 
 # ---- Logs ----
 with logs_tab:
