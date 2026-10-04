@@ -420,10 +420,10 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 5. Performance
 
-**7,200 durable step executions/sec (900 workflow instances/sec)**, sustained by one server node on
+**9,600 durable step executions/sec (1,200 workflow instances/sec)**, sustained by one server node on
 Cloud SQL for PostgreSQL. Every step is committed to the database, and each instance completes in
-about 3 seconds end to end. At lighter load the end-to-end time is about 260ms: 5,600 steps/sec
-(700 instances/sec) holds flat with no backlog.
+about 1 to 1.5 seconds end to end. At lighter load the end-to-end time is about 260ms: 8,000
+steps/sec (1,000 instances/sec) holds flat with no backlog.
 
 Each instance is the 8-step `order-fulfilment` fork/join workflow: validate, a stock gate, two
 parallel branches, an explicit combine, notify and audit. It runs in `LOCAL_ASYNC` mode. The bench
@@ -432,19 +432,21 @@ ramps the offered start rate and measures *probe sojourn*: the time a fresh inst
 
 | Cloud SQL | sustained load | window | end-to-end latency |
 |---|---|---|---|
-| 8 vCPU | 4,000 steps/s (500/s) | 60s | flat **≈260ms** |
-| 8 vCPU | **4,800 steps/s (600/s)**, the ceiling | 30s | ≈2.5s |
-| 16 vCPU | 5,600 steps/s (700/s) | 30s | flat **≈260ms** |
-| 16 vCPU | **7,200 steps/s (900/s)**, the ceiling | 60s | ≈2.5–3.7s |
+| 8 vCPU | 5,600 steps/s (700/s) | 30s | flat **≈260ms** |
+| 8 vCPU | **7,200 steps/s (900/s)**, the ceiling | 2 × 60s | ≈2–4s |
+| 16 vCPU | 7,200 steps/s (900/s) | 2 × 60s | flat **≈260ms** |
+| 16 vCPU | 8,000 steps/s (1,000/s) | 30s | flat **≈260ms** |
+| 16 vCPU | **9,600 steps/s (1,200/s)**, the ceiling | 30s | ≈0.9–1.4s |
 
-![End-to-end latency over time at four sustained loads on Cloud SQL: 5,600 and 4,000 steps/sec stay flat near 260ms; 7,200 steps/sec on 16 vCPU holds at about 2.5 to 3.7 seconds and 4,800 steps/sec on 8 vCPU near 2.5 seconds.](docs/img/bench-gcp-sojourn.svg)
+![End-to-end latency over time at four sustained loads on Cloud SQL: 8,000 and 5,600 steps/sec stay flat near 260ms; 9,600 steps/sec on 16 vCPU holds at about 0.9 to 1.4 seconds and 7,200 steps/sec on 8 vCPU at about 2 to 4 seconds.](docs/img/bench-gcp-sojourn.svg)
 
-![The ceiling follows the database: 4,800 durable step executions/sec (600 instances/sec) on an 8 vCPU Cloud SQL, 7,200 (900/s) on 16 vCPU, with flat 260ms latency up to 4,000 and 5,600 steps/sec respectively.](docs/img/bench-gcp-ceiling.svg)
+![The ceiling follows the database: 7,200 durable step executions/sec (900 instances/sec) on an 8 vCPU Cloud SQL, 9,600 (1,200/s) on 16 vCPU, with flat 260ms latency up to 5,600 and 8,000 steps/sec respectively.](docs/img/bench-gcp-ceiling.svg)
 
-**The database sets the ceiling, not the server.** At the ceiling, Cloud SQL ran at ≈90% CPU
-(8 vCPU) and ≈75% (16 vCPU). The server node stayed at 25–40% CPU and the workers had headroom.
-Under load the same statements slowed 4–5×: a `wf_token` update went from 0.4ms to 2ms. Doubling
-the database's vCPUs raised the ceiling 1.5×. Adding server nodes on the same database would not
+**The database sets the ceiling, not the server.** At the ceiling the server node stayed under 50%
+CPU and the workers had headroom. On 8 vCPU, Cloud SQL ran at ≈80% CPU. On 16 vCPU it peaked at only
+63%: there the limit is time spent waiting on instance locks, because the two branches of a fork
+finish together and the second one's report waits for the first one's commit. Doubling the
+database's vCPUs raised the ceiling 1.33×. Adding server nodes on the same database would not
 raise it.
 
 **Size the connection pool to the load.** With `WIGGLE_JDBC_POOL_SIZE=32` (the default is 10),
@@ -461,7 +463,7 @@ Raising the pool to 128 removed the limit.
 | Server | 1 node, `c3-standard-8`, `WIGGLE_JDBC_POOL_SIZE=128`, default settings otherwise |
 | Workers | own `c3-standard-8`: 4 processes × 256 slots, `LOCAL_ASYNC` batch 64 |
 | Load generator | own `c3-standard-8`: `RateCeilingBench`, 256 submitter threads |
-| Build | revision `dc7022c`, OpenJDK 21, fresh database |
+| Build | revision `0dcff87`, OpenJDK 21; one database, resized from 8 to 16 vCPU between runs |
 
 A regional (HA) Cloud SQL instance adds a synchronous standby to every commit, so expect a lower
 ceiling there.
