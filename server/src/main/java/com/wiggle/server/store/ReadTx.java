@@ -72,6 +72,21 @@ public interface ReadTx extends GraphReads {
     /** The best {@code query.limit()} matches on this shard, filters applied, best first. Held on a search shard. */
     List<Rows.SearchHit> searchDocs(Rows.SearchQuery query);
 
+    /** The nearest {@code query.limit()} documents by cosine similarity (the score), filters applied. Held on a search shard. */
+    List<Rows.SearchHit> searchVectors(Rows.VectorQuery query);
+
+    /** Up to {@code max} documents with no {@code model} vector, or one older than the document. Held on a search shard. */
+    List<Rows.SearchDoc> docsNeedingVector(String model, int max);
+
+    /** How many documents changed before {@code updatedBefore} have no {@code model} vector. Held on a search shard. */
+    long countDocsWithoutVector(String model, long updatedBefore);
+
+    /** The vectors of these instances, under every model. Held on a search shard. */
+    List<Rows.SearchVector> searchVectorsOf(List<String> instanceIds);
+
+    /** Every embedding model the registry knows. Held on the home shard. */
+    List<Rows.SearchModel> searchModels();
+
     /** Up to {@code max} documents with an instance id after {@code afterId}, in id order. Held on a search shard. */
     List<Rows.SearchDoc> searchDocsAfter(String afterId, int max);
 

@@ -106,6 +106,10 @@ Read by a server node that serves the portal.
 | `WIGGLE_SEARCH_ENABLED` | `false` | full-text search on the one database (a topology enables it with a `search` shard instead) |
 | `WIGGLE_SEARCH_RETENTION_MILLIS` | `2592000000` | how long a search document outlives its instance's last change (30 days) |
 | `WIGGLE_SEARCH_WORKFLOWS` | *(all)* | comma-separated workflows to index; unset indexes every one |
+| `WIGGLE_SEARCH_UPKEEP_MILLIS` | `60000` | how often the leader applies search retention, rebalances, backfills vectors and moves the embedding model on |
+| `WIGGLE_EMBEDDER` | `none` | semantic search: `none`, `hashing` (no model; development) or `http` (an OpenAI-compatible `/embeddings` API) |
+| `WIGGLE_EMBEDDER_URL` / `_MODEL` / `_DIMENSION` / `_API_KEY` | *(unset)* | the `http` embedder's API root, model, vector size and key (`_DIMENSION` alone sizes `hashing`, default 256) |
+| `WIGGLE_EMBEDDER_PREVIOUS_MODEL` / `_DIMENSION` | *(unset)* | the model being replaced, on the same service, so semantic queries keep working while the new index builds |
 | `WIGGLE_TLS_*` | *(unset)* | the server's keystore and truststore serve the portal's HTTPS too |
 
 **WGL-OPS-004** (MUST) A definition's `DEFAULT` execution mode MUST resolve to `SERVER`. There is

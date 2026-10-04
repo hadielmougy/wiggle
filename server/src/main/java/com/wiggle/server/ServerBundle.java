@@ -1,6 +1,7 @@
 package com.wiggle.server;
 
 import com.wiggle.server.auth.AuthCache;
+import com.wiggle.server.search.Embedder;
 import com.wiggle.server.search.Search;
 import com.wiggle.server.search.SearchIndex;
 import com.wiggle.server.search.SearchIndexer;
@@ -38,10 +39,12 @@ final class ServerBundle {
     private final GrpcApi api;
     private final Search search;
     private final SearchIndexer indexer;
+    private final long upkeepMillis;
     /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
     private final HealthServer health;
 
-    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache) throws IOException {
+    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache,
+                 List<Embedder> embedders) throws IOException {
         super();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
                 config.topology() == null ? InstanceIds.across(storage.instanceShards())
@@ -54,12 +57,15 @@ final class ServerBundle {
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         if (config.searchEnabled()) {
             SearchIndex index = new SearchIndex(storage, searchTargets(config, storage));
-            this.search = new Search(index, engine);
+            this.search = new Search(index, engine, storage, embedders);
             this.indexer = new SearchIndexer(engine, storage, index, cluster, config.search().retention().toMillis(),
-                    config.search().workflows(), System::currentTimeMillis);
+                    config.search().workflows(), embedders.isEmpty() ? null : embedders.getFirst(),
+                    System::currentTimeMillis);
+            this.upkeepMillis = config.search().upkeep().toMillis();
         } else {
             this.search = null;
             this.indexer = null;
+            this.upkeepMillis = 0;
         }
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
                 config.tls(), config.memory(), new Authorizer(config.auth().grpc(), authCache), search);
@@ -85,7 +91,7 @@ final class ServerBundle {
     }
 
     public void start() {
-        if (indexer != null) indexer.start(250);
+        if (indexer != null) indexer.start(250, upkeepMillis);
         housekeeper.start();
         replicaMonitor.start();
         queueLagMonitor.start();

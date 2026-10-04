@@ -114,6 +114,9 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, Rows.AuthCredential> authCredentials = new TreeMap<>();
     /** The search documents, by instance id. Guarded by the global lock. */
     private final TreeMap<String, Rows.SearchDoc> searchDocs = new TreeMap<>();
+    /** instance id -> model -> vector. Guarded by the global lock. */
+    private final Map<String, Map<String, Rows.SearchVector>> searchVectors = new HashMap<>();
+    private final Map<String, Rows.SearchModel> searchModels = new TreeMap<>();
     private final List<Rows.AuthAudit> authAudit = new ArrayList<>();
 
     private final class MemTx implements Tx {
@@ -297,13 +300,74 @@ public final class InMemoryStorage implements Storage {
 
         @Override public void deleteSearchDoc(String instanceId) {
             searchDocs.remove(instanceId);
+            searchVectors.remove(instanceId);
         }
 
         @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
             List<String> old = searchDocs.values().stream().filter(d -> d.updatedAt() < updatedBefore)
                     .limit(max).map(Rows.SearchDoc::instanceId).toList();
-            old.forEach(searchDocs::remove);
+            old.forEach(this::deleteSearchDoc);
             return old.size();
+        }
+
+        @Override public void upsertSearchVectors(List<Rows.SearchVector> vectors) {
+            for (Rows.SearchVector v : vectors) {
+                Map<String, Rows.SearchVector> byModel = searchVectors.computeIfAbsent(v.instanceId(), k -> new HashMap<>());
+                Rows.SearchVector held = byModel.get(v.model());
+                if (held == null || held.updatedAt() <= v.updatedAt()) byModel.put(v.model(), v);
+            }
+        }
+
+        @Override public int deleteSearchVectors(String model, int max) {
+            int n = 0;
+            for (Map<String, Rows.SearchVector> byModel : searchVectors.values()) {
+                if (n >= max) break;
+                if (byModel.remove(model) != null) n++;
+            }
+            searchVectors.values().removeIf(Map::isEmpty);
+            return n;
+        }
+
+        @Override public List<Rows.SearchHit> searchVectors(Rows.VectorQuery q) {
+            Rows.SearchQuery f = q.filters();
+            List<Rows.SearchDoc> filtered = searchDocs.values().stream()
+                    .filter(d -> f.workflows() == null || f.workflows().contains(d.workflow()))
+                    .filter(d -> f.status() == null || f.status().equals(d.status()))
+                    .filter(d -> f.from() == null || d.updatedAt() >= f.from())
+                    .filter(d -> f.to() == null || d.updatedAt() <= f.to())
+                    .toList();
+            Map<String, float[]> vectors = new HashMap<>();
+            for (Rows.SearchDoc d : filtered) {
+                Rows.SearchVector v = searchVectors.getOrDefault(d.instanceId(), Map.of()).get(q.model());
+                if (v != null) vectors.put(d.instanceId(), v.embedding());
+            }
+            return Vectors.nearest(filtered, vectors, q.vector(), q.limit());
+        }
+
+        @Override public List<Rows.SearchDoc> docsNeedingVector(String model, int max) {
+            return searchDocs.values().stream().filter(d -> {
+                Rows.SearchVector v = searchVectors.getOrDefault(d.instanceId(), Map.of()).get(model);
+                return v == null || v.updatedAt() < d.updatedAt();
+            }).limit(max).toList();
+        }
+
+        @Override public long countDocsWithoutVector(String model, long updatedBefore) {
+            return searchDocs.values().stream().filter(d -> d.updatedAt() < updatedBefore)
+                    .filter(d -> !searchVectors.getOrDefault(d.instanceId(), Map.of()).containsKey(model)).count();
+        }
+
+        @Override public List<Rows.SearchVector> searchVectorsOf(List<String> instanceIds) {
+            List<Rows.SearchVector> out = new ArrayList<>();
+            for (String id : instanceIds) out.addAll(searchVectors.getOrDefault(id, Map.of()).values());
+            return out;
+        }
+
+        @Override public List<Rows.SearchModel> searchModels() {
+            return List.copyOf(searchModels.values());
+        }
+
+        @Override public void putSearchModel(Rows.SearchModel model) {
+            searchModels.put(model.model(), model);
         }
 
         @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {

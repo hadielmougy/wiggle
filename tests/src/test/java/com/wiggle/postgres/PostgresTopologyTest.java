@@ -186,10 +186,76 @@ class PostgresTopologyTest {
             }
             assertEquals(List.of(ada), hits.stream().map(WiggleClient.SearchHit::instanceId).toList());
             assertEquals(true, hits.getFirst().score() > 0, "ranked by the database's own full-text search");
+            while (client.search("", null, null, null, null, 10, false).hits().size() < 2
+                    && System.currentTimeMillis() < deadline) {
+                Thread.sleep(100);   // the other instance is indexed in its own batch
+            }
         }
         assertEquals(2, count(databases.get(1), "SELECT COUNT(*) FROM wf_search_doc"), "both instances are indexed");
         assertEquals(1, count(databases.get(1), "SELECT COUNT(*) FROM wf_search_doc WHERE tsv @@ plainto_tsquery('simple', 'turing')"));
         assertEquals(0, count(databases.get(0), "SELECT COUNT(*) FROM wf_search_doc"), "and nothing on the instance shard");
         assertEquals(0, count(databases.get(1), "SELECT COUNT(*) FROM wf_instance"), "nor instances on the search shard");
+    }
+
+    /** Where pgvector is installed: vectors in the native column, under the model's HNSW index. Skipped elsewhere. */
+    @Test @DisplayName("semantic search on a pgvector search shard uses the database's own vector index")
+    void pgvectorSearchShard() throws Exception {
+        Topology t = TopologyParser.parse("""
+                {
+                  "defaults": { "user": "${U}", "password": "${P}", "pool": 4 },
+                  "generations": [ { "id": 1, "activeFrom": "2000-01-01T00:00:00Z", "weights": { "0": 1 } } ],
+                  "shards": [
+                    { "id": 0, "state": "ACTIVE", "roles": ["instances", "home"], "primary": { "url": "%s" } },
+                    { "id": 1, "state": "ACTIVE", "roles": ["search"], "primary": { "url": "%s" } }
+                  ]
+                }
+                """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
+                Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
+        ServerConfig config = new ServerConfig(0, "pg-vector", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
+                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t)
+                .withSearch(new ServerConfig.Search(false, Duration.ofDays(30), java.util.Set.of(), Duration.ofMillis(300)));
+        FlowSpec flow = FlowSpec.define("pg-vector", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory(),
+                List.of(new com.wiggle.server.search.HashingEmbedder(64))).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(count(databases.get(1),
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='wf_search_vec' AND column_name='vec'") == 1,
+                    "pgvector is not installed on this PostgreSQL");
+            client.register(flow);
+            String damaged = client.start("pg-vector", Map.of("note", "parcel arrived damaged, wants a refund"), null, null);
+            client.start("pg-vector", Map.of("note", "invoice settled early"), null, null);
+            long deadline = System.currentTimeMillis() + 20_000;
+            WiggleClient.SearchResult r = null;
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    r = client.search("damaged parcel refund", null, null, null, null, 2, false, true);
+                    if (r.hits().size() == 2) break;
+                } catch (WiggleClient.WiggleApiException building) {
+                    // the model's index is not complete yet
+                }
+                Thread.sleep(200);
+            }
+            assertEquals(damaged, r.hits().getFirst().instanceId());
+            assertEquals("hashing-64", r.model());
+        }
+        String search = databases.get(1);
+        assertEquals(2, count(search, "SELECT COUNT(*) FROM wf_search_vec WHERE vec IS NOT NULL AND model='hashing-64'"),
+                "vectors are in the native column");
+        assertEquals(1, count(search, "SELECT COUNT(*) FROM pg_indexes WHERE tablename='wf_search_vec' AND indexdef LIKE '%hnsw%'"));
+        try (Connection c = DriverManager.getConnection(urlOf(search), TestDb.user("PG"), TestDb.password("PG"));
+             Statement st = c.createStatement()) {
+            st.execute("SET enable_seqscan = off");
+            StringBuilder plan = new StringBuilder();
+            float[] q = new float[64];
+            q[0] = 1;
+            try (ResultSet rs = st.executeQuery("EXPLAIN SELECT instance_id FROM wf_search_vec v WHERE v.model='hashing-64' "
+                    + "AND v.vec IS NOT NULL ORDER BY (v.vec::vector(64) <=> CAST('" + com.wiggle.server.store.Vectors.literal(q)
+                    + "' AS vector(64))) LIMIT 5")) {
+                while (rs.next()) plan.append(rs.getString(1)).append('\n');
+            }
+            assertEquals(true, plan.toString().contains("ix_search_vec_"), "the query shape the store issues can use the HNSW index:\n" + plan);
+        }
     }
 }

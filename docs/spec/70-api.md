@@ -342,5 +342,12 @@ nothing rather than failing.
 **WGL-API-123** (MUST) A search shard that does not answer MUST fail the search `UNAVAILABLE`, unless
 `partial_ok` asks for the hits of the shards that did, with `partial` set.
 
+**WGL-API-124** (MUST) With `semantic`, the hits MUST be the instances whose embedding is closest to
+`text`'s by cosine similarity (the score), under the same filters and scoping, embedded with the
+newest model whose index is complete, named in `model`. It MUST fail `FAILED_PRECONDITION` when the
+server has no embedder, when no model's index is complete yet, or when the node has no embedder for
+the model that is.
+
 *Verified by:* `server/search/SearchEndToEndTest`, `server/search/SearchIndexTest`,
+`server/search/SemanticSearchTest`, `server/search/EmbeddersTest`,
 `server/store/StorageContract` (search chapter, on every backend), `postgres/PostgresTopologyTest`.

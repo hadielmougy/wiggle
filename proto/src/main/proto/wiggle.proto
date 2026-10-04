@@ -66,6 +66,9 @@ message SearchRequest {
     int32 limit = 6;
     // Answer from the search shards that respond when one does not, and say so in `partial`.
     bool partial_ok = 7;
+    // Rank by closeness in meaning (vector search) instead of by the words; needs an embedder and a
+    // complete vector index, else FAILED_PRECONDITION.
+    bool semantic = 8;
 }
 
 message SearchHit {
@@ -84,6 +87,8 @@ message SearchHit {
 message SearchResult {
     repeated SearchHit hits = 1;
     bool partial = 2;
+    // The embedding model a semantic search used; empty for a text search.
+    string model = 3;
 }
 
 message Empty {}

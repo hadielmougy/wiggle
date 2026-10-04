@@ -25,15 +25,21 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
      * Full-text search over instances. On a topology, search runs when a shard carries the search role;
      * on one database (or in memory), when {@code enabled}, on that database. {@code workflows} limits
      * which workflows are indexed (empty: all); {@code retention} is how long a document outlives its
-     * instance's last change.
+     * instance's last change; {@code upkeep} is how often the leader applies retention, rebalances,
+     * backfills vectors and moves the embedding model on.
      */
-    public record Search(boolean enabled, Duration retention, java.util.Set<String> workflows) {
+    public record Search(boolean enabled, Duration retention, java.util.Set<String> workflows, Duration upkeep) {
 
         public static final Search DISABLED = new Search(false, Duration.ofDays(30), java.util.Set.of());
 
         public Search {
             if (retention == null || retention.isNegative() || retention.isZero()) retention = Duration.ofDays(30);
             workflows = workflows == null ? java.util.Set.of() : java.util.Set.copyOf(workflows);
+            if (upkeep == null || upkeep.isNegative() || upkeep.isZero()) upkeep = Duration.ofMinutes(1);
+        }
+
+        public Search(boolean enabled, Duration retention, java.util.Set<String> workflows) {
+            this(enabled, retention, workflows, null);
         }
 
         public static Search fromEnvironment() {
@@ -44,7 +50,8 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
             return new Search(boolProp("wiggle.search.enabled", "WIGGLE_SEARCH_ENABLED", false),
                     Duration.ofMillis(Long.parseLong(strProp("wiggle.search.retentionMillis",
                             "WIGGLE_SEARCH_RETENTION_MILLIS", String.valueOf(Duration.ofDays(30).toMillis())).trim())),
-                    workflows);
+                    workflows,
+                    Duration.ofMillis(intProp("wiggle.search.upkeepMillis", "WIGGLE_SEARCH_UPKEEP_MILLIS", 60_000)));
         }
     }
 

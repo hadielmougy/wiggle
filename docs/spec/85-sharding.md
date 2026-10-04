@@ -642,9 +642,7 @@ input and output, errors) go to dedicated search shards.
 
 ### 14.2 Requirements
 
-**Status: implemented for full-text search**, the first half of step 14 of [§16](#16-delivery-plan).
-Not yet:
-- WGL-SHARD-192 (the `Embedder` SPI and vector search) is the next step.
+**Status: implemented**, full text and vectors (step 14 of [§16](#16-delivery-plan)). Not yet:
 - WGL-SHARD-190's rebuild covers what the event log still retains, from which a new consumer starts.
   A rebuild that walks the instance tables is not built.
 - WGL-SHARD-196's delete on request applies once instances can be deleted on request; today only
@@ -662,6 +660,21 @@ Search runs when a topology shard carries the `search` role, or on the one datab
   default 30 days) and rebalances. `WIGGLE_SEARCH_WORKFLOWS` limits which workflows are indexed.
 - **API.** Search is the `SearchInstances` RPC ([chapter 70 §12](70-api.md#12-search)) and the
   portal's `/api/search`.
+- **Vectors (WGL-SHARD-192).** The `Embedder` SPI (`model()`, `dimension()`, `embed(texts)`) ships
+  with `HttpEmbedder` (the OpenAI-compatible `/embeddings` API: OpenAI, Ollama, vLLM, LiteLLM) and
+  `HashingEmbedder` (no model; for development). `WIGGLE_EMBEDDER` picks one.
+  - *Storage.* Vectors live in `wf_search_vec`, one per instance and model, beside their document.
+    Where pgvector is installed, `migrate()` adds a native `vector` column, and each model gets an HNSW
+    index over `vec::vector(<dimension>)`, partial on the model. Elsewhere the embedding is stored as
+    bytes and compared in Java, exactly and by scan.
+  - *Indexing.* The indexer embeds the documents it writes. If embedding fails, the documents stay
+    searchable by text, and the upkeep's backfill embeds any document without a current vector.
+  - *Changing the model.* The registry `wf_search_model` (home shard) holds each model as BUILDING,
+    READY or RETIRED. A new model is BUILDING until every document indexed before it started has a
+    vector; then it is READY and the one it replaces RETIRED, whose vectors are deleted. A semantic
+    query uses the newest READY model, so a node keeps a replaced model's embedder
+    (`WIGGLE_EMBEDDER_PREVIOUS_MODEL`) to answer during the build; without it, semantic search fails
+    as a precondition until the build completes.
 
 **WGL-SHARD-190** (MUST) A search document MUST be derived data: built from an instance shard, never
 the source of truth, and always rebuildable from the instance shards while the instances are
@@ -788,6 +801,8 @@ weight.
 - **Which instance fields are searchable.** *Settled for now:* search is opt-in per deployment (a
   search shard, or `WIGGLE_SEARCH_ENABLED`), `WIGGLE_SEARCH_WORKFLOWS` limits it to named workflows,
   and step input and output are not indexed. Per-field selection stays open.
+- **Hybrid ranking.** A semantic search ranks by vector alone. Mixing text rank and vector closeness
+  (reciprocal rank fusion) is left until a workload asks for it.
 - **A search engine other than Postgres.** WGL-SHARD-190 to 198 do not depend on pgvector. A
   `SearchStore` SPI would let OpenSearch or a dedicated vector database stand in for search shards;
   pgvector first keeps one operational stack.

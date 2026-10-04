@@ -1676,6 +1676,93 @@ abstract class StorageContract {
         storage.inTx(tx -> { mine.forEach(tx::deleteSearchDoc); return null; });
     }
 
+    // -- WGL-SHARD-192: vectors beside their documents, and the model registry --
+
+    private static float[] vec(float... v) {
+        return v;
+    }
+
+    @Test
+    @DisplayName("the nearest documents by cosine, filtered, from vectors kept per model and replaced only by newer")
+    void searchVectors() {
+        String model = "m-" + run, other = "o-" + run;
+        String near = id("wfi"), far = id("wfi"), billing = id("wfi"), bare = id("wfi");
+        storage.inTx(tx -> {
+            tx.ensureVectorIndex(model, 3);
+            tx.upsertSearchDoc(searchDoc(near, "orders", "RUNNING", "near", ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(far, "orders", "RUNNING", "far", ANCIENT + 2));
+            tx.upsertSearchDoc(searchDoc(billing, "billing", "RUNNING", "billing", ANCIENT + 3));
+            tx.upsertSearchDoc(searchDoc(bare, "orders", "RUNNING", "no vector", ANCIENT + 4));
+            tx.upsertSearchVectors(List.of(
+                    new Rows.SearchVector(near, model, vec(1, 0.1f, 0), ANCIENT + 1),
+                    new Rows.SearchVector(far, model, vec(0, 1, 0), ANCIENT + 2),
+                    new Rows.SearchVector(billing, model, vec(1, 0, 0), ANCIENT + 3),
+                    new Rows.SearchVector(near, other, vec(0, 0, 1), ANCIENT + 1)));
+            return null;
+        });
+        List<Rows.SearchHit> hits = storage.inTx(tx -> tx.searchVectors(
+                new Rows.VectorQuery(model, vec(1, 0, 0), java.util.Set.of("orders"), null, null, null, 10)));
+        assertEquals(List.of(near, far), hits.stream().map(h -> h.doc().instanceId()).toList(),
+                "closest first; another workflow, and a document with no vector, are left out");
+        assertTrue(hits.get(0).score() > 0.99 && Math.abs(hits.get(1).score()) < 0.01, hits.toString());
+        assertEquals(List.of(billing, near), storage.inTx(tx -> tx.searchVectors(
+                new Rows.VectorQuery(model, vec(1, 0, 0), null, null, ANCIENT + 1, ANCIENT + 3, 2)))
+                .stream().map(h -> h.doc().instanceId()).toList(), "time bounds and limit");
+
+        storage.inTx(tx -> {
+            tx.upsertSearchVectors(List.of(new Rows.SearchVector(near, model, vec(0, 0, 1), ANCIENT)));
+            return null;
+        });
+        assertEquals(near, storage.inTx(tx -> tx.searchVectors(new Rows.VectorQuery(model, vec(1, 0.1f, 0),
+                java.util.Set.of("orders"), null, null, null, 1))).getFirst().doc().instanceId(),
+                "an older vector delivered late does not replace the newer one");
+
+        List<Rows.SearchVector> held = storage.inTx(tx -> tx.searchVectorsOf(List.of(near)));
+        assertEquals(java.util.Set.of(model, other), held.stream().map(Rows.SearchVector::model).collect(java.util.stream.Collectors.toSet()));
+        float[] back = held.stream().filter(v -> v.model().equals(model)).findFirst().orElseThrow().embedding();
+        assertEquals(3, back.length);
+        assertEquals(0.1f, back[1], 1e-6, "a vector reads back as written");
+
+        storage.inTx(tx -> { tx.deleteSearchDoc(near); return null; });
+        assertTrue(storage.inTx(tx -> tx.searchVectorsOf(List.of(near))).isEmpty(), "a document takes its vectors with it");
+        assertEquals(2, (int) storage.inTx(tx -> tx.deleteSearchVectors(model, 100)));
+        assertTrue(storage.inTx(tx -> tx.searchVectors(new Rows.VectorQuery(model, vec(1, 0, 0), null, null, null, null, 10)))
+                .isEmpty());
+        storage.inTx(tx -> { List.of(far, billing, bare).forEach(tx::deleteSearchDoc); return null; });
+    }
+
+    @Test
+    @DisplayName("documents needing a vector: none yet, or one older than the document")
+    void docsNeedingVectors() {
+        String model = "n-" + run;
+        String fresh = id("wfi"), stale = id("wfi"), missing = id("wfi");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(searchDoc(fresh, "wf", "RUNNING", "a", ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(stale, "wf", "COMPLETED", "b", ANCIENT + 9));
+            tx.upsertSearchDoc(searchDoc(missing, "wf", "RUNNING", "c", ANCIENT + 2));
+            tx.upsertSearchVectors(List.of(new Rows.SearchVector(fresh, model, vec(1, 0, 0), ANCIENT + 1),
+                    new Rows.SearchVector(stale, model, vec(1, 0, 0), ANCIENT + 5)));
+            return null;
+        });
+        List<String> needing = storage.inTx(tx -> tx.docsNeedingVector(model, 10_000)).stream()
+                .map(Rows.SearchDoc::instanceId).filter(List.of(fresh, stale, missing)::contains).toList();
+        assertEquals(java.util.Set.of(stale, missing), java.util.Set.copyOf(needing));
+        assertEquals(1L, (long) storage.inTx(tx -> tx.countDocsWithoutVector(model, ANCIENT + 3))
+                - storage.inTx(tx -> tx.countDocsWithoutVector(model, ANCIENT + 1)),
+                "a document changed before the bound with no vector at all counts; a stale one does not");
+        storage.inTx(tx -> { List.of(fresh, stale, missing).forEach(tx::deleteSearchDoc); return null; });
+    }
+
+    @Test
+    @DisplayName("the model registry records each model's state and is replaced row by row")
+    void searchModels() {
+        String model = "r-" + run;
+        storage.inTx(tx -> { tx.putSearchModel(new Rows.SearchModel(model, 768, Rows.SearchModel.BUILDING, now, null)); return null; });
+        storage.inTx(tx -> { tx.putSearchModel(new Rows.SearchModel(model, 768, Rows.SearchModel.READY, now, now + 1)); return null; });
+        assertEquals(new Rows.SearchModel(model, 768, Rows.SearchModel.READY, now, now + 1),
+                storage.inTx(tx -> tx.searchModels()).stream().filter(m -> m.model().equals(model)).findFirst().orElseThrow());
+    }
+
     // -- WGL-STOR-005: the store's own identity --
 
     @Test

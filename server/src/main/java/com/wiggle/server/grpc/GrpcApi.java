@@ -493,13 +493,25 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 throw EngineException.conflict("search is not enabled: give a shard the search role, "
                         + "or set WIGGLE_SEARCH_ENABLED=true on a single database");
             }
-            com.wiggle.server.search.Search.Result r = search.search(req.getText(),
-                    req.hasWorkflow() ? req.getWorkflow() : null, req.hasStatus() ? req.getStatus() : null,
-                    req.getUpdatedFrom() > 0 ? req.getUpdatedFrom() : null,
-                    req.getUpdatedTo() > 0 ? req.getUpdatedTo() : null,
-                    req.getLimit() > 0 ? req.getLimit() : 20, req.getPartialOk(), authz.readableWorkflows());
-            SearchResult.Builder out = SearchResult.newBuilder().setPartial(r.partial());
-            for (com.wiggle.server.search.Search.Hit h : r.hits()) {
+            String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
+            String status = req.hasStatus() ? req.getStatus() : null;
+            Long from = req.getUpdatedFrom() > 0 ? req.getUpdatedFrom() : null;
+            Long to = req.getUpdatedTo() > 0 ? req.getUpdatedTo() : null;
+            int limit = req.getLimit() > 0 ? req.getLimit() : 20;
+            SearchResult.Builder out = SearchResult.newBuilder();
+            List<com.wiggle.server.search.Search.Hit> hits;
+            if (req.getSemantic()) {
+                com.wiggle.server.search.Search.SemanticResult r = search.semantic(req.getText(), workflow, status,
+                        from, to, limit, req.getPartialOk(), authz.readableWorkflows());
+                out.setPartial(r.partial()).setModel(r.model());
+                hits = r.hits();
+            } else {
+                com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
+                        limit, req.getPartialOk(), authz.readableWorkflows());
+                out.setPartial(r.partial());
+                hits = r.hits();
+            }
+            for (com.wiggle.server.search.Search.Hit h : hits) {
                 out.addHits(SearchHit.newBuilder().setInstanceId(h.instanceId()).setWorkflow(h.workflow())
                         .setVersion(h.version()).setStatus(h.status())
                         .setCorrelationId(h.correlationId() == null ? "" : h.correlationId())

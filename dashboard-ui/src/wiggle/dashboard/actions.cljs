@@ -20,7 +20,7 @@
 
 (defn load-instances! []
   (let [f (:filter @db)]
-    (if (and (= :text (:search-by f)) (seq (:search f)))
+    (if (and (#{:text :meaning} (:search-by f)) (seq (:search f)))
       (-> (api/search-instances f)
           (.then #(swap! db assoc :instances (:hits %) :partial (:partial %)))
           (.catch st/on-error))
