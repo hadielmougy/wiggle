@@ -186,9 +186,10 @@ helm install wiggle deploy/helm/wiggle \
 A web UI the server serves on its own port when `WIGGLE_PORTAL_PORT` is set, reading the engine
 in process — any node with it on serves the whole cluster. Every instance as a table of the steps it ran — click a step to expand its **input, output,
 retries and timing** — plus cancel, deliver signals, schedules, and search by
-**instance id or correlation id**. Optional login with an operator account and a **read-only
-viewer** account, and an admin can add further accounts of either role from the portal itself,
-each able to change its own password. The `/healthz` probe for Kubernetes stays on its own port.
+**instance id or correlation id**. Optional login: built-in admin and **read-only viewer**
+accounts from the environment, plus accounts and **roles built from permissions** (scoped to a
+workflow if you like) managed in the portal and kept in the database, with an audit of every
+change. Any node serves any signed-in session. The `/healthz` probe for Kubernetes stays on its own port.
 
 ![The portal's instance detail: an onboarding run as a table of its steps — fork, join, a sub-workflow, and a signal step waiting on manager approval — with the first step expanded to its input, output, retries and timing, and an inline deliver button.](docs/img/console-instance-trace.png)
 
@@ -395,7 +396,7 @@ class per recipe where the other is a topology file plus a handlers file.
 | **Engine (server)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
-| **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
+| **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; accounts and permission-set roles on the auth shard. |
 | **Distribution** | `dist` | The one runnable image: the server with the portal, every storage backend bundled. |
 
 **The mechanics that make it hold together:**
@@ -522,11 +523,12 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_PORTAL_PORT` | `0` (off) | HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |
-| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | accounts an admin creates in the portal, held by that node |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session; accounts, roles and sessions live on the auth shard |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once and then no longer read |
 | `WIGGLE_TLS_*` | *(unset)* | the same keystore serves the portal over HTTPS |
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
-> upgrades it to mTLS; the portal adds operator/viewer authorization. TLS authenticates the
+> upgrades it to mTLS; the portal adds accounts with permission-set roles. TLS authenticates the
 > connection — per-RPC authorization is on the [roadmap](#7-roadmap).
 
 ---

@@ -30,6 +30,9 @@ public interface Storage extends AutoCloseable {
     /** The shard holding the cluster-global rows: nodes, schedules, event cursors. */
     default int home() { return 0; }
 
+    /** The shard holding accounts, roles and sessions. */
+    default int auth() { return home(); }
+
     /** The shards that hold instances, in a stable order. */
     default List<Integer> instanceShards() { return List.of(home()); }
 
@@ -44,6 +47,9 @@ public interface Storage extends AutoCloseable {
 
     /** A transaction on the {@link #home} shard. */
     default <R> R inHome(Function<Tx, R> work) { return inShard(home(), work); }
+
+    /** A transaction on the {@link #auth} shard. */
+    default <R> R inAuth(Function<Tx, R> work) { return inShard(auth(), work); }
 
     /** A read-only transaction on one shard, served by a replica when {@code freshness} allows. */
     default <R> R readShard(int shard, Freshness freshness, Function<ReadTx, R> work) {

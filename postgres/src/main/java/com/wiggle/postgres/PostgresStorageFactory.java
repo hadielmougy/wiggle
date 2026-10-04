@@ -45,23 +45,23 @@ public class PostgresStorageFactory implements StorageFactory {
     }
 
     /**
-     * One store per shard that holds instances or the cluster-global rows, behind a
-     * {@link ShardedStorage}. Shards that only carry auth or search hold nothing the engine reads yet,
-     * so they are not opened.
+     * One store per shard that holds instances, the cluster-global rows or accounts, behind a
+     * {@link ShardedStorage}. Shards that only carry search hold nothing the server reads yet, so they
+     * are not opened.
      */
     public static ShardedStorage sharded(Topology topology) {
         List<ShardedStorage.Member> members = new ArrayList<>();
         try {
             for (Topology.Shard s : topology.shards()) {
                 boolean instances = s.has(Topology.Role.INSTANCES);
-                if (!instances && !s.has(Topology.Role.HOME)) continue;
+                if (!instances && !s.has(Topology.Role.HOME) && !s.has(Topology.Role.AUTH)) continue;
                 members.add(new ShardedStorage.Member(s.id(), s.state(), instances, shard(s)));
                 int replicaConnections = s.replicas().stream().mapToInt(Topology.Connection::pool).sum();
                 LOG.log(System.Logger.Level.INFO, () -> "shard " + s.id() + ": up to " + s.primary().pool()
                         + " primary and " + replicaConnections + " replica connection(s) per node, over "
                         + s.replicas().size() + " replica(s)");
             }
-            return new ShardedStorage(members, topology.home());
+            return new ShardedStorage(members, topology.home(), topology.only(Topology.Role.AUTH).id());
         } catch (RuntimeException e) {
             members.forEach(m -> {
                 try { m.storage().close(); } catch (RuntimeException suppressed) { e.addSuppressed(suppressed); }

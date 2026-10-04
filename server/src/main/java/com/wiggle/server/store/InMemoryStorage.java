@@ -106,6 +106,13 @@ public final class InMemoryStorage implements Storage {
     /** consumer -> shard -> acknowledged seq, for shards other than home. */
     private final Map<String, Map<Integer, Long>> eventPositions = new ConcurrentHashMap<>();
 
+    /** The auth shard's rows. Guarded by the global lock. */
+    private final Map<String, Rows.AuthUser> authUsers = new LinkedHashMap<>();
+    private final Map<String, SortedSet<String>> authGrants = new HashMap<>();
+    private final Map<String, Rows.AuthRole> authRoles = new TreeMap<>();
+    private final Map<String, Rows.AuthSession> authSessions = new HashMap<>();
+    private final List<Rows.AuthAudit> authAudit = new ArrayList<>();
+
     private final class MemTx implements Tx {
 
         /** Writes apply directly under the storage lock; a throw undoes nothing. */
@@ -167,6 +174,91 @@ public final class InMemoryStorage implements Storage {
 
         @Override public List<String> definitionNames() {
             return new ArrayList<>(new TreeSet<>(versions.keySet()));
+        }
+
+        @Override public Optional<Rows.AuthUser> findAuthUser(String name) {
+            return Optional.ofNullable(authUsers.get(name));
+        }
+
+        @Override public List<Rows.AuthUser> authUsers() {
+            return authUsers.values().stream()
+                    .sorted(Comparator.comparingLong(Rows.AuthUser::createdAt)).toList();
+        }
+
+        @Override public List<String> authRolesOf(String user) {
+            return List.copyOf(authGrants.getOrDefault(user, new TreeSet<>()));
+        }
+
+        @Override public List<Rows.AuthRole> authRoles() {
+            return List.copyOf(authRoles.values());
+        }
+
+        @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) {
+            return Optional.ofNullable(authSessions.get(idHash));
+        }
+
+        @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) {
+            return authAudit.stream().filter(a -> a.seq() > afterSeq).limit(max).toList();
+        }
+
+        @Override public long authAuditHead() {
+            return authAudit.isEmpty() ? 0 : authAudit.getLast().seq();
+        }
+
+        @Override public boolean authAuditHas(String action) {
+            return authAudit.stream().anyMatch(a -> a.action().equals(action));
+        }
+
+        @Override public void putAuthUser(Rows.AuthUser user) {
+            authUsers.put(user.name(), user);
+        }
+
+        @Override public boolean deleteAuthUser(String name) {
+            authGrants.remove(name);
+            authSessions.values().removeIf(x -> x.user().equals(name));
+            return authUsers.remove(name) != null;
+        }
+
+        @Override public void setAuthRolesOf(String user, List<String> roles) {
+            if (roles.isEmpty()) authGrants.remove(user);
+            else authGrants.put(user, new TreeSet<>(roles));
+        }
+
+        @Override public void putAuthRole(Rows.AuthRole role) {
+            authRoles.put(role.name(), role);
+        }
+
+        @Override public boolean deleteAuthRole(String name) {
+            authGrants.values().forEach(g -> g.remove(name));
+            authGrants.values().removeIf(Set::isEmpty);
+            return authRoles.remove(name) != null;
+        }
+
+        @Override public void insertAuthSession(Rows.AuthSession session) {
+            authSessions.put(session.idHash(), session);
+        }
+
+        @Override public void deleteAuthSession(String idHash) {
+            authSessions.remove(idHash);
+        }
+
+        @Override public int deleteAuthSessionsOf(String user, String keepIdHash) {
+            int before = authSessions.size();
+            authSessions.values().removeIf(x -> x.user().equals(user) && !x.idHash().equals(keepIdHash));
+            return before - authSessions.size();
+        }
+
+        @Override public int deleteExpiredAuthSessions(long now, int max) {
+            List<String> expired = authSessions.values().stream().filter(x -> x.expiresAt() < now)
+                    .limit(max).map(Rows.AuthSession::idHash).toList();
+            expired.forEach(authSessions::remove);
+            return expired.size();
+        }
+
+        @Override public long appendAuthAudit(Rows.AuthAudit e) {
+            long seq = authAuditHead() + 1;
+            authAudit.add(new Rows.AuthAudit(seq, e.at(), e.actor(), e.action(), e.target(), e.detail()));
+            return seq;
         }
 
         @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }

@@ -2,7 +2,8 @@
   "The whole UI state in one reagent atom, with a couple of derived helpers. Deliberately a
    minimal store rather than re-frame: the dashboard is small and this keeps the dependency
    surface tiny."
-  (:require [reagent.core :as r]))
+  (:require [reagent.core :as r]
+            [clojure.string :as str]))
 
 (defonce db
   (r/atom
@@ -47,11 +48,20 @@
 (defn set-filter! [k v] (swap! db assoc-in [:filter k] v))
 (defn set-perf! [k v] (swap! db assoc-in [:perf k] v))
 
-;; ---- authorization: true unless the server says this session is read-only (a viewer) ----
-(defn can-write? [] (get-in @db [:auth :canWrite] true))
+;; ---- authorization: the permissions the server says this session holds ----
+(defn can?
+  "Whether this session may do `action`, on `scope` when given, else on at least one scope.
+   True until the server has answered, so nothing flickers away on load."
+  ([action] (can? action nil))
+  ([action scope]
+   (let [ps (get-in @db [:auth :permissions])]
+     (or (nil? ps)
+         (boolean (some #(or (= % "*") (= % action)
+                             (if scope (= % (str action ":" scope)) (str/starts-with? % (str action ":"))))
+                        ps))))))
 
-;; ---- console accounts: an admin manages them, and only when this console keeps a user file ----
+;; ---- accounts: managed on the auth shard, by whoever holds user.manage ----
 (defn manages-users? [] (boolean (get-in @db [:auth :managesUsers])))
-(defn can-manage-users? [] (and (manages-users?) (can-write?)))
+(defn can-manage-users? [] (and (manages-users?) (can? "user.manage")))
 ;; A built-in account's password comes from the environment, so the console cannot change it.
 (defn can-change-password? [] (boolean (get-in @db [:auth :canChangePassword])))

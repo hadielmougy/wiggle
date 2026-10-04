@@ -119,4 +119,39 @@ class PostgresTopologyTest {
         assertEquals(2, count(databases.get(0), "SELECT COUNT(*) FROM wf_shard_registry"), "the registry is on home");
         assertEquals(0, count(databases.get(1), "SELECT COUNT(*) FROM wf_shard_registry"), "and only there");
     }
+
+    @Test @DisplayName("accounts, roles, sessions and their audit live on the auth shard, and only there")
+    void authShard() throws Exception {
+        Topology t = TopologyParser.parse("""
+                {
+                  "defaults": { "user": "${U}", "password": "${P}", "pool": 4 },
+                  "generations": [ { "id": 1, "activeFrom": "2000-01-01T00:00:00Z", "weights": { "0": 1 } } ],
+                  "shards": [
+                    { "id": 0, "state": "ACTIVE", "roles": ["instances", "home"], "primary": { "url": "%s" } },
+                    { "id": 1, "state": "ACTIVE", "roles": ["auth"], "primary": { "url": "%s" } }
+                  ]
+                }
+                """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
+                Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
+        ServerConfig config = new ServerConfig(0, "pg-auth", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
+                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
+            server.accounts().create(null, "dana", "dana-password", List.of("admin"), java.util.Set.of(), true);
+            server.accounts().openSession("dana", 60_000);
+            assertEquals(true, server.accounts().account("dana").orElseThrow().passwordMatches("dana-password"));
+        }
+        String auth = databases.get(1), home = databases.get(0);
+        assertEquals(1, count(auth, "SELECT shard_id FROM wf_shard WHERE k='self'"), "the auth database is claimed");
+        assertEquals(1, count(auth, "SELECT COUNT(*) FROM wf_auth_user WHERE name='dana'"));
+        assertEquals(1, count(auth, "SELECT COUNT(*) FROM wf_auth_user_role WHERE user_name='dana' AND role_name='admin'"));
+        assertEquals(2, count(auth, "SELECT COUNT(*) FROM wf_auth_role WHERE builtin=1"));
+        assertEquals(1, count(auth, "SELECT COUNT(*) FROM wf_auth_session WHERE user_name='dana'"));
+        assertEquals(true, count(auth, "SELECT COUNT(*) FROM wf_auth_audit") >= 3);
+        for (String table : List.of("wf_auth_user", "wf_auth_role", "wf_auth_session", "wf_auth_audit")) {
+            assertEquals(0, count(home, "SELECT COUNT(*) FROM " + table), table + " is empty on home");
+        }
+        assertEquals(0, count(auth, "SELECT COUNT(*) FROM wf_instance"), "the auth shard holds no instances");
+    }
 }

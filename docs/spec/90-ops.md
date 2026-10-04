@@ -99,7 +99,8 @@ Read by a server node that serves the portal.
 |---|---|---|
 | `WIGGLE_DASHBOARD_USER` / `_PASSWORD` | `admin` / *(unset)* | built-in admin; unset password = open access |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `_PASSWORD` | `viewer` / *(unset)* | optional built-in read-only account |
-| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where accounts managed in the portal are kept |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | a console users file from before the auth shard, imported once ([WGL-SHARD-180](85-sharding.md#13-users-and-authorization)) |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session before reading it again |
 | `WIGGLE_TLS_*` | *(unset)* | the server's keystore and truststore serve the portal's HTTPS too |
 
 **WGL-OPS-004** (MUST) A definition's `DEFAULT` execution mode MUST resolve to `SERVER`. There is
@@ -173,8 +174,9 @@ schedules), **Signals** (waits pending delivery), **Backlog** (dispatchable work
 **Signals** view MUST be empty against a gRPC backend today: the control plane has no RPC that
 enumerates parked signal waits. Delivering a signal from the console works regardless.
 
-**WGL-OPS-043** (MUST) There MUST be two roles: **admin** does everything; **viewer** sees everything and
-is refused every mutating call.
+**WGL-OPS-043** (MUST) There MUST be two built-in roles: **admin** does everything; **viewer** sees
+everything and is refused every mutating call. Further roles are permission sets
+([WGL-SHARD-182](85-sharding.md#13-users-and-authorization)).
 
 **WGL-OPS-044** (MUST) Browsers MUST get a `/login` form setting an HttpOnly session cookie; programmatic
 clients MUST be able to use HTTP Basic.
@@ -186,17 +188,17 @@ served over TLS.
 of the nodes serving the portal (and unchangeable from inside it), and **managed** accounts an admin
 creates in the portal.
 
-**WGL-OPS-047** (MUST) Managed accounts MUST live in a JSON file the portal node owns, **not** in the
-workflow database, until they move to the auth shard
-([WGL-SHARD-180](85-sharding.md#13-users-and-authorization)).
+**WGL-OPS-047** (*withdrawn*, by [WGL-SHARD-180](85-sharding.md#13-users-and-authorization): managed
+accounts live on the auth shard) Managed accounts MUST live in a JSON file the console owns, **not** in
+the workflow database.
 
 **WGL-OPS-048** (MUST) Passwords MUST be stored as PBKDF2-HMAC-SHA256 hashes over a per-account random
-salt, and the file MUST be rewritten atomically and kept owner-only where the filesystem allows it.
+salt, never in the clear, and a session MUST be stored only as a hash of its token.
 
 **WGL-OPS-049** (MUST) Three rules MUST keep a portal reachable: a managed account cannot take a built-in
-account's name and built-in accounts cannot be deleted or re-passworded from the portal; the last
-remaining admin cannot be deleted when no built-in admin exists to fall back on; creating the first
-managed account turns authentication on even when no password was configured.
+account's name and built-in accounts cannot be deleted or re-passworded from the portal; with no
+built-in admin to fall back on, no change may leave no enabled account that can manage users;
+creating the first managed account turns authentication on even when no password was configured.
 
 **WGL-OPS-050** (MUST) Any account MAY change its own password after proving the current one — the one
 write a viewer is allowed. Changing or resetting a password MUST sign out that account's **other**
@@ -206,7 +208,7 @@ sessions; deleting an account MUST sign it out everywhere.
 every request is an admin, and MUST warn at startup.
 
 *Verified by:* `console/ConsoleWebTest`, `console/ConsoleUsersTest`, `console/ConsoleDataTest`,
-`console/PortalTest`, `tests/HealthzTest`.
+`console/PortalTest`, `tests/HealthzTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.
 
 ## 5. Transport security
 

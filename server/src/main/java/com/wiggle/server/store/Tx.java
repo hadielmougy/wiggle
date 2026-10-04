@@ -41,6 +41,34 @@ public interface Tx extends ReadTx, GraphStore {
     /** Writes a shard's registry row, replacing any it had. */
     void putShardRecord(Rows.ShardRecord record);
 
+    /** Writes a portal account, replacing any of that name. Held on the auth shard. */
+    void putAuthUser(Rows.AuthUser user);
+
+    /** Deletes a portal account with its role grants and sessions; false when there was none. */
+    boolean deleteAuthUser(String name);
+
+    /** Replaces the roles {@code user} holds. */
+    void setAuthRolesOf(String user, List<String> roles);
+
+    /** Writes a role, replacing any of that name. Held on the auth shard. */
+    void putAuthRole(Rows.AuthRole role);
+
+    /** Deletes a role and every grant of it; false when there was none. */
+    boolean deleteAuthRole(String name);
+
+    void insertAuthSession(Rows.AuthSession session);
+
+    void deleteAuthSession(String idHash);
+
+    /** Deletes every session of {@code user} except {@code keepIdHash} (null keeps none); returns how many. */
+    int deleteAuthSessionsOf(String user, String keepIdHash);
+
+    /** Deletes up to {@code max} sessions that expired before {@code now}; returns how many. */
+    int deleteExpiredAuthSessions(long now, int max);
+
+    /** Appends to the auth audit and returns the seq the store assigned. */
+    long appendAuthAudit(Rows.AuthAudit entry);
+
     void insertInstance(Instance instance);
 
     /** Acquires the instance write-lock for the remainder of this transaction. */
