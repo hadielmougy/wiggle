@@ -157,7 +157,7 @@ cmd_up() {
         [ "$DB_HA" = true ] && availability=regional
         gc sql instances create "$DB" \
             --database-version "$DB_VERSION" --edition enterprise --tier "$DB_TIER" \
-            --region "$REGION" --zone "$ZONE" --availability-type "$availability" \
+            --zone "$ZONE" --availability-type "$availability" \
             --storage-type SSD --storage-size "$DB_DISK_GB" --no-storage-auto-increase \
             --network "projects/$GCP_PROJECT/global/networks/$NET" --no-assign-ip \
             --database-flags "max_connections=$DB_MAX_CONNECTIONS,track_io_timing=on"
