@@ -2,6 +2,7 @@ package com.wiggle.server;
 
 import com.wiggle.server.auth.Accounts;
 import com.wiggle.server.auth.AuthCache;
+import com.wiggle.server.search.Embedder;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -10,6 +11,7 @@ import com.wiggle.server.store.StorageFactory;
 import com.wiggle.server.topology.Topology;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * Wires one server node together. Multiple nodes pointed at the same JDBC URL form a
@@ -45,6 +47,16 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
+        this(config, storageFactory, List.of());
+    }
+
+    /**
+     * @param embedders the embedding models for semantic search: the first makes new vectors, any
+     *                  others are models it replaces, kept so queries can use them until the new
+     *                  index is built. Empty: text search only.
+     */
+    public WiggleServer(ServerConfig config, StorageFactory storageFactory, List<Embedder> embedders)
+            throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
@@ -56,7 +68,7 @@ public final class WiggleServer implements AutoCloseable {
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead(),
                 topology == null ? 0 : topology.newestGeneration().id(),
                 topology == null ? () -> 0 : () -> topology.generationAt(System.currentTimeMillis()).id());
-        this.bundle = new ServerBundle(config, storage, cluster, authCache);
+        this.bundle = new ServerBundle(config, storage, cluster, authCache, List.copyOf(embedders));
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */

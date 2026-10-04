@@ -82,7 +82,7 @@ class ConsoleWebTest {
                 assertTrue(get(http, base + "/api/cluster", null).body().contains("\"members\""), "cluster");
                 assertTrue(get(http, base + "/api/workflows", null).body().contains("wf"), "workflows");
                 assertEquals("{\"required\":false,\"user\":null,\"permissions\":[\"*\"],\"role\":\"admin\",\"canWrite\":true,"
-                                + "\"canChangePassword\":false,\"managesUsers\":false,\"searchEnabled\":false}",
+                                + "\"canChangePassword\":false,\"managesUsers\":false,\"searchEnabled\":false,\"semanticEnabled\":false}",
                         get(http, base + "/api/auth", null).body(), "open mode = full admin access");
 
                 HttpResponse<String> cancelled = http.send(HttpRequest.newBuilder(

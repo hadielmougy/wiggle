@@ -90,15 +90,87 @@ public final class SearchIndex {
         }));
     }
 
+    /** Writes each vector beside its document, on that document's winner. */
+    public void indexVectors(List<Rows.SearchVector> vectors) {
+        Map<Integer, List<Rows.SearchVector>> byShard = new LinkedHashMap<>();
+        for (Rows.SearchVector v : vectors) byShard.computeIfAbsent(winner(v.instanceId()), k -> new ArrayList<>()).add(v);
+        byShard.forEach((shard, batch) -> storage.inShard(shard, tx -> {
+            tx.upsertSearchVectors(batch);
+            return null;
+        }));
+    }
+
+    /**
+     * Embeds up to {@code max} documents per shard that have no vector under the embedder's model, or
+     * an older one than the document, and writes the vectors beside them. Returns how many.
+     */
+    public int vectorize(Embedder embedder, int max) {
+        int done = 0;
+        for (int shard : queried) {
+            List<Rows.SearchDoc> docs = storage.inShard(shard, tx -> tx.docsNeedingVector(embedder.model(), max));
+            if (docs.isEmpty()) continue;
+            List<Rows.SearchVector> vectors = embed(embedder, docs);
+            storage.inShard(shard, tx -> {
+                tx.upsertSearchVectors(vectors);
+                return null;
+            });
+            done += vectors.size();
+        }
+        return done;
+    }
+
+    /** {@code docs}' vectors under {@code embedder}, stamped with each document's time. */
+    static List<Rows.SearchVector> embed(Embedder embedder, List<Rows.SearchDoc> docs) {
+        List<float[]> embedded = embedder.embed(docs.stream().map(Rows.SearchDoc::text).toList());
+        List<Rows.SearchVector> out = new ArrayList<>(docs.size());
+        for (int i = 0; i < docs.size(); i++) {
+            Rows.SearchDoc d = docs.get(i);
+            out.add(new Rows.SearchVector(d.instanceId(), embedder.model(), embedded.get(i), d.updatedAt()));
+        }
+        return out;
+    }
+
+    /** How many documents changed before {@code updatedBefore} still have no {@code model} vector, over every shard. */
+    public long pending(String model, long updatedBefore) {
+        long n = 0;
+        for (int shard : queried) n += storage.inShard(shard, tx -> tx.countDocsWithoutVector(model, updatedBefore));
+        return n;
+    }
+
+    /** Builds {@code model}'s fast index on every shard where the database can; idempotent. */
+    public void prepare(String model, int dimension) {
+        for (int shard : queried) storage.inShard(shard, tx -> { tx.ensureVectorIndex(model, dimension); return null; });
+    }
+
+    /** Deletes up to {@code max} of {@code model}'s vectors per shard; returns how many. */
+    public int dropVectors(String model, int max) {
+        int n = 0;
+        for (int shard : queried) n += storage.inShard(shard, tx -> tx.deleteSearchVectors(model, max));
+        return n;
+    }
+
+    /** {@link #search} by nearest vector instead of words. */
+    public Result searchVectors(Rows.VectorQuery query, boolean partialOk) {
+        return fanOut(tx -> tx.searchVectors(query), query.limit(), partialOk, VECTOR_ORDER);
+    }
+
+    private static final java.util.Comparator<Rows.SearchHit> VECTOR_ORDER =
+            java.util.Comparator.comparingDouble(Rows.SearchHit::score).reversed().thenComparing(SearchText.BEST_FIRST);
+
     /**
      * Runs {@code query} on every search shard at once, replicas allowed, and keeps the global best.
      * A shard that fails makes the result partial when {@code partialOk}; otherwise the search fails.
      */
     public Result search(Rows.SearchQuery query, boolean partialOk) {
+        return fanOut(tx -> tx.searchDocs(query), query.limit(), partialOk, SearchText.BEST_FIRST);
+    }
+
+    private Result fanOut(java.util.function.Function<com.wiggle.server.store.ReadTx, List<Rows.SearchHit>> read, int limit,
+                          boolean partialOk, java.util.Comparator<Rows.SearchHit> order) {
         List<Future<List<Rows.SearchHit>>> answers = new ArrayList<>();
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int shard : queried) {
-                answers.add(pool.submit(() -> storage.readShard(shard, Freshness.REPLICA_OK, tx -> tx.searchDocs(query))));
+                answers.add(pool.submit(() -> storage.readShard(shard, Freshness.REPLICA_OK, read)));
             }
             Map<String, Rows.SearchHit> newest = new LinkedHashMap<>();
             boolean partial = false;
@@ -122,9 +194,8 @@ public final class SearchIndex {
                 }
             }
             List<Rows.SearchHit> merged = new ArrayList<>(newest.values());
-            merged.sort(SearchText.BEST_FIRST);
-            return new Result(merged.size() > query.limit() ? List.copyOf(merged.subList(0, query.limit())) : merged,
-                    partial);
+            merged.sort(order);
+            return new Result(merged.size() > limit ? List.copyOf(merged.subList(0, limit)) : merged, partial);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new StorageException("search interrupted", e, StorageException.Classification.TRANSIENT);
@@ -151,7 +222,10 @@ public final class SearchIndex {
             rebalanceFrom.put(shard, docs.size() < max ? "" : docs.getLast().instanceId());
             List<Rows.SearchDoc> misplaced = docs.stream().filter(d -> winner(d.instanceId()) != shard).toList();
             if (misplaced.isEmpty()) continue;
+            List<Rows.SearchVector> vectors = storage.inShard(shard,
+                    tx -> tx.searchVectorsOf(misplaced.stream().map(Rows.SearchDoc::instanceId).toList()));
             index(misplaced);
+            indexVectors(vectors);
             storage.inShard(shard, tx -> {
                 misplaced.forEach(d -> tx.deleteSearchDoc(d.instanceId()));
                 return null;

@@ -117,4 +117,33 @@ class SearchEndToEndTest {
                     () -> c.search("x", null, null, null, null, 10, false)).status());
         }
     }
+
+    @Test @DisplayName("a semantic search ranks by meaning once the model's index is built, and needs an embedder")
+    void semantic() throws Exception {
+        ServerConfig config = config(true, ServerConfig.GrpcAuth.OFF)
+                .withSearch(new ServerConfig.Search(true, Duration.ofDays(30), Set.of(), Duration.ofMillis(200)));
+        try (WiggleServer server = new WiggleServer(config, c -> new com.wiggle.server.store.InMemoryStorage(),
+                List.of(new HashingEmbedder(256))).start();
+             WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
+            c.register(ORDERS);
+            String damaged = c.start("orders", Map.of("note", "parcel arrived damaged, customer wants a refund"), null, null);
+            c.start("orders", Map.of("note", "invoice settled early"), null, null);
+            SearchResult r = await(() -> {
+                try {
+                    return c.search("refund for damaged parcel", null, null, null, null, 2, false, true);
+                } catch (WiggleApiException e) {
+                    return null;   // the index is still being built
+                }
+            }, x -> x != null && x.hits().size() == 2);
+            assertEquals("hashing-256", r.model());
+            assertEquals(damaged, r.hits().getFirst().instanceId());
+        }
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.GrpcAuth.OFF)).start();
+             WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
+            WiggleApiException e = assertThrows(WiggleApiException.class,
+                    () -> c.search("x", null, null, null, null, 10, false, true));
+            assertEquals(409, e.status());
+            assertTrue(e.getMessage().contains("WIGGLE_EMBEDDER"), e.getMessage());
+        }
+    }
 }

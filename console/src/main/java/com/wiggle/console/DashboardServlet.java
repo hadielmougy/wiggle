@@ -105,6 +105,7 @@ public final class DashboardServlet extends HttpServlet {
         out.put("canChangePassword", auth.accounts() != null && p != null && p.user() != null && !p.builtin());
         out.put("managesUsers", auth.accounts() != null);
         out.put("searchEnabled", data.searchEnabled());
+        out.put("semanticEnabled", data.semanticEnabled());
         json(res, 200, out);
     }
 
@@ -417,7 +418,7 @@ public final class DashboardServlet extends HttpServlet {
         DashboardData.SearchView found = data.search(trimToNull(req.getParameter("q")),
                 trimToNull(req.getParameter("workflow")), trimToNull(req.getParameter("status")),
                 parseInt(req.getParameter("limit"), 50), "true".equals(req.getParameter("partial")),
-                Permissions.readableWorkflows(principal(req).permissions())).orElse(null);
+                "semantic".equals(req.getParameter("mode")), Permissions.readableWorkflows(principal(req).permissions())).orElse(null);
         if (found == null) { error(res, 404, "search is not enabled on this deployment"); return; }
         List<Object> hits = new ArrayList<>();
         for (DashboardData.SearchHitView h : found.hits()) {

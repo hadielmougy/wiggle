@@ -258,6 +258,40 @@ public final class Rows {
         }
     }
 
+    /**
+     * An instance's embedding under one model, kept on the search shard that holds its document.
+     * {@code updatedAt} is the document's when it was embedded, so a newer document marks it stale.
+     */
+    public record SearchVector(String instanceId, String model, float[] embedding, long updatedAt) { }
+
+    /**
+     * A nearest-neighbour search: the documents whose {@code model} vector is closest to
+     * {@code vector} by cosine, under the same filters as {@link SearchQuery}.
+     */
+    public record VectorQuery(String model, float[] vector, java.util.Set<String> workflows, String status,
+                              Long from, Long to, int limit) {
+        public VectorQuery {
+            if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
+            if (workflows != null) workflows = java.util.Set.copyOf(workflows);
+        }
+
+        public SearchQuery filters() {
+            return new SearchQuery(null, workflows, status, from, to, limit);
+        }
+    }
+
+    /**
+     * An embedding model the search shards hold vectors for, as the registry on the home shard
+     * records it. A model is {@code BUILDING} until every document indexed before it started has a
+     * vector, then {@code READY}; queries use the newest READY one, and a model it replaces is
+     * {@code RETIRED} and its vectors deleted.
+     */
+    public record SearchModel(String model, int dimension, String state, long startedAt, Long readyAt) {
+        public static final String BUILDING = "BUILDING";
+        public static final String READY = "READY";
+        public static final String RETIRED = "RETIRED";
+    }
+
     /** One match, best first by {@code score}, then newest. */
     public record SearchHit(SearchDoc doc, double score) { }
 

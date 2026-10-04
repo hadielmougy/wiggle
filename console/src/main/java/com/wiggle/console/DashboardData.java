@@ -64,8 +64,12 @@ public interface DashboardData {
     /** Whether {@link #search} answers. */
     boolean searchEnabled();
 
+    /** Whether {@link #search} answers a semantic search. */
+    boolean semanticEnabled();
+
+    /** {@code semantic} ranks by closeness in meaning instead of by the words. */
     Optional<SearchView> search(String text, String workflow, String status, int limit, boolean partialOk,
-                                java.util.Set<String> readable);
+                                boolean semantic, java.util.Set<String> readable);
 
     record SearchView(List<SearchHitView> hits, boolean partial) {}
 

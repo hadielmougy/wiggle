@@ -81,9 +81,22 @@ public interface Tx extends ReadTx, GraphStore {
      */
     boolean upsertSearchDoc(Rows.SearchDoc doc);
 
+    /** Deletes the document and its vectors. */
     void deleteSearchDoc(String instanceId);
 
-    /** Deletes up to {@code max} documents whose instance last changed before {@code updatedBefore}. */
+    /** Writes each vector unless the one held for that instance and model is newer. */
+    void upsertSearchVectors(List<Rows.SearchVector> vectors);
+
+    /** Deletes up to {@code max} vectors of {@code model}; returns how many. */
+    int deleteSearchVectors(String model, int max);
+
+    /** Prepares this database to search {@code model}'s vectors fast, where it can; idempotent. */
+    default void ensureVectorIndex(String model, int dimension) { }
+
+    /** Writes a model's registry row, replacing any it had. Held on the home shard. */
+    void putSearchModel(Rows.SearchModel model);
+
+    /** Deletes up to {@code max} documents, with their vectors, whose instance last changed before {@code updatedBefore}. */
     int deleteSearchDocsBefore(long updatedBefore, int max);
 
     void insertInstance(Instance instance);

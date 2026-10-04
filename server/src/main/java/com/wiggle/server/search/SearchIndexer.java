@@ -25,8 +25,13 @@ import java.util.function.LongSupplier;
  * or a change of leader is harmless. A search shard that fails leaves the batch unacknowledged, to
  * be retried; the engine never waits on any of this.
  *
- * <p>Once a minute it also deletes documents past their retention and takes a step of the
- * rebalance.
+ * <p>With an {@link Embedder}, it then embeds the documents it wrote and writes their vectors; if
+ * that fails, the documents are already searchable by text, and the backfill embeds them later.
+ *
+ * <p>Once a minute it also deletes documents past their retention, takes a step of the rebalance,
+ * backfills vectors, and moves the embedding model through the registry on the home shard: a new
+ * model is {@code BUILDING} until every document indexed before it started has a vector, then
+ * {@code READY}, retiring the one it replaces, whose vectors are then deleted.
  */
 public final class SearchIndexer implements AutoCloseable {
 
@@ -42,6 +47,7 @@ public final class SearchIndexer implements AutoCloseable {
     private final ClusterManager cluster;
     private final long retentionMillis;
     private final Set<String> workflows;
+    private final Embedder embedder;
     private final LongSupplier clock;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "wiggle-search-indexer");
@@ -49,9 +55,13 @@ public final class SearchIndexer implements AutoCloseable {
         return t;
     });
 
-    /** @param workflows the workflows indexed; empty indexes all */
+    /**
+     * @param workflows the workflows indexed; empty indexes all
+     * @param embedder  the model new vectors are made with; null indexes text only
+     */
     public SearchIndexer(WorkflowEngine engine, Storage storage, SearchIndex index, ClusterManager cluster,
-                         long retentionMillis, Set<String> workflows, LongSupplier clock) {
+                         long retentionMillis, Set<String> workflows, Embedder embedder, LongSupplier clock) {
+        this.embedder = embedder;
         this.engine = engine;
         this.storage = storage;
         this.index = index;
@@ -61,11 +71,12 @@ public final class SearchIndexer implements AutoCloseable {
         this.clock = clock;
     }
 
-    public SearchIndexer start(long intervalMillis) {
+    /** Drains the log every {@code intervalMillis}, and runs the upkeep every {@code upkeepMillis}, first soon after start. */
+    public SearchIndexer start(long intervalMillis, long upkeepMillis) {
         scheduler.scheduleWithFixedDelay(() -> quietly(this::drain, "indexing"), intervalMillis, intervalMillis,
                 TimeUnit.MILLISECONDS);
-        scheduler.scheduleWithFixedDelay(() -> quietly(this::maintain, "search upkeep"), 60_000, 60_000,
-                TimeUnit.MILLISECONDS);
+        scheduler.scheduleWithFixedDelay(() -> quietly(this::maintain, "search upkeep"),
+                Math.min(upkeepMillis, 5_000), upkeepMillis, TimeUnit.MILLISECONDS);
         return this;
     }
 
@@ -94,6 +105,14 @@ public final class SearchIndexer implements AutoCloseable {
             index.index(docs);
             engine.ackEvents(CONSUMER, events.getLast().cursor());
             written += docs.size();
+            if (embedder != null && !docs.isEmpty()) {
+                try {
+                    index.indexVectors(SearchIndex.embed(embedder, docs));
+                } catch (RuntimeException e) {
+                    LOG.log(System.Logger.Level.WARNING, () -> "embedding " + docs.size() + " document(s) failed; "
+                            + "they are searchable by text, and the backfill will embed them: " + e.getMessage());
+                }
+            }
             if (events.size() < BATCH) return written;
         }
     }
@@ -120,7 +139,7 @@ public final class SearchIndexer implements AutoCloseable {
                 inst.createdAt, inst.updatedAt);
     }
 
-    /** Deletes documents past retention and moves a batch of misplaced ones. */
+    /** Deletes documents past retention, moves a batch of misplaced ones, and keeps the vectors current. */
     public void maintain() {
         int removed = index.retain(clock.getAsLong() - retentionMillis, BATCH);
         int moved = index.rebalance(BATCH);
@@ -128,6 +147,54 @@ public final class SearchIndexer implements AutoCloseable {
             LOG.log(System.Logger.Level.INFO, () -> "search upkeep: " + removed + " document(s) past retention, "
                     + moved + " moved to their shard");
         }
+        if (embedder != null) maintainVectors();
+    }
+
+    /** Vectors embedded per backfill pass; a batch is one call to the embedder. */
+    static final int EMBED_BATCH = 64;
+    private static final int EMBED_BATCHES_PER_PASS = 20;
+
+    private void maintainVectors() {
+        long now = clock.getAsLong();
+        Map<String, Rows.SearchModel> models = new LinkedHashMap<>();
+        storage.inHome(tx -> tx.searchModels()).forEach(m -> models.put(m.model(), m));
+        Rows.SearchModel current = models.get(embedder.model());
+        if (current == null || current.state().equals(Rows.SearchModel.RETIRED)) {
+            index.prepare(embedder.model(), embedder.dimension());
+            current = new Rows.SearchModel(embedder.model(), embedder.dimension(), Rows.SearchModel.BUILDING, now, null);
+            Rows.SearchModel starting = current;
+            storage.inHome(tx -> { tx.putSearchModel(starting); return null; });
+            LOG.log(System.Logger.Level.INFO, () -> "building the vector index for model " + embedder.model());
+        }
+        int embedded = 0;
+        for (int i = 0; i < EMBED_BATCHES_PER_PASS; i++) {
+            int n = index.vectorize(embedder, EMBED_BATCH);
+            embedded += n;
+            if (n == 0) break;
+        }
+        if (current.state().equals(Rows.SearchModel.BUILDING) && index.pending(embedder.model(), current.startedAt()) == 0) {
+            Rows.SearchModel ready = new Rows.SearchModel(current.model(), current.dimension(), Rows.SearchModel.READY,
+                    current.startedAt(), now);
+            storage.inHome(tx -> {
+                tx.putSearchModel(ready);
+                for (Rows.SearchModel m : tx.searchModels()) {
+                    if (!m.model().equals(ready.model()) && m.state().equals(Rows.SearchModel.READY)) {
+                        tx.putSearchModel(new Rows.SearchModel(m.model(), m.dimension(), Rows.SearchModel.RETIRED,
+                                m.startedAt(), m.readyAt()));
+                    }
+                }
+                return null;
+            });
+            LOG.log(System.Logger.Level.INFO, () -> "vector index for model " + ready.model() + " is complete; "
+                    + "semantic queries use it from now on");
+        }
+        for (Rows.SearchModel m : models.values()) {
+            if (m.state().equals(Rows.SearchModel.RETIRED) && !m.model().equals(embedder.model())) {
+                index.dropVectors(m.model(), BATCH);
+            }
+        }
+        int e = embedded;
+        if (e > 0) LOG.log(System.Logger.Level.DEBUG, () -> "vector backfill embedded " + e + " document(s)");
     }
 
     @Override public void close() {

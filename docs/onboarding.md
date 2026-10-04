@@ -668,6 +668,17 @@ for (WiggleClient.SearchHit hit : r.hits()) {
 }
 ```
 
+**By meaning.** With an embedder, a search can rank by closeness in meaning rather than by the
+words: `client.search(text, …, semantic = true)` (the overload's last argument), or **by meaning**
+in the portal. Set `WIGGLE_EMBEDDER=http` with `WIGGLE_EMBEDDER_URL` (an OpenAI-compatible API root
+such as `https://api.openai.com/v1` or Ollama's `http://localhost:11434/v1`), `_MODEL`,
+`_DIMENSION` and `_API_KEY`; `WIGGLE_EMBEDDER=hashing` tries the path with no model at all. Install
+pgvector on the search database for an HNSW index; without it vectors are compared in Java, exactly
+and by scan, which suits thousands of documents rather than millions. Semantic search starts once
+every existing document has a vector. Changing the model builds a new index beside the old one, and
+queries switch when it is complete, as long as the old model stays configured as
+`WIGGLE_EMBEDDER_PREVIOUS_MODEL` until then.
+
 In the portal, pick **full text** next to the Instances search box. Searches see only the workflows
 the caller may read. With several search shards, documents spread by instance id; add or drain one
 and the leader moves documents in the background, a batch a minute.
@@ -677,6 +688,9 @@ and the leader moves documents in the background, a batch a minute.
 | `WIGGLE_SEARCH_ENABLED` | `false` | search on the one database |
 | `WIGGLE_SEARCH_RETENTION_MILLIS` | 30 days | how long a document outlives its instance's last change |
 | `WIGGLE_SEARCH_WORKFLOWS` | *(all)* | comma-separated workflows to index |
+| `WIGGLE_EMBEDDER` | `none` | `none`, `hashing` or `http` |
+| `WIGGLE_EMBEDDER_URL` / `_MODEL` / `_DIMENSION` / `_API_KEY` | *(unset)* | the embedding API, model, vector size and key |
+| `WIGGLE_EMBEDDER_PREVIOUS_MODEL` / `_DIMENSION` | *(unset)* | the model being replaced, while the new index builds |
 
 ### 7.2 Storage backends
 
