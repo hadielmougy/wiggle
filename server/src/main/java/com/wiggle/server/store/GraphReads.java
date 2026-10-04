@@ -16,6 +16,9 @@ public interface GraphReads {
 
     List<String> definitionNames();
 
+    /** Every registered version of a name, ascending. */
+    List<Integer> definitionVersions(String name);
+
     /** One node plus its outgoing edges, reconstructed from the normalised rows. */
     Optional<Node> graphNode(String workflow, int version, String nodeId);
 

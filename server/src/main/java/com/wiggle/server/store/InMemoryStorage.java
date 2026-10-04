@@ -187,6 +187,11 @@ public final class InMemoryStorage implements Storage {
             return new ArrayList<>(new TreeSet<>(versions.keySet()));
         }
 
+        @Override public List<Integer> definitionVersions(String name) {
+            NavigableSet<Integer> vs = versions.get(name);
+            return vs == null ? List.of() : new ArrayList<>(vs);
+        }
+
         @Override public Optional<Rows.AuthUser> findAuthUser(String name) {
             return Optional.ofNullable(authUsers.get(name));
         }

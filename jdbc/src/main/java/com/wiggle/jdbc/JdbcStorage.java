@@ -1349,6 +1349,13 @@ public final class JdbcStorage implements Storage {
                     .list();
         }
 
+        @Override public List<Integer> definitionVersions(String name) {
+            return h.createQuery("SELECT version FROM wf_definition WHERE name=:name ORDER BY version")
+                    .bind("name", name)
+                    .mapTo(Integer.class)
+                    .list();
+        }
+
         private static final String INSERT_INSTANCE = "INSERT INTO wf_instance "
                 + "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,"
                 + "revision,parent_token_id) VALUES "

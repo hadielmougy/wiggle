@@ -57,6 +57,9 @@ class DefinitionCacheTest {
         @Override public List<String> definitionNames() {
             throw new StoreTouched("definitionNames");
         }
+        @Override public List<Integer> definitionVersions(String name) {
+            throw new StoreTouched("definitionVersions");
+        }
         @Override public void putGraph(WorkflowDefinition d) {
             throw new StoreTouched("putGraph");
         }
