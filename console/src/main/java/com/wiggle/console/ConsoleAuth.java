@@ -54,7 +54,7 @@ final class ConsoleAuth {
 
         /** Whether it may do anything beyond reading. */
         boolean writes() {
-            return permissions.stream().anyMatch(p -> !p.equals(Permissions.PORTAL_READ));
+            return permissions.stream().anyMatch(p -> !p.equals(Permissions.READ));
         }
     }
 

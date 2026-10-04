@@ -111,6 +111,7 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, SortedSet<String>> authGrants = new HashMap<>();
     private final Map<String, Rows.AuthRole> authRoles = new TreeMap<>();
     private final Map<String, Rows.AuthSession> authSessions = new HashMap<>();
+    private final Map<String, Rows.AuthCredential> authCredentials = new TreeMap<>();
     private final List<Rows.AuthAudit> authAudit = new ArrayList<>();
 
     private final class MemTx implements Tx {
@@ -232,6 +233,30 @@ public final class InMemoryStorage implements Storage {
             authGrants.values().forEach(g -> g.remove(name));
             authGrants.values().removeIf(Set::isEmpty);
             return authRoles.remove(name) != null;
+        }
+
+        @Override public List<Rows.AuthCredential> authCredentials() {
+            return List.copyOf(authCredentials.values());
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
+            return authCredentials.values().stream().filter(c -> keyHash.equals(c.keyHash())).findFirst();
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
+            return authCredentials.values().stream().filter(c -> subject.equals(c.subject())).findFirst();
+        }
+
+        @Override public void insertAuthCredential(Rows.AuthCredential c) {
+            boolean clash = authCredentials.containsKey(c.id()) || authCredentials.values().stream().anyMatch(x ->
+                    (c.keyHash() != null && c.keyHash().equals(x.keyHash()))
+                            || (c.subject() != null && c.subject().equals(x.subject())));
+            if (clash) throw new IllegalArgumentException("credential '" + c.id() + "' or its key or subject exists");
+            authCredentials.put(c.id(), c);
+        }
+
+        @Override public boolean deleteAuthCredential(String id) {
+            return authCredentials.remove(id) != null;
         }
 
         @Override public void insertAuthSession(Rows.AuthSession session) {

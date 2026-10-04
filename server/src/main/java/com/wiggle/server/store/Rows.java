@@ -227,6 +227,16 @@ public final class Rows {
         }
     }
 
+    /**
+     * A machine credential bound to a role: an API key, stored as {@code keyHash} (SHA-256 of the
+     * key), or a client certificate subject. {@code expiresAt} is null when it does not expire.
+     */
+    public record AuthCredential(String id, String kind, String keyHash, String subject, String role,
+                                 long createdAt, Long expiresAt) {
+        public static final String API_KEY = "API_KEY";
+        public static final String MTLS = "MTLS";
+    }
+
     /** A signed-in session. Only a hash of its token is stored, so a read of the table signs no one in. */
     public record AuthSession(String idHash, String user, long expiresAt, long createdAt) { }
 

@@ -1,5 +1,7 @@
 package com.wiggle.server;
 
+import com.wiggle.server.auth.AuthCache;
+import com.wiggle.server.grpc.Authorizer;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
 import com.wiggle.server.cluster.QueueLagMonitor;
@@ -29,7 +31,7 @@ final class ServerBundle {
     /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
     private final HealthServer health;
 
-    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
+    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache) throws IOException {
         super();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
                 config.topology() == null ? InstanceIds.across(storage.instanceShards())
@@ -41,7 +43,7 @@ final class ServerBundle {
         this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
                 config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
-                config.tls(), config.memory());
+                config.tls(), config.memory(), new Authorizer(config.auth().grpc(), authCache));
         // The dashboard moved to the console; the former dashboard port now serves only /healthz.
         this.health = config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
     }

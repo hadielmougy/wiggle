@@ -41,20 +41,20 @@ class AccountsTest {
         assertEquals(List.of("admin", "viewer"), a.roles().stream().map(Rows.AuthRole::name).toList());
         assertEquals(Set.of("*"), a.roles().getFirst().permissions());
         assertEquals(2, actions(a).size(), "a second bootstrap writes nothing");
-        assertThrows(IllegalArgumentException.class, () -> a.putRole("x", "admin", List.of("portal.read"), true));
+        assertThrows(IllegalArgumentException.class, () -> a.putRole("x", "admin", List.of("read"), true));
         assertThrows(IllegalArgumentException.class, () -> a.deleteRole("x", "viewer", true));
     }
 
     @Test @DisplayName("an account signs in with its password, holds its roles' permissions, and every change is audited")
     void accountLifecycle() {
         Accounts a = accounts(new InMemoryStorage());
-        a.putRole("root", "ops", List.of("portal.read", "instance.cancel:orders"), true);
+        a.putRole("root", "ops", List.of("read", "instance.cancel:orders"), true);
         a.create("root", "dana", "dana-password", List.of("ops"), Set.of(), true);
 
         Accounts.Account dana = a.account("dana").orElseThrow();
         assertTrue(dana.passwordMatches("dana-password"));
         assertFalse(dana.passwordMatches("wrong"));
-        assertEquals(Set.of("portal.read", "instance.cancel:orders"), dana.permissions());
+        assertEquals(Set.of("read", "instance.cancel:orders"), dana.permissions());
 
         a.setRoles("root", "dana", List.of("ops", "viewer"), true);
         a.setPassword("root", "dana", "new-password", null);
@@ -107,7 +107,7 @@ class AccountsTest {
         assertThrows(IllegalArgumentException.class, () -> a.deleteRole("rey", "managers", false),
                 "rey is the last manager, and only through that role");
         assertThrows(IllegalArgumentException.class,
-                () -> a.putRole("rey", "managers", List.of("portal.read"), false), "nor may the role lose the permission");
+                () -> a.putRole("rey", "managers", List.of("read"), false), "nor may the role lose the permission");
         a.deleteRole("rey", "managers", true);
     }
 
@@ -128,6 +128,33 @@ class AccountsTest {
         a.closeSession(one);
         assertTrue(a.session(Accounts.tokenHash(one)).isEmpty());
         assertEquals("session.close", actions(a).getLast());
+    }
+
+    @Test @DisplayName("an API key is shown once and stored as a hash; a certificate credential names its subject")
+    void credentials() {
+        Accounts a = accounts(new InMemoryStorage());
+        a.putRole("ops", "worker", List.of("task.poll"), true);
+        String key = a.createApiKey("ops", "w1", "worker", null);
+        assertTrue(key.startsWith(Accounts.KEY_PREFIX));
+        Rows.AuthCredential stored = a.credentials().getFirst();
+        assertEquals(Accounts.tokenHash(key), stored.keyHash());
+        assertEquals(Set.of("task.poll"), a.machineByKeyHash(Accounts.tokenHash(key)).orElseThrow().permissions());
+
+        a.createCertificate("ops", "c1", "CN=worker", "viewer", 5L);
+        Accounts.Machine m = a.machineBySubject("CN=worker").orElseThrow();
+        assertEquals(Set.of("read"), m.permissions());
+        assertTrue(m.expired(5));
+        assertFalse(m.expired(4));
+
+        assertThrows(IllegalArgumentException.class, () -> a.createApiKey("ops", "w1", "worker", null), "an id is unique");
+        assertThrows(IllegalArgumentException.class, () -> a.createCertificate("ops", "c2", "CN=worker", "viewer", null));
+        assertThrows(IllegalArgumentException.class, () -> a.createApiKey("ops", "w2", "nope", null), "the role must exist");
+        assertThrows(IllegalArgumentException.class, () -> a.deleteRole("ops", "worker", true),
+                "a role a credential holds is not deleted from under it");
+        a.deleteCredential("ops", "w1");
+        a.deleteRole("ops", "worker", true);
+        assertEquals(List.of("credential.create", "credential.create", "credential.delete", "role.delete"),
+                actions(a).subList(actions(a).size() - 4, actions(a).size()));
     }
 
     @Test @DisplayName("a console users file is imported once with its hashes, skipping built-in names")

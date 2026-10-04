@@ -19,7 +19,43 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            Duration retention, int housekeepingBatch, int dashboardPort,
                            Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                            String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory,
-                           Topology topology) {
+                           Topology topology, Auth auth) {
+
+    /** How the gRPC API treats a call's credential ({@code WIGGLE_GRPC_AUTH}). */
+    public enum GrpcAuth {
+        /** No credential is read; any peer that can connect may call any RPC. */
+        OFF,
+        /** Credentials are checked and every call that enforcement would refuse is logged, but served. */
+        LOG,
+        /** A call without a known credential is UNAUTHENTICATED; one its role does not allow is PERMISSION_DENIED. */
+        ENFORCE
+    }
+
+    /**
+     * Who may call what. {@code grpc} is how the gRPC API checks calls; {@code cache} is how long a
+     * node serves a cached account, session or credential before reading it again.
+     */
+    public record Auth(GrpcAuth grpc, Duration cache) {
+
+        public static final Auth DISABLED = new Auth(GrpcAuth.OFF, Duration.ofSeconds(30));
+
+        public Auth {
+            if (grpc == null) grpc = GrpcAuth.OFF;
+            if (cache == null || cache.isNegative()) cache = Duration.ofSeconds(30);
+        }
+
+        public static Auth fromEnvironment() {
+            String mode = strProp("wiggle.grpc.auth", "WIGGLE_GRPC_AUTH", "off").trim().toUpperCase(java.util.Locale.ROOT);
+            GrpcAuth grpc;
+            try {
+                grpc = GrpcAuth.valueOf(mode);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("WIGGLE_GRPC_AUTH='" + mode.toLowerCase(java.util.Locale.ROOT)
+                        + "' is not one of off, log, enforce");
+            }
+            return new Auth(grpc, Duration.ofMillis(intProp("wiggle.auth.cacheMillis", "WIGGLE_AUTH_CACHE_MILLIS", 30_000)));
+        }
+    }
 
     /**
      * Memory-pressure admission control for worker polls. When GC-accurate heap utilization crosses
@@ -86,7 +122,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                         String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
                 missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory, null);
+                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory, null, null);
     }
 
     /** Back-compat constructor: TLS but default (disabled) memory shedding. */
@@ -104,6 +140,15 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     public ServerConfig {
         if (tls == null) tls = Tls.Options.DISABLED;
         if (memory == null) memory = Memory.DISABLED;
+        if (auth == null) auth = Auth.DISABLED;
+    }
+
+    /** A copy of this config checking calls as {@code auth} says. */
+    public ServerConfig withAuth(Auth auth) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, topology, auth);
     }
 
     /** A copy of this config on the given storage topology (null ⇒ the JDBC url, or in-memory). */
@@ -111,7 +156,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth);
     }
 
     /** A copy of this config on the given storage (null/blank url ⇒ in-memory). */
@@ -119,7 +164,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth);
     }
 
     /** A copy of this config bound to a different gRPC port. */
@@ -127,7 +172,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth);
     }
 
     public static ServerConfig fromEnvironment() {
@@ -159,7 +204,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 // Memory-pressure load shedding; disabled unless WIGGLE_MEMORY_SHEDDING_ENABLED=true.
                 Memory.fromEnvironment(),
                 // Several databases (WIGGLE_STORAGE_TOPOLOGY); unset for one database or none.
-                TopologyParser.fromEnvironment(System.getenv()).orElse(null));
+                TopologyParser.fromEnvironment(System.getenv()).orElse(null),
+                // Per-RPC authorization; off unless WIGGLE_GRPC_AUTH is log or enforce.
+                Auth.fromEnvironment());
     }
 
     public boolean isInMemory() {

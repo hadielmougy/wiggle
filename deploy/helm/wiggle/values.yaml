@@ -34,6 +34,7 @@ env: {}
   # WIGGLE_POLL_INTERVAL_MILLIS: "200"
   # WIGGLE_HOUSEKEEPING_BATCH: "500"
   # WIGGLE_DASHBOARD_PASSWORD: "change-me"
+  # WIGGLE_GRPC_AUTH: "enforce"   # per-RPC authorization; create API credentials in the portal first
 
 resources:
   requests:

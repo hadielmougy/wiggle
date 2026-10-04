@@ -129,8 +129,9 @@ Stated so a reader does not look for them.
   be idempotent.
 - **No workflow-code determinism model.** The workflow is data the server walks, not code replayed
   to rebuild state, so there is no replay discipline, no history API, and no side-effect wrappers.
-- **No per-RPC authorization.** TLS (optionally mTLS) authenticates the channel; any trusted peer
-  may call any control-plane RPC. Role separation exists only in the portal.
+- **No authorization unless asked for.** With `WIGGLE_GRPC_AUTH` unset, any peer that can connect
+  may call any control-plane RPC; set it to `enforce` for per-RPC authorization by API key or client
+  certificate ([chapter 70 §11](70-api.md#11-per-rpc-authorization)).
 - **No rollback by default.** A failed instance stops where it is unless the topology declares
   compensators.
 - **No context schema management.** The context is opaque JSON; evolving it is the handler's job via

@@ -557,6 +557,11 @@ public final class JdbcStorage implements Storage {
               target       VARCHAR(200),
               detail       TEXT
             );
+            """),
+            // Machine credentials are looked up by key hash or certificate subject, each unique.
+            new Migration(28, "auth-credential-lookup", """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_credential_key ON wf_auth_credential (key_hash);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_credential_subject ON wf_auth_credential (subject);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -1365,6 +1370,45 @@ public final class JdbcStorage implements Storage {
         @Override public boolean deleteAuthRole(String name) {
             h.createUpdate("DELETE FROM wf_auth_user_role WHERE role_name=:name").bind("name", name).execute();
             return h.createUpdate("DELETE FROM wf_auth_role WHERE name=:name").bind("name", name).execute() > 0;
+        }
+
+        @Override public List<Rows.AuthCredential> authCredentials() {
+            return h.createQuery("SELECT * FROM wf_auth_credential ORDER BY id").map(JdbcTx::authCredential).list();
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
+            return h.createQuery("SELECT * FROM wf_auth_credential WHERE key_hash=:h")
+                    .bind("h", keyHash).map(JdbcTx::authCredential).findOne();
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
+            return h.createQuery("SELECT * FROM wf_auth_credential WHERE subject=:s")
+                    .bind("s", subject).map(JdbcTx::authCredential).findOne();
+        }
+
+        private static Rows.AuthCredential authCredential(ResultSet rs, org.jdbi.v3.core.statement.StatementContext ctx)
+                throws SQLException {
+            long expires = rs.getLong("expires_at");
+            Long expiresAt = rs.wasNull() ? null : expires;
+            return new Rows.AuthCredential(rs.getString("id"), rs.getString("kind"), rs.getString("key_hash"),
+                    rs.getString("subject"), rs.getString("role_name"), rs.getLong("created_at"), expiresAt);
+        }
+
+        @Override public void insertAuthCredential(Rows.AuthCredential c) {
+            h.createUpdate("INSERT INTO wf_auth_credential (id,kind,key_hash,subject,role_name,created_at,expires_at) "
+                            + "VALUES (:id,:kind,:keyHash,:subject,:role,:created,:expires)")
+                    .bind("id", c.id())
+                    .bind("kind", c.kind())
+                    .bind("keyHash", c.keyHash())
+                    .bind("subject", c.subject())
+                    .bind("role", c.role())
+                    .bind("created", c.createdAt())
+                    .bind("expires", c.expiresAt())
+                    .execute();
+        }
+
+        @Override public boolean deleteAuthCredential(String id) {
+            return h.createUpdate("DELETE FROM wf_auth_credential WHERE id=:id").bind("id", id).execute() > 0;
         }
 
         @Override public void insertAuthSession(Rows.AuthSession x) {
