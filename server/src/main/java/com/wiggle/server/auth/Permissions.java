@@ -13,20 +13,24 @@ import java.util.regex.Pattern;
 public final class Permissions {
 
     public static final String ALL = "*";
-    /** Every read the portal serves. */
-    public static final String PORTAL_READ = "portal.read";
+    /** Every read, over the portal or gRPC; scoped, the reads of one workflow. */
+    public static final String READ = "read";
     public static final String INSTANCE_CANCEL = "instance.cancel";
     public static final String INSTANCE_SIGNAL = "instance.signal";
     public static final String INSTANCE_START = "instance.start";
     public static final String SCHEDULE_WRITE = "schedule.write";
     public static final String USER_MANAGE = "user.manage";
     public static final String TASK_POLL = "task.poll";
+    public static final String WORKFLOW_REGISTER = "workflow.register";
+    /** Polling and acknowledging the event feed. */
+    public static final String EVENT_READ = "event.read";
 
-    /** Every action a permission may name, and whether it takes a scope. */
-    public static final List<String> ACTIONS = List.of(PORTAL_READ, INSTANCE_CANCEL, INSTANCE_SIGNAL,
-            INSTANCE_START, SCHEDULE_WRITE, USER_MANAGE, TASK_POLL);
-    private static final Set<String> SCOPED = Set.of(INSTANCE_CANCEL, INSTANCE_SIGNAL, INSTANCE_START,
-            SCHEDULE_WRITE, TASK_POLL);
+    /** Every action a permission may name. */
+    public static final List<String> ACTIONS = List.of(READ, INSTANCE_START, INSTANCE_CANCEL, INSTANCE_SIGNAL,
+            SCHEDULE_WRITE, WORKFLOW_REGISTER, TASK_POLL, EVENT_READ, USER_MANAGE);
+    /** The actions that take a scope: a workflow name, or a queue for {@code task.poll}. */
+    private static final Set<String> SCOPED = Set.of(READ, INSTANCE_START, INSTANCE_CANCEL, INSTANCE_SIGNAL,
+            SCHEDULE_WRITE, WORKFLOW_REGISTER, TASK_POLL);
     private static final Pattern SCOPE = Pattern.compile("[A-Za-z0-9._:/-]{1,200}");
 
     public static final String ADMIN = "admin";
@@ -35,7 +39,7 @@ public final class Permissions {
     /** The roles every deployment has, which cannot be changed or deleted. */
     public static final Map<String, Set<String>> BUILTIN_ROLES = Map.of(
             ADMIN, Set.of(ALL),
-            VIEWER, Set.of(PORTAL_READ));
+            VIEWER, Set.of(READ));
 
     /** Whether {@code granted} allows {@code action}, on {@code scope} when it is non-null. */
     public static boolean allows(Set<String> granted, String action, String scope) {

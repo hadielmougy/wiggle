@@ -17,23 +17,19 @@ import java.util.Set;
  *
  * <p>Built-in accounts come from {@code WIGGLE_DASHBOARD_USER} / {@code WIGGLE_DASHBOARD_PASSWORD} and
  * the optional read-only {@code WIGGLE_DASHBOARD_VIEWER_*} pair. Every other account, role and
- * session is on the auth shard, read through a per-node cache whose entries live at most
- * {@code WIGGLE_AUTH_CACHE_MILLIS} (default 30 s). A users file at {@code WIGGLE_CONSOLE_USERS_FILE}
- * from before is imported once and then no longer read.
+ * session is on the auth shard, read through the server's {@link WiggleServer#authCache()}. A
+ * users file at {@code WIGGLE_CONSOLE_USERS_FILE} from before is imported once and then no longer
+ * read.
  */
 public final class Portal implements AutoCloseable {
 
     public static final String PORT_ENV = "WIGGLE_PORTAL_PORT";
     private static final System.Logger LOG = System.getLogger(Portal.class.getName());
-    private static final long DEFAULT_CACHE_MILLIS = 30_000;
-    private static final long POLL_MILLIS = 1_000;
 
     private final ConsoleServer http;
-    private final AuthCache cache;
 
-    private Portal(ConsoleServer http, AuthCache cache) {
+    private Portal(ConsoleServer http) {
         this.http = http;
-        this.cache = cache;
     }
 
     /** Starts the portal for {@code server} when {@code env} sets a positive {@value #PORT_ENV}. */
@@ -46,23 +42,17 @@ public final class Portal implements AutoCloseable {
             throw new IllegalArgumentException(PORT_ENV + "='" + raw + "' is not a port number");
         }
         if (port <= 0) return Optional.empty();
-        long cacheMillis = Long.parseLong(get(env, "WIGGLE_AUTH_CACHE_MILLIS", String.valueOf(DEFAULT_CACHE_MILLIS)));
         Accounts accounts = server.accounts();
-        AuthCache cache = new AuthCache(accounts, cacheMillis, System::currentTimeMillis).start(POLL_MILLIS);
-        try {
-            ConsoleAuth auth = new ConsoleAuth(get(env, "WIGGLE_DASHBOARD_USER", "admin"),
-                    get(env, "WIGGLE_DASHBOARD_PASSWORD", null),
-                    get(env, "WIGGLE_DASHBOARD_VIEWER_USER", "viewer"),
-                    get(env, "WIGGLE_DASHBOARD_VIEWER_PASSWORD", null),
-                    tls.hasKeyStore(), accounts, cache);
-            importUsersFile(accounts, Path.of(get(env, "WIGGLE_CONSOLE_USERS_FILE", "wiggle-users.json")),
-                    auth.builtinNames());
-            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
-            return Optional.of(new Portal(new ConsoleServer(data, auth, port, tls).start(), cache));
-        } catch (RuntimeException e) {
-            cache.close();
-            throw e;
-        }
+        AuthCache cache = server.authCache();
+        ConsoleAuth auth = new ConsoleAuth(get(env, "WIGGLE_DASHBOARD_USER", "admin"),
+                get(env, "WIGGLE_DASHBOARD_PASSWORD", null),
+                get(env, "WIGGLE_DASHBOARD_VIEWER_USER", "viewer"),
+                get(env, "WIGGLE_DASHBOARD_VIEWER_PASSWORD", null),
+                tls.hasKeyStore(), accounts, cache);
+        importUsersFile(accounts, Path.of(get(env, "WIGGLE_CONSOLE_USERS_FILE", "wiggle-users.json")),
+                auth.builtinNames());
+        DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
+        return Optional.of(new Portal(new ConsoleServer(data, auth, port, tls).start()));
     }
 
     /** Imports the users file of a console from before the auth shard, the first time any node sees one. */
@@ -84,7 +74,6 @@ public final class Portal implements AutoCloseable {
 
     @Override public void close() {
         http.close();
-        cache.close();
     }
 
     private static String get(Map<String, String> env, String key, String def) {

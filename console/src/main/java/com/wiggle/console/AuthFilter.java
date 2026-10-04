@@ -38,10 +38,11 @@ public final class AuthFilter implements Filter {
      * so a new mutating endpoint is locked down until it is given its own action.
      */
     static String action(String method, String path) {
-        if (path.startsWith("/api/users") || path.startsWith("/api/roles") || path.startsWith("/api/audit")) {
+        if (path.startsWith("/api/users") || path.startsWith("/api/roles") || path.startsWith("/api/audit")
+                || path.startsWith("/api/credentials")) {
             return Permissions.USER_MANAGE;
         }
-        if (READ_METHODS.contains(method)) return Permissions.PORTAL_READ;
+        if (READ_METHODS.contains(method)) return Permissions.READ;
         if (path.startsWith("/api/instances/") && path.endsWith("/cancel")) return Permissions.INSTANCE_CANCEL;
         if (path.startsWith("/api/instances/") && path.contains("/signal/")) return Permissions.INSTANCE_SIGNAL;
         if (path.startsWith("/api/schedules")) return Permissions.SCHEDULE_WRITE;
@@ -77,8 +78,12 @@ public final class AuthFilter implements Filter {
         }
         if (path.startsWith("/api/") && !SELF_SERVICE.contains(path)) {
             String action = action(req.getMethod(), path);
-            boolean allowed = action.equals(Permissions.ALL)
-                    ? principal.permissions().contains(Permissions.ALL) : principal.allowsAny(action);
+            boolean allowed = switch (action) {
+                case Permissions.ALL -> principal.permissions().contains(Permissions.ALL);
+                // The portal lists across workflows, so a read scoped to some of them is not enough.
+                case Permissions.READ -> principal.allows(Permissions.READ, null);
+                default -> principal.allowsAny(action);
+            };
             if (!allowed) {
                 res.sendError(403, "permission '" + action + "' required");
                 return;

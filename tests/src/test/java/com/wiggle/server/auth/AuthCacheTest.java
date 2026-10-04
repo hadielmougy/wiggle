@@ -73,7 +73,7 @@ class AuthCacheTest {
         a.setRoles(null, "dana", List.of("viewer"), true);
         assertEquals(Set.of("*"), cache.account("dana").orElseThrow().permissions(), "until the poll, the cache holds");
         cache.poll();
-        assertEquals(Set.of("portal.read"), cache.account("dana").orElseThrow().permissions());
+        assertEquals(Set.of("read"), cache.account("dana").orElseThrow().permissions());
 
         a.closeSession(token);
         cache.poll();
@@ -83,6 +83,24 @@ class AuthCacheTest {
         cache.poll();
         assertTrue(cache.account("dana").isEmpty());
         assertFalse(cache.anyAccount());
+    }
+
+    @Test @DisplayName("a credential is cached by its key, and dropped when any credential or role changes")
+    void credentials() {
+        Flaky store = new Flaky();
+        Accounts a = accounts(store);
+        AuthCache cache = new AuthCache(a, 30_000, clock::get);
+        cache.poll();
+        String key = a.createApiKey(null, "k1", "admin", null);
+        assertTrue(cache.machineByKey(key).isPresent());
+        int reads = store.reads;
+        cache.machineByKey(key);
+        assertEquals(reads, store.reads, "the hot path reads nothing");
+        assertTrue(cache.machineByKey("wgk_unknown").isEmpty());
+
+        a.deleteCredential(null, "k1");
+        cache.poll();
+        assertTrue(cache.machineByKey(key).isEmpty(), "a deleted key stops working at the next poll");
     }
 
     @Test @DisplayName("with the auth shard down, what is cached keeps working and a miss fails")

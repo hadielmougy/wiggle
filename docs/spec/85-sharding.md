@@ -568,13 +568,15 @@ Users, roles and credentials do not shard by instance. A sign-in names a user, n
 a role assignment must be read the same way by every node. They live on one shard with the `auth`
 role.
 
-**Status: implemented**, except WGL-SHARD-187 (the next step of [§16](#16-delivery-plan)).
-`wf_auth_credential` exists in the schema and nothing reads or writes it until then. `Accounts`
+**Status: implemented.** WGL-SHARD-187 is chapter 70 §11
+([per-RPC authorization](70-api.md#11-per-rpc-authorization)): off by default, enabled with
+`WIGGLE_GRPC_AUTH`. `Accounts`
 (server module) holds the rows and appends an audit entry with every change; `AuthCache` is the
 per-node cache, and each node polls the audit every second to drop what a change names. Built-in
-roles are `admin` (`*`) and `viewer` (`portal.read`); the actions are `portal.read`,
-`instance.cancel`, `instance.signal`, `instance.start`, `schedule.write`, `user.manage` and
-`task.poll`, the scoped ones taking `:<workflow>` or `:<queue>`. The reachability rule of
+roles are `admin` (`*`) and `viewer` (`read`); the actions are `read`, `instance.start`,
+`instance.cancel`, `instance.signal`, `schedule.write`, `workflow.register`, `task.poll`,
+`event.read` and `user.manage`, all but the last two taking `:<workflow>` (or `:<queue>` for
+`task.poll`). The reachability rule of
 WGL-SHARD-183 is now: no change may leave no enabled account holding `user.manage` when there is
 no built-in admin, deleting the last account included. A topology whose auth shard holds nothing
 else is opened for it alone.
@@ -615,8 +617,7 @@ plane. Account management stays on the portal's authenticated HTTP surface.
 
 **WGL-SHARD-187** (SHOULD) Per-RPC authorization on the gRPC API SHOULD follow, resolving each call's
 API key or mTLS subject through `wf_auth_credential` and the cache of WGL-SHARD-184, so the hot path
-never reads the auth shard per call. Until it ships, gRPC remains open to any trusted peer, as today
-([chapter 00 §7](00-index.md)).
+never reads the auth shard per call. It is [chapter 70 §11](70-api.md#11-per-rpc-authorization).
 
 ## 14. Search shards
 

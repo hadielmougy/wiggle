@@ -49,6 +49,16 @@ public final class Accounts {
         }
     }
 
+    /** A machine credential as a caller: what it may do, and when it stops working (null: never). */
+    public record Machine(String id, Set<String> permissions, Long expiresAt) {
+        public boolean expired(long now) {
+            return expiresAt != null && expiresAt <= now;
+        }
+    }
+
+    /** What an API key starts with, so a leaked one is recognisable in logs and scanners. */
+    public static final String KEY_PREFIX = "wgk_";
+
     private final Storage storage;
     private final LongSupplier clock;
 
@@ -221,12 +231,82 @@ public final class Accounts {
         });
     }
 
+    /**
+     * Creates an API key credential holding {@code role} and returns the key. Only its hash is
+     * stored, so this is the one time anyone sees it.
+     */
+    public String createApiKey(String actor, String id, String role, Long expiresAt) {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String key = KEY_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        createCredential(actor, new Rows.AuthCredential(id, Rows.AuthCredential.API_KEY, tokenHash(key), null, role,
+                clock.getAsLong(), expiresAt));
+        return key;
+    }
+
+    /** Creates a credential for the client certificate whose subject is {@code subject}, holding {@code role}. */
+    public void createCertificate(String actor, String id, String subject, String role, Long expiresAt) {
+        if (subject == null || subject.isBlank()) throw new IllegalArgumentException("a certificate credential names a subject");
+        createCredential(actor, new Rows.AuthCredential(id, Rows.AuthCredential.MTLS, null, subject.trim(), role,
+                clock.getAsLong(), expiresAt));
+    }
+
+    private void createCredential(String actor, Rows.AuthCredential c) {
+        Passwords.requireName(c.id());
+        storage.inAuth(tx -> {
+            if (tx.authCredentials().stream().anyMatch(x -> x.id().equals(c.id()))) {
+                throw new IllegalArgumentException("credential '" + c.id() + "' already exists");
+            }
+            if (c.subject() != null && tx.findAuthCredentialBySubject(c.subject()).isPresent()) {
+                throw new IllegalArgumentException("a credential for subject '" + c.subject() + "' already exists");
+            }
+            requireRoles(tx, List.of(c.role()));
+            tx.insertAuthCredential(c);
+            audit(tx, actor, "credential.create", c.id(), c.kind() + " " + c.role());
+            return null;
+        });
+    }
+
+    /** Every machine credential; a key's hash is the only trace of it. */
+    public List<Rows.AuthCredential> credentials() {
+        return storage.inAuth(Tx::authCredentials);
+    }
+
+    public void deleteCredential(String actor, String id) {
+        storage.inAuth(tx -> {
+            if (!tx.deleteAuthCredential(id)) throw new IllegalArgumentException("no credential '" + id + "'");
+            audit(tx, actor, "credential.delete", id, null);
+            return null;
+        });
+    }
+
+    /** The API key credential whose key hashes to {@code keyHash}, read from the auth primary. */
+    public Optional<Machine> machineByKeyHash(String keyHash) {
+        return storage.inAuth(tx -> tx.findAuthCredentialByKeyHash(keyHash).map(c -> machine(tx, c)));
+    }
+
+    /** The credential for client certificate subject {@code subject}, read from the auth primary. */
+    public Optional<Machine> machineBySubject(String subject) {
+        return storage.inAuth(tx -> tx.findAuthCredentialBySubject(subject).map(c -> machine(tx, c)));
+    }
+
+    private static Machine machine(Tx tx, Rows.AuthCredential c) {
+        Rows.AuthRole role = rolesByName(tx).get(c.role());
+        return new Machine(c.id(), role == null ? Set.of() : role.permissions(), c.expiresAt());
+    }
+
     /** Deletes a role and every grant of it. A built-in role cannot be deleted. */
     public void deleteRole(String actor, String name, boolean builtinAdmin) {
         storage.inAuth(tx -> {
             Rows.AuthRole existing = rolesByName(tx).get(name);
             if (existing == null) throw new IllegalArgumentException("no role '" + name + "'");
             if (existing.builtin()) throw new IllegalArgumentException("'" + name + "' is a built-in role and cannot be deleted");
+            List<String> bound = tx.authCredentials().stream().filter(c -> c.role().equals(name))
+                    .map(Rows.AuthCredential::id).toList();
+            if (!bound.isEmpty()) {
+                throw new IllegalArgumentException("role '" + name + "' is held by credential(s) " + bound
+                        + "; delete them first");
+            }
             requireManager(tx, builtinAdmin, "deleting role '" + name + "'", u -> { }, r -> r.remove(name));
             tx.deleteAuthRole(name);
             audit(tx, actor, "role.delete", name, null);

@@ -1483,7 +1483,7 @@ abstract class StorageContract {
         String name = id("u");
         String role = id("r");
         storage.inTx(tx -> {
-            tx.putAuthRole(new Rows.AuthRole(role, Set.of("portal.read", "instance.cancel:orders"), false, now, now));
+            tx.putAuthRole(new Rows.AuthRole(role, Set.of("read", "instance.cancel:orders"), false, now, now));
             tx.putAuthUser(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now));
             tx.setAuthRolesOf(name, List.of(role, "viewer-" + run));
             return null;
@@ -1493,7 +1493,7 @@ abstract class StorageContract {
         assertEquals(List.of(role, "viewer-" + run).stream().sorted().toList(), storage.inTx(tx -> tx.authRolesOf(name)));
         Rows.AuthRole r = storage.inTx(tx -> tx.authRoles()).stream().filter(x -> x.name().equals(role)).findFirst()
                 .orElseThrow();
-        assertEquals(Set.of("portal.read", "instance.cancel:orders"), r.permissions());
+        assertEquals(Set.of("read", "instance.cancel:orders"), r.permissions());
         assertTrue(storage.inTx(tx -> tx.authUsers()).stream().anyMatch(u -> u.name().equals(name)));
 
         storage.inTx(tx -> {
@@ -1521,7 +1521,7 @@ abstract class StorageContract {
         String role = id("r");
         String other = id("r");
         storage.inTx(tx -> {
-            tx.putAuthRole(new Rows.AuthRole(role, Set.of("portal.read"), false, now, now));
+            tx.putAuthRole(new Rows.AuthRole(role, Set.of("read"), false, now, now));
             tx.putAuthRole(new Rows.AuthRole(other, Set.of("*"), false, now, now));
             tx.putAuthUser(new Rows.AuthUser(name, "h", "s", 1, false, now, now));
             tx.setAuthRolesOf(name, List.of(role, other));
@@ -1558,6 +1558,32 @@ abstract class StorageContract {
         assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isEmpty());
         assertTrue(storage.inTx(tx -> tx.findAuthSession(c)).isPresent(), "the kept session stays");
         assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, null)), "null keeps none");
+    }
+
+    @Test
+    @DisplayName("a machine credential is found by key hash or subject, listed, and deleted")
+    void authCredentials() {
+        String key = id("k"), cert = id("c");
+        String hash = id("hash"), subject = "CN=" + id("subj");
+        storage.inTx(tx -> {
+            tx.insertAuthCredential(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
+            tx.insertAuthCredential(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5));
+            return null;
+        });
+        assertEquals(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null),
+                storage.inTx(tx -> tx.findAuthCredentialByKeyHash(hash)).orElseThrow());
+        assertEquals(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5),
+                storage.inTx(tx -> tx.findAuthCredentialBySubject(subject)).orElseThrow());
+        assertTrue(storage.inTx(tx -> tx.authCredentials()).stream().map(Rows.AuthCredential::id).toList()
+                .containsAll(List.of(key, cert)));
+        assertThrows(RuntimeException.class, () -> storage.inTx(tx -> {
+            tx.insertAuthCredential(new Rows.AuthCredential(id("k"), Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
+            return null;
+        }), "a key hash is unique");
+        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthCredential(key)));
+        assertTrue(storage.inTx(tx -> tx.findAuthCredentialByKeyHash(hash)).isEmpty());
+        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthCredential(key)));
+        storage.inTx(tx -> tx.deleteAuthCredential(cert));
     }
 
     @Test

@@ -116,6 +116,30 @@ class TlsTest {
     }
 
 
+    @Test @DisplayName("gRPC authorization by client certificate: its subject is the credential")
+    void grpcCertificateCredential() throws Exception {
+        ServerConfig config = serverConfig(opts(serverKs, trust), 0, null)
+                .withAuth(new ServerConfig.Auth(ServerConfig.GrpcAuth.ENFORCE, Duration.ofSeconds(30)));
+        try (WiggleServer server = new WiggleServer(config).start();
+             WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust))) {
+            WiggleClient.WiggleApiException refused = assertThrows(WiggleClient.WiggleApiException.class, client::cluster);
+            assertEquals(401, refused.status(), "a trusted certificate with no credential is not enough");
+
+            server.accounts().createCertificate("ops", "tls-client", "CN=wiggle-client", "admin", null);
+            long deadline = System.currentTimeMillis() + 5_000;
+            while (true) {
+                try {
+                    client.cluster();
+                    break;
+                } catch (WiggleClient.WiggleApiException e) {
+                    if (System.currentTimeMillis() > deadline) throw e;
+                    Thread.sleep(100);
+                }
+            }
+            client.register(BP);
+        }
+    }
+
     private static Tls.Options opts(Path keystore, Path truststore) {
         return new Tls.Options(
                 keystore == null ? null : keystore.toString(), keystore == null ? null : STORE,

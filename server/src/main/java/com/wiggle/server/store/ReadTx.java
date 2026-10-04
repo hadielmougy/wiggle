@@ -57,6 +57,15 @@ public interface ReadTx extends GraphReads {
     /** The highest audit seq, or 0 when there is none. Held on the auth shard. */
     long authAuditHead();
 
+    /** Every machine credential, by id. Held on the auth shard. */
+    List<Rows.AuthCredential> authCredentials();
+
+    /** The API key credential whose key hashes to {@code keyHash}. Held on the auth shard. */
+    Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash);
+
+    /** The certificate credential for {@code subject}. Held on the auth shard. */
+    Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject);
+
     /** Whether any audit entry records {@code action}. Held on the auth shard. */
     boolean authAuditHas(String action);
 

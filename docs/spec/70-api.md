@@ -29,8 +29,8 @@ wait to the server's maximum.
 **WGL-API-005** (MUST) A cancelled call on `PollTasks` MUST be treated as "the worker is gone": the
 server MUST NOT claim work it cannot run.
 
-**WGL-API-006** (MUST) There MUST be no per-RPC authorization. TLS (optionally mTLS) authenticates the
-channel; any trusted peer may call any RPC.
+**WGL-API-006** (*withdrawn*, by [§11](#11-per-rpc-authorization)) There MUST be no per-RPC
+authorization. TLS (optionally mTLS) authenticates the channel; any trusted peer may call any RPC.
 
 **WGL-API-007** (MUST) A storage failure that applied nothing — a `StorageException` classified
 `TRANSIENT`, see [WGL-STOR-080](80-storage.md) — MUST map to `UNAVAILABLE`, which is what makes it
@@ -255,7 +255,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 **WGL-API-101** (MUST) An unknown `/api/*` path MUST be 404; a mutating call on a GET-only endpoint MUST
 be 405.
 
-**WGL-API-102** (MUST) Every `/api/*` call except `/api/password` MUST need a permission: `portal.read`
+**WGL-API-102** (MUST) Every `/api/*` call except `/api/password` MUST need a permission: `read`
 for a read, `user.manage` for users, roles and the audit, `instance.cancel`, `instance.signal` or
 `schedule.write` for those writes, scoped to the workflow they touch, and `*` for any other write.
 A call without it is 403. A viewer is therefore refused every write.
@@ -272,3 +272,50 @@ names; it carries a reference that the node's log pairs with the full cause.
 
 *Verified by:* `console/ConsoleWebTest`, `console/ConsoleDataTest`, `console/ConsoleUsersTest`,
 `console/PortalTest`.
+
+## 11. Per-RPC authorization
+
+Who a call is, and what it may do ([WGL-SHARD-187](85-sharding.md#13-users-and-authorization)).
+Off by default, so a deployment that sets nothing behaves as before.
+
+**WGL-API-110** (MUST) `WIGGLE_GRPC_AUTH` MUST select the mode: `off` (default) reads no credential
+and allows every call; `log` checks every call, serves it anyway, and logs each distinct refusal
+`enforce` would make once; `enforce` refuses.
+
+**WGL-API-111** (MUST) A caller MUST identify itself with an API key, sent as
+`authorization: Bearer <key>` metadata, or, on an mTLS listener, with its client certificate, whose
+RFC 2253 subject names a certificate credential. A key wins when both are present. Credentials are
+created in the portal and hold one role ([WGL-SHARD-181](85-sharding.md#13-users-and-authorization)).
+
+**WGL-API-112** (MUST) Under `enforce`, a call with no credential, an unknown one or an expired one
+MUST fail `UNAUTHENTICATED`, and a call its role does not allow MUST fail `PERMISSION_DENIED`, before
+the RPC reads anything. `HealthCheck` MUST need no credential.
+
+**WGL-API-113** (MUST) Each RPC MUST need this permission:
+
+| RPC | Permission |
+|---|---|
+| `HealthCheck` | none |
+| `GetCluster`, `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules` | `read` |
+| `GetWorkflow`, `GetStepStats` | `read:<workflow>` |
+| `ListInstances` | `read:<workflow>` when it names a workflow, else `read` |
+| `GetInstance` | `read:<the instance's workflow>` |
+| `RegisterWorkflow` | `workflow.register:<workflow>` |
+| `StartInstance` | `instance.start:<workflow>` |
+| `CancelInstance`, `SignalInstance` | `instance.cancel` / `instance.signal` `:<the instance's workflow>` |
+| `CreateSchedule`, `DeleteSchedule` | `schedule.write:<workflow>` |
+| `PollTasks` | `task.poll:<queue>` for each queue it names; `task.poll` when it names none (every queue) |
+| `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll` on any scope (the lease already ties the call to its task) |
+| `PollEvents`, `AckEvents` | `event.read` |
+
+**WGL-API-114** (MUST) A credential MUST be resolved through the node's cache
+([WGL-SHARD-184](85-sharding.md#13-users-and-authorization)), so a call reads the auth shard only on
+a miss; a deleted credential, or one whose role changed, MUST be refused on calls made more than a
+second after the change. A call already running, such as an open long poll, finishes as it began. With the auth shard unreachable and the credential not cached, the call MUST fail
+`UNAVAILABLE`.
+
+**WGL-API-115** (MUST) The Java client MUST send the key in `WIGGLE_API_KEY` (or `-Dwiggle.api.key`) on
+every call when one is set, and MUST report `UNAUTHENTICATED` as 401 and `PERMISSION_DENIED` as 403.
+
+*Verified by:* `server/grpc/GrpcAuthTest` (every RPC of the service is checked, so one added without
+a permission fails it), `tests/TlsTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.

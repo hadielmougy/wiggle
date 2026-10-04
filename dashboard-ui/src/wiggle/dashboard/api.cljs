@@ -64,6 +64,9 @@
 (defn put-role        [body] (POST "/api/roles" body))
 (defn delete-role     [name] (DELETE (str "/api/roles/" (enc name))))
 (defn audit           [] (GET "/api/audit?limit=1000"))
+(defn credentials     [] (GET "/api/credentials"))
+(defn create-credential [body] (POST "/api/credentials" body))
+(defn delete-credential [id] (DELETE (str "/api/credentials/" (enc id))))
 
 (defn cancel-instance [id reason]
   (POST (str "/api/instances/" (enc id) "/cancel"

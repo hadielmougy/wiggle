@@ -670,7 +670,7 @@
           [:input {:value name :placeholder "e.g. orders-ops"
                    :on-change #(swap! s assoc :name (.. % -target -value))}]]
          [:div.field [:span "permissions"]
-          [:input {:value permissions :placeholder "e.g. portal.read instance.cancel:orders"
+          [:input {:value permissions :placeholder "e.g. read instance.cancel:orders"
                    :on-change #(swap! s assoc :permissions (.. % -target -value))}]]
          [:div.row
           [:button.primary {:on-click #(do (act/put-role! {:name name :permissions permissions})
@@ -711,6 +711,54 @@
           [:td [:code (:action e)]]
           [:td (:target e)]])]])])
 
+(defn credential-form []
+  (let [s (r/atom {:id "" :kind "api-key" :role "viewer" :subject ""})]
+    (fn []
+      (let [{:keys [id kind role subject]} @s]
+        [:div {:style {:padding 14}}
+         [:div.field [:span "id"]
+          [:input {:value id :placeholder "e.g. orders-worker"
+                   :on-change #(swap! s assoc :id (.. % -target -value))}]]
+         [:div.field [:span "kind"]
+          [:select {:value kind :on-change #(swap! s assoc :kind (.. % -target -value))}
+           [:option {:value "api-key"} "API key"]
+           [:option {:value "mtls"} "client certificate"]]]
+         (when (= kind "mtls")
+           [:div.field [:span "subject"]
+            [:input {:value subject :placeholder "CN=orders-worker,O=Example"
+                     :on-change #(swap! s assoc :subject (.. % -target -value))}]])
+         [:div.field [:span "role"]
+          [:select {:value role :on-change #(swap! s assoc :role (.. % -target -value))}
+           (for [r (role-names)] ^{:key r} [:option {:value r} r])]]
+         [:div.row
+          [:button.primary {:on-click #(do (act/create-credential! {:id id :kind kind :role role :subject subject})
+                                           (reset! s {:id "" :kind "api-key" :role "viewer" :subject ""}))}
+           "create credential"]]
+         (when-let [k (:new-key @db)]
+           [:div {:style {:margin-top 10}}
+            [:p.muted "The key for " [:strong (:id k)] ". It is shown this once; set it as WIGGLE_API_KEY."]
+            [:pre (:key k)]
+            [:button.ghost {:on-click #(swap! db dissoc :new-key)} "done"]])]))))
+
+(defn credentials-list []
+  [:section.panel
+   [:h2 "API credentials" [:span.count (count (:credentials @db))]]
+   [:p.muted "What workers and services present to the gRPC API, when it checks calls (WIGGLE_GRPC_AUTH)."]
+   (if-not (seq (:credentials @db))
+     [:div.empty "no credentials yet"]
+     [:table
+      [:thead [:tr [:th "id"] [:th "kind"] [:th "role"] [:th "created"] [:th ""]]]
+      [:tbody
+       (for [c (:credentials @db)]
+         ^{:key (:id c)}
+         [:tr
+          [:td [:strong (:id c)] (when (:subject c) [:div.muted [:code (:subject c)]])]
+          [:td (if (= (:kind c) "mtls") "certificate" "API key")]
+          [:td [:span.badge (:role c)]]
+          [:td.muted (str (u/ago (:createdAt c)) " ago")]
+          [:td.actions [:button.danger {:on-click #(act/delete-credential! (:id c))} "delete"]]])]])
+   [credential-form]])
+
 (defn users-tab []
   ;; The forms are narrow and the tables are not: give the tables the full width rather than half of it.
   [:<>
@@ -719,7 +767,8 @@
     [users-list]]
    [:div.cols.wide-left
     [roles-list]
-    [audit-list]]])
+    [credentials-list]]
+   [audit-list]])
 
 ;; ---------------------------------------------------------------- root
 

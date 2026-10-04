@@ -60,6 +60,7 @@ public final class DashboardServlet extends HttpServlet {
             if (path.startsWith("/api/users")) { users(req, res, sub(path, "/api/users")); return; }
             if (path.startsWith("/api/roles")) { roles(req, res, sub(path, "/api/roles")); return; }
             if (path.equals("/api/audit")) { audit(req, res); return; }
+            if (path.startsWith("/api/credentials")) { credentials(req, res, sub(path, "/api/credentials")); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
             if (path.startsWith("/api/schedules")) { schedules(req, res, sub(path, "/api/schedules")); return; }
@@ -244,6 +245,58 @@ public final class DashboardServlet extends HttpServlet {
             case "DELETE" -> {
                 if (parts.length != 1) { error(res, 404, "not found"); return; }
                 accounts.deleteRole(actor(req), parts[0], auth.hasBuiltinAdmin());
+                json(res, 200, Map.of("ok", true));
+            }
+            default -> error(res, 405, "GET, POST or DELETE");
+        }
+    }
+
+    /**
+     * Machine credentials for the gRPC API: API keys and client certificate subjects, each holding a
+     * role. A new API key is in the response that creates it and nowhere else. The filter has checked
+     * {@code user.manage}.
+     */
+    private void credentials(HttpServletRequest req, HttpServletResponse res, String[] parts) throws IOException {
+        Accounts accounts = auth.accounts();
+        if (accounts == null) { error(res, 404, "this portal manages no credentials"); return; }
+        switch (req.getMethod()) {
+            case "GET" -> {
+                if (parts.length != 0) { error(res, 404, "not found"); return; }
+                List<Object> list = new ArrayList<>();
+                for (Rows.AuthCredential c : accounts.credentials()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id", c.id());
+                    m.put("kind", c.kind().equals(Rows.AuthCredential.API_KEY) ? "api-key" : "mtls");
+                    m.put("subject", c.subject());
+                    m.put("role", c.role());
+                    m.put("createdAt", c.createdAt());
+                    m.put("expiresAt", c.expiresAt());
+                    list.add(m);
+                }
+                json(res, 200, Map.of("credentials", list));
+            }
+            case "POST" -> {
+                if (parts.length != 0) { error(res, 404, "not found"); return; }
+                Map<String, Object> body = Json.asObject(readBody(req));
+                String id = String.valueOf(body.get("id")).trim();
+                String role = roleName(body.get("role"));
+                Long expiresAt = body.get("expiresAt") instanceof Number n && n.longValue() > 0 ? n.longValue() : null;
+                String kind = String.valueOf(body.getOrDefault("kind", "api-key")).trim().toLowerCase();
+                switch (kind) {
+                    case "api-key" -> {
+                        String key = accounts.createApiKey(actor(req), id, role, expiresAt);
+                        json(res, 200, Map.of("id", id, "key", key));
+                    }
+                    case "mtls" -> {
+                        accounts.createCertificate(actor(req), id, String.valueOf(body.get("subject")), role, expiresAt);
+                        json(res, 200, Map.of("id", id));
+                    }
+                    default -> error(res, 400, "a credential kind is api-key or mtls, not '" + kind + "'");
+                }
+            }
+            case "DELETE" -> {
+                if (parts.length != 1) { error(res, 404, "not found"); return; }
+                accounts.deleteCredential(actor(req), parts[0]);
                 json(res, 200, Map.of("ok", true));
             }
             default -> error(res, 405, "GET, POST or DELETE");
