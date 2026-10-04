@@ -6,7 +6,10 @@ import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.server.store.Rows.Token;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.OptionalLong;
 
 /**
  * The reads of one transaction: everything a caller may do on a read-only connection, such as a
@@ -14,6 +17,78 @@ import java.util.Optional;
  * {@code ReadTx} cannot write.
  */
 public interface ReadTx extends GraphReads {
+
+    /** The shard this database was claimed for, or empty when no shard has claimed it. */
+    OptionalInt shardIdentity();
+
+    /** When this database's primary last wrote the replica-lag heartbeat (epoch millis), or empty when it
+     *  never has. Read on a replica, its distance from now is the replica's lag. */
+    OptionalLong shardBeat();
+
+    /** A consumer's acknowledged event position on each shard other than home, by shard; its home
+     *  position is its {@link #eventCursor}. Held on the home shard. */
+    Map<Integer, Long> eventPositions(String consumer);
+
+    /** The lowest position any consumer holds on {@code shard}, a consumer with none holding 0, or null
+     *  when no consumer exists. For a shard other than home; held on the home shard. */
+    Long oldestEventPosition(int shard);
+
+    /** Every shard the cluster has used, by id. Held on the home shard. */
+    List<Rows.ShardRecord> shardRegistry();
+
+    /** A portal account. Held on the auth shard. */
+    Optional<Rows.AuthUser> findAuthUser(String name);
+
+    /** Every portal account, oldest first. Held on the auth shard. */
+    List<Rows.AuthUser> authUsers();
+
+    /** The names of the roles {@code user} holds, sorted. Held on the auth shard. */
+    List<String> authRolesOf(String user);
+
+    /** Every role, by name. Held on the auth shard. */
+    List<Rows.AuthRole> authRoles();
+
+    /** The session whose token hashes to {@code idHash}, expired or not. Held on the auth shard. */
+    Optional<Rows.AuthSession> findAuthSession(String idHash);
+
+    /** Up to {@code max} audit entries after {@code afterSeq}, oldest first. Held on the auth shard. */
+    List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max);
+
+    /** The highest audit seq, or 0 when there is none. Held on the auth shard. */
+    long authAuditHead();
+
+    /** Every machine credential, by id. Held on the auth shard. */
+    List<Rows.AuthCredential> authCredentials();
+
+    /** The API key credential whose key hashes to {@code keyHash}. Held on the auth shard. */
+    Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash);
+
+    /** The certificate credential for {@code subject}. Held on the auth shard. */
+    Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject);
+
+    /** Whether any audit entry records {@code action}. Held on the auth shard. */
+    boolean authAuditHas(String action);
+
+    /** The best {@code query.limit()} matches on this shard, filters applied, best first. Held on a search shard. */
+    List<Rows.SearchHit> searchDocs(Rows.SearchQuery query);
+
+    /** The nearest {@code query.limit()} documents by cosine similarity (the score), filters applied. Held on a search shard. */
+    List<Rows.SearchHit> searchVectors(Rows.VectorQuery query);
+
+    /** Up to {@code max} documents with no {@code model} vector, or one older than the document. Held on a search shard. */
+    List<Rows.SearchDoc> docsNeedingVector(String model, int max);
+
+    /** How many documents changed before {@code updatedBefore} have no {@code model} vector. Held on a search shard. */
+    long countDocsWithoutVector(String model, long updatedBefore);
+
+    /** The vectors of these instances, under every model. Held on a search shard. */
+    List<Rows.SearchVector> searchVectorsOf(List<String> instanceIds);
+
+    /** Every embedding model the registry knows. Held on the home shard. */
+    List<Rows.SearchModel> searchModels();
+
+    /** Up to {@code max} documents with an instance id after {@code afterId}, in id order. Held on a search shard. */
+    List<Rows.SearchDoc> searchDocsAfter(String afterId, int max);
 
     Optional<Instance> findInstance(String id);
 
@@ -67,9 +142,6 @@ public interface ReadTx extends GraphReads {
 
     /** The instance's compensation log, ordered by seq ascending. */
     java.util.List<Rows.CompLog> compensationLog(String instanceId);
-
-    /** Anomalies newest first, narrowed by workflow and/or instance when either is non-null. */
-    List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit);
 
     /** Up to {@code max} events with seq greater than {@code afterSeq}, ascending. */
     default List<Rows.Event> eventsAfter(long afterSeq, int max) {

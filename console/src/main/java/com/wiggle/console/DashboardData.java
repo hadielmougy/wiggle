@@ -1,6 +1,5 @@
 package com.wiggle.console;
 
-import com.wiggle.core.AnomalyView;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.NodeStats;
 
@@ -9,10 +8,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The read/ops surface the {@link HttpDashboard} needs, decoupled from any particular source. The
- * embedded dashboard is backed by the in-process engine ({@code EngineDashboardData}); the standalone
- * ops console backs the same dashboard with a gRPC client. Everything here is neutral (no engine or storage types), so
- * both backends produce identical JSON to the SPA.
+ * The read/ops surface the portal serves, in neutral types so the SPA's JSON does not follow engine
+ * or storage changes. {@link EngineDashboardData} backs it with the server process it runs in.
  */
 public interface DashboardData {
 
@@ -32,7 +29,7 @@ public interface DashboardData {
 
     void signal(String id, String name, Object payload);
 
-    /** Signal waits pending external delivery; may be empty where the backend can't enumerate them. */
+    /** Signal waits pending external delivery, oldest first. */
     List<SignalView> pendingSignals(int limit);
 
     /**
@@ -46,12 +43,9 @@ public interface DashboardData {
     /**
      * Per-node duration statistics for a workflow (null or zero version = latest) over its newest
      * {@code sample} timed steps finished after {@code since}; slowest p95 first. Steps are timed
-     * where they ran, so this covers OBSERVED workflows and locally-chained runs alike.
+     * where they ran, so this covers worker-dispatched and locally-chained runs alike.
      */
     List<NodeStats> stepStats(String workflow, Integer version, long since, int sample);
-
-    /** Departures of observed runs from their topology, newest first; either filter may be null. */
-    List<AnomalyView> anomalies(String workflow, String instanceId, int limit);
 
     List<ScheduleView> schedules();
 
@@ -62,6 +56,25 @@ public interface DashboardData {
     void deleteSchedule(String id);
 
     ClusterView cluster();
+
+    /**
+     * Full-text search over instances, or empty when search is not enabled. {@code readable} is the
+     * set of workflows the caller may read, null for every one.
+     */
+    /** Whether {@link #search} answers. */
+    boolean searchEnabled();
+
+    /** Whether {@link #search} answers a semantic search. */
+    boolean semanticEnabled();
+
+    /** {@code semantic} ranks by closeness in meaning instead of by the words. */
+    Optional<SearchView> search(String text, String workflow, String status, int limit, boolean partialOk,
+                                boolean semantic, java.util.Set<String> readable);
+
+    record SearchView(List<SearchHitView> hits, boolean partial) {}
+
+    record SearchHitView(String instanceId, String workflow, int version, String status, String correlationId,
+                         long updatedAt, double score, boolean purged) {}
 
     record InstanceDetail(InstanceView instance, List<TokenView> tokens) {}
 

@@ -213,7 +213,7 @@
            [badge (:status i)]
            [:span.muted (:workflow i) " v" (:version i)]
            [:div.spacer {:style {:margin-left "auto"}}]
-           (when (and (st/can-write?) (= (:status i) "RUNNING"))
+           (when (and (st/can? "instance.cancel" (:workflow i)) (= (:status i) "RUNNING"))
              [:button.danger {:on-click #(act/cancel! (:id i) "cancelled from dashboard")} "cancel"])]
 
           [:dl.facts.summary
@@ -233,7 +233,7 @@
             [:div {:style {:borderTop "1px solid var(--line)"}}
              [:div {:style {:padding "10px 14px 0" :color "var(--warn)"}}
               "waiting for signal " [:strong (:activity t)]]
-             (when (st/can-write?)
+             (when (st/can? "instance.signal" (:workflow i))
                [signal-form (:activity t) #(act/signal! (:id i) (:activity t) %)])])
 
           [:h2.sub "Steps"]
@@ -248,13 +248,14 @@
 
 (defn instances-toolbar []
   (let [f (:filter @db)
-        searching (seq (:search f))]
+        searching (seq (:search f))
+        exact? (and searching (not (#{:text :meaning} (:search-by f))))]
     [:div.toolbar
-     [:select {:value (:workflow f) :disabled (boolean searching)
+     [:select {:value (:workflow f) :disabled (boolean exact?)
                :on-change #(do (st/set-filter! :workflow (.. % -target -value)) (act/load-instances!))}
       [:option {:value ""} "all workflows"]
       (for [w (:workflows @db)] ^{:key w} [:option {:value w} w])]
-     [:select {:value (:status f) :disabled (boolean searching)
+     [:select {:value (:status f) :disabled (boolean exact?)
                :on-change #(do (st/set-filter! :status (.. % -target -value)) (act/load-instances!))}
       [:option {:value ""} "all statuses"]
       (for [s ["RUNNING" "COMPLETED" "FAILED" "CANCELLED"]] ^{:key s} [:option {:value s} s])]
@@ -267,9 +268,12 @@
                :on-change #(do (st/set-filter! :search-by (keyword (.. % -target -value)))
                                (when searching (act/load-instances!)))}
       [:option {:value "correlation"} "correlation id"]
-      [:option {:value "id"} "instance id"]]
+      [:option {:value "id"} "instance id"]
+      (when (get-in @db [:auth :searchEnabled]) [:option {:value "text"} "full text"])
+      (when (get-in @db [:auth :semanticEnabled]) [:option {:value "meaning"} "by meaning"])]
      [:input {:type "search" :style {:width 220}
-              :placeholder (if (= :id (:search-by f)) "instance id…" "correlation id…")
+              :placeholder (case (:search-by f) :id "instance id…" :text "words in the context or error…"
+                             :meaning "describe what you are looking for…" "correlation id…")
               :value (:search f)
               :on-change #(st/set-filter! :search (.. % -target -value))
               :on-key-down #(when (= (.-key %) "Enter") (act/load-instances!))}]
@@ -283,7 +287,10 @@
   (let [{:keys [instances selected]} @db]
     (if-not (seq instances)
       [:div.empty "no instances"]
-      [:table
+      [:<>
+       (when (:partial @db)
+         [:p.muted {:style {:padding "0 14px"}} "A search shard did not answer; these results are partial."])
+       [:table
        [:thead [:tr [:th "id"] [:th "workflow"] [:th "status"] [:th "updated"]]]
        [:tbody
         (for [i instances]
@@ -291,7 +298,8 @@
           [:tr {:class (when (= (:id i) selected) "sel")
                 :on-click #(do (act/load-detail! (:id i)) (st/open-window! :detail))}
            [:td [:code (:id i)]] [:td (:workflow i)]
-           [:td [badge (:status i)]] [:td.muted (u/ago (:updatedAt i)) " ago"]])]])))
+           [:td [badge (:status i)] (when (:purged i) [:span.badge {:style {:margin-left 6}} "purged"])]
+           [:td.muted (u/ago (:updatedAt i)) " ago"]])]]])))
 
 (defn instances-tab []
   [:div
@@ -430,12 +438,12 @@
           [:td (:workflow s)]
           [:td (if (:cron s) [:code (:cron s)] (u/every-str (:everyMillis s)))]
           [:td.muted (u/ts (:nextFireAt s)) " " [:span.muted "(" (u/in-secs (:nextFireAt s)) ")"]]
-          [:td.actions (when (st/can-write?)
+          [:td.actions (when (st/can? "schedule.write" (:workflow s))
                          [:button.danger {:on-click #(act/delete-schedule! (:id s))} "delete"])]])]])])
 
 (defn schedules-tab []
   [:div.cols
-   (when (st/can-write?) [schedule-form])
+   (when (st/can? "schedule.write") [schedule-form])
    [schedules-list]])
 
 ;; ---------------------------------------------------------------- signals tab
@@ -448,7 +456,7 @@
         [:td [:strong (:signal t)]] [:td (:workflow t)]
         [:td [:code (:instanceId t)]]
         [:td.muted (if (pos? (:deadline t)) (u/in-secs (:deadline t)) "—")]
-        [:td.actions (when (st/can-write?)
+        [:td.actions (when (st/can? "instance.signal" (:workflow t))
                        [:button.primary {:on-click #(swap! open not)} (if @open "close" "deliver")])]]
        (when @open
          [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
@@ -536,9 +544,8 @@
      [:h2 "Step durations" [:span.count (count nodes)]]
      [:p.muted
       "How long each step takes by the handler's own clock, over the newest timed steps in the"
-      " window. A worker-run step also shows how long it waited to be claimed, so a slow step and a"
-      " starved one read differently; an observed step waits for nothing. Slowest p95 first, so the"
-      " top row is the bottleneck."]
+      " window, with how long it waited to be claimed, so a slow step and a starved one read"
+      " differently. Slowest p95 first, so the top row is the bottleneck."]
      (cond
        (empty? (:workflow perf)) [:div.empty "choose a workflow to see its step durations"]
        (nil? stats) [:div.empty "loading…"]
@@ -566,48 +573,12 @@
               [:div.bar [:span {:style {:width (str (* 100 (get heat (:nodeId n) 0)) "%")
                                         :background (heat-colour (get heat (:nodeId n)))}}]]]])]]])]))
 
-(def ^:private anomaly-hint
-  {"OUT_OF_ORDER" "a step ran where another was due; the run was resynchronised at the reported step"
-   "UNKNOWN_NODE" "a step the graph has no node for; skipped"
-   "AFTER_END"    "steps reported after the instance had already ended"
-   "INCOMPLETE"   "the run closed before reaching END; the instance was failed"
-   "DUPLICATE"    "a step already run ran again outside any loop: at-least-once delivery, most likely; ignored"
-   "STALLED"      "no report arrived for longer than the stall threshold; judged as it stood and failed"})
-
-(defn anomalies-panel []
-  (let [{:keys [anomalies perf]} @db]
-    [:section.panel
-     [:h2 "Anomalies" [:span.count (count anomalies)]]
-     [:p.muted
-      "Where an observed run departed from its declared topology. The server records these instead"
-      " of refusing the report, so the rest of the run still yields its timings."]
-     (if-not (seq anomalies)
-       [:div.empty (if (empty? (:workflow perf))
-                     "no anomalies recorded"
-                     (str "no anomalies recorded for " (:workflow perf)))]
-       [:table
-        [:thead [:tr [:th "kind"] [:th "workflow"] [:th "instance"] [:th "expected"] [:th "reported"]
-                 [:th "detail"] [:th "when"]]]
-        [:tbody
-         (for [a anomalies]
-           ^{:key (str (:instanceId a) ":" (:at a) ":" (:kind a))}
-           [:tr {:title (get anomaly-hint (:kind a))
-                 :on-click #(do (act/load-detail! (:instanceId a)) (st/open-window! :detail))}
-            [:td [:span.badge.FAILED (:kind a)]]
-            [:td (:workflow a) [:span.muted " v" (:version a)]]
-            [:td [:code (:instanceId a)]]
-            [:td [:code (:expectedNode a)]]
-            [:td [:code (:reportedNode a)]]
-            [:td.muted {:title (:detail a)} (:detail a)]
-            [:td.muted (u/ago (:at a)) " ago"]])]])]))
-
 (defn performance-tab []
   [:div
    [:section.panel
     [:h2 "Performance"]
     [perf-toolbar]]
    [stats-panel]
-   [anomalies-panel]
    (when (= :detail (get-in @db [:window :kind]))
      (let [i (get-in @db [:detail :instance])]
        [floating-window {:title [:span "Detail"
@@ -616,6 +587,8 @@
         [detail-body]]))])
 
 ;; ---------------------------------------------------------------- users tab
+
+(defn- role-names [] (map :name (:roles @db)))
 
 (defn user-form []
   (let [s (r/atom {:user "" :password "" :role "viewer"})]
@@ -633,55 +606,177 @@
                     :on-change #(swap! s assoc :password (.. % -target -value))}]]
           [:div.field [:span "role"]
            [:select {:value role :on-change #(swap! s assoc :role (.. % -target -value))}
-            [:option {:value "viewer"} "viewer — read-only"]
-            [:option {:value "admin"} "admin — full access, manages users"]]]
+            (for [r (role-names)] ^{:key r} [:option {:value r} r])]]
           [:div.row
            [:button.primary
-            {:on-click #(do (act/create-user! {:user user :password password :role role})
+            {:on-click #(do (act/create-user! {:user user :password password :roles [role]})
                             (reset! s {:user "" :password "" :role "viewer"}))}
             "create user"]]
           [:p.muted {:style {:margin "10px 0 0"}}
-           "The account is stored on this console, hashed. Tell the person their password out of band;"
-           " they can change it from here once they sign in."]]]))))
+           "The account is stored on the auth shard, hashed, and every portal node knows it. Tell the"
+           " person their password out of band; they can change it once they sign in."]]]))))
+
+(defn roles-field
+  "A space-separated list of role names and a button. on-submit is (fn [roles])."
+  [initial on-submit]
+  (let [v (r/atom (str/join " " initial))]
+    (fn [_ on-submit]
+      [:div.row {:style {:padding "10px 14px"}}
+       [:input {:style {:flex 1} :value @v :placeholder (str "roles, e.g. " (str/join " " (role-names)))
+                :on-change #(reset! v (.. % -target -value))}]
+       [:button.primary {:on-click #(on-submit (vec (remove str/blank? (str/split @v #"[\s,]+"))))}
+        "set roles"]])))
 
 (defn users-list []
-  (let [resetting (r/atom nil)]
+  (let [open (r/atom nil)]
     (fn []
       [:section.panel
        [:h2 "Users" [:span.count (count (:users @db))]]
        [:p.muted
-        "Who can sign in to this console. A built-in account comes from the environment where the"
-        " console runs, so its password and role are set there, not here."]
+        "Who can sign in to the portal. A built-in account comes from the environment of the server,"
+        " so its password and role are set there, not here."]
        (if-not (seq (:users @db))
          [:div.empty "no accounts yet"]
          [:table
-          [:thead [:tr [:th "user"] [:th "role"] [:th "source"] [:th "created"] [:th ""]]]
+          [:thead [:tr [:th "user"] [:th "roles"] [:th "source"] [:th "created"] [:th ""]]]
           [:tbody
            (for [u (:users @db)]
              ^{:key (:name u)}
              [:<>
               [:tr
-               [:td [:strong (:name u)]]
-               [:td [:span.badge {:class (when (= (:role u) "admin") "RUNNING")} (:role u)]]
-               [:td.muted (if (:builtin u) "environment" "this console")]
+               [:td [:strong (:name u)] (when (:disabled u) [:span.badge {:style {:margin-left 6}} "disabled"])]
+               [:td (for [r (:roles u)]
+                      ^{:key r} [:span.badge {:class (when (= r "admin") "RUNNING") :style {:margin-right 4}} r])]
+               [:td.muted (if (:builtin u) "environment" "auth shard")]
                [:td.muted (if (:builtin u) "—" (str (u/ago (:createdAt u)) " ago"))]
                [:td.actions
                 (when-not (:builtin u)
                   [:<>
-                   [:button.ghost {:on-click #(swap! resetting (fn [c] (when-not (= c (:name u)) (:name u))))}
-                    (if (= @resetting (:name u)) "close" "set password")]
+                   [:button.ghost {:on-click #(swap! open (fn [c] (when-not (= c [:password (:name u)]) [:password (:name u)])))}
+                    "password"]
+                   [:button.ghost {:on-click #(swap! open (fn [c] (when-not (= c [:roles (:name u)]) [:roles (:name u)])))}
+                    "roles"]
+                   [:button.ghost {:on-click #(act/set-disabled! (:name u) (not (:disabled u)))}
+                    (if (:disabled u) "enable" "disable")]
                    [:button.danger {:on-click #(act/delete-user! (:name u))} "delete"]])]]
-              (when (= @resetting (:name u))
+              (when (= @open [:password (:name u)])
                 [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
                       [password-field "new password"
-                       (fn [p] (act/reset-password! (:name u) p) (reset! resetting nil))
-                       "set password"]]])])]])])))
+                       (fn [p] (act/reset-password! (:name u) p) (reset! open nil))
+                       "set password"]]])
+              (when (= @open [:roles (:name u)])
+                [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
+                      [roles-field (:roles u)
+                       (fn [rs] (act/set-roles! (:name u) rs) (reset! open nil))]]])])]])])))
+
+(defn role-form []
+  (let [s (r/atom {:name "" :permissions ""})]
+    (fn []
+      (let [{:keys [name permissions]} @s]
+        [:div {:style {:padding 14}}
+         [:div.field [:span "name"]
+          [:input {:value name :placeholder "e.g. orders-ops"
+                   :on-change #(swap! s assoc :name (.. % -target -value))}]]
+         [:div.field [:span "permissions"]
+          [:input {:value permissions :placeholder "e.g. read instance.cancel:orders"
+                   :on-change #(swap! s assoc :permissions (.. % -target -value))}]]
+         [:div.row
+          [:button.primary {:on-click #(do (act/put-role! {:name name :permissions permissions})
+                                           (reset! s {:name "" :permissions ""}))}
+           "save role"]]
+         [:p.muted {:style {:margin "10px 0 0"}}
+          "A permission is an action, optionally scoped to one workflow as action:workflow. Actions: "
+          (str/join ", " (:actions @db)) ", or * for all."]]))))
+
+(defn roles-list []
+  [:section.panel
+   [:h2 "Roles" [:span.count (count (:roles @db))]]
+   [:table
+    [:thead [:tr [:th "role"] [:th "permissions"] [:th ""]]]
+    [:tbody
+     (for [r (:roles @db)]
+       ^{:key (:name r)}
+       [:tr
+        [:td [:strong (:name r)] (when (:builtin r) [:span.muted " built-in"])]
+        [:td [:code (str/join " " (:permissions r))]]
+        [:td.actions (when-not (:builtin r)
+                       [:button.danger {:on-click #(act/delete-role! (:name r))} "delete"])]])]]
+   [role-form]])
+
+(defn audit-list []
+  [:section.panel
+   [:h2 "Audit" [:span.count (count (:audit @db))]]
+   (if-not (seq (:audit @db))
+     [:div.empty "no changes yet"]
+     [:table
+      [:thead [:tr [:th "when"] [:th "who"] [:th "what"] [:th "on"]]]
+      [:tbody
+       (for [e (take 50 (reverse (:audit @db)))]
+         ^{:key (:seq e)}
+         [:tr
+          [:td.muted (u/ts (:at e))]
+          [:td (or (:actor e) [:span.muted "system"])]
+          [:td [:code (:action e)]]
+          [:td (:target e)]])]])])
+
+(defn credential-form []
+  (let [s (r/atom {:id "" :kind "api-key" :role "viewer" :subject ""})]
+    (fn []
+      (let [{:keys [id kind role subject]} @s]
+        [:div {:style {:padding 14}}
+         [:div.field [:span "id"]
+          [:input {:value id :placeholder "e.g. orders-worker"
+                   :on-change #(swap! s assoc :id (.. % -target -value))}]]
+         [:div.field [:span "kind"]
+          [:select {:value kind :on-change #(swap! s assoc :kind (.. % -target -value))}
+           [:option {:value "api-key"} "API key"]
+           [:option {:value "mtls"} "client certificate"]]]
+         (when (= kind "mtls")
+           [:div.field [:span "subject"]
+            [:input {:value subject :placeholder "CN=orders-worker,O=Example"
+                     :on-change #(swap! s assoc :subject (.. % -target -value))}]])
+         [:div.field [:span "role"]
+          [:select {:value role :on-change #(swap! s assoc :role (.. % -target -value))}
+           (for [r (role-names)] ^{:key r} [:option {:value r} r])]]
+         [:div.row
+          [:button.primary {:on-click #(do (act/create-credential! {:id id :kind kind :role role :subject subject})
+                                           (reset! s {:id "" :kind "api-key" :role "viewer" :subject ""}))}
+           "create credential"]]
+         (when-let [k (:new-key @db)]
+           [:div {:style {:margin-top 10}}
+            [:p.muted "The key for " [:strong (:id k)] ". It is shown this once; set it as WIGGLE_API_KEY."]
+            [:pre (:key k)]
+            [:button.ghost {:on-click #(swap! db dissoc :new-key)} "done"]])]))))
+
+(defn credentials-list []
+  [:section.panel
+   [:h2 "API credentials" [:span.count (count (:credentials @db))]]
+   [:p.muted "What workers and services present to the gRPC API, when it checks calls (WIGGLE_GRPC_AUTH)."]
+   (if-not (seq (:credentials @db))
+     [:div.empty "no credentials yet"]
+     [:table
+      [:thead [:tr [:th "id"] [:th "kind"] [:th "role"] [:th "created"] [:th ""]]]
+      [:tbody
+       (for [c (:credentials @db)]
+         ^{:key (:id c)}
+         [:tr
+          [:td [:strong (:id c)] (when (:subject c) [:div.muted [:code (:subject c)]])]
+          [:td (if (= (:kind c) "mtls") "certificate" "API key")]
+          [:td [:span.badge (:role c)]]
+          [:td.muted (str (u/ago (:createdAt c)) " ago")]
+          [:td.actions [:button.danger {:on-click #(act/delete-credential! (:id c))} "delete"]]])]])
+   [credential-form]])
 
 (defn users-tab []
-  ;; The form is narrow and the table is not: give the table the full width rather than half of it.
-  [:div.cols.wide-left
-   [user-form]
-   [users-list]])
+  ;; The forms are narrow and the tables are not: give the tables the full width rather than half of it.
+  [:<>
+   [:div.cols.wide-left
+    [user-form]
+    [users-list]]
+   [:div.cols.wide-left
+    [roles-list]
+    [credentials-list]]
+   [audit-list]])
 
 ;; ---------------------------------------------------------------- root
 

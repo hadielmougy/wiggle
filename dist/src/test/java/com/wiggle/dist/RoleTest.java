@@ -25,10 +25,15 @@ class RoleTest {
         assertSame(Role.SERVER, Role.of(" cell "));
     }
 
-    @Test @DisplayName("both roles parse, case- and space-insensitively")
-    void bothRoles() {
+    @Test @DisplayName("the role parses case- and space-insensitively")
+    void caseAndSpace() {
         assertSame(Role.SERVER, Role.of(" Server "));
-        assertSame(Role.CONSOLE, Role.of("CONSOLE"));
+    }
+
+    @Test @DisplayName("the removed console role is refused with a pointer to the portal")
+    void consoleRoleIsRemoved() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> Role.of("CONSOLE"));
+        assertTrue(e.getMessage().contains("WIGGLE_PORTAL_PORT"), e.getMessage());
     }
 
     @Test @DisplayName("the removed coordinator role is refused with a pointer to what replaces it")
@@ -43,7 +48,7 @@ class RoleTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> Role.of("sever"));
         assertTrue(e.getMessage().contains("sever"), e.getMessage());
-        assertTrue(e.getMessage().contains("server, console"), e.getMessage());
+        assertTrue(e.getMessage().contains("expected: server"), e.getMessage());
     }
 
     @Test @DisplayName("every role has a name the parser accepts back")

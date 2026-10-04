@@ -15,20 +15,20 @@ here first, and the requirement names the test that holds it.
 | 10 | [Authoring](10-authoring.md) | `FlowSpec`/`WiggleFlow`, the node model, compilation, validation, versioning | `WGL-AUTH` |
 | 20 | [Worker contract](20-worker.md) | `@ForFlow` binding, handler signatures, polling, leases, heartbeats, reporting | `WGL-WRK` |
 | 30 | [Engine semantics](30-engine.md) | tokens over the graph, both state machines, per-node behaviour, failure paths | `WGL-ENG` |
-| 40 | [Execution modes](40-execution-modes.md) | `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC`, `OBSERVED` and conformance judging | `WGL-MODE`, `WGL-OBS` |
+| 40 | [Execution modes](40-execution-modes.md) | `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC`, step timing statistics; the withdrawn `OBSERVED` | `WGL-MODE`, `WGL-OBS` |
 | 50 | [Sagas](50-sagas.md) | compensable steps, the comp-log, the reverse pass, terminal states | `WGL-SAGA` |
 | 60 | [Event log](60-event-log.md) | lifecycle entries, handler-emitted events, the pull-and-ack feed | `WGL-EVT` |
-| 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the console's HTTP surface | `WGL-API` |
+| 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the portal's HTTP surface | `WGL-API` |
 | 80 | [Storage](80-storage.md) | the schema, migrations, dialects, claim mechanics, retention | `WGL-STOR` |
 | 85 | [Sharding](85-sharding.md) *(proposed)* | shard-carrying ids, the topology and shard roles, read replicas, adding shards, the portal in the server, the auth shard, search shards, dropping the coordinator | `WGL-SHARD` |
-| 90 | [Operations](90-ops.md) | configuration, cluster and leadership, console, TLS, deployment; the withdrawn coordinator | `WGL-OPS`, `WGL-COORD` (withdrawn) |
+| 90 | [Operations](90-ops.md) | configuration, cluster and leadership, portal, TLS, deployment; the withdrawn coordinator | `WGL-OPS`, `WGL-COORD` (withdrawn) |
 
 ## 1. Scope
 
 **In scope.** The durable workflow engine (the `server` module), the authoring and worker library
-(`client`), the observed-execution reporter (`observe`), the wire contract (`proto`), storage
-(`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the ops
-console (`console`).
+(`client`), the wire contract (`proto`), storage
+(`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the
+portal the server serves (`console`).
 
 **Out of scope.** The Go and Python client libraries (separate repositories; they implement the same
 wire contract), the example and benchmark
@@ -72,7 +72,6 @@ behaviour, and the disagreement is recorded in [§6](#6-known-documentation-drif
 | **lease** | A time-bounded, owner-stamped claim on a token. Only the owner may report or fail it. |
 | **worker** | A process that polls for tasks, runs handlers, and reports results. Holds no durable state. |
 | **submitter** | A process that only starts instances. Needs the workflow name and the context shape, nothing else. |
-| **observer** | A process that runs its own steps and reports them after the fact (`OBSERVED`). |
 
 ## 4. Architecture in one paragraph
 
@@ -83,7 +82,7 @@ The server drives tokens over the graph until each parks on something external: 
 (`JOINED`). Workers long-poll over gRPC, claim `READY` tokens for the queues they serve under a
 lease, run the bound handler, and report the result; the server applies it and drives on. A single
 elected leader per cluster runs the clock-driven duties (timers, signal deadlines, schedules, lease
-reclaim, observed-run settling, retention). Every mutation for one instance is serialised by an
+reclaim, retention). Every mutation for one instance is serialised by an
 instance write-lock, so any number of server nodes over one database may drive the same instance.
 
 ## 5. Conformance
@@ -119,7 +118,6 @@ requirement.
 | `docs/saga-compensation.md` §7 | `cancel(id, reason, compensate=true)` | not implemented; `CancelInstanceRequest` has no such field and cancellation never compensates ([WGL-SAGA-030](50-sagas.md)). |
 | `client/…/WiggleFlow.java` javadoc | a "task step named directly" form, linked as `thenApply(String, Class)` | no such public overload exists; only combines, sleeps, signals and sub-flows take a bare name ([WGL-AUTH-061a](10-authoring.md)). |
 | `README.md` "Topology without handlers" | implies steps can be authored by name | they are authored through a **contract interface the author need not implement**, which is the mechanism that story describes. |
-| `proto/…/wiggle.proto` (`Anomaly.kind` comment) | four anomaly kinds | six: `OUT_OF_ORDER`, `UNKNOWN_NODE`, `AFTER_END`, `INCOMPLETE`, `DUPLICATE`, `STALLED` ([WGL-OBS-030](40-execution-modes.md)). |
 | `README.md` / `docs/onboarding.md` | `WIGGLE_EXECUTION_MODE` as a server-wide default | the server does not read it; `DEFAULT` hard-resolves to `SERVER` and only the example benchmark reads the variable ([WGL-OPS-004](90-ops.md)). |
 | `docs/local-execution.md` | `AdvanceRun` / `CompleteTask` RPCs | collapsed into one `ReportSteps` RPC; the document says so in its own header note ([WGL-API-040](70-api.md)). |
 
@@ -131,8 +129,9 @@ Stated so a reader does not look for them.
   be idempotent.
 - **No workflow-code determinism model.** The workflow is data the server walks, not code replayed
   to rebuild state, so there is no replay discipline, no history API, and no side-effect wrappers.
-- **No per-RPC authorization.** TLS (optionally mTLS) authenticates the channel; any trusted peer
-  may call any control-plane RPC. Role separation exists only in the console.
+- **No authorization unless asked for.** With `WIGGLE_GRPC_AUTH` unset, any peer that can connect
+  may call any control-plane RPC; set it to `enforce` for per-RPC authorization by API key or client
+  certificate ([chapter 70 §11](70-api.md#11-per-rpc-authorization)).
 - **No rollback by default.** A failed instance stops where it is unless the topology declares
   compensators.
 - **No context schema management.** The context is opaque JSON; evolving it is the handler's job via

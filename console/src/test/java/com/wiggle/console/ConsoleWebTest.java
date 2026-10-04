@@ -4,9 +4,6 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.core.ExecutionMode;
-import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -25,12 +22,8 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The console's Tomcat/servlet web tier end to end: the SPA API over HTTP, and the auth filter. */
+/** The portal's Tomcat/servlet web tier end to end: the SPA API over HTTP, and the auth filter. */
 class ConsoleWebTest {
-
-    static {
-        System.setProperty("wiggle.observe.settleMillis", "0");   // observed runs are judged at settle; no grace here
-    }
 
     /** The steps a spec names. A worker binds them by name; nothing here implements them. */
     interface Steps {
@@ -71,7 +64,7 @@ class ConsoleWebTest {
             String b = c.start("wf", Map.of(), null, null);
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);   // no password -> open
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -88,8 +81,8 @@ class ConsoleWebTest {
 
                 assertTrue(get(http, base + "/api/cluster", null).body().contains("\"members\""), "cluster");
                 assertTrue(get(http, base + "/api/workflows", null).body().contains("wf"), "workflows");
-                assertEquals("{\"required\":false,\"user\":null,\"role\":\"admin\",\"canWrite\":true,"
-                                + "\"canChangePassword\":false,\"managesUsers\":false}",
+                assertEquals("{\"required\":false,\"setupRequired\":false,\"user\":null,\"permissions\":[\"*\"],\"role\":\"admin\",\"canWrite\":true,"
+                                + "\"canChangePassword\":false,\"managesUsers\":false,\"searchEnabled\":false,\"semanticEnabled\":false}",
                         get(http, base + "/api/auth", null).body(), "open mode = full admin access");
 
                 HttpResponse<String> cancelled = http.send(HttpRequest.newBuilder(
@@ -112,7 +105,7 @@ class ConsoleWebTest {
             String other = c.start("wf", Map.of(), null, "order-99");
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -147,7 +140,7 @@ class ConsoleWebTest {
             String id = c.start(stranded, Map.of());
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -188,7 +181,7 @@ class ConsoleWebTest {
             String id = c.start("wf", Map.of(), null, null);
 
             ConsoleAuth auth = new ConsoleAuth("admin", "op-pass", "viewer", "view-pass", false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
@@ -223,7 +216,7 @@ class ConsoleWebTest {
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             conn.client().register(wf());
             ConsoleAuth auth = new ConsoleAuth("admin", "s3cret", false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
@@ -238,54 +231,25 @@ class ConsoleWebTest {
         }
     }
 
-    /** An observed workflow: a spec with no mode, stamped OBSERVED as the observe module does. */
-    private static FlowSpec observed() {
-        FlowSpec spec = FlowSpec.define("obs", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work).thenApply(s::more));
-        WorkflowDefinition d = spec.definition();
-        return new FlowSpec(new WorkflowDefinition(d.name(), d.version(), d.startNode(), d.nodes(), d.queues(),
-                ExecutionMode.OBSERVED, d.checkpoints()));
-    }
-
-    @Test @DisplayName("performance: /api/stats ranks steps by p95 and /api/anomalies lists departures from the topology")
-    void statsAndAnomaliesOverHttp() throws Exception {
+    @Test @DisplayName("performance: /api/stats ranks steps by p95")
+    void statsOverHttp() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
-            FlowSpec obs = observed();
-            conn.client().register(obs);
-            String a = obs.definition().startNode();
-            String b = obs.definition().node(a).next();
-            long t0 = 1_700_000_000_000L;
-            // one clean run: work 10ms, more 40ms
-            server.engine().observe("obs", null, null, "run-1", "app", List.of(
-                    new StepInput(a, null, null, null, t0, t0 + 10),
-                    new StepInput(b, null, null, null, t0 + 10, t0 + 50)), true);
-            // one run that reports 'more' where 'work' was due
-            server.engine().observe("obs", null, null, "run-2", "app", List.of(
-                    new StepInput(b, null, null, null, t0, t0 + 30)), true);
-            server.engine().settleObservedRuns(10);   // the leader's sweep, run by hand: judges both runs
+            ConsoleDataTest.runTimed(conn.client(), 2);
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
-            try (ConsoleServer console = new ConsoleServer(new GrpcDashboardData(conn.client()),
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
                     auth, 0, Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
-                String stats = get(http, base + "/api/stats?workflow=obs", null).body();
-                assertTrue(stats.contains("\"workflow\":\"obs\""), stats);
+                String stats = get(http, base + "/api/stats?workflow=timed", null).body();
+                assertTrue(stats.contains("\"workflow\":\"timed\""), stats);
                 int more = stats.indexOf("\"name\":\"more\""), work = stats.indexOf("\"name\":\"work\"");
                 assertTrue(more >= 0 && work >= 0, "both steps have stats: " + stats);
                 assertTrue(more < work, "slowest p95 first: " + stats);
-                assertTrue(stats.contains("\"p95Millis\":40"), "more's p95 over its two runs: " + stats);
-                assertTrue(stats.contains("\"waitP95Millis\":0"), "an observed step never queued: " + stats);
-                assertTrue(stats.contains("\"count\":2"), "more ran twice: " + stats);
+                assertTrue(stats.contains("\"count\":2"), "each step ran twice: " + stats);
                 assertEquals(400, get(http, base + "/api/stats", null).statusCode(), "a workflow is required");
-
-                String anomalies = get(http, base + "/api/anomalies?workflow=obs", null).body();
-                assertTrue(anomalies.contains("\"kind\":\"OUT_OF_ORDER\""), anomalies);
-                assertTrue(anomalies.contains("\"expectedNode\":\"" + a + "\""), anomalies);
-                assertTrue(anomalies.contains("\"reportedNode\":\"" + b + "\""), anomalies);
-                assertEquals("{\"anomalies\":[]}", get(http, base + "/api/anomalies?workflow=other", null).body(),
-                        "filtered by workflow");
             }
         }
     }

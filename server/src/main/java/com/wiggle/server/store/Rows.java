@@ -20,9 +20,6 @@ public final class Rows {
         public Doc context = Doc.EMPTY;
         /** When this instance is a sub-workflow: the parent's waiting token; null otherwise. */
         public String parentTokenId;
-        /** Observed runs only: when the run is due to be judged. Every report pushes it out by the
-         *  stall threshold; reaching END pulls it in to a short grace. Null on every other instance. */
-        public Long settleAt;
         public long createdAt;
         public long updatedAt;
         public long revision;
@@ -70,7 +67,7 @@ public final class Rows {
         public Long compSeq;
         public String lastError;
         /** When the step ran. A worker-run step is stamped by the server: claimed, then settled.
-         *  A locally-chained or observed step carries its own clock instead, since the server only
+         *  A locally-chained step carries its own clock instead, since the server only
          *  sees the flush. Null when the step was not timed. */
         public Long startedAt;
         public Long finishedAt;
@@ -79,9 +76,6 @@ public final class Rows {
          *  as it was; a predicate's output is its branch. */
         public String stepInput;
         public String stepOutput;
-        /** Observed steps only: the order they were reported in, which breaks ties between steps
-         *  whose clocks agree to the millisecond. Null elsewhere. */
-        public Long seq;
         public long createdAt;
         public long updatedAt;
 
@@ -135,6 +129,8 @@ public final class Rows {
         public long lastHeartbeat;
         public int workers;
         public boolean leader;
+        /** The newest storage-topology generation this node has loaded; 0 when it runs without one. */
+        public long topologyGeneration;
 
         @Override public ServerNode clone() {
             try { return (ServerNode) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
@@ -187,6 +183,10 @@ public final class Rows {
      */
     public record QueueDepth(int readyCount, long oldestAvailableAt) { }
 
+    /** A shard the cluster has used, as the registry on the home shard remembers it. {@code retiredAt}
+     *  is null until it is retired. */
+    public record ShardRecord(int shardId, ShardState state, long firstSeen, Long retiredAt) { }
+
     /**
      * One slice of the dispatchable backlog, grouped by what decides who may claim it: the queue a
      * token sits on, and the (workflow, version) a worker must serve to be allowed it. The console
@@ -195,13 +195,6 @@ public final class Rows {
      */
     public record BacklogSlice(String workflow, int version, String queue,
                                int readyCount, long oldestAvailableAt) { }
-
-    /**
-     * One departure of an observed run from its topology, written once and never updated.
-     * {@code kind} is one of the names {@link com.wiggle.core.AnomalyView} lists.
-     */
-    public record Anomaly(String id, String instanceId, String workflow, int version, String kind,
-                          String expectedNode, String reportedNode, String detail, long at) { }
 
     /**
      * One entry of the event log. {@code seq} is assigned by the store on append (0 before);
@@ -217,6 +210,100 @@ public final class Rows {
      * has been acknowledged and may be trimmed. {@code lastSeen} is when the consumer last polled.
      */
     public record EventCursor(String consumer, long ackedSeq, long lastSeen, long createdAt) { }
+
+    /**
+     * A portal account on the auth shard. {@code hash} is a PBKDF2-HMAC-SHA256 key derived from the
+     * password over {@code salt} with {@code iterations} rounds, both Base64; a disabled account
+     * cannot sign in.
+     */
+    public record AuthUser(String name, String hash, String salt, int iterations, boolean disabled,
+                           long createdAt, long updatedAt) { }
+
+    /** A named set of permissions. A built-in role exists on every deployment and cannot be deleted. */
+    public record AuthRole(String name, java.util.Set<String> permissions, boolean builtin,
+                           long createdAt, long updatedAt) {
+        public AuthRole {
+            permissions = java.util.Set.copyOf(permissions);
+        }
+    }
+
+    /**
+     * A machine credential bound to a role: an API key, stored as {@code keyHash} (SHA-256 of the
+     * key), or a client certificate subject. {@code expiresAt} is null when it does not expire.
+     */
+    public record AuthCredential(String id, String kind, String keyHash, String subject, String role,
+                                 long createdAt, Long expiresAt) {
+        public static final String API_KEY = "API_KEY";
+        public static final String MTLS = "MTLS";
+    }
+
+    /**
+     * An instance as the search shards hold it: derived from its instance shard, never the source of
+     * truth. {@code text} is what full-text queries match; {@code updatedAt} is the instance's own, so
+     * an older copy never replaces a newer one.
+     */
+    public record SearchDoc(String instanceId, String workflow, int version, String status, String correlationId,
+                            String text, long createdAt, long updatedAt) { }
+
+    /**
+     * A search: the words {@code text} must all contain (blank: any document), and filters applied
+     * inside each shard's query. {@code workflows} null means every workflow; {@code from}/{@code to}
+     * bound {@code updatedAt}, null for open.
+     */
+    public record SearchQuery(String text, java.util.Set<String> workflows, String status, Long from, Long to,
+                              int limit) {
+        public SearchQuery {
+            if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
+            if (workflows != null) workflows = java.util.Set.copyOf(workflows);
+        }
+    }
+
+    /**
+     * An instance's embedding under one model, kept on the search shard that holds its document.
+     * {@code updatedAt} is the document's when it was embedded, so a newer document marks it stale.
+     */
+    public record SearchVector(String instanceId, String model, float[] embedding, long updatedAt) { }
+
+    /**
+     * A nearest-neighbour search: the documents whose {@code model} vector is closest to
+     * {@code vector} by cosine, under the same filters as {@link SearchQuery}.
+     */
+    public record VectorQuery(String model, float[] vector, java.util.Set<String> workflows, String status,
+                              Long from, Long to, int limit) {
+        public VectorQuery {
+            if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
+            if (workflows != null) workflows = java.util.Set.copyOf(workflows);
+        }
+
+        public SearchQuery filters() {
+            return new SearchQuery(null, workflows, status, from, to, limit);
+        }
+    }
+
+    /**
+     * An embedding model the search shards hold vectors for, as the registry on the home shard
+     * records it. A model is {@code BUILDING} until every document indexed before it started has a
+     * vector, then {@code READY}; queries use the newest READY one, and a model it replaces is
+     * {@code RETIRED} and its vectors deleted.
+     */
+    public record SearchModel(String model, int dimension, String state, long startedAt, Long readyAt) {
+        public static final String BUILDING = "BUILDING";
+        public static final String READY = "READY";
+        public static final String RETIRED = "RETIRED";
+    }
+
+    /** One match, best first by {@code score}, then newest. */
+    public record SearchHit(SearchDoc doc, double score) { }
+
+    /** A signed-in session. Only a hash of its token is stored, so a read of the table signs no one in. */
+    public record AuthSession(String idHash, String user, long expiresAt, long createdAt) { }
+
+    /**
+     * One change to accounts, roles or sessions: who made it, what it was, and what it named.
+     * {@code seq} is assigned by the store on append (0 before). Every node reads the entries after
+     * the last it saw to drop what it has cached about {@code target}.
+     */
+    public record AuthAudit(long seq, long at, String actor, String action, String target, String detail) { }
 
     /** One settled, timed step: how long it ran, and how long it waited to be claimed (zero for a
      *  step reported after the fact, which was never queued). What the statistics are computed from. */

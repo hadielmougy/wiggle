@@ -19,20 +19,20 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # In-cluster ports.
 CELL_GRPC_PORT = 8080           # WiggleControlPlane gRPC on a cell node
-CELL_DASHBOARD_PORT = 8090      # cell /healthz probe port (the dashboard moved to the console)
-CONSOLE_HTTP_PORT = 8090        # the standalone ops console (Tomcat) web UI
+CELL_DASHBOARD_PORT = 8090      # cell /healthz probe port
+CELL_PORTAL_PORT = 8070         # the portal (web UI) every cell node serves
 DB_PORT = 5432
 
 # Host-side local ports the lab forwards to (kubectl port-forward).
 CELL_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CELL_LOCAL_PORT_BASE", "18100"))
-CONSOLE_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_CONSOLE_LOCAL_PORT_BASE", "18300"))
+PORTAL_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_PORTAL_LOCAL_PORT_BASE", "18300"))
 POD_LOCAL_PORT_BASE = int(os.environ.get("WIGGLE_LAB_POD_LOCAL_PORT_BASE", "18500"))
 
 PART_OF = "wiggle-lab"
 
 
 def labels(role: str, cell: str | None = None) -> dict[str, str]:
-    """Standard label set. ``role`` is cell | db | console."""
+    """Standard label set. ``role`` is cell | db."""
     lb = {"app.kubernetes.io/part-of": PART_OF, "wiggle-lab/role": role}
     if cell:
         lb["wiggle-lab/cell"] = cell
@@ -103,6 +103,11 @@ CELL_TUNABLES = [
      "help": "Random jitter added to the shed-poll hold-off."},
     {"key": "WIGGLE_LOG_LEVEL", "kind": "enum", "default": "INFO", "choices": LOG_LEVELS,
      "help": "File log level (only takes effect with WIGGLE_LOG_FILE set)."},
+    # Portal login. Blank = the portal's first visit sets the admin password.
+    {"key": "WIGGLE_DASHBOARD_PASSWORD", "kind": "secret", "default": None,
+     "help": "Portal admin password; blank means the first visit to the portal sets it (kept in the database)."},
+    {"key": "WIGGLE_DASHBOARD_VIEWER_PASSWORD", "kind": "secret", "default": None,
+     "help": "Portal read-only account (can view, not cancel/signal/schedule); needs an operator password."},
 ]
 
 

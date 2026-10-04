@@ -27,13 +27,79 @@ public interface Tx extends ReadTx, GraphStore {
      */
     default boolean transactional() { return true; }
 
-    void insertInstance(Instance instance);
+    /** Claims this database for {@code shardId} when nothing has claimed it; leaves an existing claim
+     *  alone, so the caller compares {@link #shardIdentity} afterwards. */
+    void claimShardIdentity(int shardId);
+
+    /** Stamps the replica-lag heartbeat with {@code now}. Needs a claimed shard identity. */
+    void writeShardBeat(long now);
+
+    /** Moves a consumer's event position on {@code shard}, a shard other than home, to
+     *  {@code ackedSeq}, never backwards. Held on the home shard. */
+    void advanceEventPosition(String consumer, int shard, long ackedSeq);
+
+    /** Writes a shard's registry row, replacing any it had. */
+    void putShardRecord(Rows.ShardRecord record);
+
+    /** Writes a portal account, replacing any of that name. Held on the auth shard. */
+    void putAuthUser(Rows.AuthUser user);
+
+    /** Deletes a portal account with its role grants and sessions; false when there was none. */
+    boolean deleteAuthUser(String name);
+
+    /** Replaces the roles {@code user} holds. */
+    void setAuthRolesOf(String user, List<String> roles);
+
+    /** Writes a role, replacing any of that name. Held on the auth shard. */
+    void putAuthRole(Rows.AuthRole role);
+
+    /** Deletes a role and every grant of it; false when there was none. */
+    boolean deleteAuthRole(String name);
+
+    /** Adds a machine credential; its id, key hash and subject are each unique. */
+    void insertAuthCredential(Rows.AuthCredential credential);
+
+    /** Deletes a machine credential; false when there was none. */
+    boolean deleteAuthCredential(String id);
+
+    void insertAuthSession(Rows.AuthSession session);
+
+    void deleteAuthSession(String idHash);
+
+    /** Deletes every session of {@code user} except {@code keepIdHash} (null keeps none); returns how many. */
+    int deleteAuthSessionsOf(String user, String keepIdHash);
+
+    /** Deletes up to {@code max} sessions that expired before {@code now}; returns how many. */
+    int deleteExpiredAuthSessions(long now, int max);
+
+    /** Appends to the auth audit and returns the seq the store assigned. */
+    long appendAuthAudit(Rows.AuthAudit entry);
 
     /**
-     * {@code insertInstance} that leaves an existing row alone: false when the id was already
-     * taken. Two reporters can create the same keyed observed run at once; the loser re-reads.
+     * Writes a search document unless one for the same instance is newer; returns whether it wrote.
+     * Held on a search shard.
      */
-    boolean insertInstanceIfAbsent(Instance instance);
+    boolean upsertSearchDoc(Rows.SearchDoc doc);
+
+    /** Deletes the document and its vectors. */
+    void deleteSearchDoc(String instanceId);
+
+    /** Writes each vector unless the one held for that instance and model is newer. */
+    void upsertSearchVectors(List<Rows.SearchVector> vectors);
+
+    /** Deletes up to {@code max} vectors of {@code model}; returns how many. */
+    int deleteSearchVectors(String model, int max);
+
+    /** Prepares this database to search {@code model}'s vectors fast, where it can; idempotent. */
+    default void ensureVectorIndex(String model, int dimension) { }
+
+    /** Writes a model's registry row, replacing any it had. Held on the home shard. */
+    void putSearchModel(Rows.SearchModel model);
+
+    /** Deletes up to {@code max} documents, with their vectors, whose instance last changed before {@code updatedBefore}. */
+    int deleteSearchDocsBefore(long updatedBefore, int max);
+
+    void insertInstance(Instance instance);
 
     /** Acquires the instance write-lock for the remainder of this transaction. */
     Optional<Instance> lockInstance(String id);
@@ -67,7 +133,7 @@ public interface Tx extends ReadTx, GraphStore {
 
     /**
      * Writes back the fields of an instance that change as it runs: status, termination reason,
-     * error, context and {@code settleAt}, stamped with {@code updatedAt}.
+     * error and context, stamped with {@code updatedAt}.
      *
      * <p>It writes nothing else. An instance's identity and provenance -- {@code workflow},
      * {@code version}, {@code correlationId}, {@code parentTokenId}, {@code createdAt} -- are
@@ -165,9 +231,6 @@ public interface Tx extends ReadTx, GraphStore {
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
 
-    /** RUNNING observed runs whose settle time has passed, soonest first. */
-    List<Instance> dueSettle(long now, int max);
-
     void upsertNode(ServerNode node);
 
     void deleteNodesOlderThan(long lastHeartbeatBefore);
@@ -182,8 +245,6 @@ public interface Tx extends ReadTx, GraphStore {
 
     /** Cancels every active token of an instance, stamping {@code now} as their update time. */
     void cancelActiveTokens(String instanceId, long now);
-
-    void insertAnomaly(Rows.Anomaly anomaly);
 
     /** Appends to the event log and returns the seq the store assigned; visible with the transaction. */
     long appendEvent(Rows.Event event);

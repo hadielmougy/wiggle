@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" width="980" height="560" role="img" aria-label="Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; a standalone ops console is another gRPC client.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" width="980" height="560" role="img" aria-label="Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; operators reach the portal each node can serve over HTTP.">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a90a2"/>
@@ -18,7 +18,7 @@
 
   <rect width="980" height="560" fill="#fbfcff"/>
 
-  <!-- ── top row: the three kinds of gRPC client ────────────────────────────── -->
+  <!-- ── top row: who talks to the cluster ─────────────────────────────────── -->
   <rect x="40" y="36" width="270" height="104" rx="10" fill="#ffffff" stroke="#c3c8d4"/>
   <text class="t h" x="60" y="66">Clients</text>
   <text class="t s" x="60" y="87">Java · Go · Python</text>
@@ -32,10 +32,10 @@
   <text class="t s" x="375" y="128">gRPC long-poll, no inbound ports</text>
 
   <rect x="670" y="36" width="270" height="104" rx="10" fill="#f6f8fc" stroke="#c3c8d4"/>
-  <text class="t h" x="690" y="66">Ops console</text>
-  <text class="t s" x="690" y="87">standalone web UI :8090</text>
+  <text class="t h" x="690" y="66">Operators</text>
+  <text class="t s" x="690" y="87">a browser on the portal</text>
   <text class="t s" x="690" y="110">trace · cancel · signal · schedules</text>
-  <text class="t s" x="690" y="128">a pure gRPC client, like any other</text>
+  <text class="t s" x="690" y="128">HTTP :8070, served by the nodes</text>
 
   <!-- ── arrows down into the cluster ───────────────────────────────────────── -->
   <line x1="175" y1="140" x2="175" y2="214" stroke="#5b6cff" stroke-width="1.6" marker-end="url(#arrowAccent)"/>
@@ -52,13 +52,13 @@
   <text class="t h" x="84" y="311" font-size="13.5">wiggle node</text>
   <text class="m s2" x="84" y="333">engine · gRPC :8080</text>
   <text class="t s" x="84" y="353">leader: timers · recovery</text>
-  <text class="t s" x="84" y="370">/healthz</text>
+  <text class="t s" x="84" y="370">portal · /healthz</text>
 
   <rect x="355" y="284" width="270" height="96" rx="9" fill="#ffffff" stroke="#8a90a2"/>
   <text class="t h" x="375" y="311" font-size="13.5">wiggle node</text>
   <text class="m s2" x="375" y="333">engine · gRPC :8080</text>
   <text class="t s" x="375" y="353">leases · shared queue</text>
-  <text class="t s" x="375" y="370">/healthz</text>
+  <text class="t s" x="375" y="370">portal · /healthz</text>
 
   <rect x="646" y="284" width="270" height="96" rx="9" fill="#ffffff" stroke="#c3c8d4" stroke-dasharray="5 4"/>
   <text class="t h" x="666" y="311" font-size="13.5" fill="#7c8296">more nodes…</text>

@@ -4,13 +4,19 @@ import com.wiggle.jdbc.Dialect;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.server.store.ReplicatedStorage;
+import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
+import com.wiggle.server.topology.Topology;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Storage selection by URL scheme: an explicit switch the compiler checks, not a {@code
  * ServiceLoader} lookup. {@code jdbc:postgresql:} gets the PostgreSQL dialect, {@code jdbc:h2:} the
- * H2 one, and no URL at all keeps state in memory.
+ * H2 one, and no URL at all keeps state in memory. A storage topology gets one such store per shard.
  *
  * <p>This lives here rather than in the runnable distribution because an application that
  * <em>embeds</em> the engine needs it too, and {@code dist} is not published. Everything it touches
@@ -28,11 +34,57 @@ import com.wiggle.server.store.StorageFactory;
  */
 public class PostgresStorageFactory implements StorageFactory {
 
+    private static final System.Logger LOG = System.getLogger(PostgresStorageFactory.class.getName());
+
     @Override public Storage create(ServerConfig config) {
+        if (config.topology() != null) return sharded(config.topology());
         String url = config.jdbcUrl();
         if (url == null || url.isBlank()) return new InMemoryStorage();
         return new JdbcStorage(url, config.jdbcUser(), config.jdbcPassword(), config.jdbcPoolSize(),
                 dialect(url));
+    }
+
+    /**
+     * One store per shard, whatever it holds, behind a {@link ShardedStorage}.
+     */
+    public static ShardedStorage sharded(Topology topology) {
+        List<ShardedStorage.Member> members = new ArrayList<>();
+        try {
+            for (Topology.Shard s : topology.shards()) {
+                boolean instances = s.has(Topology.Role.INSTANCES);
+                members.add(new ShardedStorage.Member(s.id(), s.state(), instances, shard(s)));
+                int replicaConnections = s.replicas().stream().mapToInt(Topology.Connection::pool).sum();
+                LOG.log(System.Logger.Level.INFO, () -> "shard " + s.id() + ": up to " + s.primary().pool()
+                        + " primary and " + replicaConnections + " replica connection(s) per node, over "
+                        + s.replicas().size() + " replica(s)");
+            }
+            return new ShardedStorage(members, topology.home(), topology.only(Topology.Role.AUTH).id());
+        } catch (RuntimeException e) {
+            members.forEach(m -> {
+                try { m.storage().close(); } catch (RuntimeException suppressed) { e.addSuppressed(suppressed); }
+            });
+            throw e;
+        }
+    }
+
+    /** A shard's primary, behind a {@link ReplicatedStorage} when it lists read replicas. */
+    private static Storage shard(Topology.Shard s) {
+        Topology.Connection p = s.primary();
+        JdbcStorage primary = new JdbcStorage(p.url(), p.user(), p.password(), p.pool(), dialect(p.url()));
+        if (s.replicas().isEmpty()) return primary;
+        List<ReplicatedStorage.Named> replicas = new ArrayList<>();
+        try {
+            for (Topology.Connection r : s.replicas()) {
+                // named by position: a JDBC url can carry a password parameter, and names reach logs
+                replicas.add(new ReplicatedStorage.Named("#" + (replicas.size() + 1),
+                        JdbcStorage.readReplica(r.url(), r.user(), r.password(), r.pool(), dialect(r.url()))));
+            }
+        } catch (RuntimeException e) {
+            primary.close();
+            replicas.forEach(r -> r.store().close());
+            throw e;
+        }
+        return new ReplicatedStorage(s.id(), primary, replicas, s.maxReplicaLagMillis(), s.replicaFallback());
     }
 
     /** The dialect for a JDBC URL, or a clear failure naming what is supported. */

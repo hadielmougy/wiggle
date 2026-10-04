@@ -69,6 +69,9 @@ class DefinitionCacheTest {
         @Override public Optional<String> graphStartNode(String w, int v) {
             throw new StoreTouched("graphStartNode");
         }
+        @Override public int graphNodeCount(String w, int v) {
+            throw new StoreTouched("graphNodeCount");
+        }
     };
 
     @Test
@@ -136,12 +139,32 @@ class DefinitionCacheTest {
     }
 
     @Test
+    @DisplayName("a node that did not register a small definition holds it after first reading it")
+    void anotherNodeFillsTheCacheOnFirstUse() {
+        try (Storage storage = new InMemoryStorage()) {
+            storage.migrate();
+            new DefinitionRegistry(storage).register(def("orders", 1, "a"));
+            DefinitionRegistry other = new DefinitionRegistry(storage);
+            assertEquals("a", storage.inTx(tx -> other.graph(tx, "orders", 1).node("step").activity()));
+            assertEquals("a", other.graph(REFUSES, "orders", 1).node("step").activity(),
+                    "from then on it reads nothing from the store for this graph");
+            assertThrows(StoreTouched.class, () -> other.graph(REFUSES, "unknown", 1).node("step"),
+                    "a version it has never read is not invented");
+        }
+    }
+
+    @Test
     @DisplayName("a definition past the node limit is left to the one-node-at-a-time path")
     void anOversizedDefinitionIsNotCached() {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(chain("big", 1, 200));
+            DefinitionRegistry other = new DefinitionRegistry(storage);
+            assertEquals("act-1", storage.inTx(tx -> other.graph(tx, "big", 1).node("n1").activity()),
+                    "a node that did not register it counts its nodes, and stays on the lazy path");
+            assertThrows(StoreTouched.class, () -> other.graph(REFUSES, "big", 1).node("n0"),
+                    "having counted once, it does not count again, and never holds the graph whole");
 
             LazyGraph uncached = registry.graph(REFUSES, "big", 1);
             assertThrows(StoreTouched.class, () -> uncached.node("n0"),

@@ -15,6 +15,7 @@ import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.*;
+import com.wiggle.server.store.ShardState;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
@@ -46,6 +47,7 @@ public final class JdbcStorage implements Storage {
     private final HikariDataSource ds;
     private final Jdbi jdbi;
     private final String fingerprint;
+    private final boolean readOnly;
 
     /** Attempts a transaction gets when it rolled back on a momentary failure; 1 disables the replay. */
     private final int txAttempts = (int) envLong("wiggle.jdbc.txAttempts", "WIGGLE_JDBC_TX_ATTEMPTS", 3);
@@ -56,7 +58,21 @@ public final class JdbcStorage implements Storage {
 
     /** Explicit-dialect constructor used by the per-database modules. */
     public JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect) {
+        this(url, user, password, poolSize, dialect, false);
+    }
+
+    /**
+     * A store over a read replica: its connections are read-only, it is never migrated, and it opens
+     * even while the replica is unreachable, so a replica that is down at startup costs reads from it
+     * rather than the node.
+     */
+    public static JdbcStorage readReplica(String url, String user, String password, int poolSize, Dialect dialect) {
+        return new JdbcStorage(url, user, password, poolSize, dialect, true);
+    }
+
+    private JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect, boolean readOnly) {
         this.dialect = Objects.requireNonNull(dialect, "dialect");
+        this.readOnly = readOnly;
         this.fingerprint = fingerprintOf(dialect.id() + ':' + url);
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(url);
@@ -67,7 +83,11 @@ public final class JdbcStorage implements Storage {
         // stays in manual-commit, read-committed mode.
         cfg.setAutoCommit(false);
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
-        cfg.setPoolName("wiggle-" + dialect.id());
+        cfg.setPoolName("wiggle-" + dialect.id() + (readOnly ? "-replica" : ""));
+        if (readOnly) {
+            cfg.setReadOnly(true);
+            cfg.setInitializationFailTimeout(-1);
+        }
         this.ds = new HikariDataSource(cfg);
         this.jdbi = Jdbi.create(this.ds)
                 .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
@@ -443,6 +463,146 @@ public final class JdbcStorage implements Storage {
             new Migration(22, "token-step-io", """
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS step_input TEXT;
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS step_output TEXT;
+            """),
+            // Sharding: which shard a database was claimed for, the registry of every shard the
+            // cluster has used (read on the home shard), and the topology generation each node runs.
+            new Migration(23, "shard-identity-and-registry", """
+            CREATE TABLE IF NOT EXISTS wf_shard (
+              k            VARCHAR(16)  PRIMARY KEY,
+              shard_id     INT          NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS wf_shard_registry (
+              shard_id     INT          PRIMARY KEY,
+              state        VARCHAR(16)  NOT NULL,
+              first_seen   BIGINT       NOT NULL,
+              retired_at   BIGINT
+            );
+            ALTER TABLE wf_node ADD COLUMN IF NOT EXISTS topology_generation BIGINT;
+            """),
+            // The replica-lag heartbeat: the leader stamps it on every primary, and each node reads it
+            // back from the replicas.
+            new Migration(24, "shard-beat", """
+            ALTER TABLE wf_shard ADD COLUMN IF NOT EXISTS beat_at BIGINT;
+            """),
+            // A consumer's event position on each shard other than home (its home position stays in
+            // wf_event_cursor.acked_seq). Held on the home shard.
+            new Migration(25, "event-cursor-per-shard", """
+            CREATE TABLE IF NOT EXISTS wf_event_cursor_shard (
+              consumer       VARCHAR(200) NOT NULL,
+              shard_id       INT          NOT NULL,
+              acked_seq      BIGINT       NOT NULL,
+              PRIMARY KEY (consumer, shard_id)
+            );
+            """),
+            // OBSERVED execution was removed. A run still open would stay RUNNING forever with
+            // nothing left to settle it, so it is cancelled; then its settle time, the anomaly table
+            // and the order its steps were reported in go.
+            new Migration(26, "drop-observed-execution", """
+            UPDATE wf_instance SET status='CANCELLED',
+              term_reason='OBSERVED execution was removed', revision=revision+1
+              WHERE settle_at IS NOT NULL AND status='RUNNING';
+            DROP INDEX IF EXISTS ix_instance_settle;
+            ALTER TABLE wf_instance DROP COLUMN IF EXISTS settle_at;
+            DROP INDEX IF EXISTS ix_anomaly_instance;
+            DROP INDEX IF EXISTS ix_anomaly_workflow;
+            DROP TABLE IF EXISTS wf_anomaly;
+            ALTER TABLE wf_token DROP COLUMN IF EXISTS seq;
+            """),
+            // Portal accounts, roles, sessions, machine credentials and the audit of every change
+            // to them. Read and written on the auth shard only.
+            new Migration(27, "auth", """
+            CREATE TABLE IF NOT EXISTS wf_auth_user (
+              name         VARCHAR(64)  PRIMARY KEY,
+              hash         VARCHAR(128) NOT NULL,
+              salt         VARCHAR(64)  NOT NULL,
+              iterations   INT          NOT NULL,
+              disabled     INT          NOT NULL DEFAULT 0,
+              created_at   BIGINT       NOT NULL,
+              updated_at   BIGINT       NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS wf_auth_role (
+              name         VARCHAR(64)  PRIMARY KEY,
+              permissions  TEXT         NOT NULL,
+              builtin      INT          NOT NULL DEFAULT 0,
+              created_at   BIGINT       NOT NULL,
+              updated_at   BIGINT       NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS wf_auth_user_role (
+              user_name    VARCHAR(64)  NOT NULL,
+              role_name    VARCHAR(64)  NOT NULL,
+              PRIMARY KEY (user_name, role_name)
+            );
+            CREATE TABLE IF NOT EXISTS wf_auth_session (
+              id_hash      VARCHAR(64)  PRIMARY KEY,
+              user_name    VARCHAR(64)  NOT NULL,
+              expires_at   BIGINT       NOT NULL,
+              created_at   BIGINT       NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_auth_session_user ON wf_auth_session (user_name);
+            CREATE INDEX IF NOT EXISTS ix_auth_session_expiry ON wf_auth_session (expires_at);
+            CREATE TABLE IF NOT EXISTS wf_auth_credential (
+              id           VARCHAR(64)  PRIMARY KEY,
+              kind         VARCHAR(16)  NOT NULL,
+              key_hash     VARCHAR(128),
+              subject      VARCHAR(512),
+              role_name    VARCHAR(64)  NOT NULL,
+              created_at   BIGINT       NOT NULL,
+              expires_at   BIGINT
+            );
+            CREATE TABLE IF NOT EXISTS wf_auth_audit (
+              seq          BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+              at           BIGINT       NOT NULL,
+              actor        VARCHAR(64),
+              action       VARCHAR(64)  NOT NULL,
+              target       VARCHAR(200),
+              detail       TEXT
+            );
+            """),
+            // Machine credentials are looked up by key hash or certificate subject, each unique.
+            new Migration(28, "auth-credential-lookup", """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_credential_key ON wf_auth_credential (key_hash);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_credential_subject ON wf_auth_credential (subject);
+            """),
+            // Search documents, on the search shards: one per instance, derived from its instance shard.
+            new Migration(29, "search-doc", """
+            CREATE TABLE IF NOT EXISTS wf_search_doc (
+              instance_id    VARCHAR(128) PRIMARY KEY,
+              workflow       VARCHAR(200) NOT NULL,
+              version        INT          NOT NULL,
+              status         VARCHAR(32)  NOT NULL,
+              correlation_id VARCHAR(200),
+              text           TEXT         NOT NULL,
+              created_at     BIGINT       NOT NULL,
+              updated_at     BIGINT       NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_search_doc_updated ON wf_search_doc (updated_at);
+            CREATE INDEX IF NOT EXISTS ix_search_doc_workflow ON wf_search_doc (workflow, updated_at);
+            """),
+            // Full-text matching where the database has it: a word vector kept by the database itself.
+            new Migration(30, "search-doc-fulltext", """
+            ALTER TABLE wf_search_doc ADD COLUMN IF NOT EXISTS tsv tsvector
+              GENERATED ALWAYS AS (to_tsvector('simple', text)) STORED;
+            CREATE INDEX IF NOT EXISTS ix_search_doc_tsv ON wf_search_doc USING GIN (tsv);
+            """, Dialect::supportsFullText),
+            // Embeddings, one per instance and model, beside their document on a search shard; and on
+            // the home shard, the registry of the models being built, served or retired. Where
+            // pgvector is installed, migrate() also adds a native vector column (see enableVectors).
+            new Migration(31, "search-vectors", """
+            CREATE TABLE IF NOT EXISTS wf_search_vec (
+              instance_id    VARCHAR(128) NOT NULL,
+              model          VARCHAR(200) NOT NULL,
+              embedding      BYTEA,
+              updated_at     BIGINT       NOT NULL,
+              PRIMARY KEY (instance_id, model)
+            );
+            CREATE INDEX IF NOT EXISTS ix_search_vec_model ON wf_search_vec (model);
+            CREATE TABLE IF NOT EXISTS wf_search_model (
+              model          VARCHAR(200) PRIMARY KEY,
+              dimension      INT          NOT NULL,
+              state          VARCHAR(16)  NOT NULL,
+              started_at     BIGINT       NOT NULL,
+              ready_at       BIGINT
+            );
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -458,7 +618,54 @@ public final class JdbcStorage implements Storage {
      * with the distribution's {@code WIGGLE_MIGRATE_ONLY=true}, then run the app in {@code verify}.
      */
     @Override public void migrate() {
-        applyMigrations(MIGRATIONS, "baseline", modeFromEnv());
+        if (readOnly) throw new IllegalStateException("a read replica is not migrated; its primary is");
+        MigrationMode mode = modeFromEnv();
+        applyMigrations(MIGRATIONS, "baseline", mode);
+        if (mode == MigrationMode.APPLY && dialect.supportsFullText()) enableVectors();
+    }
+
+    /**
+     * Adds a native {@code vector} column to {@code wf_search_vec} where the pgvector extension is
+     * installed on the server, so nearest-neighbour search runs in the database over an HNSW index.
+     * Where it is not, or this user may not create it, vectors stay in {@code embedding} and are
+     * compared in Java: correct, but a scan of every candidate. Not a numbered migration because
+     * whether it applies depends on the server, not on this schema.
+     */
+    private void enableVectors() {
+        try (Handle h = open()) {
+            Connection c = h.getConnection();
+            try {
+                boolean available = h.createQuery("SELECT COUNT(*) FROM pg_available_extensions WHERE name='vector'")
+                        .mapTo(Long.class).one() > 0;
+                if (!available) {
+                    c.rollback();
+                    LOG.log(System.Logger.Level.INFO, "pgvector is not installed on this PostgreSQL; vector search "
+                            + "compares embeddings in Java (install pgvector for an HNSW index)");
+                    return;
+                }
+                h.execute("CREATE EXTENSION IF NOT EXISTS vector");
+                h.execute("ALTER TABLE wf_search_vec ADD COLUMN IF NOT EXISTS vec vector");
+                c.commit();
+                pgvector = true;
+            } catch (SQLException | RuntimeException e) {
+                rollback(c);
+                LOG.log(System.Logger.Level.WARNING, () -> "could not enable pgvector (" + e.getMessage()
+                        + "); vector search compares embeddings in Java. A superuser can run CREATE EXTENSION vector");
+            }
+        }
+    }
+
+    /** Whether {@code wf_search_vec} has the native vector column; asked of the database once. */
+    private volatile Boolean pgvector;
+
+    boolean pgvector(Handle h) {
+        Boolean known = pgvector;
+        if (known != null) return known;
+        boolean has = dialect.supportsFullText() && h.createQuery("SELECT COUNT(*) FROM information_schema.columns "
+                        + "WHERE table_name='wf_search_vec' AND column_name='vec'")
+                .mapTo(Long.class).one() > 0;
+        pgvector = has;
+        return has;
     }
 
     private static MigrationMode modeFromEnv() {
@@ -661,7 +868,7 @@ public final class JdbcStorage implements Storage {
         try (Handle h = open()) {
             Connection c = h.getConnection();
             try {
-                R r = work.apply(new JdbcTx(h, dialect));
+                R r = work.apply(new JdbcTx(h, dialect, this));
                 c.commit();
                 return r;
             } catch (SQLException e) {
@@ -737,15 +944,13 @@ public final class JdbcStorage implements Storage {
         i.createdAt = rs.getLong(prefix + "created_at");
         i.updatedAt = rs.getLong(prefix + "updated_at");
         i.revision = rs.getLong(prefix + "revision");
-        long settleAt = rs.getLong(prefix + "settle_at");
-        i.settleAt = rs.wasNull() ? null : settleAt;
         return i;
     }
 
     /** Every column {@link #readInstance} reads. */
     private static final List<String> INSTANCE_COLUMNS = List.of("id", "workflow", "version", "correlation_id",
             "status", "term_reason", "error", "context", "parent_token_id", "created_at", "updated_at",
-            "revision", "settle_at");
+            "revision");
 
     static Token readToken(ResultSet rs) throws SQLException {
         Token t = new Token();
@@ -775,8 +980,6 @@ public final class JdbcStorage implements Storage {
         t.startedAt = rs.wasNull() ? null : startedAt;
         long finishedAt = rs.getLong("finished_at");
         t.finishedAt = rs.wasNull() ? null : finishedAt;
-        long seq = rs.getLong("seq");
-        t.seq = rs.wasNull() ? null : seq;
         t.stepInput = rs.getString("step_input");
         t.stepOutput = rs.getString("step_output");
         t.createdAt = rs.getLong("created_at");
@@ -792,6 +995,7 @@ public final class JdbcStorage implements Storage {
         n.lastHeartbeat = rs.getLong("last_heartbeat");
         n.workers = rs.getInt("workers");
         n.leader = rs.getInt("leader") == 1;
+        n.topologyGeneration = rs.getLong("topology_generation");
         return n;
     }
 
@@ -823,11 +1027,13 @@ public final class JdbcStorage implements Storage {
         private final Handle h;
         private final Connection c;
         private final Dialect dialect;
+        private final JdbcStorage owner;
 
-        JdbcTx(Handle h, Dialect dialect) {
+        JdbcTx(Handle h, Dialect dialect, JdbcStorage owner) {
             this.h = h;
             this.c = h.getConnection();
             this.dialect = dialect;
+            this.owner = owner;
             h.registerRowMapper(Token.class, (rs, ctx) -> recorded(readToken(rs)));
         }
 
@@ -1100,6 +1306,14 @@ public final class JdbcStorage implements Storage {
                     .findFirst();
         }
 
+        @Override public int graphNodeCount(String workflow, int version) {
+            return h.createQuery("SELECT COUNT(*) FROM wf_graph_node WHERE workflow=:workflow AND version=:version")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .mapTo(Integer.class)
+                    .one();
+        }
+
         @Override public Optional<String> definition(String name, int version) {
             return h.createQuery("SELECT body FROM wf_definition WHERE name=:name AND version=:version")
                     .bind("name", name)
@@ -1125,16 +1339,476 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_INSTANCE = "INSERT INTO wf_instance "
                 + "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,"
-                + "revision,parent_token_id,settle_at) VALUES "
+                + "revision,parent_token_id) VALUES "
                 + "(:id,:workflow,:version,:correlationId,:status,:termReason,:error,:context,:createdAt,"
-                + ":updatedAt,:revision,:parentTokenId,:settleAt)";
+                + ":updatedAt,:revision,:parentTokenId)";
+
+        @Override public Optional<Rows.AuthUser> findAuthUser(String name) {
+            return h.createQuery("SELECT * FROM wf_auth_user WHERE name=:name")
+                    .bind("name", name)
+                    .map(JdbcTx::authUser)
+                    .findOne();
+        }
+
+        @Override public List<Rows.AuthUser> authUsers() {
+            return h.createQuery("SELECT * FROM wf_auth_user ORDER BY created_at, name")
+                    .map(JdbcTx::authUser)
+                    .list();
+        }
+
+        private static Rows.AuthUser authUser(ResultSet rs, org.jdbi.v3.core.statement.StatementContext ctx)
+                throws SQLException {
+            return new Rows.AuthUser(rs.getString("name"), rs.getString("hash"), rs.getString("salt"),
+                    rs.getInt("iterations"), rs.getInt("disabled") != 0, rs.getLong("created_at"),
+                    rs.getLong("updated_at"));
+        }
+
+        @Override public List<String> authRolesOf(String user) {
+            return h.createQuery("SELECT role_name FROM wf_auth_user_role WHERE user_name=:user ORDER BY role_name")
+                    .bind("user", user)
+                    .mapTo(String.class)
+                    .list();
+        }
+
+        @Override public List<Rows.AuthRole> authRoles() {
+            return h.createQuery("SELECT * FROM wf_auth_role ORDER BY name")
+                    .map((rs, ctx) -> new Rows.AuthRole(rs.getString("name"),
+                            permissionSet(rs.getString("permissions")), rs.getInt("builtin") != 0,
+                            rs.getLong("created_at"), rs.getLong("updated_at")))
+                    .list();
+        }
+
+        private static Set<String> permissionSet(String stored) {
+            Set<String> out = new TreeSet<>();
+            for (String p : stored.split("\\s+")) if (!p.isEmpty()) out.add(p);
+            return out;
+        }
+
+        @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) {
+            return h.createQuery("SELECT * FROM wf_auth_session WHERE id_hash=:id")
+                    .bind("id", idHash)
+                    .map((rs, ctx) -> new Rows.AuthSession(rs.getString("id_hash"), rs.getString("user_name"),
+                            rs.getLong("expires_at"), rs.getLong("created_at")))
+                    .findOne();
+        }
+
+        @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) {
+            return h.createQuery("SELECT * FROM wf_auth_audit WHERE seq>:after ORDER BY seq LIMIT :max")
+                    .bind("after", afterSeq)
+                    .bind("max", max)
+                    .map((rs, ctx) -> new Rows.AuthAudit(rs.getLong("seq"), rs.getLong("at"), rs.getString("actor"),
+                            rs.getString("action"), rs.getString("target"), rs.getString("detail")))
+                    .list();
+        }
+
+        @Override public long authAuditHead() {
+            return h.createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_auth_audit").mapTo(Long.class).one();
+        }
+
+        @Override public boolean authAuditHas(String action) {
+            return h.createQuery("SELECT COUNT(*) FROM wf_auth_audit WHERE action=:action")
+                    .bind("action", action)
+                    .mapTo(Long.class)
+                    .one() > 0;
+        }
+
+        @Override public void putAuthUser(Rows.AuthUser u) {
+            String update = "UPDATE wf_auth_user SET hash=:hash,salt=:salt,iterations=:iterations,"
+                    + "disabled=:disabled,created_at=:created,updated_at=:updated WHERE name=:name";
+            if (bindAuthUser(h.createUpdate(update), u).execute() > 0) return;
+            if (bindAuthUser(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_user "
+                    + "(name,hash,salt,iterations,disabled,created_at,updated_at) VALUES "
+                    + "(:name,:hash,:salt,:iterations,:disabled,:created,:updated)")), u).execute() > 0) return;
+            bindAuthUser(h.createUpdate(update), u).execute();
+        }
+
+        private static Update bindAuthUser(Update q, Rows.AuthUser u) {
+            return q.bind("name", u.name())
+                    .bind("hash", u.hash())
+                    .bind("salt", u.salt())
+                    .bind("iterations", u.iterations())
+                    .bind("disabled", u.disabled() ? 1 : 0)
+                    .bind("created", u.createdAt())
+                    .bind("updated", u.updatedAt());
+        }
+
+        @Override public boolean deleteAuthUser(String name) {
+            h.createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:name").bind("name", name).execute();
+            h.createUpdate("DELETE FROM wf_auth_session WHERE user_name=:name").bind("name", name).execute();
+            return h.createUpdate("DELETE FROM wf_auth_user WHERE name=:name").bind("name", name).execute() > 0;
+        }
+
+        @Override public void setAuthRolesOf(String user, List<String> roles) {
+            h.createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:user").bind("user", user).execute();
+            if (roles.isEmpty()) return;
+            PreparedBatch b = h.prepareBatch("INSERT INTO wf_auth_user_role (user_name,role_name) VALUES (:user,:role)");
+            for (String r : new TreeSet<>(roles)) b.bind("user", user).bind("role", r).add();
+            b.execute();
+        }
+
+        @Override public void putAuthRole(Rows.AuthRole r) {
+            String update = "UPDATE wf_auth_role SET permissions=:permissions,builtin=:builtin,"
+                    + "created_at=:created,updated_at=:updated WHERE name=:name";
+            if (bindAuthRole(h.createUpdate(update), r).execute() > 0) return;
+            if (bindAuthRole(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_role "
+                    + "(name,permissions,builtin,created_at,updated_at) VALUES "
+                    + "(:name,:permissions,:builtin,:created,:updated)")), r).execute() > 0) return;
+            bindAuthRole(h.createUpdate(update), r).execute();
+        }
+
+        private static Update bindAuthRole(Update q, Rows.AuthRole r) {
+            return q.bind("name", r.name())
+                    .bind("permissions", String.join(" ", new TreeSet<>(r.permissions())))
+                    .bind("builtin", r.builtin() ? 1 : 0)
+                    .bind("created", r.createdAt())
+                    .bind("updated", r.updatedAt());
+        }
+
+        @Override public boolean deleteAuthRole(String name) {
+            h.createUpdate("DELETE FROM wf_auth_user_role WHERE role_name=:name").bind("name", name).execute();
+            return h.createUpdate("DELETE FROM wf_auth_role WHERE name=:name").bind("name", name).execute() > 0;
+        }
+
+        @Override public List<Rows.AuthCredential> authCredentials() {
+            return h.createQuery("SELECT * FROM wf_auth_credential ORDER BY id").map(JdbcTx::authCredential).list();
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
+            return h.createQuery("SELECT * FROM wf_auth_credential WHERE key_hash=:h")
+                    .bind("h", keyHash).map(JdbcTx::authCredential).findOne();
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
+            return h.createQuery("SELECT * FROM wf_auth_credential WHERE subject=:s")
+                    .bind("s", subject).map(JdbcTx::authCredential).findOne();
+        }
+
+        private static Rows.AuthCredential authCredential(ResultSet rs, org.jdbi.v3.core.statement.StatementContext ctx)
+                throws SQLException {
+            long expires = rs.getLong("expires_at");
+            Long expiresAt = rs.wasNull() ? null : expires;
+            return new Rows.AuthCredential(rs.getString("id"), rs.getString("kind"), rs.getString("key_hash"),
+                    rs.getString("subject"), rs.getString("role_name"), rs.getLong("created_at"), expiresAt);
+        }
+
+        @Override public void insertAuthCredential(Rows.AuthCredential c) {
+            h.createUpdate("INSERT INTO wf_auth_credential (id,kind,key_hash,subject,role_name,created_at,expires_at) "
+                            + "VALUES (:id,:kind,:keyHash,:subject,:role,:created,:expires)")
+                    .bind("id", c.id())
+                    .bind("kind", c.kind())
+                    .bind("keyHash", c.keyHash())
+                    .bind("subject", c.subject())
+                    .bind("role", c.role())
+                    .bind("created", c.createdAt())
+                    .bind("expires", c.expiresAt())
+                    .execute();
+        }
+
+        @Override public boolean deleteAuthCredential(String id) {
+            return h.createUpdate("DELETE FROM wf_auth_credential WHERE id=:id").bind("id", id).execute() > 0;
+        }
+
+        @Override public void insertAuthSession(Rows.AuthSession x) {
+            h.createUpdate("INSERT INTO wf_auth_session (id_hash,user_name,expires_at,created_at) "
+                            + "VALUES (:id,:user,:expires,:created)")
+                    .bind("id", x.idHash())
+                    .bind("user", x.user())
+                    .bind("expires", x.expiresAt())
+                    .bind("created", x.createdAt())
+                    .execute();
+        }
+
+        @Override public void deleteAuthSession(String idHash) {
+            h.createUpdate("DELETE FROM wf_auth_session WHERE id_hash=:id").bind("id", idHash).execute();
+        }
+
+        @Override public int deleteAuthSessionsOf(String user, String keepIdHash) {
+            return h.createUpdate("DELETE FROM wf_auth_session WHERE user_name=:user AND id_hash<>:keep")
+                    .bind("user", user)
+                    .bind("keep", keepIdHash == null ? "" : keepIdHash)
+                    .execute();
+        }
+
+        @Override public int deleteExpiredAuthSessions(long now, int max) {
+            List<String> ids = h.createQuery("SELECT id_hash FROM wf_auth_session WHERE expires_at<:now "
+                            + "ORDER BY expires_at LIMIT :max")
+                    .bind("now", now)
+                    .bind("max", max)
+                    .mapTo(String.class)
+                    .list();
+            if (ids.isEmpty()) return 0;
+            return h.createUpdate("DELETE FROM wf_auth_session WHERE id_hash IN (<ids>)").bindList("ids", ids).execute();
+        }
+
+        @Override public long appendAuthAudit(Rows.AuthAudit e) {
+            return h.createUpdate("INSERT INTO wf_auth_audit (at,actor,action,target,detail) "
+                            + "VALUES (:at,:actor,:action,:target,:detail)")
+                    .bind("at", e.at())
+                    .bind("actor", e.actor())
+                    .bind("action", e.action())
+                    .bind("target", e.target())
+                    .bind("detail", e.detail())
+                    .executeAndReturnGeneratedKeys("seq")
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElseThrow(() -> new StorageException("wf_auth_audit insert returned no seq", null));
+        }
+
+        @Override public boolean upsertSearchDoc(Rows.SearchDoc d) {
+            String update = "UPDATE wf_search_doc SET workflow=:workflow,version=:version,status=:status,"
+                    + "correlation_id=:correlationId,text=:text,created_at=:created,updated_at=:updated "
+                    + "WHERE instance_id=:id AND updated_at<=:updated";
+            if (bindSearchDoc(h.createUpdate(update), d).execute() > 0) return true;
+            if (bindSearchDoc(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
+                    + "(instance_id,workflow,version,status,correlation_id,text,created_at,updated_at) VALUES "
+                    + "(:id,:workflow,:version,:status,:correlationId,:text,:created,:updated)")), d).execute() > 0) {
+                return true;
+            }
+            return bindSearchDoc(h.createUpdate(update), d).execute() > 0;   // another writer inserted it first
+        }
+
+        private static Update bindSearchDoc(Update u, Rows.SearchDoc d) {
+            return u.bind("id", d.instanceId())
+                    .bind("workflow", d.workflow())
+                    .bind("version", d.version())
+                    .bind("status", d.status())
+                    .bind("correlationId", d.correlationId())
+                    .bind("text", d.text())
+                    .bind("created", d.createdAt())
+                    .bind("updated", d.updatedAt());
+        }
+
+        @Override public void deleteSearchDoc(String instanceId) {
+            h.createUpdate("DELETE FROM wf_search_vec WHERE instance_id=:id").bind("id", instanceId).execute();
+            h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
+        }
+
+        @Override public void upsertSearchVectors(List<Rows.SearchVector> vectors) {
+            boolean native_ = owner.pgvector(h);
+            String set = native_ ? "vec=CAST(:vec AS vector),embedding=NULL" : "embedding=:embedding";
+            for (Rows.SearchVector v : vectors) {
+                Update update = bindVector(h.createUpdate("UPDATE wf_search_vec SET " + set + ",updated_at=:updated "
+                        + "WHERE instance_id=:id AND model=:model AND updated_at<=:updated"), v, native_);
+                if (update.execute() > 0) continue;
+                String insert = native_
+                        ? "INSERT INTO wf_search_vec (instance_id,model,vec,updated_at) VALUES (:id,:model,CAST(:vec AS vector),:updated)"
+                        : "INSERT INTO wf_search_vec (instance_id,model,embedding,updated_at) VALUES (:id,:model,:embedding,:updated)";
+                if (bindVector(h.createUpdate(dialect.insertIgnore(insert)), v, native_).execute() > 0) continue;
+                bindVector(h.createUpdate("UPDATE wf_search_vec SET " + set + ",updated_at=:updated "
+                        + "WHERE instance_id=:id AND model=:model AND updated_at<=:updated"), v, native_).execute();
+            }
+        }
+
+        private static Update bindVector(Update u, Rows.SearchVector v, boolean native_) {
+            u.bind("id", v.instanceId()).bind("model", v.model()).bind("updated", v.updatedAt());
+            return native_ ? u.bind("vec", com.wiggle.server.store.Vectors.literal(v.embedding()))
+                    : u.bind("embedding", com.wiggle.server.store.Vectors.encode(v.embedding()));
+        }
+
+        @Override public int deleteSearchVectors(String model, int max) {
+            List<String> ids = h.createQuery("SELECT instance_id FROM wf_search_vec WHERE model=:model LIMIT :max")
+                    .bind("model", model).bind("max", max).mapTo(String.class).list();
+            if (ids.isEmpty()) return 0;
+            return h.createUpdate("DELETE FROM wf_search_vec WHERE model=:model AND instance_id IN (<ids>)")
+                    .bind("model", model).bindList("ids", ids).execute();
+        }
+
+        /** The name of {@code model}'s HNSW index: a hash, since a model id may hold any character. */
+        private static String vectorIndexName(String model) {
+            return "ix_search_vec_" + Integer.toHexString(model.hashCode() & 0x7fffffff);
+        }
+
+        @Override public void ensureVectorIndex(String model, int dimension) {
+            if (!owner.pgvector(h)) return;
+            h.execute("CREATE INDEX IF NOT EXISTS " + vectorIndexName(model) + " ON wf_search_vec USING hnsw "
+                    + "((vec::vector(" + dimension + ")) vector_cosine_ops) WHERE model=" + sqlString(model));
+        }
+
+        private static String sqlString(String value) {
+            return "'" + value.replace("'", "''") + "'";
+        }
+
+        /** The filters of {@code f} on {@code wf_search_doc} aliased {@code d}, for a WHERE that already has a condition. */
+        private static String docFilters(Rows.SearchQuery f) {
+            StringBuilder w = new StringBuilder();
+            if (f.workflows() != null) w.append(f.workflows().isEmpty() ? " AND 1=0" : " AND d.workflow IN (<workflows>)");
+            if (f.status() != null) w.append(" AND d.status=:status");
+            if (f.from() != null) w.append(" AND d.updated_at>=:from");
+            if (f.to() != null) w.append(" AND d.updated_at<=:to");
+            return w.toString();
+        }
+
+        private static void bindFilters(Query q, Rows.SearchQuery f) {
+            if (f.workflows() != null && !f.workflows().isEmpty()) q.bindList("workflows", List.copyOf(f.workflows()));
+            if (f.status() != null) q.bind("status", f.status());
+            if (f.from() != null) q.bind("from", f.from());
+            if (f.to() != null) q.bind("to", f.to());
+        }
+
+        /**
+         * With pgvector, the database orders by cosine distance over the model's HNSW index (the
+         * expression and predicate match {@link #ensureVectorIndex}), searching wider than the limit
+         * so the filters leave enough. Without it, the filtered candidates are compared here.
+         */
+        @Override public List<Rows.SearchHit> searchVectors(Rows.VectorQuery q) {
+            Rows.SearchQuery f = q.filters();
+            String docCols = "d.instance_id,d.workflow,d.version,d.status,d.correlation_id,d.text,d.created_at,d.updated_at";
+            if (owner.pgvector(h)) {
+                int dim = q.vector().length;
+                h.execute("SET LOCAL hnsw.ef_search = " + Math.max(40, Math.min(1000, q.limit() * 4)));
+                String distance = "(v.vec::vector(" + dim + ") <=> CAST(:q AS vector(" + dim + ")))";
+                Query query = h.createQuery("SELECT " + docCols + ", 1 - " + distance + " AS score "
+                                + "FROM wf_search_vec v JOIN wf_search_doc d ON d.instance_id=v.instance_id "
+                                // The model is a literal, as in the index predicate, so even a generic plan
+                                // can prove the partial index applies.
+                                + "WHERE v.model=" + sqlString(q.model()) + " AND v.vec IS NOT NULL" + docFilters(f)
+                                + " ORDER BY " + distance + " LIMIT :limit")
+                        .bind("q", com.wiggle.server.store.Vectors.literal(q.vector()))
+                        .bind("limit", q.limit());
+                bindFilters(query, f);
+                return query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list();
+            }
+            Query query = h.createQuery("SELECT " + docCols + ", v.embedding FROM wf_search_vec v "
+                    + "JOIN wf_search_doc d ON d.instance_id=v.instance_id WHERE v.model=:model" + docFilters(f))
+                    .bind("model", q.model());
+            bindFilters(query, f);
+            List<Rows.SearchDoc> docs = new ArrayList<>();
+            Map<String, float[]> vectors = new HashMap<>();
+            query.map((rs, ctx) -> {
+                Rows.SearchDoc d = searchDoc(rs);
+                byte[] e = rs.getBytes("embedding");
+                if (e != null) vectors.put(d.instanceId(), com.wiggle.server.store.Vectors.decode(e));
+                return d;
+            }).forEach(docs::add);
+            return com.wiggle.server.store.Vectors.nearest(docs, vectors, q.vector(), q.limit());
+        }
+
+        @Override public List<Rows.SearchDoc> docsNeedingVector(String model, int max) {
+            return h.createQuery("SELECT d.instance_id,d.workflow,d.version,d.status,d.correlation_id,d.text,"
+                            + "d.created_at,d.updated_at FROM wf_search_doc d LEFT JOIN wf_search_vec v "
+                            + "ON v.instance_id=d.instance_id AND v.model=:model "
+                            + "WHERE v.instance_id IS NULL OR v.updated_at<d.updated_at"
+                            + (owner.pgvector(h) ? " OR v.vec IS NULL" : "") + " ORDER BY d.updated_at LIMIT :max")
+                    .bind("model", model).bind("max", max)
+                    .map((rs, ctx) -> searchDoc(rs)).list();
+        }
+
+        @Override public long countDocsWithoutVector(String model, long updatedBefore) {
+            return h.createQuery("SELECT COUNT(*) FROM wf_search_doc d WHERE d.updated_at<:before AND NOT EXISTS "
+                            + "(SELECT 1 FROM wf_search_vec v WHERE v.instance_id=d.instance_id AND v.model=:model)")
+                    .bind("before", updatedBefore).bind("model", model).mapTo(Long.class).one();
+        }
+
+        @Override public List<Rows.SearchVector> searchVectorsOf(List<String> instanceIds) {
+            if (instanceIds.isEmpty()) return List.of();
+            boolean native_ = owner.pgvector(h);
+            return h.createQuery("SELECT instance_id,model,updated_at,embedding" + (native_ ? ",vec::text AS vec" : "")
+                            + " FROM wf_search_vec WHERE instance_id IN (<ids>)")
+                    .bindList("ids", instanceIds)
+                    .map((rs, ctx) -> {
+                        String text = native_ ? rs.getString("vec") : null;
+                        float[] v = text != null ? com.wiggle.server.store.Vectors.parseLiteral(text)
+                                : com.wiggle.server.store.Vectors.decode(rs.getBytes("embedding"));
+                        return new Rows.SearchVector(rs.getString("instance_id"), rs.getString("model"), v,
+                                rs.getLong("updated_at"));
+                    })
+                    .list();
+        }
+
+        @Override public List<Rows.SearchModel> searchModels() {
+            return h.createQuery("SELECT * FROM wf_search_model ORDER BY started_at, model")
+                    .map((rs, ctx) -> {
+                        long ready = rs.getLong("ready_at");
+                        Long readyAt = rs.wasNull() ? null : ready;
+                        return new Rows.SearchModel(rs.getString("model"), rs.getInt("dimension"), rs.getString("state"),
+                                rs.getLong("started_at"), readyAt);
+                    })
+                    .list();
+        }
+
+        @Override public void putSearchModel(Rows.SearchModel m) {
+            String update = "UPDATE wf_search_model SET dimension=:dim,state=:state,started_at=:started,ready_at=:ready "
+                    + "WHERE model=:model";
+            if (bindModel(h.createUpdate(update), m).execute() > 0) return;
+            if (bindModel(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_model "
+                    + "(model,dimension,state,started_at,ready_at) VALUES (:model,:dim,:state,:started,:ready)")), m)
+                    .execute() > 0) return;
+            bindModel(h.createUpdate(update), m).execute();
+        }
+
+        private static Update bindModel(Update u, Rows.SearchModel m) {
+            return u.bind("model", m.model()).bind("dim", m.dimension()).bind("state", m.state())
+                    .bind("started", m.startedAt()).bind("ready", m.readyAt());
+        }
+
+        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
+            List<String> ids = h.createQuery("SELECT instance_id FROM wf_search_doc WHERE updated_at<:before "
+                            + "ORDER BY updated_at LIMIT :max")
+                    .bind("before", updatedBefore)
+                    .bind("max", max)
+                    .mapTo(String.class)
+                    .list();
+            if (ids.isEmpty()) return 0;
+            h.createUpdate("DELETE FROM wf_search_vec WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
+            return h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
+        }
+
+        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
+            return h.createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc WHERE instance_id>:after "
+                            + "ORDER BY instance_id LIMIT :max")
+                    .bind("after", afterId == null ? "" : afterId)
+                    .bind("max", max)
+                    .map((rs, ctx) -> searchDoc(rs))
+                    .list();
+        }
+
+        private static final String SEARCH_COLUMNS =
+                "instance_id,workflow,version,status,correlation_id,text,created_at,updated_at";
+
+        private static Rows.SearchDoc searchDoc(ResultSet rs) throws SQLException {
+            return new Rows.SearchDoc(rs.getString("instance_id"), rs.getString("workflow"), rs.getInt("version"),
+                    rs.getString("status"), rs.getString("correlation_id"), rs.getString("text"),
+                    rs.getLong("created_at"), rs.getLong("updated_at"));
+        }
+
+        /**
+         * With full-text support, the database matches and ranks ({@code ts_rank} over the
+         * {@code simple} configuration: words as written, no stemming). Without it, the filtered
+         * documents are matched word by word here, as the in-memory store does.
+         */
+        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
+            boolean text = q.text() != null && !q.text().isBlank();
+            StringBuilder where = new StringBuilder(" WHERE 1=1");
+            if (q.workflows() != null) where.append(q.workflows().isEmpty() ? " AND 1=0" : " AND workflow IN (<workflows>)");
+            if (q.status() != null) where.append(" AND status=:status");
+            if (q.from() != null) where.append(" AND updated_at>=:from");
+            if (q.to() != null) where.append(" AND updated_at<=:to");
+            Query query;
+            if (dialect.supportsFullText()) {
+                String sql = text
+                        ? "SELECT " + SEARCH_COLUMNS + ", ts_rank(tsv, plainto_tsquery('simple', :text)) AS score "
+                          + "FROM wf_search_doc" + where + " AND tsv @@ plainto_tsquery('simple', :text) "
+                          + "ORDER BY score DESC, updated_at DESC, instance_id LIMIT :limit"
+                        : "SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
+                          + " ORDER BY updated_at DESC, instance_id LIMIT :limit";
+                query = h.createQuery(sql).bind("limit", q.limit());
+                if (text) query.bind("text", q.text());
+            } else {
+                query = h.createQuery("SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
+                        + " ORDER BY updated_at DESC, instance_id");
+            }
+            if (q.workflows() != null && !q.workflows().isEmpty()) query.bindList("workflows", List.copyOf(q.workflows()));
+            if (q.status() != null) query.bind("status", q.status());
+            if (q.from() != null) query.bind("from", q.from());
+            if (q.to() != null) query.bind("to", q.to());
+            if (dialect.supportsFullText()) {
+                return query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list();
+            }
+            return com.wiggle.server.store.SearchText.match(query.map((rs, ctx) -> searchDoc(rs)).list(), q.text(), q.limit());
+        }
 
         @Override public void insertInstance(Instance i) {
             bindInstance(h.createUpdate(INSERT_INSTANCE), i).execute();
-        }
-
-        @Override public boolean insertInstanceIfAbsent(Instance i) {
-            return bindInstance(h.createUpdate(dialect.insertIgnore(INSERT_INSTANCE)), i).execute() > 0;
         }
 
         private static <S extends SqlStatement<S>> S bindInstance(S s, Instance i) {
@@ -1149,8 +1823,7 @@ public final class JdbcStorage implements Storage {
                     .bind("createdAt", i.createdAt)
                     .bind("updatedAt", i.updatedAt)
                     .bind("revision", i.revision)
-                    .bind("parentTokenId", i.parentTokenId)
-                    .bindByType("settleAt", i.settleAt, Long.class);
+                    .bind("parentTokenId", i.parentTokenId);
         }
 
         @Override public Optional<Instance> lockInstance(String id) { return loadInstance(id, true); }
@@ -1188,7 +1861,7 @@ public final class JdbcStorage implements Storage {
 
         private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=:status,"
                 + "term_reason=:termReason,error=:error,context=:context,updated_at=:updatedAt,"
-                + "settle_at=:settleAt,revision=revision+1 WHERE id=:id";
+                + "revision=revision+1 WHERE id=:id";
 
         @Override public void updateInstance(Instance i) {
             bindInstanceUpdate(h.createUpdate(UPDATE_INSTANCE), i).execute();
@@ -1224,7 +1897,6 @@ public final class JdbcStorage implements Storage {
                     .bind("error", i.error)
                     .bind("context", i.context.json())
                     .bind("updatedAt", i.updatedAt)
-                    .bindByType("settleAt", i.settleAt, Long.class)
                     .bind("id", i.id);
         }
 
@@ -1259,11 +1931,11 @@ public final class JdbcStorage implements Storage {
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
                 + "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,"
-                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,seq,inst_created_at,"
+                + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,inst_created_at,"
                 + "step_input,step_output) VALUES "
                 + "(:id,:instanceId,:workflow,:version,:nodeId,:kind,:status,:activity,:queue,:attempt,"
                 + ":availableAt,:leaseOwner,:leaseExpires,:joinStack,:lastError,:createdAt,:updatedAt,:payload,"
-                + ":compSeq,:startedAt,:finishedAt,:seq,:instCreatedAt,:stepInput,:stepOutput)";
+                + ":compSeq,:startedAt,:finishedAt,:instCreatedAt,:stepInput,:stepOutput)";
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
@@ -1308,7 +1980,6 @@ public final class JdbcStorage implements Storage {
                     .bindByType("compSeq", t.compSeq, Long.class)
                     .bindByType("startedAt", t.startedAt, Long.class)
                     .bindByType("finishedAt", t.finishedAt, Long.class)
-                    .bindByType("seq", t.seq, Long.class)
                     .bindByType("stepInput", t.stepInput, String.class)
                     .bindByType("stepOutput", t.stepOutput, String.class);
         }
@@ -1350,7 +2021,7 @@ public final class JdbcStorage implements Storage {
                 + "status=:status,activity=:activity,queue=:queue,attempt=:attempt,"
                 + "available_at=:availableAt,lease_owner=:leaseOwner,lease_expires=:leaseExpires,"
                 + "join_stack=:joinStack,last_error=:lastError,updated_at=:updatedAt,payload=:payload,"
-                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,seq=:seq,"
+                + "comp_seq=:compSeq,started_at=:startedAt,finished_at=:finishedAt,"
                 + "step_input=:stepInput,step_output=:stepOutput WHERE id=:id";
 
         /** {@link #UPDATE_TOKEN} minus the payload column, for a row whose payload is unchanged. */
@@ -1596,15 +2267,6 @@ public final class JdbcStorage implements Storage {
                     "ORDER BY available_at LIMIT ?", now, max);
         }
 
-        @Override public List<Instance> dueSettle(long now, int max) {
-            return h.createQuery("SELECT * FROM wf_instance WHERE status='RUNNING' AND settle_at IS NOT NULL "
-                            + "AND settle_at <= :now ORDER BY settle_at LIMIT :max")
-                    .bind("now", now)
-                    .bind("max", max)
-                    .mapTo(Instance.class)
-                    .list();
-        }
-
         @Override public List<Token> expiredLeases(long now, int max) {
             return query("SELECT * FROM wf_token WHERE status='RUNNING' AND lease_expires>0 AND lease_expires<? " +
                     "ORDER BY lease_expires LIMIT ?", now, max);
@@ -1725,20 +2387,22 @@ public final class JdbcStorage implements Storage {
 
         @Override public void upsertNode(ServerNode n) {
             int updated = h.createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
-                            + "workers=:workers WHERE id=:id")
+                            + "workers=:workers,topology_generation=:gen WHERE id=:id")
                     .bind("name", n.name)
                     .bind("beat", n.lastHeartbeat)
                     .bind("workers", n.workers)
+                    .bind("gen", n.topologyGeneration)
                     .bind("id", n.id)
                     .execute();
             if (updated > 0) return;
-            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader) "
-                            + "VALUES (:id,:name,:first,:beat,:workers,0)")
+            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader,"
+                            + "topology_generation) VALUES (:id,:name,:first,:beat,:workers,0,:gen)")
                     .bind("id", n.id)
                     .bind("name", n.name)
                     .bind("first", n.firstHeartbeat)
                     .bind("beat", n.lastHeartbeat)
                     .bind("workers", n.workers)
+                    .bind("gen", n.topologyGeneration)
                     .execute();
         }
 
@@ -1752,6 +2416,60 @@ public final class JdbcStorage implements Storage {
             h.createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
                     .bind("before", before)
                     .execute();
+        }
+
+        @Override public OptionalInt shardIdentity() {
+            return h.createQuery("SELECT shard_id FROM wf_shard WHERE k='self'")
+                    .mapTo(Integer.class)
+                    .findOne()
+                    .map(OptionalInt::of)
+                    .orElse(OptionalInt.empty());
+        }
+
+        @Override public void claimShardIdentity(int shardId) {
+            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard (k,shard_id) VALUES ('self',:shard)"))
+                    .bind("shard", shardId)
+                    .execute();
+        }
+
+        @Override public OptionalLong shardBeat() {
+            List<Long> beats = h.createQuery("SELECT beat_at FROM wf_shard WHERE k='self' AND beat_at IS NOT NULL")
+                    .mapTo(Long.class)
+                    .list();
+            return beats.isEmpty() ? OptionalLong.empty() : OptionalLong.of(beats.getFirst());
+        }
+
+        @Override public void writeShardBeat(long now) {
+            h.createUpdate("UPDATE wf_shard SET beat_at=:now WHERE k='self'").bind("now", now).execute();
+        }
+
+        @Override public List<Rows.ShardRecord> shardRegistry() {
+            return h.createQuery("SELECT shard_id,state,first_seen,retired_at FROM wf_shard_registry "
+                            + "ORDER BY shard_id")
+                    .map((rs, ctx) -> {
+                        long retired = rs.getLong("retired_at");
+                        Long retiredAt = rs.wasNull() ? null : retired;
+                        return new Rows.ShardRecord(rs.getInt("shard_id"),
+                                ShardState.valueOf(rs.getString("state")), rs.getLong("first_seen"), retiredAt);
+                    })
+                    .list();
+        }
+
+        @Override public void putShardRecord(Rows.ShardRecord r) {
+            String update = "UPDATE wf_shard_registry SET state=:state,first_seen=:first,retired_at=:retired "
+                    + "WHERE shard_id=:shard";
+            if (bindShard(h.createUpdate(update), r).execute() > 0) return;
+            if (bindShard(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard_registry "
+                    + "(shard_id,state,first_seen,retired_at) VALUES (:shard,:state,:first,:retired)")), r)
+                    .execute() > 0) return;
+            bindShard(h.createUpdate(update), r).execute();   // another node inserted it first
+        }
+
+        private static Update bindShard(Update u, Rows.ShardRecord r) {
+            return u.bind("shard", r.shardId())
+                    .bind("state", r.state().name())
+                    .bind("first", r.firstSeen())
+                    .bind("retired", r.retiredAt());
         }
 
         @Override public void setLeader(String nodeId, boolean leader) {
@@ -1814,38 +2532,6 @@ public final class JdbcStorage implements Storage {
                         e.compensated = rs.getInt("compensated") != 0;
                         return e;
                     })
-                    .list();
-        }
-
-        @Override public void insertAnomaly(Rows.Anomaly a) {
-            h.createUpdate("INSERT INTO wf_anomaly (id,instance_id,workflow,version,kind,"
-                            + "expected_node,reported_node,detail,observed_at) VALUES "
-                            + "(:id,:instanceId,:workflow,:version,:kind,:expected,:reported,:detail,:at)")
-                    .bind("id", a.id())
-                    .bind("instanceId", a.instanceId())
-                    .bind("workflow", a.workflow())
-                    .bind("version", a.version())
-                    .bind("kind", a.kind())
-                    .bind("expected", a.expectedNode())
-                    .bind("reported", a.reportedNode())
-                    .bind("detail", a.detail())
-                    .bind("at", a.at())
-                    .execute();
-        }
-
-        @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
-            Query q = h.createQuery("SELECT id,instance_id,workflow,version,kind,expected_node,"
-                    + "reported_node,detail,observed_at FROM wf_anomaly WHERE 1=1"
-                    + (workflow != null ? " AND workflow=:workflow" : "")
-                    + (instanceId != null ? " AND instance_id=:instanceId" : "")
-                    + " ORDER BY observed_at DESC, id DESC LIMIT :limit");
-            q.bind("limit", limit);
-            if (workflow != null) q.bind("workflow", workflow);
-            if (instanceId != null) q.bind("instanceId", instanceId);
-            return q.map((rs, ctx) -> new Rows.Anomaly(rs.getString("id"), rs.getString("instance_id"),
-                            rs.getString("workflow"), rs.getInt("version"), rs.getString("kind"),
-                            rs.getString("expected_node"), rs.getString("reported_node"),
-                            rs.getString("detail"), rs.getLong("observed_at")))
                     .list();
         }
 
@@ -1925,6 +2611,36 @@ public final class JdbcStorage implements Storage {
                     .execute();
         }
 
+        @Override public Map<Integer, Long> eventPositions(String consumer) {
+            Map<Integer, Long> out = new HashMap<>();
+            h.createQuery("SELECT shard_id, acked_seq FROM wf_event_cursor_shard WHERE consumer=:consumer")
+                    .bind("consumer", consumer)
+                    .map((rs, ctx) -> Map.entry(rs.getInt("shard_id"), rs.getLong("acked_seq")))
+                    .forEach(e -> out.put(e.getKey(), e.getValue()));
+            return out;
+        }
+
+        @Override public Long oldestEventPosition(int shard) {
+            // MIN over no cursors is NULL; a consumer with no row for the shard holds 0.
+            return h.createQuery("SELECT MIN(COALESCE(p.acked_seq, 0)) FROM wf_event_cursor c "
+                            + "LEFT JOIN wf_event_cursor_shard p ON p.consumer=c.consumer AND p.shard_id=:shard")
+                    .bind("shard", shard)
+                    .mapTo(Long.class)
+                    .findOne()
+                    .orElse(null);
+        }
+
+        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
+            String move = "UPDATE wf_event_cursor_shard SET acked_seq=CASE WHEN acked_seq<:acked THEN :acked "
+                    + "ELSE acked_seq END WHERE consumer=:consumer AND shard_id=:shard";
+            if (h.createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard)
+                    .execute() > 0) return;
+            if (h.createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor_shard (consumer,shard_id,acked_seq) "
+                    + "VALUES (:consumer,:shard,:acked)")).bind("consumer", consumer).bind("shard", shard)
+                    .bind("acked", ackedSeq).execute() > 0) return;
+            h.createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard).execute();
+        }
+
         @Override public Long oldestAckedSeq() {
             // MIN over no cursors is a row holding NULL, so the absence comes from the value.
             return h.createQuery("SELECT MIN(acked_seq) FROM wf_event_cursor")
@@ -1948,7 +2664,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
-            return h.createQuery("SELECT node_id, started_at, finished_at, available_at, seq FROM wf_token "
+            return h.createQuery("SELECT node_id, started_at, finished_at, available_at FROM wf_token "
                             + "WHERE workflow=:workflow AND version=:version AND status='DONE' "
                             + "AND finished_at > :since AND started_at IS NOT NULL "
                             + "ORDER BY finished_at DESC LIMIT :max")
@@ -1957,12 +2673,8 @@ public final class JdbcStorage implements Storage {
                     .bind("since", since)
                     .bind("max", max)
                     .map((rs, ctx) -> {
-                        rs.getLong("seq");
-                        // An observed step waited for nothing: it was never dispatched from a queue.
-                        boolean observed = !rs.wasNull();
                         long ran = Math.max(0, rs.getLong("finished_at") - rs.getLong("started_at"));
-                        long waited = observed ? 0
-                                : Math.max(0, rs.getLong("started_at") - rs.getLong("available_at"));
+                        long waited = Math.max(0, rs.getLong("started_at") - rs.getLong("available_at"));
                         return new Rows.StepDuration(rs.getString("node_id"), ran, waited);
                     })
                     .list();

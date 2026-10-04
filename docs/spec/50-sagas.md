@@ -25,8 +25,8 @@ to bind.
 
 **WGL-SAGA-005** (MUST) A compensable step MAY change the context type like any other task.
 
-**WGL-SAGA-006** (MUST) An `OBSERVED` graph MUST NOT contain compensable steps
-([WGL-OBS-002](40-execution-modes.md)).
+**WGL-SAGA-006** *Withdrawn with OBSERVED execution.* (It kept compensable steps out of `OBSERVED`
+graphs.)
 
 *Verified by:* `client/…/CompensationDeclarationTest`.
 

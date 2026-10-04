@@ -10,9 +10,11 @@ import io.grpc.ChannelCredentials;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.TlsChannelCredentials;
+import io.grpc.stub.MetadataUtils;
 import io.github.shield.internal.RetriesExhaustedException;
 
 import java.util.*;
@@ -23,7 +25,10 @@ public final class WiggleClient implements AutoCloseable {
     private final ManagedChannel channel;
     private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
 
-    /** Connects with TLS if {@code WIGGLE_TLS_*} is configured, otherwise plaintext. */
+    /**
+     * Connects with TLS if {@code WIGGLE_TLS_*} is configured, otherwise plaintext, presenting the
+     * API key in {@code WIGGLE_API_KEY} when one is set.
+     */
     public WiggleClient(String target) {
         this(target, Tls.Options.fromEnvironment());
     }
@@ -31,7 +36,7 @@ public final class WiggleClient implements AutoCloseable {
     /**
      * Connects to {@code target}, using TLS when {@code tls} carries a keystore and/or truststore:
      * the truststore verifies the server, and the keystore presents a client certificate for mTLS.
-     * With neither, the channel is plaintext.
+     * With neither, the channel is plaintext. Presents the API key in {@code WIGGLE_API_KEY} when set.
      */
     public WiggleClient(String target, Tls.Options tls) {
         this(target, tls, tls.any());
@@ -44,8 +49,30 @@ public final class WiggleClient implements AutoCloseable {
      * still overrides the default trust and adds a client certificate for mTLS.
      */
     public WiggleClient(String target, Tls.Options tls, boolean requireTls) {
+        this(target, tls, requireTls, apiKeyFromEnvironment());
+    }
+
+    /**
+     * As {@link #WiggleClient(String, Tls.Options, boolean)}, presenting {@code apiKey} on every
+     * call as {@code authorization: Bearer <key>}; null presents none. A key travels in the clear on a
+     * plaintext channel, so use one with TLS.
+     */
+    public WiggleClient(String target, Tls.Options tls, boolean requireTls, String apiKey) {
         this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls, requireTls)).build();
-        this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
+        WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub s = WiggleControlPlaneGrpc.newBlockingStub(channel);
+        if (apiKey != null && !apiKey.isBlank()) {
+            Metadata headers = new Metadata();
+            headers.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + apiKey.trim());
+            s = s.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers));
+        }
+        this.stub = s;
+    }
+
+    /** {@code -Dwiggle.api.key}, else {@code WIGGLE_API_KEY}; null when neither is set. */
+    static String apiKeyFromEnvironment() {
+        String v = System.getProperty("wiggle.api.key");
+        if (v == null) v = System.getenv("WIGGLE_API_KEY");
+        return v == null || v.isBlank() ? null : v;
     }
 
     private static ChannelCredentials channelCredentials(Tls.Options tls, boolean requireTls) {
@@ -92,6 +119,52 @@ public final class WiggleClient implements AutoCloseable {
                 com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build())));
     }
 
+    /**
+     * Full-text search over instances: every word of {@code text} must occur in an instance's
+     * correlation id, context, termination reason or error. {@code workflow}, {@code status} and the
+     * {@code updatedFrom}/{@code updatedTo} bounds (epoch millis) filter, null for none. With
+     * {@code partialOk}, a search shard that does not answer leaves the result partial instead of
+     * failing it.
+     */
+    public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
+                               int limit, boolean partialOk) {
+        return search(text, workflow, status, updatedFrom, updatedTo, limit, partialOk, false);
+    }
+
+    /**
+     * {@link #search(String, String, String, Long, Long, int, boolean)}, ranked by closeness in meaning
+     * when {@code semantic}: the server embeds {@code text} and finds the nearest instances. A
+     * semantic search needs an embedder on the server and a complete vector index; without them it
+     * fails as a precondition (409).
+     */
+    public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
+                               int limit, boolean partialOk, boolean semantic) {
+        com.wiggle.proto.SearchRequest.Builder req = com.wiggle.proto.SearchRequest.newBuilder()
+                .setText(text == null ? "" : text).setLimit(limit).setPartialOk(partialOk).setSemantic(semantic);
+        if (workflow != null) req.setWorkflow(workflow);
+        if (status != null) req.setStatus(status);
+        if (updatedFrom != null) req.setUpdatedFrom(updatedFrom);
+        if (updatedTo != null) req.setUpdatedTo(updatedTo);
+        com.wiggle.proto.SearchResult r = call(() -> stub.searchInstances(req.build()));
+        List<SearchHit> hits = new ArrayList<>();
+        for (com.wiggle.proto.SearchHit h : r.getHitsList()) {
+            hits.add(new SearchHit(h.getInstanceId(), h.getWorkflow(), h.getVersion(), h.getStatus(),
+                    h.getCorrelationId().isEmpty() ? null : h.getCorrelationId(), h.getCreatedAt(), h.getUpdatedAt(),
+                    h.getScore(), h.getPurged()));
+        }
+        return new SearchResult(hits, r.getPartial(), r.getModel().isEmpty() ? null : r.getModel());
+    }
+
+    /** One search hit; {@code purged} when the instance is gone and only its document remains. */
+    public record SearchHit(String instanceId, String workflow, int version, String status, String correlationId,
+                            long createdAt, long updatedAt, double score, boolean purged) {}
+
+    /**
+     * Search hits, best first; {@code partial} when a search shard did not answer; {@code model} the
+     * embedding model a semantic search used, null for a text search.
+     */
+    public record SearchResult(List<SearchHit> hits, boolean partial, String model) {}
+
     /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
     public record BacklogSlice(String workflow, int version, String queue, int readyCount,
                                long oldestAvailableAt, boolean covered, int livePollers) {}
@@ -112,28 +185,31 @@ public final class WiggleClient implements AutoCloseable {
      * The next entries of the event log for {@code consumer}, oldest first, long-polling up to
      * {@code waitMillis} for one to appear. A consumer is a named cursor: its first poll registers
      * it at the log's tail ({@code startFrom} 0), at the earliest entry still retained ({@code -1}),
-     * or after the seq it names, and later polls ignore {@code startFrom}.
+     * or, on a log that is not sharded, after the seq it names; later polls ignore {@code startFrom}.
      *
-     * <p>Delivery is at-least-once and the cursor only moves on {@link #ackEvents}, so a consumer
-     * that dies mid-batch is served the same entries again. Acknowledge what you have handled.
+     * <p>Delivery is at-least-once and the cursor only moves on an ack, so a consumer that dies
+     * mid-batch is served the same entries again. Acknowledge what you have handled with
+     * {@link #ackEvents(String, String)} and the last entry's {@link com.wiggle.core.EventView#cursor()}.
      */
     public java.util.List<com.wiggle.core.EventView> pollEvents(String consumer, int max, long waitMillis, long startFrom) {
         return Wire.events(call(() -> stub.pollEvents(com.wiggle.proto.PollEventsRequest.newBuilder()
                 .setConsumer(consumer).setMax(max).setWaitMillis(waitMillis).setStartFrom(startFrom).build())));
     }
 
-    /** Acknowledges every event up to {@code ackedSeq} for {@code consumer}; cumulative, never backwards. */
+    /**
+     * Acknowledges, for {@code consumer}, the event whose {@link com.wiggle.core.EventView#cursor()} this
+     * is and every event served before it; cumulative, never backwards.
+     */
+    public void ackEvents(String consumer, String cursor) {
+        call(() -> stub.ackEvents(com.wiggle.proto.AckEventsRequest.newBuilder()
+                .setConsumer(consumer).setAckedCursor(cursor).build()));
+    }
+
+    /** Acknowledges every event up to {@code ackedSeq} for {@code consumer}; cumulative, never backwards.
+     *  Only for a log that is not sharded: a sharded one refuses it, and takes {@link #ackEvents(String, String)}. */
     public void ackEvents(String consumer, long ackedSeq) {
         call(() -> stub.ackEvents(com.wiggle.proto.AckEventsRequest.newBuilder()
                 .setConsumer(consumer).setAckedSeq(ackedSeq).build()));
-    }
-
-    /** Departures of observed runs from their topology, newest first; either filter may be null. */
-    public java.util.List<com.wiggle.core.AnomalyView> anomalies(String workflow, String instanceId, int limit) {
-        com.wiggle.proto.ListAnomaliesRequest.Builder req = com.wiggle.proto.ListAnomaliesRequest.newBuilder().setLimit(limit);
-        if (workflow != null) req.setWorkflow(workflow);
-        if (instanceId != null) req.setInstanceId(instanceId);
-        return Wire.anomalies(call(() -> stub.listAnomalies(req.build())));
     }
 
     /**
@@ -427,6 +503,8 @@ public final class WiggleClient implements AutoCloseable {
     private static int statusCode(Status status) {
         return switch (status.getCode()) {
             case INVALID_ARGUMENT -> 400;
+            case UNAUTHENTICATED -> 401;
+            case PERMISSION_DENIED -> 403;
             case NOT_FOUND -> 404;
             case FAILED_PRECONDITION, ALREADY_EXISTS -> 409;
             case UNAVAILABLE, DEADLINE_EXCEEDED -> 0;

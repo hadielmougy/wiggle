@@ -3,7 +3,7 @@
 ← [Event log](60-event-log.md) · [Index](00-index.md) · Next: [Storage](80-storage.md)
 
 One gRPC service, `com.wiggle.proto.WiggleControlPlane`, is the whole contract between a server and
-everything else: submitters, workers, observers, the console, and the clients in other languages.
+everything else: submitters, workers, and the clients in other languages.
 Nothing is ever pushed to a worker, so workers need no inbound connectivity.
 
 The definition of record is `proto/src/main/proto/wiggle.proto`. This chapter specifies each RPC's
@@ -29,8 +29,8 @@ wait to the server's maximum.
 **WGL-API-005** (MUST) A cancelled call on `PollTasks` MUST be treated as "the worker is gone": the
 server MUST NOT claim work it cannot run.
 
-**WGL-API-006** (MUST) There MUST be no per-RPC authorization. TLS (optionally mTLS) authenticates the
-channel; any trusted peer may call any RPC.
+**WGL-API-006** (*withdrawn*, by [§11](#11-per-rpc-authorization)) There MUST be no per-RPC
+authorization. TLS (optionally mTLS) authenticates the channel; any trusted peer may call any RPC.
 
 **WGL-API-007** (MUST) A storage failure that applied nothing — a `StorageException` classified
 `TRANSIENT`, see [WGL-STOR-080](80-storage.md) — MUST map to `UNAVAILABLE`, which is what makes it
@@ -69,9 +69,8 @@ count, leader flag and liveness.
 **WGL-API-021** (MUST) `force` MUST be refused with `FAILED_PRECONDITION` unless the server is configured
 to allow graph replacement, and the refusal MUST name the variable that would permit it.
 
-**WGL-API-022** (MUST) An `OBSERVED` definition MUST be validated against
-[WGL-OBS-002](40-execution-modes.md) at registration and refused with `INVALID_ARGUMENT` when it holds a
-node kind no observer can report.
+**WGL-API-022** (MUST) A definition naming the removed `OBSERVED` mode MUST be refused with
+`INVALID_ARGUMENT`.
 
 **WGL-API-023** (MUST) `GetWorkflow` without a version MUST return the latest; with one, that exact
 version, or `NOT_FOUND`.
@@ -169,22 +168,21 @@ be this node's count.
 
 *Verified by:* `tests/BacklogCoverageTest`, `server/engine/AdvanceManyTest`, `tests/MemoryPollTest`.
 
-## 7. Observed execution
+## 7. Step statistics
+
+`ObserveRun`, `ObserveMany` and `ListAnomalies` went with OBSERVED execution; their messages are gone
+and `StepResult.error` (field 4) is reserved.
 
 | RPC | Request → Response |
 |---|---|
-| `ObserveRun` | `ObserveRunRequest{workflow, version, instanceId, correlationId, reporter, steps[], final}` → `ObserveRunResult{instanceId, instanceStatus, anomalies}` |
-| `ObserveMany` | `ObserveManyRequest{runs[]}` → `ObserveManyResult{results[]}` |
 | `GetStepStats` | `StepStatsRequest{workflow, version, since, sample}` → `StepStats{workflow, version, nodes[]}` |
-| `ListAnomalies` | `ListAnomaliesRequest{workflow?, instanceId?, limit}` → `AnomalyList` |
 
-**WGL-API-070** (MUST) Version 0 MUST mean the latest registered version, and `sample` or `limit` of 0 a
-server default.
+**WGL-API-070** (MUST) Version 0 MUST mean the latest registered version, and `sample` of 0 a server
+default.
 
-**WGL-API-071** (MUST) `ObserveMany` MUST apply each run on its own and answer in submission order, with
-the same `errorStatus` convention as `ReportSteps`.
+**WGL-API-071** *Withdrawn with OBSERVED execution.*
 
-**WGL-API-072** (MUST) `ObserveRunResult.anomalies` MUST count the anomalies recorded **by that report**.
+**WGL-API-072** *Withdrawn with OBSERVED execution.*
 
 **WGL-API-073** (MUST) `NodeStats` MUST carry node id, name, count, mean, p50, p95, max, and queue-wait
 p50/p95 (0 for steps that were never queued).
@@ -211,7 +209,7 @@ a flag requiring TLS, and MUST strip a `scheme://` prefix from the target.
 name, with optional version and correlation id), `instance`, `instanceDetail`, `listInstances`,
 `findByCorrelation`, `awaitCompletion(id, timeout)`, `cancel`, `signal`, `workflowNames`, `getWorkflow`,
 `createSchedule`, `createCronSchedule`, `schedules`, `deleteSchedule`, `poll`, `reportSteps`, `fail`,
-`heartbeat`, `backlogCoverage`, `stepStats`, `anomalies`, `pollEvents`, `ackEvents`, `cluster`.
+`heartbeat`, `backlogCoverage`, `stepStats`, `pollEvents`, `ackEvents`, `cluster`.
 
 **WGL-API-092** (MUST) `WiggleApiException` MUST carry the engine status code and MUST distinguish client
 errors (4xx) from others.
@@ -226,18 +224,19 @@ explanation when a registration is refused.
 
 *Verified by:* `tests/ScheduleClientTest`, `tests/VersioningTest`, `tests/RpcRetryFailoverTest`.
 
-## 10. The console's HTTP surface
+## 10. The portal's HTTP surface
 
-The console is a separate process and a pure gRPC client; these endpoints are its own, not a server
-node's ([WGL-OPS-040](90-ops.md)).
+A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
+([WGL-SHARD-170](85-sharding.md#12-the-portal-in-the-server)), through the engine in process.
 
 **WGL-API-100** (MUST) The JSON API MUST be exactly:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/auth` | who am I, and which role |
+| `GET` | `/api/auth` | who am I, and my permissions |
 | `POST` | `/api/login` · `/logout` · `GET /login` | session cookie login and the browser form |
-| `GET` | `/healthz` | the console pod's own probe |
+| `GET` | `/healthz` | a probe on the portal port |
+| `GET` · `POST` | `/setup` · `/api/setup` | first run only: the screen that sets the admin's password, and the call that does ([WGL-OPS-051](90-ops.md)); 409 once any account exists |
 | `GET` | `/api/cluster` | cluster view |
 | `GET` | `/api/workflows` · `/api/workflows/{name}` | names, and one compiled graph as JSON |
 | `GET` | `/api/instances` | list, filtered by workflow/status/limit or searched by instance or correlation id |
@@ -247,19 +246,109 @@ node's ([WGL-OPS-040](90-ops.md)).
 | `GET` | `/api/signals` | signal waits pending delivery |
 | `GET` | `/api/backlog` | backlog coverage, with uncovered slices and stranded task counts |
 | `GET` | `/api/stats` | per-step duration statistics |
-| `GET` | `/api/anomalies` | observed-run anomalies |
 | `GET`/`POST`/`DELETE` | `/api/schedules[/{id}]` | list, create (interval or cron), delete |
-| `GET`/`POST`/`DELETE` | `/api/users[/{name}[/password]]` | managed accounts (admin only) |
+| `GET`/`POST`/`DELETE` | `/api/users[/{name}]` | managed accounts: list, create with roles, delete |
+| `POST` | `/api/users/{name}/password` · `/roles` · `/disabled` | reset a password, replace roles, disable or enable |
+| `GET`/`POST`/`DELETE` | `/api/roles[/{name}]` | roles: list with the known actions, create or replace, delete |
+| `GET` | `/api/audit?after=&limit=` | changes to accounts, roles and sessions, oldest first |
+| `GET` | `/api/search?q=&workflow=&status=&limit=&partial=` | full-text search over instances ([§12](#12-search)); 404 when search is off |
 | `POST` | `/api/password` | change one's own password |
 
 **WGL-API-101** (MUST) An unknown `/api/*` path MUST be 404; a mutating call on a GET-only endpoint MUST
 be 405.
 
-**WGL-API-102** (MUST) A viewer MUST be refused every non-`GET` `/api/*` call except `/api/password`.
+**WGL-API-102** (MUST) Every `/api/*` call except `/api/password` MUST need a permission: `read`
+for a read, `user.manage` for users, roles and the audit, `instance.cancel`, `instance.signal` or
+`schedule.write` for those writes, scoped to the workflow they touch, and `*` for any other write.
+A call without it is 403. A viewer is therefore refused every write.
 
 **WGL-API-103** (MUST) The backend MUST sit behind one neutral seam (`DashboardData`) carrying no engine
-or storage types, so the same JSON is produced whether it is served in process or over gRPC.
+or storage types, so the SPA's JSON does not follow engine or storage changes.
 
 **WGL-API-104** *Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).*
 
-*Verified by:* `console/ConsoleWebTest`, `console/ConsoleDataTest`, `console/ConsoleUsersTest`.
+**WGL-API-105** (MUST) A failed `/api/*` call MUST answer with the engine's status (400, 404, 409)
+when the engine refused it, 404 for a retired shard, 503 for a storage failure that applied nothing,
+and 500 otherwise. A 503 or 500 MUST NOT carry the cause's message, which can hold SQL or host
+names; it carries a reference that the node's log pairs with the full cause.
+
+*Verified by:* `console/ConsoleWebTest`, `console/ConsoleDataTest`, `console/ConsoleUsersTest`,
+`console/PortalTest`.
+
+## 11. Per-RPC authorization
+
+Who a call is, and what it may do ([WGL-SHARD-187](85-sharding.md#13-users-and-authorization)).
+Off by default, so a deployment that sets nothing behaves as before.
+
+**WGL-API-110** (MUST) `WIGGLE_GRPC_AUTH` MUST select the mode: `off` (default) reads no credential
+and allows every call; `log` checks every call, serves it anyway, and logs each distinct refusal
+`enforce` would make once; `enforce` refuses.
+
+**WGL-API-111** (MUST) A caller MUST identify itself with an API key, sent as
+`authorization: Bearer <key>` metadata, or, on an mTLS listener, with its client certificate, whose
+RFC 2253 subject names a certificate credential. A key wins when both are present. Credentials are
+created in the portal and hold one role ([WGL-SHARD-181](85-sharding.md#13-users-and-authorization)).
+
+**WGL-API-112** (MUST) Under `enforce`, a call with no credential, an unknown one or an expired one
+MUST fail `UNAUTHENTICATED`, and a call its role does not allow MUST fail `PERMISSION_DENIED`, before
+the RPC reads anything. `HealthCheck` MUST need no credential.
+
+**WGL-API-113** (MUST) Each RPC MUST need this permission:
+
+| RPC | Permission |
+|---|---|
+| `HealthCheck` | none |
+| `GetCluster`, `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules` | `read` |
+| `GetWorkflow`, `GetStepStats` | `read:<workflow>` |
+| `ListInstances` | `read:<workflow>` when it names a workflow, else `read` |
+| `GetInstance` | `read:<the instance's workflow>` |
+| `RegisterWorkflow` | `workflow.register:<workflow>` |
+| `StartInstance` | `instance.start:<workflow>` |
+| `CancelInstance`, `SignalInstance` | `instance.cancel` / `instance.signal` `:<the instance's workflow>` |
+| `CreateSchedule`, `DeleteSchedule` | `schedule.write:<workflow>` |
+| `PollTasks` | `task.poll:<queue>` for each queue it names; `task.poll` when it names none (every queue) |
+| `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll` on any scope (the lease already ties the call to its task) |
+| `PollEvents`, `AckEvents` | `event.read` |
+| `SearchInstances` | `read` on any scope; the hits are narrowed to the workflows it may read |
+
+**WGL-API-114** (MUST) A credential MUST be resolved through the node's cache
+([WGL-SHARD-184](85-sharding.md#13-users-and-authorization)), so a call reads the auth shard only on
+a miss; a deleted credential, or one whose role changed, MUST be refused on calls made more than a
+second after the change. A call already running, such as an open long poll, finishes as it began. With the auth shard unreachable and the credential not cached, the call MUST fail
+`UNAVAILABLE`.
+
+**WGL-API-115** (MUST) The Java client MUST send the key in `WIGGLE_API_KEY` (or `-Dwiggle.api.key`) on
+every call when one is set, and MUST report `UNAUTHENTICATED` as 401 and `PERMISSION_DENIED` as 403.
+
+*Verified by:* `server/grpc/GrpcAuthTest` (every RPC of the service is checked, so one added without
+a permission fails it), `tests/TlsTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.
+
+## 12. Search
+
+Full-text search over instances, served by the search shards
+([chapter 85 §14](85-sharding.md#14-search-shards)).
+
+**WGL-API-120** (MUST) `SearchInstances` MUST return the instances whose correlation id, context,
+termination reason or error contain every word of `text` (an empty `text` matches all), filtered by
+`workflow`, `status` and the bounds on when the instance last changed, best first, at most `limit`
+(default 20, at most 1000). With search off it MUST fail `FAILED_PRECONDITION`.
+
+**WGL-API-121** (MUST) A hit MUST carry the instance's identity and status as last indexed, its
+score, and `purged` when the instance itself is gone.
+
+**WGL-API-122** (MUST) The hits MUST be limited, inside each shard's query, to the workflows the
+caller may read ([§11](#11-per-rpc-authorization)); asking for a workflow it may not read finds
+nothing rather than failing.
+
+**WGL-API-123** (MUST) A search shard that does not answer MUST fail the search `UNAVAILABLE`, unless
+`partial_ok` asks for the hits of the shards that did, with `partial` set.
+
+**WGL-API-124** (MUST) With `semantic`, the hits MUST be the instances whose embedding is closest to
+`text`'s by cosine similarity (the score), under the same filters and scoping, embedded with the
+newest model whose index is complete, named in `model`. It MUST fail `FAILED_PRECONDITION` when the
+server has no embedder, when no model's index is complete yet, or when the node has no embedder for
+the model that is.
+
+*Verified by:* `server/search/SearchEndToEndTest`, `server/search/SearchIndexTest`,
+`server/search/SemanticSearchTest`, `server/search/EmbeddersTest`,
+`server/store/StorageContract` (search chapter, on every backend), `postgres/PostgresTopologyTest`.

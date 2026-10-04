@@ -66,6 +66,16 @@ public record WorkflowDefinition(String name, int version, String startNode,
         return m;
     }
 
+    /**
+     * The mode a stored definition names. {@code OBSERVED}, a mode that was removed, reads as
+     * {@link ExecutionMode#DEFAULT}, so a definition stored under it still loads; its stored
+     * fingerprint still names {@code OBSERVED}, so registering that version again is refused as a
+     * changed graph.
+     */
+    private static ExecutionMode mode(String name) {
+        return "OBSERVED".equals(name) ? ExecutionMode.DEFAULT : ExecutionMode.valueOf(name);
+    }
+
     public static WorkflowDefinition fromJson(Object o) {
         Map<String, Object> m = Json.asObject(o);
         Map<String, Node> nodes = new LinkedHashMap<>();
@@ -75,7 +85,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
         }
         Set<String> queues = new LinkedHashSet<>();
         for (Object q : Json.asArray(m.get("queues"))) queues.add(String.valueOf(q));
-        ExecutionMode mode = ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.DEFAULT.name()));
+        ExecutionMode mode = mode(Json.str(m, "executionMode", ExecutionMode.DEFAULT.name()));
         Set<String> checkpoints = new LinkedHashSet<>();
         for (Object c : Json.asArray(m.get("checkpoints"))) checkpoints.add(String.valueOf(c));
         return new WorkflowDefinition(Json.reqStr(m, "name"), (int) Json.num(m, "version", 0),

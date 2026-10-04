@@ -1,5 +1,10 @@
 package com.wiggle.console;
 
+import com.wiggle.server.auth.Accounts;
+import com.wiggle.server.auth.AuthCache;
+import com.wiggle.server.auth.Permissions;
+import com.wiggle.server.store.Rows;
+import com.wiggle.server.store.StorageException;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.nio.charset.StandardCharsets;
@@ -7,71 +12,83 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The console's auth, by session cookie (from the {@code /login} form) or HTTP Basic (for
- * {@code curl}). Authentication answers "who are you"; authorization is one bit —
- * {@link Role#ADMIN} may mutate (cancel / signal / schedules / users), {@link Role#VIEWER} is
- * read-only.
+ * The portal's auth, by session cookie (from the {@code /login} form) or HTTP Basic (for
+ * {@code curl}). Authentication answers "who are you" with a {@link Principal}; what it may do is
+ * its permission set ({@link Permissions}).
  *
  * <p>Two sources of accounts. The environment configures up to two <b>built-in</b> accounts
- * ({@code WIGGLE_DASHBOARD_PASSWORD} and the optional viewer), which no one can change from the
- * running console. On top of those, an admin manages accounts in a {@link ConsoleUsers} file,
- * and any account can change its own password.
+ * ({@code WIGGLE_DASHBOARD_PASSWORD} as {@code admin} and the optional viewer), which no one can
+ * change from the running portal and which sign in even when the auth shard is down. On top of
+ * those, accounts and roles managed in the portal live on the auth shard ({@link Accounts}), read
+ * through this node's {@link AuthCache}. Sessions live there too, so any portal node serves any
+ * signed-in request; a built-in account signing in while the auth shard is unreachable gets a
+ * session held by this node only.
  *
- * <p>With neither a built-in password nor a managed account the console is unauthenticated and
- * every request is an admin (open mode); creating the first managed account therefore turns
- * authentication on. Sessions are per process.
+ * <p>With neither a built-in password nor a single managed account, the portal is in <b>setup</b>:
+ * nothing is served but the screen that sets the admin's password ({@link #setUpAdmin}), which
+ * creates the admin account on the auth shard. A portal built without accounts (tests, embedding)
+ * has nowhere to keep that password, so it is open instead: every request may do anything.
  */
 final class ConsoleAuth {
 
     static final String SESSION_COOKIE = "wiggle_session";
+    static final String PRINCIPAL_ATTRIBUTE = "wiggle.principal";
     private static final long SESSION_TTL_MILLIS = 12 * 60 * 60 * 1000L;
 
-    /** Access level: ADMIN has full read/write, VIEWER is read-only. */
-    enum Role {
-        ADMIN, VIEWER;
+    /** Who a request is, and what it may do. {@code user} is null in open mode. */
+    record Principal(String user, Set<String> permissions, boolean builtin) {
 
-        /** The name this role travels under, in the user file and the JSON API. */
-        String wire() { return name().toLowerCase(); }
+        boolean allows(String action, String scope) {
+            return Permissions.allows(permissions, action, scope);
+        }
 
-        /** Parses a role name; {@code operator} is the old name for {@link #ADMIN}. */
-        static Role of(String name) {
-            String v = name == null ? "" : name.trim().toLowerCase();
-            return switch (v) {
-                case "admin", "operator" -> ADMIN;
-                case "viewer" -> VIEWER;
-                default -> throw new IllegalArgumentException("role is 'admin' or 'viewer', not '" + name + "'");
-            };
+        /** Whether it may do {@code action} on at least one scope. */
+        boolean allowsAny(String action) {
+            if (permissions.contains(Permissions.ALL) || permissions.contains(action)) return true;
+            return permissions.stream().anyMatch(p -> p.startsWith(action + ":"));
+        }
+
+        /** Whether it may do anything beyond reading. */
+        boolean writes() {
+            return permissions.stream().anyMatch(p -> !p.equals(Permissions.READ));
         }
     }
+
+    private static final Principal OPEN = new Principal(null, Set.of(Permissions.ALL), false);
 
     private final String user;
     private final String password;
     private final String viewerUser;
     private final String viewerPassword;
     private final boolean secureCookies;
-    private final ConsoleUsers users;
+    private final Accounts accounts;
+    private final AuthCache cache;
     private final SecureRandom random = new SecureRandom();
-    private final Map<String, Session> sessions = new ConcurrentHashMap<>();
+    /** Sessions of built-in accounts opened while the auth shard was unreachable. */
+    private final Map<String, LocalSession> localSessions = new ConcurrentHashMap<>();
 
-    private record Session(long expiry, String user, Role role) {}
+    private record LocalSession(long expiry, String user) {}
 
-    /** Admin-only console (no read-only viewer account), with no managed users. */
+    /** Admin-only portal (no read-only viewer account), with no managed accounts. */
     ConsoleAuth(String user, String password, boolean secureCookies) {
-        this(user, password, null, null, secureCookies, null);
+        this(user, password, null, null, secureCookies, null, null);
     }
 
     ConsoleAuth(String user, String password, String viewerUser, String viewerPassword, boolean secureCookies) {
-        this(user, password, viewerUser, viewerPassword, secureCookies, null);
+        this(user, password, viewerUser, viewerPassword, secureCookies, null, null);
     }
 
     ConsoleAuth(String user, String password, String viewerUser, String viewerPassword, boolean secureCookies,
-                ConsoleUsers users) {
-        this.users = users;
+                Accounts accounts, AuthCache cache) {
+        this.accounts = accounts;
+        this.cache = cache;
         this.user = user == null || user.isBlank() ? "admin" : user;
         this.password = password == null || password.isBlank() ? null : password;
         this.viewerUser = viewerUser == null || viewerUser.isBlank() ? "viewer" : viewerUser;
@@ -81,14 +98,42 @@ final class ConsoleAuth {
         this.secureCookies = secureCookies;
     }
 
-    /** Whether anyone must sign in: a built-in password, or any managed account, turns auth on. */
-    boolean required() { return password != null || (users != null && !users.isEmpty()); }
+    /** Whether anyone must sign in: always, unless this portal has no accounts at all to sign in with. */
+    boolean required() {
+        return password != null || cache != null;
+    }
+
+    /**
+     * Whether the admin's password is still to be set: no built-in password, and no account on the
+     * auth shard yet. When the auth shard cannot say, it is not: setup only ever starts from a
+     * database known to be empty.
+     */
+    boolean setupRequired() {
+        if (password != null || cache == null) return false;
+        try {
+            return !cache.anyAccount();
+        } catch (StorageException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Sets the admin's password on first run: creates the admin account ({@link #user}) with the
+     * admin role on the auth shard and signs it in, returning the {@code Set-Cookie} value. Refused
+     * once any account exists, so it cannot be used to take over a portal already set up.
+     */
+    String setUpAdmin(String newPassword) {
+        if (!setupRequired()) throw new IllegalStateException("the portal is already set up; sign in instead");
+        accounts.create(null, user, newPassword, List.of(Permissions.ADMIN), builtinNames(), false);
+        cache.forgetUser(user);
+        return cookie(accounts.openSession(user, SESSION_TTL_MILLIS), SESSION_TTL_MILLIS / 1000);
+    }
 
     /** The built-in admin's name, which is also the login form's default. */
     String user() { return user; }
 
-    /** The managed accounts, or null when this console has no user file. */
-    ConsoleUsers users() { return users; }
+    /** The managed accounts, or null when this portal has none. */
+    Accounts accounts() { return accounts; }
 
     /** The names no managed account may take, because a built-in already answers to them. */
     Set<String> builtinNames() {
@@ -98,43 +143,45 @@ final class ConsoleAuth {
         return names;
     }
 
-    /** Whether a built-in admin can still sign in; false means managed admins are the only way in. */
+    /** Whether a built-in admin can still sign in; false means managed accounts are the only way in. */
     boolean hasBuiltinAdmin() { return password != null; }
 
     String apiChallenge() {
         return required() ? "Basic realm=\"Wiggle\", charset=\"UTF-8\"" : null;
     }
 
-    /** The caller's role, or null if authentication is required and they aren't authenticated. */
-    Role role(HttpServletRequest req) {
-        if (!required()) return Role.ADMIN;   // open mode: everyone is an admin
-        Session s = session(req);
-        if (s != null) return s.role();
+    /** The caller, or null if authentication is required and they aren't authenticated. */
+    Principal principal(HttpServletRequest req) {
+        if (req.getAttribute(PRINCIPAL_ATTRIBUTE) instanceof Principal p) return p;
+        Principal p = resolve(req);
+        if (p != null) req.setAttribute(PRINCIPAL_ATTRIBUTE, p);
+        return p;
+    }
+
+    private Principal resolve(HttpServletRequest req) {
+        if (!required()) return OPEN;
+        String token = sessionToken(req);
+        if (token != null) {
+            Principal p = sessionPrincipal(token);
+            if (p != null) return p;
+        }
         Credentials c = basic(req.getHeader("Authorization"));
-        return c == null ? null : credentialRole(c.user(), c.password());
+        return c == null ? null : credentialPrincipal(c.user(), c.password());
     }
 
     /** The caller's account name, or null when unauthenticated or in open mode. */
     String signedInUser(HttpServletRequest req) {
-        if (!required()) return null;
-        Session s = session(req);
-        if (s != null) return s.user();
-        Credentials c = basic(req.getHeader("Authorization"));
-        return c != null && credentialRole(c.user(), c.password()) != null ? c.user() : null;
+        Principal p = principal(req);
+        return p == null ? null : p.user();
     }
 
     boolean authenticated(HttpServletRequest req) {
-        return role(req) != null;
-    }
-
-    /** Whether the caller may perform mutating operations (cancel / signal / schedules / users). */
-    boolean canWrite(HttpServletRequest req) {
-        return role(req) == Role.ADMIN;
+        return principal(req) != null;
     }
 
     /**
      * Changes the caller's own password, given their current one. Built-in accounts come from the
-     * environment and cannot be changed here. Every other session of that account is dropped; the
+     * environment and cannot be changed here. Every other session of that account is ended; the
      * caller keeps the one they are using.
      */
     void changeOwnPassword(HttpServletRequest req, String current, String next) {
@@ -142,50 +189,101 @@ final class ConsoleAuth {
         if (name == null) throw new IllegalStateException("not signed in");
         if (builtinNames().contains(name)) {
             throw new IllegalArgumentException("'" + name + "' is a built-in account set in the environment; "
-                    + "change WIGGLE_DASHBOARD_PASSWORD where the console is deployed, not here");
+                    + "change WIGGLE_DASHBOARD_PASSWORD where the server is deployed, not here");
         }
-        requireUsers();
-        if (users.verify(name, current) == null) {
+        Accounts a = requireAccounts();
+        Optional<Accounts.Account> account = a.account(name);
+        if (account.isEmpty() || !account.get().passwordMatches(current)) {
             throw new IllegalArgumentException("the current password is wrong");
         }
-        users.setPassword(name, next, System.currentTimeMillis());
-        revokeSessions(name, sessionToken(req));
+        a.setPassword(name, name, next, sessionToken(req));
+        cache.forgetUser(name);
     }
 
-    /** Drops every session of {@code name}, except {@code keepToken} when it is non-null. */
-    void revokeSessions(String name, String keepToken) {
-        sessions.entrySet().removeIf(e -> e.getValue().user().equals(name) && !e.getKey().equals(keepToken));
-    }
-
-    ConsoleUsers requireUsers() {
-        if (users == null) {
-            throw new IllegalStateException("this console manages no users: it was built without a user file");
+    Accounts requireAccounts() {
+        if (accounts == null) {
+            throw new IllegalStateException("this portal manages no accounts");
         }
-        return users;
+        return accounts;
     }
 
-    /** On matching credentials, mints a session bound to the matched role and returns the {@code
-     * Set-Cookie} value; else null. */
+    /**
+     * On matching credentials, opens a session and returns its {@code Set-Cookie} value; else null.
+     * A managed account's password is checked against the auth primary, so a sign-in fails while
+     * the auth shard is unreachable.
+     */
     String login(String u, String p) {
-        Role role = credentialRole(u, p);
-        if (role == null) return null;
+        Principal builtin = builtinPrincipal(u, p);
+        if (builtin != null) {
+            String token;
+            try {
+                token = accounts == null ? localSession(u) : accounts.openSession(u, SESSION_TTL_MILLIS);
+            } catch (StorageException e) {
+                token = localSession(u);
+            }
+            return cookie(token, SESSION_TTL_MILLIS / 1000);
+        }
+        if (accounts == null || u == null) return null;
+        Optional<Accounts.Account> account = accounts.account(u);
+        if (account.isEmpty() || account.get().disabled() || !account.get().passwordMatches(p)) return null;
+        return cookie(accounts.openSession(u, SESSION_TTL_MILLIS), SESSION_TTL_MILLIS / 1000);
+    }
+
+    private String localSession(String u) {
         String token = newToken();
-        sessions.put(token, new Session(System.currentTimeMillis() + SESSION_TTL_MILLIS, u, role));
-        return cookie(token, SESSION_TTL_MILLIS / 1000);
+        localSessions.put(token, new LocalSession(System.currentTimeMillis() + SESSION_TTL_MILLIS, u));
+        return token;
     }
 
     void logout(HttpServletRequest req) {
         String token = sessionToken(req);
-        if (token != null) sessions.remove(token);
+        if (token == null) return;
+        if (localSessions.remove(token) != null || accounts == null) return;
+        accounts.closeSession(token);
+        cache.forgetSession(Accounts.tokenHash(token));
     }
 
     String expiredCookie() { return cookie("", 0); }
 
-    /** Which role these credentials authenticate as, built-ins first, or null if none match. */
-    private Role credentialRole(String u, String p) {
-        if (password != null && eq(u, user) && eq(p, password)) return Role.ADMIN;
-        if (viewerPassword != null && eq(u, viewerUser) && eq(p, viewerPassword)) return Role.VIEWER;
-        return users == null ? null : users.verify(u, p);
+    private Principal sessionPrincipal(String token) {
+        long now = System.currentTimeMillis();
+        LocalSession local = localSessions.get(token);
+        if (local != null) {
+            if (local.expiry() < now) { localSessions.remove(token); return null; }
+            return builtinFor(local.user());
+        }
+        if (cache == null) return null;
+        Rows.AuthSession s = cache.session(Accounts.tokenHash(token)).orElse(null);
+        if (s == null || s.expiresAt() < now) return null;
+        if (builtinNames().contains(s.user())) return builtinFor(s.user());
+        return cache.account(s.user()).filter(a -> !a.disabled())
+                .map(a -> new Principal(a.name(), a.permissions(), false)).orElse(null);
+    }
+
+    /** Which principal these credentials authenticate as, built-ins first, or null if none match. */
+    private Principal credentialPrincipal(String u, String p) {
+        Principal builtin = builtinPrincipal(u, p);
+        if (builtin != null) return builtin;
+        if (cache == null || u == null) return null;
+        return cache.account(u).filter(a -> !a.disabled() && a.passwordMatches(p))
+                .map(a -> new Principal(a.name(), a.permissions(), false)).orElse(null);
+    }
+
+    private Principal builtinPrincipal(String u, String p) {
+        if (password != null && eq(u, user) && eq(p, password)) return builtinFor(user);
+        if (viewerPassword != null && eq(u, viewerUser) && eq(p, viewerPassword)) return builtinFor(viewerUser);
+        return null;
+    }
+
+    /** The built-in account {@code name} as a principal, or null when it is no longer configured. */
+    private Principal builtinFor(String name) {
+        if (password != null && name.equals(user)) {
+            return new Principal(name, Permissions.BUILTIN_ROLES.get(Permissions.ADMIN), true);
+        }
+        if (viewerPassword != null && name.equals(viewerUser)) {
+            return new Principal(name, Permissions.BUILTIN_ROLES.get(Permissions.VIEWER), true);
+        }
+        return null;
     }
 
     private record Credentials(String user, String password) {}
@@ -203,16 +301,7 @@ final class ConsoleAuth {
         return new Credentials(decoded.substring(0, colon), decoded.substring(colon + 1));
     }
 
-    private Session session(HttpServletRequest req) {
-        String token = sessionToken(req);
-        if (token == null) return null;
-        Session s = sessions.get(token);
-        if (s == null) return null;
-        if (s.expiry() < System.currentTimeMillis()) { sessions.remove(token); return null; }
-        return s;
-    }
-
-    private static String sessionToken(HttpServletRequest req) {
+    static String sessionToken(HttpServletRequest req) {
         String header = req.getHeader("Cookie");
         if (header == null) return null;
         for (String pair : header.split(";")) {
@@ -241,6 +330,78 @@ final class ConsoleAuth {
         if (a == null || b == null) return false;
         return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
+
+    /** The first-run screen: sets the admin's password, then opens the portal signed in. */
+    static final String SETUP_HTML = """
+            <!doctype html>
+            <html lang="en">
+            <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Wiggle — set the admin password</title>
+            <style>
+              :root { color-scheme: light dark; --bg:#0e1420; --panel:#161d2b; --line:#28324a;
+                      --fg:#eef1f6; --muted:#8892a6; --accent:#f5b544; }
+              * { box-sizing:border-box; }
+              body { margin:0; min-height:100vh; display:grid; place-items:center;
+                     background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif; }
+              .card { width:min(400px,92vw); background:var(--panel); border:1px solid var(--line);
+                      border-radius:14px; padding:32px 28px; }
+              .brand { display:flex; align-items:center; gap:10px; font-size:20px; font-weight:800;
+                       letter-spacing:.02em; margin-bottom:4px; }
+              .brand .dot { color:var(--accent); }
+              p.sub { margin:0 0 18px; color:var(--muted); font-size:13px; }
+              label { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+                      color:var(--muted); margin:14px 0 6px; }
+              input { width:100%; background:#0d0f14; color:var(--fg); border:1px solid var(--line);
+                      border-radius:8px; padding:10px 12px; font:inherit; }
+              input[readonly] { color:var(--muted); }
+              input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+              button { width:100%; margin-top:22px; background:var(--accent); color:#0e1420; border:0;
+                       border-radius:8px; padding:11px; font:inherit; font-weight:700; cursor:pointer; }
+              button:disabled { opacity:.6; cursor:default; }
+              .err { min-height:18px; margin-top:12px; color:#ff8080; font-size:13px; }
+            </style>
+            </head>
+            <body>
+              <form class="card" id="f">
+                <div class="brand"><span class="dot">🌀</span> WIGGLE</div>
+                <p class="sub">First run: set the password of the admin account. It is stored, hashed,
+                  in the database; sign in with it from now on.</p>
+                <label for="u">Username</label>
+                <input id="u" readonly value="__USER__">
+                <label for="p">Password</label>
+                <input id="p" type="password" autocomplete="new-password" autofocus minlength="8"
+                       placeholder="at least 8 characters">
+                <label for="c">Confirm password</label>
+                <input id="c" type="password" autocomplete="new-password" minlength="8">
+                <button type="submit" id="b">Set password and sign in</button>
+                <div class="err" id="err" role="alert"></div>
+              </form>
+            <script>
+              const f = document.getElementById('f'), err = document.getElementById('err'),
+                    p = document.getElementById('p'), c = document.getElementById('c'), b = document.getElementById('b');
+              f.onsubmit = async (e) => {
+                e.preventDefault();
+                err.textContent = '';
+                if (p.value.length < 8) { err.textContent = 'A password is at least 8 characters'; p.focus(); return; }
+                if (p.value !== c.value) { err.textContent = 'The passwords do not match'; c.value=''; c.focus(); return; }
+                b.disabled = true;
+                try {
+                  const r = await fetch('/api/setup', { method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ password: p.value }) });
+                  if (r.ok) { location.href = '/'; return; }
+                  const body = await r.json().catch(() => ({}));
+                  err.textContent = body.error || ('Could not set the password (' + r.status + ')');
+                  if (r.status === 409) setTimeout(() => location.href = '/login', 1500);
+                } catch (_) { err.textContent = 'Could not reach the server'; }
+                b.disabled = false;
+              };
+            </script>
+            </body>
+            </html>
+            """;
 
     static final String LOGIN_HTML = """
             <!doctype html>
@@ -275,7 +436,7 @@ final class ConsoleAuth {
             <body>
               <form class="card" id="f">
                 <div class="brand"><span class="dot">🌀</span> WIGGLE</div>
-                <p class="sub">Sign in to the console</p>
+                <p class="sub">Sign in to the portal</p>
                 <label for="u">Username</label>
                 <input id="u" name="u" autocomplete="username" autofocus value="admin">
                 <label for="p">Password</label>

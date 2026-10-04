@@ -1,22 +1,16 @@
 plugins {
-    application
+    `java-library`
 }
 
-// The standalone ops console: a read/ops web UI (embedded Tomcat + servlets) that is a pure gRPC client
-// of the control plane. It owns the dashboard SPA + JSON API. No storage drivers, no engine -- a thin
-// console. Not published to Maven Central.
+// The portal: the dashboard SPA and its JSON API on embedded Tomcat, served by a server process over
+// its own engine. Not published to Maven Central.
 dependencies {
-    implementation(project(":client"))
+    api(project(":server"))
     implementation("org.apache.tomcat.embed:tomcat-embed-core:${property("tomcatVersion")}")
 
-    testImplementation(project(":server"))        // an embedded WiggleServer for direct-mode tests
+    testImplementation(project(":client"))
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-}
-
-application {
-    mainClass.set("com.wiggle.console.ConsoleMain")
-    applicationName = "wiggle-console"
 }
 
 // Compiles the ClojureScript dashboard SPA (dashboard-ui/) into src/main/resources/dashboard/js so the

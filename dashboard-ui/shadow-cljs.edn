@@ -1,7 +1,7 @@
 ;; Build config for the Wiggle dashboard SPA.
 ;;
 ;;   npx shadow-cljs watch   app   -> dev build + hot reload on http://localhost:8280,
-;;                                     proxying /api to a Wiggle server running on :8090
+;;                                     proxying /api to a Wiggle server with its portal on :8070
 ;;   npx shadow-cljs release app   -> optimised bundle written straight into the console's
 ;;                                     resources (dashboard/js/app.js) so it ships in the jar
 ;;
@@ -12,7 +12,7 @@
  :dependencies [[reagent "1.2.0"]]
 
  :dev-http {8280 {:root      "../console/src/main/resources/dashboard"
-                  :proxy-url "http://localhost:8090"}}
+                  :proxy-url "http://localhost:8070"}}
 
  :builds
  {:app

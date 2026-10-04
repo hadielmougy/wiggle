@@ -64,7 +64,7 @@ lock.
 per candidate token, preserving exactly-once dispatch at lower throughput.
 
 **WGL-STOR-023** (MUST) A duplicate-key insert MUST be an idempotent no-op where the SPI says so
-(definition re-registration, observed-run creation), never an error surfaced to the caller.
+(definition re-registration), never an error surfaced to the caller.
 
 **WGL-STOR-024** (MUST) A dialect MUST also recognise a *momentary* failure (`isTransient`): one where
 the transaction is gone and the same work would likely succeed on a fresh connection — connection loss,
@@ -88,14 +88,18 @@ store does with the answer is [section 9](#9-failure-classification-and-replay).
 | `wf_definition` | the submitted graph JSON per `(name, version)`, plus its fingerprint and algorithm |
 | `wf_graph_node` | one row per node of a registered graph: kind, name, activity, queue, retry JSON, sleep millis, expected, success, reason, start flag, items/item keys, arm names, collect key |
 | `wf_graph_edge` | one row per edge: from, to, condition, ordinal |
-| `wf_instance` | id, workflow, version, correlation id, status, termination reason, error, context, timestamps, revision, settle time (observed runs only) |
-| `wf_token` | id, instance, workflow, version, node, kind, status, activity, queue, attempt, `available_at`, lease owner and expiry, join stack, payload, last error, timestamps, comp seq, `started_at`/`finished_at`/`seq` |
+| `wf_instance` | id, workflow, version, correlation id, status, termination reason, error, context, timestamps, revision |
+| `wf_token` | id, instance, workflow, version, node, kind, status, activity, queue, attempt, `available_at`, lease owner and expiry, join stack, payload, last error, timestamps, comp seq, `started_at`/`finished_at` |
 | `wf_comp_log` | one row per completed compensable step: seq, node, activity, queue, both snapshots, compensated flag |
 | `wf_schedule` | one row per workflow: interval or cron, context, next fire time |
-| `wf_anomaly` | observed-run departures: kind, expected/reported node, detail, time |
 | `wf_event` | the event log, keyed by a store-generated `seq`, with payload envelope version and node id |
 | `wf_event_cursor` | one row per consumer: acknowledged seq, last poll, creation |
 | `wf_node` | cluster membership: node id, name, first/last heartbeat, worker count, leader flag |
+| `wf_auth_user` · `wf_auth_role` · `wf_auth_user_role` | portal accounts (name, PBKDF2 hash, salt, rounds, disabled), roles as permission sets, and grants; on the auth shard ([WGL-SHARD-181](85-sharding.md#13-users-and-authorization)) |
+| `wf_auth_session` · `wf_auth_audit` | sessions by token hash with their account and expiry, and every change to accounts, roles and sessions by a store-generated `seq` |
+| `wf_auth_credential` | machine credentials (API key hash or certificate subject) bound to a role |
+| `wf_search_vec` · `wf_search_model` | embeddings per instance and model beside their document (a native pgvector column under a per-model HNSW index where pgvector is installed); the model registry on the home shard |
+| `wf_search_doc` | one search document per instance on a search shard: identity, status, text, times, and on PostgreSQL a generated `tsvector` with a GIN index |
 | `wf_schema_version` | applied migrations: version, name, time, source checksum |
 
 **WGL-STOR-031** (MUST) A graph MUST be stored **twice**: the raw submitted blob (write-once, the source
@@ -119,8 +123,9 @@ nesting depth, and a bounded column caps nesting (`VARCHAR(1000)` capped it at r
 **WGL-STOR-037** (MUST) Indexes MUST cover the engine's access paths: token dispatch
 `(status, queue, available_at)`, token by instance, lease expiry `(status, lease_expires)`, throughput
 `(kind, status, updated_at)`, the join barrier `(instance_id, node_id, status)`, the duration sample
-`(workflow, version, status, finished_at)`, observed settle `(status, settle_at)`, instance status and
-correlation, anomaly by instance and by workflow, event by instance and by creation time.
+`(workflow, version, status, finished_at)`, instance status and correlation, event by instance and by
+creation time. (Migration 26 cancelled any still-running observed run and dropped `settle_at`,
+`wf_token.seq` and `wf_anomaly` when OBSERVED execution was removed.)
 
 *Verified by:* `postgres/SchemaMigrationTest`, `tests/JdbcMigrationTest`,
 `server/store/InstanceStatusWidthTest`, `client/flow/DeepNestingTest`.
@@ -191,9 +196,8 @@ accumulated history measurably raises latency at the throughput ceiling.
 **WGL-STOR-070** (MUST) `Tx` MUST provide, beyond the CRUD on instances and tokens: batched insert /
 find / update of tokens; instances by correlation id (newest first); due timers; signal waits (oldest
 first) and those whose deadline passed; sub-workflow children of a parent token's instance; the
-schedule for a workflow and the schedules that are due; expired leases; observed runs whose settle time
-has passed; a backlog snapshot for lag monitoring; the join-stack list at a barrier; the compensation
-log in seq order; cancelling every active token of an instance; anomalies newest first; and the event
+schedule for a workflow and the schedules that are due; expired leases; a backlog snapshot for lag monitoring; the join-stack list at a barrier; the compensation
+log in seq order; cancelling every active token of an instance; and the event
 log's append, read, head, cursor register / advance / minimum.
 
 **WGL-STOR-071** (MUST) A batched variant MUST be semantically identical to looping the single-row form;

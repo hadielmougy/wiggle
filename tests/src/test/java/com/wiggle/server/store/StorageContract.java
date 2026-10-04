@@ -451,7 +451,6 @@ abstract class StorageContract {
         i.error = "boom";
         i.context = doc("stage", "paid");
         i.parentTokenId = id("tok");
-        i.settleAt = now + 60_000;
         i.revision = 7;
         store(i);
 
@@ -465,7 +464,6 @@ abstract class StorageContract {
         assertEquals("boom", back.error);
         assertEquals(i.context.json(), back.context.json());
         assertEquals(i.parentTokenId, back.parentTokenId);
-        assertEquals(i.settleAt, back.settleAt);
         assertEquals(now, back.createdAt);
         assertEquals(now, back.updatedAt);
         assertEquals(7, back.revision);
@@ -473,31 +471,15 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("a null settleAt and a null correlation id are stored as absent, not as text")
+    @DisplayName("a null correlation id is stored as absent, not as text")
     void instanceNullablesStayNull() {
         Instance i = instance(id("wf"));
         store(i);
         Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
-        assertNull(back.settleAt, "only an observed run has a settle time");
         assertNull(back.correlationId);
         assertNull(back.parentTokenId);
         assertNull(back.terminationReason);
         assertNull(back.error);
-    }
-
-    @Test
-    @DisplayName("insertInstanceIfAbsent leaves the winner's row standing")
-    void insertIfAbsentIsIdempotent() {
-        Instance first = instance(id("wf"));
-        first.context = doc("reporter", "a");
-        assertTrue(inTxBoolean(tx -> tx.insertInstanceIfAbsent(first)), "the first reporter creates the run");
-
-        Instance second = instance(first.workflow);
-        second.id = first.id;
-        second.context = doc("reporter", "b");
-        assertFalse(inTxBoolean(tx -> tx.insertInstanceIfAbsent(second)), "the second is told it lost");
-        assertEquals(first.context.json(), storage.inTx(tx -> tx.findInstance(first.id)).orElseThrow().context.json(),
-                "and the loser overwrote nothing -- it re-reads instead");
     }
 
     @Test
@@ -512,7 +494,6 @@ abstract class StorageContract {
         live.terminationReason = "step failed";
         live.error = "handler threw";
         live.context = doc("stage", "failed");
-        live.settleAt = 42L;
         live.updatedAt = now + 5;
         storage.inTxVoid(tx -> tx.updateInstance(live));
 
@@ -522,7 +503,6 @@ abstract class StorageContract {
         assertEquals("step failed", back.terminationReason);
         assertEquals("handler threw", back.error);
         assertEquals(doc("stage", "failed").json(), back.context.json());
-        assertEquals(42L, back.settleAt);
         assertEquals(now + 5, back.updatedAt);
         assertEquals(before + 1, back.revision);
     }
@@ -688,7 +668,6 @@ abstract class StorageContract {
         t.compSeq = 3L;
         t.startedAt = now + 1;
         t.finishedAt = now + 2;
-        t.seq = 11L;
         t.stepInput = "{\"order\":1}";
         t.stepOutput = "{\"order\":1,\"paid\":true}";
         t.payload = TokenPayload.EMPTY
@@ -718,7 +697,6 @@ abstract class StorageContract {
         assertEquals(3L, back.compSeq);
         assertEquals(now + 1, back.startedAt);
         assertEquals(now + 2, back.finishedAt);
-        assertEquals(11L, back.seq);
         assertEquals("{\"order\":1}", back.stepInput);
         assertEquals("{\"order\":1,\"paid\":true}", back.stepOutput);
         assertEquals(now, back.createdAt);
@@ -763,7 +741,6 @@ abstract class StorageContract {
         assertNull(back.compSeq, "null comp seq is what tells forward work from an undo");
         assertNull(back.startedAt);
         assertNull(back.finishedAt);
-        assertNull(back.seq);
         assertNull(back.leaseOwner);
     }
 
@@ -1139,27 +1116,6 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("dueSettle is the running observed runs whose settle time has passed, soonest first")
-    void dueSettleIsSoonestFirst() {
-        String wf = id("wf");
-        Instance soon = instance(wf);
-        soon.settleAt = ANCIENT;
-        Instance later = instance(wf);
-        later.settleAt = ANCIENT + 1;
-        Instance notObserved = instance(wf);
-        Instance finished = instance(wf);
-        finished.status = InstanceStatus.COMPLETED;
-        finished.settleAt = ANCIENT;
-        for (Instance i : List.of(soon, later, notObserved, finished)) store(i);
-
-        List<String> ids = List.of(soon.id, later.id, notObserved.id, finished.id);
-        List<String> swept = storage.inTx(tx -> tx.dueSettle(ANCIENT + 2, 10_000)).stream()
-                .map(i -> i.id).filter(ids::contains).toList();
-        assertEquals(List.of(soon.id, later.id), swept,
-                "soonest first; an instance with no settle time and a finished one are not judged");
-    }
-
-    @Test
     @DisplayName("the retention pass takes a terminal instance with its tokens and its comp log")
     void retentionTakesTheWholeInstance() {
         String wf = id("wf");
@@ -1325,7 +1281,7 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("stepDurations are newest first, and a step that was never queued waited for nothing")
+    @DisplayName("stepDurations are newest first, with the time each step waited to be claimed")
     void stepDurationsMeasureRunAndWait() {
         Instance i = instance(id("wf"));
         Token dispatched = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
@@ -1333,22 +1289,21 @@ abstract class StorageContract {
         dispatched.availableAt = 1_000;
         dispatched.startedAt = 1_200L;
         dispatched.finishedAt = 1_500L;
-        Token observed = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
-        observed.nodeId = "n-observed";
-        observed.availableAt = 1_000;
-        observed.startedAt = 2_000L;
-        observed.finishedAt = 2_050L;
-        observed.seq = 1L;
+        Token later = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
+        later.nodeId = "n-later";
+        later.availableAt = 1_990;
+        later.startedAt = 2_000L;
+        later.finishedAt = 2_050L;
         Token unfinished = token(i, NodeKind.TASK, TokenStatus.RUNNING, id("q"));
         unfinished.nodeId = "n-running";
         unfinished.startedAt = 3_000L;
-        store(i, dispatched, observed, unfinished);
+        store(i, dispatched, later, unfinished);
 
         List<Rows.StepDuration> steps = storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 0, 10));
-        assertEquals(List.of("n-observed", "n-dispatched"), steps.stream().map(Rows.StepDuration::nodeId).toList(),
+        assertEquals(List.of("n-later", "n-dispatched"), steps.stream().map(Rows.StepDuration::nodeId).toList(),
                 "newest first by finish time, and nothing still running");
         assertEquals(50, steps.getFirst().millis());
-        assertEquals(0, steps.getFirst().waitMillis(), "a reported step was never dispatched from a queue");
+        assertEquals(10, steps.getFirst().waitMillis());
         assertEquals(300, steps.getLast().millis());
         assertEquals(200, steps.getLast().waitMillis(), "ready to claimed");
         assertTrue(storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 1_600, 10)).size() == 1,
@@ -1357,7 +1312,72 @@ abstract class StorageContract {
         assertTrue(storage.inTx(tx -> tx.stepDurations(i.workflow, 2, 0, 10)).isEmpty(), "one version at a time");
     }
 
+    // -- shards --
+
+    @Test
+    @DisplayName("a database is claimed for one shard, and a later claim leaves the first standing")
+    void aShardIdentityIsClaimedOnce() {
+        storage.inTxVoid(tx -> tx.claimShardIdentity(7));
+        int claimed = storage.inTx(tx -> tx.shardIdentity()).orElseThrow();   // 7, or an earlier run's
+        storage.inTxVoid(tx -> tx.claimShardIdentity(claimed + 1));
+        assertEquals(claimed, storage.inTx(tx -> tx.shardIdentity()).orElseThrow());
+    }
+
+    @Test
+    @DisplayName("a consumer's position on another shard only moves forward, and every consumer is counted for retention")
+    void eventPositionsOnOtherShards() {
+        String consumer = id("consumer");
+        int shard = (int) (System.nanoTime() & 0x3fffffff);
+        storage.inTxVoid(tx -> tx.createEventCursorIfAbsent(new Rows.EventCursor(consumer, 0, now, now)));
+        Long oldest = storage.inTx(tx -> tx.oldestEventPosition(shard));
+        assertEquals(Long.valueOf(0), oldest, "a consumer with no row holds 0");
+        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 7));
+        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 3));
+        assertEquals(Map.of(shard, 7L), storage.inTx(tx -> tx.eventPositions(consumer)), "never backwards");
+        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 9));
+        assertEquals(Long.valueOf(9), storage.inTx(tx -> tx.eventPositions(consumer).get(shard)));
+        assertTrue(storage.inTx(tx -> tx.eventPositions(id("nobody"))).isEmpty());
+    }
+
+    @Test
+    @DisplayName("the replica heartbeat reads back what the primary last stamped")
+    void theShardBeatReadsBack() {
+        storage.inTxVoid(tx -> tx.claimShardIdentity(7));
+        storage.inTxVoid(tx -> tx.writeShardBeat(now));
+        assertEquals(now, storage.inTx(tx -> tx.shardBeat()).orElseThrow());
+        storage.inTxVoid(tx -> tx.writeShardBeat(now + 1));
+        assertEquals(now + 1, storage.inTx(tx -> tx.shardBeat()).orElseThrow());
+    }
+
+    @Test
+    @DisplayName("the shard registry keeps one row per shard, replaced in place")
+    void theShardRegistryKeepsOneRowPerShard() {
+        int shard = (int) (System.nanoTime() & 0x3fffffff);
+        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
+        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9)));
+        List<Rows.ShardRecord> rows = storage.inTx(tx -> tx.shardRegistry()).stream()
+                .filter(r -> r.shardId() == shard).toList();
+        assertEquals(List.of(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9L)), rows);
+        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
+        assertEquals(List.of(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)),
+                storage.inTx(tx -> tx.shardRegistry()).stream().filter(r -> r.shardId() == shard).toList(),
+                "a null retiredAt reads back null, not zero");
+    }
+
     // -- cluster membership --
+
+    @Test
+    @DisplayName("a node row carries the topology generation the node runs, updated with each heartbeat")
+    void aNodeCarriesItsTopologyGeneration() {
+        ServerNode n = serverNode(ANCIENT);
+        n.topologyGeneration = 3;
+        storage.inTxVoid(tx -> tx.upsertNode(n));
+        assertEquals(3, node(n.id).orElseThrow().topologyGeneration);
+        n.topologyGeneration = 4;
+        storage.inTxVoid(tx -> tx.upsertNode(n));
+        assertEquals(4, node(n.id).orElseThrow().topologyGeneration);
+        storage.inTxVoid(tx -> tx.deleteNodesOlderThan(ANCIENT + 1));
+    }
 
     @Test
     @DisplayName("a node keeps the heartbeat it first registered with, and the leader flag is set apart")
@@ -1455,45 +1475,292 @@ abstract class StorageContract {
         return e;
     }
 
-    // -- observed-run anomalies --
+    // -- WGL-SHARD-181: accounts, roles, sessions and their audit on the auth shard --
 
     @Test
-    @DisplayName("anomalies are newest first, and narrowed by workflow or by instance")
-    void anomaliesAreNewestFirstAndFilterable() {
-        String wf = id("wf");
-        Instance a = instance(wf);
-        Instance b = instance(wf);
-        store(a);
-        store(b);
-        Rows.Anomaly older = anomaly(a, "UNEXPECTED_STEP", ANCIENT);
-        Rows.Anomaly newer = anomaly(b, "SKIPPED_STEP", ANCIENT + 1);
-        storage.inTxVoid(tx -> {
-            tx.insertAnomaly(older);
-            tx.insertAnomaly(newer);
+    @DisplayName("an account is written, replaced, granted roles, and deleted with its grants and sessions")
+    void authAccounts() {
+        String name = id("u");
+        String role = id("r");
+        storage.inTx(tx -> {
+            tx.putAuthRole(new Rows.AuthRole(role, Set.of("read", "instance.cancel:orders"), false, now, now));
+            tx.putAuthUser(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now));
+            tx.setAuthRolesOf(name, List.of(role, "viewer-" + run));
+            return null;
         });
+        Rows.AuthUser read = storage.inTx(tx -> tx.findAuthUser(name)).orElseThrow();
+        assertEquals(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now), read);
+        assertEquals(List.of(role, "viewer-" + run).stream().sorted().toList(), storage.inTx(tx -> tx.authRolesOf(name)));
+        Rows.AuthRole r = storage.inTx(tx -> tx.authRoles()).stream().filter(x -> x.name().equals(role)).findFirst()
+                .orElseThrow();
+        assertEquals(Set.of("read", "instance.cancel:orders"), r.permissions());
+        assertTrue(storage.inTx(tx -> tx.authUsers()).stream().anyMatch(u -> u.name().equals(name)));
 
-        assertEquals(List.of(newer.id(), older.id()),
-                storage.inTx(tx -> tx.anomalies(wf, null, 10)).stream().map(Rows.Anomaly::id).toList(),
-                "newest first");
-        assertEquals(List.of(older.id()),
-                storage.inTx(tx -> tx.anomalies(null, a.id, 10)).stream().map(Rows.Anomaly::id).toList(),
-                "one instance's departures");
-        assertEquals(List.of(newer.id()),
-                storage.inTx(tx -> tx.anomalies(wf, null, 1)).stream().map(Rows.Anomaly::id).toList(),
-                "the limit keeps the newest");
+        storage.inTx(tx -> {
+            tx.putAuthUser(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5));
+            tx.setAuthRolesOf(name, List.of(role));
+            return null;
+        });
+        assertEquals(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5),
+                storage.inTx(tx -> tx.findAuthUser(name)).orElseThrow(), "a put replaces the account");
+        assertEquals(List.of(role), storage.inTx(tx -> tx.authRolesOf(name)), "and roles are replaced, not added");
 
-        Rows.Anomaly back = storage.inTx(tx -> tx.anomalies(null, b.id, 10)).getFirst();
-        assertEquals("SKIPPED_STEP", back.kind());
-        assertEquals("n-expected", back.expectedNode());
-        assertEquals("n-reported", back.reportedNode());
-        assertEquals("reported out of order", back.detail());
-        assertEquals(ANCIENT + 1, back.at());
-        assertEquals(1, back.version());
+        String session = id("sess");
+        storage.inTx(tx -> { tx.insertAuthSession(new Rows.AuthSession(session, name, now + 60_000, now)); return null; });
+        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthUser(name)));
+        assertTrue(storage.inTx(tx -> tx.findAuthUser(name)).isEmpty());
+        assertTrue(storage.inTx(tx -> tx.authRolesOf(name)).isEmpty(), "its grants go with it");
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(session)).isEmpty(), "and its sessions");
+        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthUser(name)), "a second delete finds nothing");
     }
 
-    private Rows.Anomaly anomaly(Instance of, String kind, long at) {
-        return new Rows.Anomaly(id("anom"), of.id, of.workflow, of.version, kind,
-                "n-expected", "n-reported", "reported out of order", at);
+    @Test
+    @DisplayName("deleting a role removes every grant of it")
+    void authRoleDeletion() {
+        String name = id("u");
+        String role = id("r");
+        String other = id("r");
+        storage.inTx(tx -> {
+            tx.putAuthRole(new Rows.AuthRole(role, Set.of("read"), false, now, now));
+            tx.putAuthRole(new Rows.AuthRole(other, Set.of("*"), false, now, now));
+            tx.putAuthUser(new Rows.AuthUser(name, "h", "s", 1, false, now, now));
+            tx.setAuthRolesOf(name, List.of(role, other));
+            return null;
+        });
+        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthRole(role)));
+        assertEquals(List.of(other), storage.inTx(tx -> tx.authRolesOf(name)));
+        assertTrue(storage.inTx(tx -> tx.authRoles()).stream().noneMatch(r -> r.name().equals(role)));
+        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthRole(role)));
+    }
+
+    @Test
+    @DisplayName("sessions are found by hash, ended one at a time, per account except one, or once expired")
+    void authSessions() {
+        String name = id("u");
+        String a = id("sa"), b = id("sb"), c = id("sc"), old = id("so");
+        storage.inTx(tx -> {
+            tx.insertAuthSession(new Rows.AuthSession(a, name, now + 60_000, now));
+            tx.insertAuthSession(new Rows.AuthSession(b, name, now + 60_000, now));
+            tx.insertAuthSession(new Rows.AuthSession(c, name, now + 60_000, now));
+            tx.insertAuthSession(new Rows.AuthSession(old, name, ANCIENT, ANCIENT));
+            return null;
+        });
+        assertEquals(new Rows.AuthSession(a, name, now + 60_000, now), storage.inTx(tx -> tx.findAuthSession(a)).orElseThrow());
+        storage.inTx(tx -> { tx.deleteAuthSession(a); return null; });
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(a)).isEmpty());
+
+        int expired = storage.inTx(tx -> tx.deleteExpiredAuthSessions(ANCIENT + 1, 1000));
+        assertTrue(expired >= 1);
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(old)).isEmpty(), "an expired session is swept");
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isPresent(), "a live one is not");
+
+        assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, c)));
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isEmpty());
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(c)).isPresent(), "the kept session stays");
+        assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, null)), "null keeps none");
+    }
+
+    @Test
+    @DisplayName("a machine credential is found by key hash or subject, listed, and deleted")
+    void authCredentials() {
+        String key = id("k"), cert = id("c");
+        String hash = id("hash"), subject = "CN=" + id("subj");
+        storage.inTx(tx -> {
+            tx.insertAuthCredential(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
+            tx.insertAuthCredential(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5));
+            return null;
+        });
+        assertEquals(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null),
+                storage.inTx(tx -> tx.findAuthCredentialByKeyHash(hash)).orElseThrow());
+        assertEquals(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5),
+                storage.inTx(tx -> tx.findAuthCredentialBySubject(subject)).orElseThrow());
+        assertTrue(storage.inTx(tx -> tx.authCredentials()).stream().map(Rows.AuthCredential::id).toList()
+                .containsAll(List.of(key, cert)));
+        assertThrows(RuntimeException.class, () -> storage.inTx(tx -> {
+            tx.insertAuthCredential(new Rows.AuthCredential(id("k"), Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
+            return null;
+        }), "a key hash is unique");
+        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthCredential(key)));
+        assertTrue(storage.inTx(tx -> tx.findAuthCredentialByKeyHash(hash)).isEmpty());
+        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthCredential(key)));
+        storage.inTx(tx -> tx.deleteAuthCredential(cert));
+    }
+
+    @Test
+    @DisplayName("the audit assigns increasing seqs and is read after a seq, in order")
+    void authAudit() {
+        long head = storage.inTx(tx -> tx.authAuditHead());
+        String action = id("act");
+        long first = storage.inTx(tx -> tx.appendAuthAudit(new Rows.AuthAudit(0, now, "dana", action, "rey", "x")));
+        long second = storage.inTx(tx -> tx.appendAuthAudit(new Rows.AuthAudit(0, now + 1, null, action, null, null)));
+        assertTrue(first > head && second > first, head + " < " + first + " < " + second);
+        assertTrue(storage.inTx(tx -> tx.authAuditHead()) >= second);
+        List<Rows.AuthAudit> after = storage.inTx(tx -> tx.authAuditAfter(first - 1, 1000)).stream()
+                .filter(e -> e.action().equals(action)).toList();
+        assertEquals(List.of(new Rows.AuthAudit(first, now, "dana", action, "rey", "x"),
+                new Rows.AuthAudit(second, now + 1, null, action, null, null)), after);
+        assertTrue((boolean) storage.inTx(tx -> tx.authAuditHas(action)));
+        assertFalse((boolean) storage.inTx(tx -> tx.authAuditHas(id("never"))));
+    }
+
+    // -- WGL-SHARD-191/194: search documents on a search shard --
+
+    private Rows.SearchDoc searchDoc(String id, String workflow, String status, String text, long updatedAt) {
+        return new Rows.SearchDoc(id, workflow, 1, status, null, text, updatedAt, updatedAt);
+    }
+
+    @Test
+    @DisplayName("a search document is replaced only by one at least as new")
+    void searchDocUpsert() {
+        String id = id("wfi");
+        String word = "w" + run;
+        assertTrue((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " first", ANCIENT + 10))));
+        assertFalse((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " stale", ANCIENT + 5))),
+                "an older copy, delivered late, does not replace the newer one");
+        assertTrue((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "COMPLETED", word + " second", ANCIENT + 20))));
+        List<Rows.SearchHit> hits = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10)));
+        assertEquals(1, hits.size());
+        assertEquals("COMPLETED", hits.getFirst().doc().status());
+        assertTrue(hits.getFirst().doc().text().contains("second"));
+        storage.inTx(tx -> { tx.deleteSearchDoc(id); return null; });
+        assertTrue(storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10))).isEmpty());
+    }
+
+    @Test
+    @DisplayName("a search needs every word, ranks by how often they occur, and filters inside the query")
+    void searchDocMatching() {
+        String a = "a" + run, b = "b" + run;
+        String one = id("wfi"), many = id("wfi"), other = id("wfi"), onlyA = id("wfi");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(searchDoc(one, "orders", "RUNNING", a + " " + b, ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(many, "orders", "FAILED", a + " " + a + " " + a + " " + b + " " + b, ANCIENT + 2));
+            tx.upsertSearchDoc(searchDoc(other, "billing", "RUNNING", a + " " + b, ANCIENT + 3));
+            tx.upsertSearchDoc(searchDoc(onlyA, "orders", "RUNNING", "{\"note\":\"" + a + "\"}", ANCIENT + 4));
+            return null;
+        });
+        List<String> both = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(a + " " + b, null, null, null, null, 10)))
+                .stream().map(h -> h.doc().instanceId()).toList();
+        assertEquals(List.of(many, other, one), both, "both words needed; more occurrences first, then newest");
+        assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).contains(onlyA),
+                "a word inside JSON text is found");
+        assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, Set.of("orders"), "FAILED", null, null, 10)));
+        assertEquals(List.of(other), ids(new Rows.SearchQuery(a + " " + b, Set.of("billing"), null, null, null, 10)));
+        assertEquals(List.of(), ids(new Rows.SearchQuery(a + " " + b, Set.of(), null, null, null, 10)), "no workflow allowed");
+        assertEquals(List.of(other, one), ids(new Rows.SearchQuery(a + " " + b, null, "RUNNING", null, null, 10)));
+        assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, null, null, ANCIENT + 2, ANCIENT + 2, 10)),
+                "the time bounds are inclusive");
+        assertEquals(1, ids(new Rows.SearchQuery(a + " " + b, null, null, null, null, 1)).size(), "the limit holds");
+        assertEquals(List.of(onlyA, other), ids(new Rows.SearchQuery("", null, null, ANCIENT + 3, ANCIENT + 4, 10)),
+                "no words: newest first, by the filters alone");
+
+        assertTrue(storage.inTx(tx -> tx.deleteSearchDocsBefore(ANCIENT + 5, 1000)) >= 4);
+        assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).isEmpty(), "retention deletes by updatedAt");
+    }
+
+    private List<String> ids(Rows.SearchQuery q) {
+        return storage.inTx(tx -> tx.searchDocs(q)).stream().map(h -> h.doc().instanceId()).toList();
+    }
+
+    @Test
+    @DisplayName("search documents are read in instance id order, a page at a time")
+    void searchDocPaging() {
+        String prefix = "zz-" + run + "-";
+        List<String> mine = List.of(prefix + "1", prefix + "2", prefix + "3");
+        storage.inTx(tx -> {
+            mine.forEach(id -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", "x", ANCIENT)));
+            return null;
+        });
+        List<Rows.SearchDoc> page = storage.inTx(tx -> tx.searchDocsAfter(prefix, 2));
+        assertEquals(List.of(prefix + "1", prefix + "2"), page.stream().map(Rows.SearchDoc::instanceId).toList());
+        assertEquals(prefix + "3", storage.inTx(tx -> tx.searchDocsAfter(prefix + "2", 1)).getFirst().instanceId());
+        storage.inTx(tx -> { mine.forEach(tx::deleteSearchDoc); return null; });
+    }
+
+    // -- WGL-SHARD-192: vectors beside their documents, and the model registry --
+
+    private static float[] vec(float... v) {
+        return v;
+    }
+
+    @Test
+    @DisplayName("the nearest documents by cosine, filtered, from vectors kept per model and replaced only by newer")
+    void searchVectors() {
+        String model = "m-" + run, other = "o-" + run;
+        String near = id("wfi"), far = id("wfi"), billing = id("wfi"), bare = id("wfi");
+        storage.inTx(tx -> {
+            tx.ensureVectorIndex(model, 3);
+            tx.upsertSearchDoc(searchDoc(near, "orders", "RUNNING", "near", ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(far, "orders", "RUNNING", "far", ANCIENT + 2));
+            tx.upsertSearchDoc(searchDoc(billing, "billing", "RUNNING", "billing", ANCIENT + 3));
+            tx.upsertSearchDoc(searchDoc(bare, "orders", "RUNNING", "no vector", ANCIENT + 4));
+            tx.upsertSearchVectors(List.of(
+                    new Rows.SearchVector(near, model, vec(1, 0.1f, 0), ANCIENT + 1),
+                    new Rows.SearchVector(far, model, vec(0, 1, 0), ANCIENT + 2),
+                    new Rows.SearchVector(billing, model, vec(1, 0, 0), ANCIENT + 3),
+                    new Rows.SearchVector(near, other, vec(0, 0, 1), ANCIENT + 1)));
+            return null;
+        });
+        List<Rows.SearchHit> hits = storage.inTx(tx -> tx.searchVectors(
+                new Rows.VectorQuery(model, vec(1, 0, 0), java.util.Set.of("orders"), null, null, null, 10)));
+        assertEquals(List.of(near, far), hits.stream().map(h -> h.doc().instanceId()).toList(),
+                "closest first; another workflow, and a document with no vector, are left out");
+        assertTrue(hits.get(0).score() > 0.99 && Math.abs(hits.get(1).score()) < 0.01, hits.toString());
+        assertEquals(List.of(billing, near), storage.inTx(tx -> tx.searchVectors(
+                new Rows.VectorQuery(model, vec(1, 0, 0), null, null, ANCIENT + 1, ANCIENT + 3, 2)))
+                .stream().map(h -> h.doc().instanceId()).toList(), "time bounds and limit");
+
+        storage.inTx(tx -> {
+            tx.upsertSearchVectors(List.of(new Rows.SearchVector(near, model, vec(0, 0, 1), ANCIENT)));
+            return null;
+        });
+        assertEquals(near, storage.inTx(tx -> tx.searchVectors(new Rows.VectorQuery(model, vec(1, 0.1f, 0),
+                java.util.Set.of("orders"), null, null, null, 1))).getFirst().doc().instanceId(),
+                "an older vector delivered late does not replace the newer one");
+
+        List<Rows.SearchVector> held = storage.inTx(tx -> tx.searchVectorsOf(List.of(near)));
+        assertEquals(java.util.Set.of(model, other), held.stream().map(Rows.SearchVector::model).collect(java.util.stream.Collectors.toSet()));
+        float[] back = held.stream().filter(v -> v.model().equals(model)).findFirst().orElseThrow().embedding();
+        assertEquals(3, back.length);
+        assertEquals(0.1f, back[1], 1e-6, "a vector reads back as written");
+
+        storage.inTx(tx -> { tx.deleteSearchDoc(near); return null; });
+        assertTrue(storage.inTx(tx -> tx.searchVectorsOf(List.of(near))).isEmpty(), "a document takes its vectors with it");
+        assertEquals(2, (int) storage.inTx(tx -> tx.deleteSearchVectors(model, 100)));
+        assertTrue(storage.inTx(tx -> tx.searchVectors(new Rows.VectorQuery(model, vec(1, 0, 0), null, null, null, null, 10)))
+                .isEmpty());
+        storage.inTx(tx -> { List.of(far, billing, bare).forEach(tx::deleteSearchDoc); return null; });
+    }
+
+    @Test
+    @DisplayName("documents needing a vector: none yet, or one older than the document")
+    void docsNeedingVectors() {
+        String model = "n-" + run;
+        String fresh = id("wfi"), stale = id("wfi"), missing = id("wfi");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(searchDoc(fresh, "wf", "RUNNING", "a", ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(stale, "wf", "COMPLETED", "b", ANCIENT + 9));
+            tx.upsertSearchDoc(searchDoc(missing, "wf", "RUNNING", "c", ANCIENT + 2));
+            tx.upsertSearchVectors(List.of(new Rows.SearchVector(fresh, model, vec(1, 0, 0), ANCIENT + 1),
+                    new Rows.SearchVector(stale, model, vec(1, 0, 0), ANCIENT + 5)));
+            return null;
+        });
+        List<String> needing = storage.inTx(tx -> tx.docsNeedingVector(model, 10_000)).stream()
+                .map(Rows.SearchDoc::instanceId).filter(List.of(fresh, stale, missing)::contains).toList();
+        assertEquals(java.util.Set.of(stale, missing), java.util.Set.copyOf(needing));
+        assertEquals(1L, (long) storage.inTx(tx -> tx.countDocsWithoutVector(model, ANCIENT + 3))
+                - storage.inTx(tx -> tx.countDocsWithoutVector(model, ANCIENT + 1)),
+                "a document changed before the bound with no vector at all counts; a stale one does not");
+        storage.inTx(tx -> { List.of(fresh, stale, missing).forEach(tx::deleteSearchDoc); return null; });
+    }
+
+    @Test
+    @DisplayName("the model registry records each model's state and is replaced row by row")
+    void searchModels() {
+        String model = "r-" + run;
+        storage.inTx(tx -> { tx.putSearchModel(new Rows.SearchModel(model, 768, Rows.SearchModel.BUILDING, now, null)); return null; });
+        storage.inTx(tx -> { tx.putSearchModel(new Rows.SearchModel(model, 768, Rows.SearchModel.READY, now, now + 1)); return null; });
+        assertEquals(new Rows.SearchModel(model, 768, Rows.SearchModel.READY, now, now + 1),
+                storage.inTx(tx -> tx.searchModels()).stream().filter(m -> m.model().equals(model)).findFirst().orElseThrow());
     }
 
     // -- WGL-STOR-005: the store's own identity --

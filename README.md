@@ -90,13 +90,9 @@ inspected, traced and versioned like any other row in your database.
 - 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
   (PostgreSQL, or in-memory for dev). Embed the server in your JVM for tests, or run it as one
   process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
-- 🖥 **Operable from day one** — a web **ops console** (every instance step by step — each
+- 🖥 **Operable from day one** — a web **portal** served by the server (every instance step by step — each
   step's input, output, retries and timing — cancel, deliver signals, schedules, search by
-  instance or correlation id, per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
-- 🔍 **Governs steps you run yourself, too** — `OBSERVED` mode: your services report the steps
-  they completed against a published topology, and the server checks every run for conformance
-  (out of order, duplicate, incomplete, stalled) and ranks the bottlenecks — no worker, no
-  dispatch, nothing waits on the server.
+  instance or correlation id, full text or meaning, per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
 
 In one picture — a single `orders` instance whose steps run on **different microservices**,
 routed by each step's **queue**. The server keeps the durable state; each service just pulls the
@@ -185,59 +181,25 @@ helm install wiggle deploy/helm/wiggle \
   --set replicaCount=3
 ```
 
-### 2.3 The ops console
+### 2.3 The portal
 
-A standalone web UI that is a **pure gRPC client** — point it at a cluster with `WIGGLE_URL`.
-Every instance as a table of the steps it ran — click a step to expand its **input, output,
+A web UI the server serves on its own port (`WIGGLE_PORTAL_PORT`, default 8070), reading the engine
+in process — any node with it on serves the whole cluster. Every instance as a table of the steps it ran — click a step to expand its **input, output,
 retries and timing** — plus cancel, deliver signals, schedules, and search by
-**instance id or correlation id**. Optional login with an operator account and a **read-only
-viewer** account, and an admin can add further accounts of either role from the console itself,
-each able to change its own password. Server nodes themselves serve no UI — just a `/healthz`
-probe for Kubernetes.
+**instance id or correlation id**. The first visit sets the `admin` password and stores it in the
+database (or set `WIGGLE_DASHBOARD_PASSWORD` to skip that). Login: built-in admin and **read-only viewer**
+accounts from the environment, plus accounts and **roles built from permissions** (scoped to a
+workflow if you like) managed in the portal and kept in the database, with an audit of every
+change. Any node serves any signed-in session. The `/healthz` probe for Kubernetes stays on its own port.
 
-![The console's instance detail: an onboarding run as a table of its steps — fork, join, a sub-workflow, and a signal step waiting on manager approval — with the first step expanded to its input, output, retries and timing, and an inline deliver button.](docs/img/console-instance-trace.png)
+![The portal's instance detail: an onboarding run as a table of its steps — fork, join, a sub-workflow, and a signal step waiting on manager approval — with the first step expanded to its input, output, retries and timing, and an inline deliver button.](docs/img/console-instance-trace.png)
 
 The **Performance** tab reads the same timings for every execution mode: each step's p50/p95
-by the handler's own clock, how long it waited to be claimed, slowest first, and the anomalies of
-observed runs ([§2.4](#24-observed-execution--governing-steps-you-run-yourself)).
-
-![The console's Performance tab for the checkout flow: the table ranks the five steps by p95 with mean, p50, max, queue wait and a share bar, reserve slowest in red, and the anomaly list below names a stalled run, two incomplete runs, two out-of-order steps and a duplicated step.](docs/img/console-performance.png)
+by the handler's own clock and how long it waited to be claimed, slowest first.
 
 ```bash
-WIGGLE_URL=localhost:8080 ./gradlew :console:run    # → http://localhost:8090
-./gradlew :example:seedDashboard                    # a seeded server to point it at (:8080)
-./gradlew :example:seedObserved                     # …or one with sixty observed checkout runs
+./gradlew :example:seedDashboard                    # a seeded server with the portal → http://localhost:8070
 ```
-
-### 2.4 Observed execution — governing steps you run yourself
-
-Not every process wants a workflow engine in its call path. In **`OBSERVED`** mode the server
-dispatches nothing: your services run their own steps, on their own threads, and report each
-completed step with a **correlation key** and its **start and finish**. The server appends
-reports to the run the key names, and once the run settles it judges it against the declared
-topology, records every departure as an **anomaly** rather than refusing it, and keeps the
-timings that feed the Performance tab.
-
-```java
-FlowSpec spec = FlowSpec.define("checkout", 1, Order.class, CheckoutSteps.class, (f, s) -> f
-        .thenApply(s::validate)
-        .thenFilter(s::inStock)
-        .thenApply(s::charge));   // no execution mode: an observer stamps OBSERVED when it publishes
-
-try (Observer observer = Observer.connect("localhost:8080")) {
-    ObservedFlow checkout = observer.publish(spec);        // stamps OBSERVED, registers, validates names
-
-    checkout.record(orderId, "validate", startedAt, finishedAt);
-    checkout.recordPredicate(orderId, "inStock", true, startedAt, finishedAt);
-    checkout.recordError(orderId, "charge", "CardDeclined", startedAt, finishedAt);
-}
-```
-
-The reporter lives in its own module, `sh.wiggle:wiggle-observe`, and never blocks the caller:
-reports queue on one flusher thread and travel in batches. Several services can report steps of
-the same run, keyed by the same correlation id, and the server pieces the run together.
-
-<sub>Anomaly kinds, settle rules, and the wire protocol → **[docs/observed-execution.md](docs/observed-execution.md)**</sub>
 
 ---
 
@@ -428,20 +390,20 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 4. Architecture
 
-![Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; a standalone ops console is another gRPC client.](docs/img/architecture.svg)
+![Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; operators reach the portal each node can serve over HTTP.](docs/img/architecture.svg)
 
 | Component | Module | What it does |
 |---|---|---|
 | **Engine (server)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
-| **Ops console** | `console` | Standalone web UI (embedded Tomcat) that is a pure gRPC client. Trace, cancel, signal, schedules, search; operator + read-only viewer auth. |
-| **Distribution** | `dist` | The one runnable image: `WIGGLE_ROLE=server ∣ console`, every storage backend bundled. |
+| **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; accounts and permission-set roles on the auth shard. |
+| **Distribution** | `dist` | The one runnable image: the server with the portal, every storage backend bundled. |
 
 **The mechanics that make it hold together:**
 
 - **Tokens over a graph** — an instance is rows, not a call stack: tokens mark where execution
-  is on the compiled graph. Crash-safe by construction; the console renders it live.
+  is on the compiled graph. Crash-safe by construction; the portal renders it live.
 - **Leases, not locks** — a claimed step carries a lease; if the worker dies, the lease expires
   and the step is redelivered. At-least-once execution, exactly-once dispatch.
 - **Declared, immutable versions** — you publish a topology at a version you choose
@@ -453,11 +415,6 @@ class per recipe where the other is a topology file plus a handlers file.
 - **Local step chaining** — `LOCAL_SYNC` / `LOCAL_ASYNC` execution modes let a worker run
   consecutive same-queue steps back-to-back, cutting server round-trips for step-heavy flows
   (see [docs/local-execution.md](docs/local-execution.md)).
-- **Observed execution** — `OBSERVED` mode turns the server into a conformance and timing
-  monitor for steps that run inside your own services: each service reports the steps it
-  completed by run key, step name and times; the server checks the run against the declared
-  topology, records anomalies, and keeps per-step p50/p95
-  (see [docs/observed-execution.md](docs/observed-execution.md)).
 
 ---
 
@@ -540,7 +497,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP max pool size |
 | `WIGGLE_JDBC_TX_ATTEMPTS` | `3` | replays for a transaction that rolled back on a momentary database failure; `1` disables |
 | `WIGGLE_LEASE_MILLIS` | `30000` | task lease before a stalled step is reclaimed |
-| `WIGGLE_RECORD_STEP_IO` | `true` | record each step's input and output for the console (`false` turns it off) |
+| `WIGGLE_RECORD_STEP_IO` | `true` | record each step's input and output for the portal (`false` turns it off) |
 | `WIGGLE_STEP_IO_MAX_CHARS` | `65536` | cap per recorded input/output; longer ones keep their first 4096 characters |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `20000` | max server-side block of a worker poll |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `1000` | housekeeping / dispatch loop cadence |
@@ -551,27 +508,32 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
-| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint (the UI moved to the console) |
+| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint |
+| `WIGGLE_PORTAL_PORT` | `8070` | port for the web **portal** (below); `0` turns it off |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | *(unset)* | keystore ⇒ TLS on; **unset = plaintext** |
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
+| `WIGGLE_SEARCH_ENABLED` | `false` | **full-text search** over instances on the one database; a topology gets it from a `search` shard (`WIGGLE_SEARCH_RETENTION_MILLIS`, `WIGGLE_SEARCH_WORKFLOWS`) |
+| `WIGGLE_EMBEDDER` | `none` | **semantic search** by meaning: `http` (any OpenAI-compatible `/embeddings` API, with `WIGGLE_EMBEDDER_URL`/`_MODEL`/`_DIMENSION`/`_API_KEY`) or `hashing`; pgvector gives it an HNSW index |
+| `WIGGLE_GRPC_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
 | `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
 
-### Ops console
+### Portal
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | the cluster to serve |
-| `WIGGLE_DASHBOARD_PORT` | `8090` | HTTP port |
-| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
+| `WIGGLE_PORTAL_PORT` | `8070` | HTTP port; `0` turns it off |
+| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | admin login from the environment; **unset = the first visit sets the admin password**, kept in the database |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS + the client certs it presents to the server |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session; accounts, roles and sessions live on the auth shard |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once and then no longer read |
+| `WIGGLE_TLS_*` | *(unset)* | the same keystore serves the portal over HTTPS |
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
-> upgrades it to mTLS; the console adds operator/viewer authorization. TLS authenticates the
-> connection — per-RPC authorization is on the [roadmap](#7-roadmap).
+> upgrades it to mTLS; `WIGGLE_GRPC_AUTH=enforce` checks every gRPC call against the caller's role,
+> by API key or certificate; the portal has accounts with the same permission-set roles.
 
 ---
 
@@ -579,24 +541,17 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 Where it's going — the honest list:
 
-- [ ] **Pending-signals over gRPC** — enumerate parked signal waits from the console
-      (a `PendingSignals` RPC).
-- [ ] **Per-RPC authorization** — identity-based (client-certificate) allow-listing and role
-      separation on the control plane itself; SSO for the console.
+- [x] **Per-RPC authorization** — API keys and client certificates bound to permission-set roles,
+      scoped to a workflow or queue (`WIGGLE_GRPC_AUTH`).
+- [ ] **SSO for the portal.**
 - [x] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
       stops; it does not roll back).
-- [x] **Observed execution** — a published topology your services report against; conformance
-      anomalies and per-step latency without a worker in the path.
 - [x] **Worker-reported timings** — every execution mode lands in the same Performance view,
       by the handler's own clock, with queue wait.
 - [x] **Event log** — durable lifecycle events with a pull-and-ack feed, so other systems can
       react to what the engine decided ([docs/event-log.md](docs/event-log.md)).
 - [x] **Handler-emitted events** — `Step.emit` on the event log, committed with the step that
       emitted it.
-- [ ] **Observed-run ingest beyond the API** — event-broker adapters (correlation in Kafka
-      headers), method instrumentation, and OpenTelemetry spans as reports.
-- [ ] **Worker-mode anomalies** — retry exhausted, lease reclaimed, and loop budget hit,
-      recorded next to the observed kinds.
 - [ ] **Buffered signals** — deliver-before-wait semantics as an option (today a signal is
       rejected unless the instance is already waiting on it).
 - [ ] **Richer wire tokens** — queue / lease-expiry / updated-at on the gRPC token detail.
@@ -613,7 +568,6 @@ Suggestions and PRs welcome — open an issue.
 | 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
-| 🔍 **[Observed execution](docs/observed-execution.md)** | `OBSERVED` mode + `wiggle-observe`: conformance + bottlenecks for steps you run yourself |
 | 📨 **[Event log](docs/event-log.md)** | durable lifecycle and handler-emitted events, pulled and acknowledged by named consumers |
 | 📽 **[Slide deck](https://hadielmougy.github.io/wiggle/presentation.html)** | the 5-minute tour |
 | 🐍 **[wiggle-python](https://github.com/hadielmougy/wiggle-python)** · 🐹 **[wiggle-go](https://github.com/hadielmougy/wiggle-go)** | idiomatic clients, same control plane |

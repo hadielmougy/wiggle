@@ -44,6 +44,8 @@ public final class DefinitionRegistry {
      *  same name. Bounded per entry by {@link #DEF_MAX_NODES} and in count by the versions this
      *  cell serves -- the same order as {@link #modeCache}. */
     private final ConcurrentHashMap<String, WorkflowDefinition> defCache = new ConcurrentHashMap<>();
+    /** Versions read once and found larger than {@link #DEF_MAX_NODES}: they stay on the lazy path. */
+    private final Set<String> tooLarge = ConcurrentHashMap.newKeySet();
 
     public DefinitionRegistry(Storage storage) {
         this.storage = storage;
@@ -70,9 +72,6 @@ public final class DefinitionRegistry {
      * as a change to the graph.
      */
     public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
-        if (ExecutionModes.resolve(def.executionMode()) == ExecutionMode.OBSERVED) {
-            ObservedRuns.requireObservable(def);
-        }
         Registration registration = new Registration(def, force);
         Set<Integer> shards = new LinkedHashSet<>(storage.instanceShards());
         shards.add(storage.home());
@@ -84,6 +83,7 @@ public final class DefinitionRegistry {
         }
         modeCache.put(def.key(), def.executionMode());
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
+        else tooLarge.add(def.key());
         return def;
     }
 
@@ -104,8 +104,32 @@ public final class DefinitionRegistry {
      * rather than switching midway if the definition happens to be cached while it runs.
      */
     public LazyGraph graph(GraphStore graphs, String name, int version) {
-        WorkflowDefinition cached = defCache.get(name + ":" + version);
+        String key = name + ":" + version;
+        WorkflowDefinition cached = defCache.get(key);
+        if (cached == null && !tooLarge.contains(key) && !com.wiggle.server.ServerConfig.allowGraphReplace()) {
+            cached = fill(graphs, name, version, key);
+        }
         return cached != null ? new CachedGraph(cached) : new DefaultLazyGraph(graphs, name, version);
+    }
+
+    /**
+     * Holds a small definition whole the first time this node reads it, so a node that did not
+     * register it stops reading its graph a node at a time on every step -- reads made while the
+     * step's instance is locked. A published version never changes, so the copy never goes stale;
+     * where a graph can be replaced in place ({@code WIGGLE_ALLOW_GRAPH_REPLACE}, development
+     * only), nothing is filled this way, since another node may replace it.
+     */
+    private WorkflowDefinition fill(GraphStore graphs, String name, int version, String key) {
+        int nodes = graphs.graphNodeCount(name, version);
+        if (nodes == 0) return null;
+        if (nodes > DEF_MAX_NODES) {
+            tooLarge.add(key);   // counted, never loaded: a large graph is not materialised to measure it
+            return null;
+        }
+        WorkflowDefinition def = load(graphs, name, version).orElse(null);
+        if (def == null) return null;
+        WorkflowDefinition held = defCache.putIfAbsent(key, def);
+        return held == null ? def : held;
     }
 
     public WorkflowDefinition get(String name, int version) {

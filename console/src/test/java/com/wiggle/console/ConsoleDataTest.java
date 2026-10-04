@@ -4,11 +4,9 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.core.AnomalyView;
-import com.wiggle.core.ExecutionMode;
+import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Worker;
 import com.wiggle.core.NodeStats;
-import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
@@ -24,15 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The console's gRPC-backed {@link DashboardData}: it lists, details and cancels instances of one
- * cluster. Instances are started without a worker, so they sit RUNNING at their first step -- enough
- * to exercise the read/ops surface.
+ * The portal's {@link DashboardData} over the engine of the server it runs in: it lists, details and
+ * cancels instances. Instances are started without a worker, so they sit RUNNING at their first
+ * step -- enough to exercise the read/ops surface.
  */
 class ConsoleDataTest {
-
-    static {
-        System.setProperty("wiggle.observe.settleMillis", "0");   // observed runs are judged at settle; no grace here
-    }
 
     /** The steps a spec names. A worker binds them by name; nothing here implements them. */
     interface Steps {
@@ -51,7 +45,7 @@ class ConsoleDataTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Test @DisplayName("direct mode: lists, details, and cancels instances against one cluster")
+    @Test @DisplayName("lists, details, and cancels instances")
     void directMode() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
@@ -60,7 +54,7 @@ class ConsoleDataTest {
             for (int i = 0; i < 3; i++) c.start("wf", Map.of("i", i), null, null);
             String target = c.start("wf", Map.of(), null, "cust-B");
 
-            GrpcDashboardData data = new GrpcDashboardData(conn.client());
+            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
 
             assertEquals(4, data.listInstances(null, null, 100).size(), "all instances");
             assertEquals(4, data.listInstances("wf", "RUNNING", 100).size(), "filtered by workflow+status");
@@ -78,40 +72,66 @@ class ConsoleDataTest {
 
             data.cancel(target, "from test");
             assertEquals("CANCELLED", data.instance(target).orElseThrow().instance().status(), "cancel routed");
-            assertEquals(0, data.pendingSignals(10).size(), "pending signals degrade to empty over gRPC");
+            assertFalse(detail.tokens().get(0).queue() == null && detail.tokens().get(0).updatedAt() == 0,
+                    "token fields the wire Token lacked are present");
         }
     }
 
-    @Test @DisplayName("direct mode: step stats and anomalies read through the seam")
-    void statsAndAnomalies() throws Exception {
+    @Test @DisplayName("pending signal waits are listed, and a signal delivered through the seam clears one")
+    void pendingSignals() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
-            FlowSpec spec = FlowSpec.define("obs", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work).thenApply(s::more));
-            WorkflowDefinition d = spec.definition();
-            conn.client().register(new FlowSpec(new WorkflowDefinition(d.name(), d.version(), d.startNode(), d.nodes(),
-                    d.queues(), ExecutionMode.OBSERVED, d.checkpoints())));
-            String a = d.startNode(), b = d.node(a).next();
-            long t0 = 1_700_000_000_000L;
-            server.engine().observe("obs", null, null, "r1", "app", List.of(
-                    new StepInput(a, null, null, null, t0, t0 + 5),
-                    new StepInput(b, null, null, null, t0 + 5, t0 + 25)), true);
-            server.engine().observe("obs", null, null, "r2", "app", List.of(
-                    new StepInput(a, null, null, null, t0, t0 + 5)), true);   // closed before END
-            server.engine().settleObservedRuns(10);
+            WiggleClient c = conn.client();
+            c.register(FlowSpec.define("waits", 1, Map.class, Steps.class, (f, s) -> f.thenAwait("approved")));
+            String id = c.start("waits", Map.of(), null, null);
 
-            GrpcDashboardData data = new GrpcDashboardData(conn.client());
-            List<NodeStats> stats = data.stepStats("obs", null, 0, 100);
+            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
+            List<DashboardData.SignalView> pending = data.pendingSignals(10);
+            assertEquals(1, pending.size(), pending.toString());
+            assertEquals(id, pending.get(0).instanceId());
+            assertEquals("approved", pending.get(0).signal());
+
+            data.signal(id, "approved", Map.of("by", "ops"));
+            assertTrue(data.pendingSignals(10).isEmpty());
+            assertEquals("COMPLETED", data.instance(id).orElseThrow().instance().status());
+        }
+    }
+
+    /** Runs {@code n} instances of a two-step flow to completion, the second step the slow one. */
+    static FlowSpec runTimed(WiggleClient client, int n) throws Exception {
+        FlowSpec spec = FlowSpec.define("timed", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work).thenApply(s::more));
+        client.register(spec);
+        try (Worker w = new Worker(client, "timed-w").registerHandler(new TimedSteps()).start()) {
+            for (int i = 0; i < n; i++) client.awaitCompletion(client.start(spec, Map.of()), Duration.ofSeconds(20));
+        }
+        return spec;
+    }
+
+    @ForFlow("timed")
+    public static final class TimedSteps {
+        public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
+        public Map<String, Object> more(Map<String, Object> ctx) throws InterruptedException {
+            Thread.sleep(60);
+            return ctx;
+        }
+    }
+
+    @Test @DisplayName("step stats read through the seam, slowest first")
+    void stepStats() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
+            long before = System.currentTimeMillis();
+            runTimed(conn.client(), 2);
+
+            DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
+            List<NodeStats> stats = data.stepStats("timed", null, 0, 100);
             assertEquals(2, stats.size());
             assertEquals("more", stats.get(0).name(), "slowest p95 first");
-            assertEquals(20, stats.get(0).p95Millis());
+            assertTrue(stats.get(0).p95Millis() >= 60, "more sleeps 60 ms: " + stats.get(0));
             assertEquals(2, stats.get(1).count(), "work ran in both runs");
-            assertTrue(data.stepStats("obs", null, t0 + 1000, 100).isEmpty(), "the window bounds the sample");
-
-            List<AnomalyView> anomalies = data.anomalies("obs", null, 10);
-            assertEquals(1, anomalies.size());
-            assertEquals("INCOMPLETE", anomalies.get(0).kind());
-            assertEquals(1, data.anomalies(null, anomalies.get(0).instanceId(), 10).size(), "by instance");
-            assertTrue(data.anomalies("other", null, 10).isEmpty());
+            assertTrue(data.stepStats("timed", null, System.currentTimeMillis() + 60_000, 100).isEmpty(),
+                    "the window bounds the sample");
+            assertTrue(before > 0);
         }
     }
 }

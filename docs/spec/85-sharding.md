@@ -30,7 +30,7 @@ users and roles move into a database on a dedicated **auth shard**, and vector s
 | **replica** | A read-only streaming replica of a shard's primary, used only for reads that tolerate bounded staleness. |
 
 **WGL-SHARD-001** (MUST) Every row that belongs to an instance — the instance, its tokens, its
-comp-log, its anomalies, its events — MUST live on that instance's shard. No engine transaction may
+comp-log, its events — MUST live on that instance's shard. No engine transaction may
 span two shards.
 
 **WGL-SHARD-002** (MUST) An instance's shard MUST be decided once, when its id is minted, and MUST be
@@ -75,8 +75,6 @@ fixture) and `server/engine/ShardIdsEngineTest`.
 | instance | `wfi.s3.01k6…` | minted ([§2.2](#22-choosing-a-shard)) |
 | token | `tok.s3.01k6…` | its instance's |
 | child instance (sub-workflow) | `wfi.s3.01k6…` | its parent instance's |
-| observed run | `wfo.s3.<digest>` | derived from the key ([§9](#9-observed-runs)) |
-| anomaly | `anm.s3.…` | its instance's |
 
 Comp-log entries and events are keyed by `(instance id, seq)` and need no id of their own. Schedule and
 node ids are global rows on the home shard and stay bare (`sched_…`, `node_…`).
@@ -93,7 +91,7 @@ paths receive only a task (token) id, and MUST route on it without reading anyth
 join ([chapter 30](30-engine.md)) stays inside one transaction on one database.
 
 **WGL-SHARD-015** (MUST) An id derived from another (a token from its instance, a child from the token
-that starts it, an anomaly from its instance) MUST inherit the owner's **form**: the owner's shard when
+that starts it) MUST inherit the owner's **form**: the owner's shard when
 its id carries one, and the bare form (`{prefix}_…`) when it carries none. A bare id belongs to the
 home shard, so the derived id lands with its owner without the minter knowing which shard is home.
 
@@ -107,7 +105,7 @@ and MUST NOT be recomputed from the topology.
 
 ### 2.3 Ids from before sharding
 
-**WGL-SHARD-030** (MUST) A legacy bare id (`wfi_…`, `tok_…`, `wfo_…`) MUST route to the home
+**WGL-SHARD-030** (MUST) A legacy bare id (`wfi_…`, `tok_…`) MUST route to the home
 shard. Upgrading a single-database deployment therefore rewrites no rows: its database becomes the
 home shard.
 
@@ -118,6 +116,17 @@ tokens of such an instance were always minted bare, so no label could route a re
 [§15](#15-dropping-the-coordinator).
 
 ## 3. Topology and configuration
+
+**Status: implemented**, with these limits until later steps:
+
+- **Shards that only carry auth or search** are parsed and validated but not opened; nothing reads
+  them yet.
+- **Schemas.** Every opened shard gets the whole `wf_*` schema; [WGL-SHARD-007](#1-model)'s per-role
+  schemas arrive with the first table that belongs to one role only.
+
+`TopologyParser` reads the document, `PostgresStorageFactory` opens a `ShardedStorage` from it, and
+`Placement` mints by generation. Verified by `server/topology/TopologyParserTest`, `PlacementTest`
+and `TopologyServerTest`, `server/store/ShardedStorageTest`, and the storage contract.
 
 ### 3.1 The topology document
 
@@ -180,8 +189,8 @@ overridable again per primary or per replica.
 `NAME`, and a reference to an unset variable MUST fail startup. Nothing else is interpolated. This
 lets the document be a ConfigMap while credentials stay in Secrets.
 
-**WGL-SHARD-043** (MUST) When `WIGGLE_STORAGE_TOPOLOGY` is unset, the server MUST build a one-shard
-topology, carrying all four roles, from `WIGGLE_JDBC_URL`, `WIGGLE_JDBC_USER`, `WIGGLE_JDBC_PASSWORD` and
+**WGL-SHARD-043** (MUST) When `WIGGLE_STORAGE_TOPOLOGY` is unset, the server MUST run as one shard
+carrying all four roles, configured from `WIGGLE_JDBC_URL`, `WIGGLE_JDBC_USER`, `WIGGLE_JDBC_PASSWORD` and
 `WIGGLE_JDBC_POOL_SIZE`, with replicas taken from:
 
 | Variable | Default | Meaning |
@@ -208,8 +217,8 @@ startup.
 **WGL-SHARD-051** (MUST) `migrate()` MUST migrate every shard's primary and MUST write the shard's id
 into that database's `wf_shard` row the first time; a later run MUST only verify it.
 
-**WGL-SHARD-052** (MUST) `Storage.fingerprint()` MUST become a hash over the ordered list of
-`(shard id, wf_shard identity)`, so two clusters built on overlapping databases are told apart.
+**WGL-SHARD-052** (MUST) `Storage.fingerprint()` on a sharded store MUST name every shard with its own
+database's fingerprint, in order, so two clusters built on overlapping databases are told apart.
 
 ### 3.3 The shard registry
 
@@ -225,10 +234,22 @@ connection.
 ## 4. Storage SPI
 
 **Status: implemented.** Every engine transaction is routed, and `Transactions` (the engine's wrapper)
-has no unrouted entry point left. Verified by `tests/RoutedConformanceTest`, which runs every engine
-scenario on a store that refuses an unrouted `inTx`. Two routes are interim until a later step: the
-event log reads and writes on the home shard until [§10](#10-event-log), and a schedule fires in one
-home transaction until [WGL-SHARD-104](#7-global-data) can mint off home.
+has no unrouted entry point left. `ShardedStorage` routes over one `Storage` per shard. Verified by:
+
+- `tests/RoutedConformanceTest`: every engine scenario on a store that refuses an unrouted `inTx`;
+- `tests/ShardedConformanceTest`: every engine scenario on two in-memory shards, the first instance
+  off the home shard;
+- `server/store/ShardedStorageTest` and `server/engine/ShardedEngineTest`: routing, unknown shards,
+  and each path that only branches with more than one shard (claims, report batches, merged reads,
+  sweeps, registration, schedule fires).
+
+Until a later step:
+
+- **Placement is round-robin** without a topology document: root instances take the instance shards
+  in turn. With one, [WGL-SHARD-020](#22-choosing-a-shard)'s weights apply.
+- **A schedule fires on home.** The fire claims the schedule and starts its instance in one home
+  transaction, minting that instance on home, until [WGL-SHARD-104](#7-global-data) can mint it
+  elsewhere with an idempotent id.
 
 ### 4.1 Routed transactions
 
@@ -248,10 +269,11 @@ default <R> R readFor(String id, Freshness f, Function<ReadTx, R> work) { return
 
 Fan-out runs over `instanceShards()`, not a count: shard ids are permanent and may be sparse.
 
-**WGL-SHARD-071** (MUST) `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
+**WGL-SHARD-071** (MUST) *Implemented.* `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
 per shard primary, and MUST depend on no JDBC type, so it runs over in-memory shards in tests.
 
-**WGL-SHARD-072** (MUST) `ShardedStorage.inTx` (unrouted) MUST throw `IllegalStateException`. A
+**WGL-SHARD-072** (MUST) *Implemented.* `ShardedStorage.inTx` (unrouted) MUST throw
+`IllegalStateException`. A
 call site that was not moved to a routed entry point then fails every test that runs over two
 shards, instead of silently writing to the wrong database.
 
@@ -266,7 +288,7 @@ a write through a replica does not compile.
 
 **WGL-SHARD-081** (MUST) `ReadTx` MUST contain at least: `findInstance`, `findToken`, `tokensOf`,
 `listInstances`, `findByCorrelation`, `countInstances`, `pendingSignals`, `backlogByVersion`,
-`queueDepth`, `countProcessedSince`, `childInstanceIds`, `schedules`, `nodes`, `anomalies`,
+`queueDepth`, `countProcessedSince`, `childInstanceIds`, `schedules`, `nodes`,
 `compensationLog`, `stepDurations`, the event-log reads, and the graph reads (`GraphReads`, split
 out of `GraphStore`). Locking reads (`lockInstance`, `lockTask`, `definitionFingerprint`) stay on
 `Tx`.
@@ -281,9 +303,9 @@ console.
 
 | Operation | Route | Freshness |
 |---|---|---|
-| start, report, fail, heartbeat, signal, cancel, observe | `inTxFor(id)` | primary |
+| start, report, fail, heartbeat, signal, cancel | `inTxFor(id)` | primary |
 | claim | rotation over shards ([§6](#6-claims)) | primary |
-| leader sweeps: timers, retries, signal deadlines, lease reclaim, observed settle, retention | each shard, in parallel | primary |
+| leader sweeps: timers, retries, signal deadlines, lease reclaim, retention | each shard, in parallel | primary |
 | register workflow (definition and `wf_graph_*` rows) | every shard ([WGL-SHARD-100](#7-global-data)) | primary |
 | schedules, node table, leadership, event cursors, shard registry | `inHome` | primary |
 | event feed poll | every shard, merged ([§10](#10-event-log)) | primary |
@@ -298,8 +320,9 @@ console.
 **WGL-SHARD-091** (MUST) A fan-out read MUST run its per-shard queries concurrently and merge them on
 a keyset `(created_at, id)`. A page cursor MUST carry that key, not an offset. Counts MUST be summed.
 
-**WGL-SHARD-092** (MUST) The control-plane API MUST let a caller ask for a `PRIMARY` read on the
-read RPCs (`GetInstance`, `ListInstances`), so a console can show read-your-writes after an action.
+**WGL-SHARD-092** (MUST) A console MUST be able to show read-your-writes after an action. `GetInstance`
+(the view after cancel, retry or signal) always reads the primary; lists and searches may lag by the
+replica bound.
 
 ## 6. Claims
 
@@ -336,6 +359,16 @@ minted like any other root instance ([WGL-SHARD-020](#22-choosing-a-shard)).
 
 ## 8. Read replicas
 
+**Status: implemented.** `ReplicatedStorage` holds one shard's primary and its replicas (read-only
+`JdbcStorage` connections that open even while a replica is down), and `ReplicaMonitor` runs the
+heartbeat and the probes once a second. Verified by `server/store/ReplicatedStorageTest`,
+`server/cluster/ReplicaMonitorTest`, the storage contract, and `postgres/PostgresReplicaTest`, which
+runs against a real hot standby: it serves replica reads, refuses writes, drops out once paused replay
+puts it over its lag bound, and serves again after it catches up.
+
+The lag is measured against the probing node's clock, so clock skew between nodes counts as lag;
+keep `maxReplicaLagMillis` well above the skew NTP leaves.
+
 **WGL-SHARD-110** (MUST) Each shard MUST keep its own pool per replica, in addition to its primary
 pool.
 
@@ -360,7 +393,10 @@ searches are neither cancelled by replay nor left running forever.
 `pool + Σ replicaPool`. Operators size each database's `max_connections` from it times the node
 count.
 
-## 9. Observed runs
+## 9. Observed runs (withdrawn)
+
+*Withdrawn: OBSERVED execution was removed, and with it the ids derived from a run's key. The ids
+WGL-SHARD-120 to 126 are kept so they are never reused.*
 
 An observed run's id is derived from its correlation key, so that every reporter lands on the same
 instance ([WGL-OBS-010](40-execution-modes.md)). A derived id cannot be minted by weighted random
@@ -395,6 +431,12 @@ gave observed runs a new id.
 
 ## 10. Event log
 
+**Status: implemented.** A consumer's home-shard position stays in `wf_event_cursor.acked_seq`, so a
+deployment on one database migrates nothing; its positions on other shards are in
+`wf_event_cursor_shard` (migration 25). Verified by `tests/ShardedEventFeedTest` (two shards, over
+gRPC), `server/engine/FeedCursorTest`, the storage contract, and the unchanged single-shard event
+suites.
+
 `seq` is one store-generated sequence per database today ([WGL-EVT-040](60-event-log.md)). Over
 several shards there is no single sequence, and a time-ordered substitute cannot be made safe:
 node clocks disagree by more than the visibility window ([WGL-EVT-026](60-event-log.md)), so a
@@ -404,7 +446,9 @@ consumer would step over entries forever.
 written in the instance's transaction on its shard, as today.
 
 **WGL-SHARD-131** (MUST) A consumer cursor MUST be a vector: one acknowledged seq per shard, stored
-on the home shard as `wf_event_cursor_shard(consumer, shard_id, acked_seq)`.
+on the home shard: the home shard's in `wf_event_cursor`, every other shard's as
+`wf_event_cursor_shard(consumer, shard_id, acked_seq)`. A shard the consumer has no position on yet
+is read from its start.
 
 **WGL-SHARD-132** (MUST) `PollEvents` MUST read every shard beyond that shard's position, apply the
 visibility window per shard, and merge the results by `created_at`.
@@ -439,10 +483,11 @@ generation with an `activeFrom` in the future. A node MUST keep minting under th
 generation until `activeFrom`, then switch.
 
 **WGL-SHARD-141** (MUST) Every node MUST publish the newest generation it has loaded in its node
-row. At `activeFrom`, the leader MUST raise an anomaly naming every live node that has not loaded
-that generation.
+row. Once a generation is in force, the leader MUST log a warning, once per node, naming every live
+node that has not loaded it.
 
-**WGL-SHARD-142** (MUST) A node asked to route an id to a shard it does not know MUST answer
+**WGL-SHARD-142** (MUST) *Implemented in `ShardedStorage` (a `TRANSIENT` storage failure).* A node
+asked to route an id to a shard it does not know MUST answer
 `UNAVAILABLE` (retryable), never *not found*, because the shard may only be missing from that node's
 older topology.
 
@@ -453,7 +498,7 @@ older topology.
    Migrations run on it, it enters the registry, and it receives every registered definition
    ([WGL-SHARD-101](#7-global-data)). Every node can now route to it; nothing is minted there.
 3. Append a generation that gives it a weight, with `activeFrom` after the rollout will be
-   complete, and roll that out. At `activeFrom`, new root instances and new observed runs start
+   complete, and roll that out. At `activeFrom`, new root instances start
    landing on it.
 
 **WGL-SHARD-145** (MUST) No existing row moves. Instances stay on the shard they were minted on until
@@ -488,8 +533,13 @@ becomes an RPC that the server then fans out, and the gRPC surface lacks reads t
 (pending signals, [WGL-OPS-042a](90-ops.md)). The server already connects to every shard and its
 replicas, and the `DashboardData` seam already has an in-process adapter (`EngineDashboardData`).
 
+**Status: implemented.** The portal is the `console` module, started by `dist` when
+`WIGGLE_PORTAL_PORT` is set, reading through `EngineDashboardData`. Sessions and permission checks
+are on the auth shard ([§13](#13-users-and-authorization)). WGL-SHARD-174 needs no code: a portal-only node is a server node workers
+are not pointed at.
+
 **WGL-SHARD-170** (MUST) The portal MUST be served by the server process, on its own HTTP port
-(`WIGGLE_PORTAL_PORT`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
+(`WIGGLE_PORTAL_PORT`, default `8070`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
 existing `WIGGLE_DASHBOARD_PORT` contract until that variable is retired.
 
 **WGL-SHARD-171** (MUST) The portal MUST read through `DashboardData` backed by the engine in
@@ -517,6 +567,19 @@ matches its views ([WGL-OPS-042](90-ops.md)). WGL-OPS-040 and WGL-OPS-041 are th
 Users, roles and credentials do not shard by instance. A sign-in names a user, not an instance, and
 a role assignment must be read the same way by every node. They live on one shard with the `auth`
 role.
+
+**Status: implemented.** WGL-SHARD-187 is chapter 70 §11
+([per-RPC authorization](70-api.md#11-per-rpc-authorization)): off by default, enabled with
+`WIGGLE_GRPC_AUTH`. `Accounts`
+(server module) holds the rows and appends an audit entry with every change; `AuthCache` is the
+per-node cache, and each node polls the audit every second to drop what a change names. Built-in
+roles are `admin` (`*`) and `viewer` (`read`); the actions are `read`, `instance.start`,
+`instance.cancel`, `instance.signal`, `schedule.write`, `workflow.register`, `task.poll`,
+`event.read` and `user.manage`, all but the last two taking `:<workflow>` (or `:<queue>` for
+`task.poll`). The reachability rule of
+WGL-SHARD-183 is now: no change may leave no enabled account holding `user.manage` when there is
+no built-in admin, deleting the last account included. A topology whose auth shard holds nothing
+else is opened for it alone.
 
 **WGL-SHARD-180** (MUST) Accounts MUST move from the console-owned file
 ([WGL-OPS-047](90-ops.md)) to the auth shard. At first start on a deployment that has
@@ -554,8 +617,7 @@ plane. Account management stays on the portal's authenticated HTTP surface.
 
 **WGL-SHARD-187** (SHOULD) Per-RPC authorization on the gRPC API SHOULD follow, resolving each call's
 API key or mTLS subject through `wf_auth_credential` and the cache of WGL-SHARD-184, so the hot path
-never reads the auth shard per call. Until it ships, gRPC remains open to any trusted peer, as today
-([chapter 00 §7](00-index.md)).
+never reads the auth shard per call. It is [chapter 70 §11](70-api.md#11-per-rpc-authorization).
 
 ## 14. Search shards
 
@@ -579,6 +641,40 @@ input and output, errors) go to dedicated search shards.
   with steps/s. Separate shards scale each one on its own.
 
 ### 14.2 Requirements
+
+**Status: implemented**, full text and vectors (step 14 of [§16](#16-delivery-plan)). Not yet:
+- WGL-SHARD-190's rebuild covers what the event log still retains, from which a new consumer starts.
+  A rebuild that walks the instance tables is not built.
+- WGL-SHARD-196's delete on request applies once instances can be deleted on request; today only
+  retention purges them.
+
+Search runs when a topology shard carries the `search` role, or on the one database with
+`WIGGLE_SEARCH_ENABLED=true` (WGL-SHARD-197, which warns at startup).
+- **Indexer.** `SearchIndexer` runs on the leader as the `wiggle.search` consumer of the event log. It
+  reads each instance from a replica when the replica has caught up to the event, else from the primary.
+- **Document text.** The text is the correlation id, the context JSON, the termination reason and the
+  error, capped at 64 KB. It is matched with Postgres `tsvector` over the `simple` configuration (words
+  as written, no stemming) and ranked by `ts_rank`. Other databases, and the in-memory store, match
+  word for word in Java with the same semantics.
+- **Shards and upkeep.** `SearchIndex` places, queries, retains (`WIGGLE_SEARCH_RETENTION_MILLIS`,
+  default 30 days) and rebalances. `WIGGLE_SEARCH_WORKFLOWS` limits which workflows are indexed.
+- **API.** Search is the `SearchInstances` RPC ([chapter 70 §12](70-api.md#12-search)) and the
+  portal's `/api/search`.
+- **Vectors (WGL-SHARD-192).** The `Embedder` SPI (`model()`, `dimension()`, `embed(texts)`) ships
+  with `HttpEmbedder` (the OpenAI-compatible `/embeddings` API: OpenAI, Ollama, vLLM, LiteLLM) and
+  `HashingEmbedder` (no model; for development). `WIGGLE_EMBEDDER` picks one.
+  - *Storage.* Vectors live in `wf_search_vec`, one per instance and model, beside their document.
+    Where pgvector is installed, `migrate()` adds a native `vector` column, and each model gets an HNSW
+    index over `vec::vector(<dimension>)`, partial on the model. Elsewhere the embedding is stored as
+    bytes and compared in Java, exactly and by scan.
+  - *Indexing.* The indexer embeds the documents it writes. If embedding fails, the documents stay
+    searchable by text, and the upkeep's backfill embeds any document without a current vector.
+  - *Changing the model.* The registry `wf_search_model` (home shard) holds each model as BUILDING,
+    READY or RETIRED. A new model is BUILDING until every document indexed before it started has a
+    vector; then it is READY and the one it replaces RETIRED, whose vectors are deleted. A semantic
+    query uses the newest READY model, so a node keeps a replaced model's embedder
+    (`WIGGLE_EMBEDDER_PREVIOUS_MODEL`) to answer during the build; without it, semantic search fails
+    as a precondition until the build completes.
 
 **WGL-SHARD-190** (MUST) A search document MUST be derived data: built from an instance shard, never
 the source of truth, and always rebuildable from the instance shards while the instances are
@@ -660,7 +756,7 @@ coordinated-connection mode goes too. It MUST ship in a release whose notes say 
 
 **WGL-SHARD-165** (MUST) `conformance/shard-ids-v1.json` MUST replace the placement fixture: id
 formatting and parsing, legacy and namespaced ids, the shard each carries, and how derived ids inherit
-it. The observed-run rendezvous choice ([WGL-SHARD-120](#9-observed-runs)) joins it with §9. Every
+it. Every
 client that mints or parses ids MUST pass it ([WGL-GEN-004](00-index.md)).
 
 **WGL-SHARD-166** (MUST) The server⊥coordinator source rule ([WGL-COORD-001](90-ops.md)) is
@@ -683,7 +779,7 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
 6. **Topology document** with roles, the registry, `wf_shard`, startup validation, and generations.
 7. **Claims, sweeps, registration fan-out and portal fan-out.**
 8. **Read replicas**: pools, the lag probe, fallback, and the per-call-site freshness table.
-9. **Observed runs** under rendezvous hashing.
+9. ~~**Observed runs** under rendezvous hashing.~~ Withdrawn with OBSERVED execution.
 10. **Event log** per-shard cursors and the wire fields.
 11. **Measure**: `deploy/gcp/ceiling.sh` on two and on four Cloud SQL shards, steps/s first.
 12. **Accounts on the auth shard** ([§13](#13-users-and-authorization)): schema, file import,
@@ -698,11 +794,15 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
   shard, so a fan-out of thousands of children loads one shard. Spreading them would need a
   cross-shard join protocol (outbox and signal). Out of scope until a workload needs it.
 - **Correlation lookups** (`findByCorrelation`) fan out to every shard. A start-time idempotency
-  key, if one is added, would need its own routing rule like [§9](#9-observed-runs).
+  key, if one is added, would need its own routing rule: an id derived from a key cannot be placed by
+weight.
 - **Home shard load.** Schedules, node heartbeats, event cursors and the leader's beat writes all
   land on the home shard. They are small, but should be measured at high shard counts.
-- **Which instance fields are searchable.** Context and step I/O may hold personal data. Whether
-  indexing is opt-in per workflow (a topology flag) or per field is undecided.
+- **Which instance fields are searchable.** *Settled for now:* search is opt-in per deployment (a
+  search shard, or `WIGGLE_SEARCH_ENABLED`), `WIGGLE_SEARCH_WORKFLOWS` limits it to named workflows,
+  and step input and output are not indexed. Per-field selection stays open.
+- **Hybrid ranking.** A semantic search ranks by vector alone. Mixing text rank and vector closeness
+  (reciprocal rank fusion) is left until a workload asks for it.
 - **A search engine other than Postgres.** WGL-SHARD-190 to 198 do not depend on pgvector. A
   `SearchStore` SPI would let OpenSearch or a dedicated vector database stand in for search shards;
   pgvector first keeps one operational stack.

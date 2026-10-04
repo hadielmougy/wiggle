@@ -10,6 +10,7 @@ import com.wiggle.server.store.Rows.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
@@ -31,10 +32,9 @@ public final class InMemoryStorage implements Storage {
             Comparator.comparingLong((Token t) -> t.instCreatedAt).thenComparingLong(t -> t.availableAt)
                     .thenComparing(t -> t.id));
 
-    /** A worker-run step's queue wait: ready to claimed. An observed step (reported, with a seq)
-     *  was never queued, so it waited for nothing. */
+    /** A step's queue wait: ready to claimed. */
     private static long waitOf(Token t) {
-        return t.seq != null ? 0 : Math.max(0, t.startedAt - t.availableAt);
+        return Math.max(0, t.startedAt - t.availableAt);
     }
 
     private static boolean claimable(Token t) {
@@ -77,6 +77,10 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, String> graphStart = new ConcurrentHashMap<>();
     private final Map<String, ServerNode> nodes = new ConcurrentHashMap<>();
     private final Map<String, Rows.Schedule> schedules = new ConcurrentHashMap<>();
+    /** The shard this store was claimed for, or null. */
+    private volatile Integer shardIdentity;
+    private volatile Long shardBeat;
+    private final Map<Integer, Rows.ShardRecord> shardRegistry = new ConcurrentSkipListMap<>();
     private final ReentrantLock lock = new ReentrantLock();
 
     @Override public void migrate() { /* nothing to do */ }
@@ -94,13 +98,26 @@ public final class InMemoryStorage implements Storage {
 
     /** instanceId -> compensation log entries (seq-ordered append). */
     private final Map<String, List<Rows.CompLog>> compLogs = new ConcurrentHashMap<>();
-    /** Insertion-ordered, so newest-first is a reverse walk. Guarded by the global lock. */
-    private final List<Rows.Anomaly> anomalies = new ArrayList<>();
     /** The event log in seq order; seq is assigned on append. Guarded by the global lock. */
     private final List<Rows.Event> events = new ArrayList<>();
     private long eventSeq;
     /** consumer -> its place in the log. */
     private final Map<String, Rows.EventCursor> eventCursors = new ConcurrentHashMap<>();
+    /** consumer -> shard -> acknowledged seq, for shards other than home. */
+    private final Map<String, Map<Integer, Long>> eventPositions = new ConcurrentHashMap<>();
+
+    /** The auth shard's rows. Guarded by the global lock. */
+    private final Map<String, Rows.AuthUser> authUsers = new LinkedHashMap<>();
+    private final Map<String, SortedSet<String>> authGrants = new HashMap<>();
+    private final Map<String, Rows.AuthRole> authRoles = new TreeMap<>();
+    private final Map<String, Rows.AuthSession> authSessions = new HashMap<>();
+    private final Map<String, Rows.AuthCredential> authCredentials = new TreeMap<>();
+    /** The search documents, by instance id. Guarded by the global lock. */
+    private final TreeMap<String, Rows.SearchDoc> searchDocs = new TreeMap<>();
+    /** instance id -> model -> vector. Guarded by the global lock. */
+    private final Map<String, Map<String, Rows.SearchVector>> searchVectors = new HashMap<>();
+    private final Map<String, Rows.SearchModel> searchModels = new TreeMap<>();
+    private final List<Rows.AuthAudit> authAudit = new ArrayList<>();
 
     private final class MemTx implements Tx {
 
@@ -156,6 +173,11 @@ public final class InMemoryStorage implements Storage {
             return Optional.ofNullable(graphStart.get(workflow + ":" + version));
         }
 
+        @Override public int graphNodeCount(String workflow, int version) {
+            Map<String, Node> ns = graphNodes.get(workflow + ":" + version);
+            return ns == null ? 0 : ns.size();
+        }
+
         @Override public Optional<Integer> latestVersion(String name) {
             NavigableSet<Integer> vs = versions.get(name);
             return vs == null || vs.isEmpty() ? Optional.empty() : Optional.of(vs.last());
@@ -165,11 +187,209 @@ public final class InMemoryStorage implements Storage {
             return new ArrayList<>(new TreeSet<>(versions.keySet()));
         }
 
-        @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }
-
-        @Override public boolean insertInstanceIfAbsent(Instance i) {
-            return instances.putIfAbsent(i.id, i.clone()) == null;
+        @Override public Optional<Rows.AuthUser> findAuthUser(String name) {
+            return Optional.ofNullable(authUsers.get(name));
         }
+
+        @Override public List<Rows.AuthUser> authUsers() {
+            return authUsers.values().stream()
+                    .sorted(Comparator.comparingLong(Rows.AuthUser::createdAt)).toList();
+        }
+
+        @Override public List<String> authRolesOf(String user) {
+            return List.copyOf(authGrants.getOrDefault(user, new TreeSet<>()));
+        }
+
+        @Override public List<Rows.AuthRole> authRoles() {
+            return List.copyOf(authRoles.values());
+        }
+
+        @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) {
+            return Optional.ofNullable(authSessions.get(idHash));
+        }
+
+        @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) {
+            return authAudit.stream().filter(a -> a.seq() > afterSeq).limit(max).toList();
+        }
+
+        @Override public long authAuditHead() {
+            return authAudit.isEmpty() ? 0 : authAudit.getLast().seq();
+        }
+
+        @Override public boolean authAuditHas(String action) {
+            return authAudit.stream().anyMatch(a -> a.action().equals(action));
+        }
+
+        @Override public void putAuthUser(Rows.AuthUser user) {
+            authUsers.put(user.name(), user);
+        }
+
+        @Override public boolean deleteAuthUser(String name) {
+            authGrants.remove(name);
+            authSessions.values().removeIf(x -> x.user().equals(name));
+            return authUsers.remove(name) != null;
+        }
+
+        @Override public void setAuthRolesOf(String user, List<String> roles) {
+            if (roles.isEmpty()) authGrants.remove(user);
+            else authGrants.put(user, new TreeSet<>(roles));
+        }
+
+        @Override public void putAuthRole(Rows.AuthRole role) {
+            authRoles.put(role.name(), role);
+        }
+
+        @Override public boolean deleteAuthRole(String name) {
+            authGrants.values().forEach(g -> g.remove(name));
+            authGrants.values().removeIf(Set::isEmpty);
+            return authRoles.remove(name) != null;
+        }
+
+        @Override public List<Rows.AuthCredential> authCredentials() {
+            return List.copyOf(authCredentials.values());
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
+            return authCredentials.values().stream().filter(c -> keyHash.equals(c.keyHash())).findFirst();
+        }
+
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
+            return authCredentials.values().stream().filter(c -> subject.equals(c.subject())).findFirst();
+        }
+
+        @Override public void insertAuthCredential(Rows.AuthCredential c) {
+            boolean clash = authCredentials.containsKey(c.id()) || authCredentials.values().stream().anyMatch(x ->
+                    (c.keyHash() != null && c.keyHash().equals(x.keyHash()))
+                            || (c.subject() != null && c.subject().equals(x.subject())));
+            if (clash) throw new IllegalArgumentException("credential '" + c.id() + "' or its key or subject exists");
+            authCredentials.put(c.id(), c);
+        }
+
+        @Override public boolean deleteAuthCredential(String id) {
+            return authCredentials.remove(id) != null;
+        }
+
+        @Override public void insertAuthSession(Rows.AuthSession session) {
+            authSessions.put(session.idHash(), session);
+        }
+
+        @Override public void deleteAuthSession(String idHash) {
+            authSessions.remove(idHash);
+        }
+
+        @Override public int deleteAuthSessionsOf(String user, String keepIdHash) {
+            int before = authSessions.size();
+            authSessions.values().removeIf(x -> x.user().equals(user) && !x.idHash().equals(keepIdHash));
+            return before - authSessions.size();
+        }
+
+        @Override public int deleteExpiredAuthSessions(long now, int max) {
+            List<String> expired = authSessions.values().stream().filter(x -> x.expiresAt() < now)
+                    .limit(max).map(Rows.AuthSession::idHash).toList();
+            expired.forEach(authSessions::remove);
+            return expired.size();
+        }
+
+        @Override public long appendAuthAudit(Rows.AuthAudit e) {
+            long seq = authAuditHead() + 1;
+            authAudit.add(new Rows.AuthAudit(seq, e.at(), e.actor(), e.action(), e.target(), e.detail()));
+            return seq;
+        }
+
+        @Override public boolean upsertSearchDoc(Rows.SearchDoc doc) {
+            Rows.SearchDoc held = searchDocs.get(doc.instanceId());
+            if (held != null && held.updatedAt() > doc.updatedAt()) return false;
+            searchDocs.put(doc.instanceId(), doc);
+            return true;
+        }
+
+        @Override public void deleteSearchDoc(String instanceId) {
+            searchDocs.remove(instanceId);
+            searchVectors.remove(instanceId);
+        }
+
+        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
+            List<String> old = searchDocs.values().stream().filter(d -> d.updatedAt() < updatedBefore)
+                    .limit(max).map(Rows.SearchDoc::instanceId).toList();
+            old.forEach(this::deleteSearchDoc);
+            return old.size();
+        }
+
+        @Override public void upsertSearchVectors(List<Rows.SearchVector> vectors) {
+            for (Rows.SearchVector v : vectors) {
+                Map<String, Rows.SearchVector> byModel = searchVectors.computeIfAbsent(v.instanceId(), k -> new HashMap<>());
+                Rows.SearchVector held = byModel.get(v.model());
+                if (held == null || held.updatedAt() <= v.updatedAt()) byModel.put(v.model(), v);
+            }
+        }
+
+        @Override public int deleteSearchVectors(String model, int max) {
+            int n = 0;
+            for (Map<String, Rows.SearchVector> byModel : searchVectors.values()) {
+                if (n >= max) break;
+                if (byModel.remove(model) != null) n++;
+            }
+            searchVectors.values().removeIf(Map::isEmpty);
+            return n;
+        }
+
+        @Override public List<Rows.SearchHit> searchVectors(Rows.VectorQuery q) {
+            Rows.SearchQuery f = q.filters();
+            List<Rows.SearchDoc> filtered = searchDocs.values().stream()
+                    .filter(d -> f.workflows() == null || f.workflows().contains(d.workflow()))
+                    .filter(d -> f.status() == null || f.status().equals(d.status()))
+                    .filter(d -> f.from() == null || d.updatedAt() >= f.from())
+                    .filter(d -> f.to() == null || d.updatedAt() <= f.to())
+                    .toList();
+            Map<String, float[]> vectors = new HashMap<>();
+            for (Rows.SearchDoc d : filtered) {
+                Rows.SearchVector v = searchVectors.getOrDefault(d.instanceId(), Map.of()).get(q.model());
+                if (v != null) vectors.put(d.instanceId(), v.embedding());
+            }
+            return Vectors.nearest(filtered, vectors, q.vector(), q.limit());
+        }
+
+        @Override public List<Rows.SearchDoc> docsNeedingVector(String model, int max) {
+            return searchDocs.values().stream().filter(d -> {
+                Rows.SearchVector v = searchVectors.getOrDefault(d.instanceId(), Map.of()).get(model);
+                return v == null || v.updatedAt() < d.updatedAt();
+            }).limit(max).toList();
+        }
+
+        @Override public long countDocsWithoutVector(String model, long updatedBefore) {
+            return searchDocs.values().stream().filter(d -> d.updatedAt() < updatedBefore)
+                    .filter(d -> !searchVectors.getOrDefault(d.instanceId(), Map.of()).containsKey(model)).count();
+        }
+
+        @Override public List<Rows.SearchVector> searchVectorsOf(List<String> instanceIds) {
+            List<Rows.SearchVector> out = new ArrayList<>();
+            for (String id : instanceIds) out.addAll(searchVectors.getOrDefault(id, Map.of()).values());
+            return out;
+        }
+
+        @Override public List<Rows.SearchModel> searchModels() {
+            return List.copyOf(searchModels.values());
+        }
+
+        @Override public void putSearchModel(Rows.SearchModel model) {
+            searchModels.put(model.model(), model);
+        }
+
+        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
+            return searchDocs.tailMap(afterId == null ? "" : afterId, false).values().stream().limit(max).toList();
+        }
+
+        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
+            List<Rows.SearchDoc> filtered = searchDocs.values().stream()
+                    .filter(d -> q.workflows() == null || q.workflows().contains(d.workflow()))
+                    .filter(d -> q.status() == null || q.status().equals(d.status()))
+                    .filter(d -> q.from() == null || d.updatedAt() >= q.from())
+                    .filter(d -> q.to() == null || d.updatedAt() <= q.to())
+                    .toList();
+            return SearchText.match(filtered, q.text(), q.limit());
+        }
+
+        @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }
 
         @Override public Optional<Instance> lockInstance(String id) { return findInstance(id); }
 
@@ -194,7 +414,6 @@ public final class InMemoryStorage implements Storage {
                 next.terminationReason = i.terminationReason;
                 next.error = i.error;
                 next.context = i.context;
-                next.settleAt = i.settleAt;
                 next.updatedAt = i.updatedAt;
                 next.revision = stored.revision + 1;
                 instances.put(i.id, next);
@@ -401,15 +620,6 @@ public final class InMemoryStorage implements Storage {
             return true;
         }
 
-        @Override public List<Instance> dueSettle(long now, int max) {
-            return instances.values().stream()
-                    .filter(i -> i.status == InstanceStatus.RUNNING && i.settleAt != null && i.settleAt <= now)
-                    .sorted(Comparator.comparingLong((Instance i) -> i.settleAt))
-                    .limit(max)
-                    .map(Instance::clone)
-                    .toList();
-        }
-
         @Override public List<Token> expiredLeases(long now, int max) {
             return tokens.values().stream()
                     .filter(t -> t.hasExpiredLeaseAt(now))
@@ -477,6 +687,34 @@ public final class InMemoryStorage implements Storage {
             if (n != null) n.leader = leader;
         }
 
+        @Override public OptionalInt shardIdentity() {
+            Integer id = shardIdentity;
+            return id == null ? OptionalInt.empty() : OptionalInt.of(id);
+        }
+
+        @Override public void claimShardIdentity(int shardId) {
+            synchronized (InMemoryStorage.this) {
+                if (shardIdentity == null) shardIdentity = shardId;
+            }
+        }
+
+        @Override public OptionalLong shardBeat() {
+            Long beat = shardBeat;
+            return beat == null ? OptionalLong.empty() : OptionalLong.of(beat);
+        }
+
+        @Override public void writeShardBeat(long now) {
+            if (shardIdentity != null) shardBeat = now;
+        }
+
+        @Override public List<Rows.ShardRecord> shardRegistry() {
+            return List.copyOf(shardRegistry.values());
+        }
+
+        @Override public void putShardRecord(Rows.ShardRecord record) {
+            shardRegistry.put(record.shardId(), record);
+        }
+
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
             List<String> victims = instances.values().stream()
                     .filter(i -> !i.status.live() && i.updatedAt < updatedBefore)
@@ -508,21 +746,6 @@ public final class InMemoryStorage implements Storage {
             List<Rows.CompLog> out = new ArrayList<>(log.size());
             for (Rows.CompLog e : log) out.add(e.clone());
             out.sort(java.util.Comparator.comparingLong(e -> e.seq));
-            return out;
-        }
-
-        @Override public void insertAnomaly(Rows.Anomaly anomaly) {
-            anomalies.add(anomaly);
-        }
-
-        @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
-            List<Rows.Anomaly> out = new ArrayList<>();
-            for (int k = anomalies.size() - 1; k >= 0 && out.size() < limit; k--) {
-                Rows.Anomaly a = anomalies.get(k);
-                if (workflow != null && !workflow.equals(a.workflow())) continue;
-                if (instanceId != null && !instanceId.equals(a.instanceId())) continue;
-                out.add(a);
-            }
             return out;
         }
 
@@ -558,6 +781,23 @@ public final class InMemoryStorage implements Storage {
             eventCursors.compute(consumer, (k, cur) -> cur == null
                     ? new Rows.EventCursor(k, ackedSeq, now, now)
                     : new Rows.EventCursor(k, Math.max(cur.ackedSeq(), ackedSeq), now, cur.createdAt()));
+        }
+
+        @Override public Map<Integer, Long> eventPositions(String consumer) {
+            return Map.copyOf(eventPositions.getOrDefault(consumer, Map.of()));
+        }
+
+        @Override public Long oldestEventPosition(int shard) {
+            if (eventCursors.isEmpty()) return null;
+            long min = Long.MAX_VALUE;
+            for (String consumer : eventCursors.keySet()) {
+                min = Math.min(min, eventPositions.getOrDefault(consumer, Map.of()).getOrDefault(shard, 0L));
+            }
+            return min;
+        }
+
+        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
+            eventPositions.computeIfAbsent(consumer, k -> new ConcurrentHashMap<>()).merge(shard, ackedSeq, Math::max);
         }
 
         @Override public Long oldestAckedSeq() {

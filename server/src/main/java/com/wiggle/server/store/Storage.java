@@ -30,6 +30,9 @@ public interface Storage extends AutoCloseable {
     /** The shard holding the cluster-global rows: nodes, schedules, event cursors. */
     default int home() { return 0; }
 
+    /** The shard holding accounts, roles and sessions. */
+    default int auth() { return home(); }
+
     /** The shards that hold instances, in a stable order. */
     default List<Integer> instanceShards() { return List.of(home()); }
 
@@ -45,6 +48,9 @@ public interface Storage extends AutoCloseable {
     /** A transaction on the {@link #home} shard. */
     default <R> R inHome(Function<Tx, R> work) { return inShard(home(), work); }
 
+    /** A transaction on the {@link #auth} shard. */
+    default <R> R inAuth(Function<Tx, R> work) { return inShard(auth(), work); }
+
     /** A read-only transaction on one shard, served by a replica when {@code freshness} allows. */
     default <R> R readShard(int shard, Freshness freshness, Function<ReadTx, R> work) {
         return inShard(shard, work::apply);
@@ -54,6 +60,16 @@ public interface Storage extends AutoCloseable {
     default <R> R readFor(String id, Freshness freshness, Function<ReadTx, R> work) {
         return readShard(shardOf(id), freshness, work);
     }
+
+    /** Whether any shard has read replicas, so something must keep their lag measured. */
+    default boolean hasReplicas() { return false; }
+
+    /** Stamps the replica-lag heartbeat on every primary that has replicas. The leader calls it about
+     *  once a second. */
+    default void beatPrimaries(long now) { }
+
+    /** Re-measures every replica's lag and health. Every node calls it about once a second. */
+    default void probeReplicas(long now) { }
 
     /**
      * A stable identity of the underlying store: the same for every node pointed at the same

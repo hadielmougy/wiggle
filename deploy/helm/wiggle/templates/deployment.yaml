@@ -39,6 +39,10 @@ spec:
               containerPort: {{ .Values.service.grpcPort }}
             - name: health
               containerPort: {{ .Values.service.healthPort }}
+            {{- if gt (int .Values.service.portalPort) 0 }}
+            - name: portal
+              containerPort: {{ .Values.service.portalPort }}
+            {{- end }}
           env:
             # Distinct membership identity per pod.
             - name: WIGGLE_NODE_NAME
@@ -53,6 +57,10 @@ spec:
               value: {{ .Values.service.grpcPort | quote }}
             - name: WIGGLE_DASHBOARD_PORT
               value: {{ .Values.service.healthPort | quote }}
+            {{- if gt (int .Values.service.portalPort) 0 }}
+            - name: WIGGLE_PORTAL_PORT
+              value: {{ .Values.service.portalPort | quote }}
+            {{- end }}
             {{- if or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret }}
             - name: WIGGLE_JDBC_URL
               valueFrom:

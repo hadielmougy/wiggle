@@ -3,7 +3,7 @@
 ← [Storage](80-storage.md) · [Index](00-index.md)
 
 Everything a deployment decides: how settings are supplied, what the cluster does with them, what the
-console shows, how the channel is secured, and what the distribution runs. §9, the cell coordinator,
+portal shows, how the channel is secured, and what the distribution runs. §9, the cell coordinator,
 is withdrawn and kept for its requirement ids.
 
 ## 1. Configuration
@@ -21,7 +21,7 @@ conventions, not the library's.
 
 | Variable | Property | Default | Meaning |
 |---|---|---|---|
-| `WIGGLE_ROLE` | — | `server` | which process the image runs: `server` or `console` (`cell` is the old name for `server`; `coordinator` is refused) |
+| `WIGGLE_ROLE` | — | `server` | which process the image runs: only `server` (`cell` is the old name for it; `console` and `coordinator` are refused) |
 | `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port; `0` picks a free one |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | unset = in-memory single node; set to cluster on a database |
@@ -50,12 +50,11 @@ conventions, not the library's.
 | `WIGGLE_RETENTION_MILLIS` | `wiggle.retention.millis` | `86400000` | how long finished instances are kept |
 | `WIGGLE_EVENTS_RETENTION_MILLIS` | `wiggle.events.retentionMillis` | `604800000` | how long an acknowledged event is kept |
 | `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed |
-| `WIGGLE_OBSERVE_STALL_MILLIS` | `wiggle.observe.stallMillis` | `600000` | quiet period after which an observed run is judged |
-| `WIGGLE_OBSERVE_SETTLE_MILLIS` | `wiggle.observe.settleMillis` | `5000` | grace after `END` or a `final` report |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | backlog check cadence |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN when the backlog will not drain within this budget |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `wiggle.allowGraphReplace` | `false` | development only: honour a forced re-registration |
 | `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | port for the `/healthz` probe on a server node |
+| `WIGGLE_PORTAL_PORT` | — | `8070` | port the node serves the portal on, `0` for none ([§4](#4-the-portal)) |
 
 ### 1.3 Memory admission control
 
@@ -92,16 +91,26 @@ conventions, not the library's.
 | `WIGGLE_COORD_JDBC_USER` / `_PASSWORD` / `_POOL` | *(unset)* / `4` | that store's credentials and pool |
 | `WIGGLE_ENDPOINT_REWRITE` | *(unset)* | client-side `MATCH=REPLACEMENT` list rewriting resolved endpoints (port-forwarded or NAT'd clusters) |
 
-### 1.6 Console
+### 1.6 Portal
+
+Read by a server node that serves the portal.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | the cluster to serve |
-| `WIGGLE_DASHBOARD_PORT` | `8090` | HTTP port |
-| `WIGGLE_DASHBOARD_USER` / `_PASSWORD` | `admin` / *(unset)* | built-in admin; unset password = open access |
+| `WIGGLE_DASHBOARD_USER` / `_PASSWORD` | `admin` / *(unset)* | built-in admin; unset password = first-run setup of the admin account ([WGL-OPS-051](#4-the-portal)) |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `_PASSWORD` | `viewer` / *(unset)* | optional built-in read-only account |
-| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where console-managed accounts are kept |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console and the client certs it presents |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | a console users file from before the auth shard, imported once ([WGL-SHARD-180](85-sharding.md#13-users-and-authorization)) |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account, session or credential before reading it again |
+| `WIGGLE_GRPC_AUTH` | `off` | per-RPC authorization of the gRPC API: `off`, `log` or `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)) |
+| `WIGGLE_API_KEY` | *(unset)* | on a client or worker, the API key it presents |
+| `WIGGLE_SEARCH_ENABLED` | `false` | full-text search on the one database (a topology enables it with a `search` shard instead) |
+| `WIGGLE_SEARCH_RETENTION_MILLIS` | `2592000000` | how long a search document outlives its instance's last change (30 days) |
+| `WIGGLE_SEARCH_WORKFLOWS` | *(all)* | comma-separated workflows to index; unset indexes every one |
+| `WIGGLE_SEARCH_UPKEEP_MILLIS` | `60000` | how often the leader applies search retention, rebalances, backfills vectors and moves the embedding model on |
+| `WIGGLE_EMBEDDER` | `none` | semantic search: `none`, `hashing` (no model; development) or `http` (an OpenAI-compatible `/embeddings` API) |
+| `WIGGLE_EMBEDDER_URL` / `_MODEL` / `_DIMENSION` / `_API_KEY` | *(unset)* | the `http` embedder's API root, model, vector size and key (`_DIMENSION` alone sizes `hashing`, default 256) |
+| `WIGGLE_EMBEDDER_PREVIOUS_MODEL` / `_DIMENSION` | *(unset)* | the model being replaced, on the same service, so semantic queries keep working while the new index builds |
+| `WIGGLE_TLS_*` | *(unset)* | the server's keystore and truststore serve the portal's HTTPS too |
 
 **WGL-OPS-004** (MUST) A definition's `DEFAULT` execution mode MUST resolve to `SERVER`. There is
 **no** server-wide execution-mode setting: `WIGGLE_EXECUTION_MODE` is read only by the example
@@ -133,7 +142,7 @@ truth and the rule over it is a pure function every process evaluates identicall
 
 **WGL-OPS-024** (MUST) Killing any node, leader included, MUST leave the rest serving.
 
-**WGL-OPS-025** (MUST) The node row MUST also carry the worker count and the leader flag the console
+**WGL-OPS-025** (MUST) The node row MUST also carry the worker count and the leader flag the portal
 reads.
 
 **WGL-OPS-026** (MUST) Nodes MUST multiply availability and API capacity, never database throughput.
@@ -149,27 +158,34 @@ graph in production.
 **WGL-OPS-031** (MUST) A forgotten version bump MUST therefore be a loud deploy-time error, not a graph
 swapped under running instances.
 
-## 4. The ops console
+## 4. The portal
 
-**WGL-OPS-040** (MUST) The console MUST be a separate process and a **pure gRPC client** — no engine, no
-storage — pointed at a cluster by `WIGGLE_URL`.
+The web UI is served by server nodes ([WGL-SHARD-170](85-sharding.md#12-the-portal-in-the-server)).
+It was a separate console process; the requirements that described that are withdrawn and kept for
+their ids.
 
-**WGL-OPS-041** (MUST) Server nodes MUST serve no UI. A node's only HTTP surface is `GET /healthz`
-returning 200 `ok`, enabled by `WIGGLE_DASHBOARD_PORT`.
+**WGL-OPS-040** (*withdrawn*, by [WGL-SHARD-175](85-sharding.md#12-the-portal-in-the-server)) The
+console MUST be a separate process and a **pure gRPC client** — no engine, no storage — pointed at a
+cluster by `WIGGLE_URL`.
 
-**WGL-OPS-042** (MUST) The console MUST provide these views: **Instances** (filter, search by instance or
+**WGL-OPS-041** (*withdrawn*, by [WGL-SHARD-175](85-sharding.md#12-the-portal-in-the-server)) Server
+nodes MUST serve no UI. A node's only HTTP surface is `GET /healthz` returning 200 `ok`, enabled by
+`WIGGLE_DASHBOARD_PORT`.
+
+**WGL-OPS-042** (MUST) The portal MUST provide these views: **Instances** (filter, search by instance or
 correlation id, a live trace overlaying token status on the workflow diagram, cancel, inline signal
 delivery), **Workflows** (render any compiled graph), **Schedules** (create and delete interval and cron
 schedules), **Signals** (waits pending delivery), **Backlog** (dispatchable work no live poller covers),
-**Performance** (per-step p50/p95 by the handler's own clock plus queue wait, the slowest step ringed on
-the diagram, and observed-run anomalies), and **Users** (admins only).
+**Performance** (per-step p50/p95 by the handler's own clock plus queue wait, slowest first), and
+**Users** (admins only).
 
-**WGL-OPS-042a** (MUST) The **Signals** view MUST be empty against a gRPC backend today: the control
-plane has no RPC that enumerates parked signal waits (the engine can answer it internally, and a
-`PendingSignals` RPC is on the roadmap). Delivering a signal from the console works regardless.
+**WGL-OPS-042a** (*withdrawn*: the portal reads the engine, which enumerates signal waits) The
+**Signals** view MUST be empty against a gRPC backend today: the control plane has no RPC that
+enumerates parked signal waits. Delivering a signal from the console works regardless.
 
-**WGL-OPS-043** (MUST) There MUST be two roles: **admin** does everything; **viewer** sees everything and
-is refused every mutating call.
+**WGL-OPS-043** (MUST) There MUST be two built-in roles: **admin** does everything; **viewer** sees
+everything and is refused every mutating call. Further roles are permission sets
+([WGL-SHARD-182](85-sharding.md#13-users-and-authorization)).
 
 **WGL-OPS-044** (MUST) Browsers MUST get a `/login` form setting an HttpOnly session cookie; programmatic
 clients MUST be able to use HTTP Basic.
@@ -178,43 +194,50 @@ clients MUST be able to use HTTP Basic.
 served over TLS.
 
 **WGL-OPS-046** (MUST) Accounts come from two places: **built-in** accounts configured in the environment
-where the console is deployed (and unchangeable from inside it), and **managed** accounts an admin
-creates in the console.
+of the nodes serving the portal (and unchangeable from inside it), and **managed** accounts an admin
+creates in the portal.
 
-**WGL-OPS-047** (MUST) Managed accounts MUST live in a JSON file the console owns, **not** in the workflow
-database: the control plane has no per-RPC authorization, so anything stored behind it is reachable by
-every worker that can dial the server.
+**WGL-OPS-047** (*withdrawn*, by [WGL-SHARD-180](85-sharding.md#13-users-and-authorization): managed
+accounts live on the auth shard) Managed accounts MUST live in a JSON file the console owns, **not** in
+the workflow database.
 
 **WGL-OPS-048** (MUST) Passwords MUST be stored as PBKDF2-HMAC-SHA256 hashes over a per-account random
-salt, and the file MUST be rewritten atomically and kept owner-only where the filesystem allows it.
+salt, never in the clear, and a session MUST be stored only as a hash of its token.
 
-**WGL-OPS-049** (MUST) Three rules MUST keep a console reachable: a managed account cannot take a built-in
-account's name and built-in accounts cannot be deleted or re-passworded from the console; the last
-remaining admin cannot be deleted when no built-in admin exists to fall back on; creating the first
-managed account turns authentication on even when no password was configured.
+**WGL-OPS-049** (MUST) Three rules MUST keep a portal reachable: a managed account cannot take a built-in
+account's name and built-in accounts cannot be deleted or re-passworded from the portal; with no
+built-in admin to fall back on, no change may leave no enabled account that can manage users;
+and the first-run setup of WGL-OPS-051 is offered only while no account exists.
 
 **WGL-OPS-050** (MUST) Any account MAY change its own password after proving the current one — the one
 write a viewer is allowed. Changing or resetting a password MUST sign out that account's **other**
 sessions; deleting an account MUST sign it out everywhere.
 
-**WGL-OPS-051** (MUST) With neither a built-in password nor a managed account, the console is open and
-every request is an admin, and MUST warn at startup.
+**WGL-OPS-051** (MUST) With neither a built-in password nor any managed account, the portal MUST
+be in first-run setup: every page MUST lead to a screen that sets the admin account's password
+(`WIGGLE_DASHBOARD_USER`, default `admin`), and every other API call MUST be refused 401. Setting it
+MUST create the account with the `admin` role on the auth shard and sign it in, and the server MUST
+warn at startup while setup is pending. Once any account exists, setup MUST be refused (409), so it
+cannot be used to take over a portal already set up. A portal with nowhere to keep accounts (built
+without the auth shard, as in tests) is open instead, and every request is an admin.
 
-*Verified by:* `console/ConsoleWebTest`, `console/ConsoleUsersTest`, `tests/HealthzTest`.
+*Verified by:* `console/ConsoleWebTest`, `console/ConsoleUsersTest`, `console/ConsoleDataTest`,
+`console/PortalTest`, `tests/HealthzTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.
 
 ## 5. Transport security
 
-**WGL-OPS-060** (MUST) TLS MUST be opt-in and shared by the gRPC API and the console's HTTP: a keystore
+**WGL-OPS-060** (MUST) TLS MUST be opt-in and shared by the gRPC API and the portal's HTTP: a keystore
 turns TLS on; a truststore additionally requires client certificates on a server and presents a client
 certificate on a client or worker. Unset means plaintext.
 
 **WGL-OPS-061** (MUST) Stores MUST be PKCS12 by default, with a `.jks` path loaded as JKS.
 
-**WGL-OPS-062** (MUST) Clients, workers and observers MUST read the same variables.
+**WGL-OPS-062** (MUST) Clients and workers MUST read the same variables.
 
 **WGL-OPS-063** (MUST) TLS MUST NOT be mistaken for authorization: it secures the channel and, with mTLS,
-authenticates the peer, but any trusted peer may call any RPC. Role separation exists only in the
-console.
+authenticates the peer. What a peer may call is decided by per-RPC authorization when
+`WIGGLE_GRPC_AUTH` is `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)); with it off,
+any trusted peer may call any RPC.
 
 *Verified by:* `tests/TlsTest`.
 
@@ -257,8 +280,8 @@ gRPC), and **cluster** (several nodes on one database).
 **WGL-OPS-081** (MUST) An embedded server MUST need nothing but a config and a storage factory, and with
 no database configured MUST keep state in memory — the test posture.
 
-**WGL-OPS-082** (MUST) One container image MUST serve all three roles by `WIGGLE_ROLE` and MUST bundle
-every storage backend.
+**WGL-OPS-082** (MUST) One container image MUST run the server, with the portal behind
+`WIGGLE_PORTAL_PORT`, and MUST bundle every storage backend.
 
 **WGL-OPS-083** (MUST) A pre-built distribution archive MUST run on a JRE 21 with no build, registry or
 network access, and each release MUST attach it with signed checksums (airgapped installs).
@@ -271,11 +294,11 @@ root filesystem, all capabilities dropped — that passes a *restricted* PodSecu
 with liveness and readiness probes on `/healthz`, a configurable replica count, storage settings, a
 secret for credentials, a service, a service account and a pod disruption budget.
 
-**WGL-OPS-086** (MUST) The single-VM deployment MUST bring up server, PostgreSQL and console on one
+**WGL-OPS-086** (MUST) The single-VM deployment MUST bring up server, PostgreSQL and portal on one
 machine with TLS on, owned by systemd, with certificates from one script (Let's Encrypt or a private CA)
 and weekly renewal that restarts only on a real change.
 
-**WGL-OPS-087** (SHOULD) The console in that posture SHOULD bind to loopback so it is reached over an SSH
+**WGL-OPS-087** (SHOULD) The portal in that posture SHOULD bind to loopback so it is reached over an SSH
 tunnel rather than exposed.
 
 **WGL-OPS-088** (MUST) Published artifacts MUST include a BOM keeping every module and the shared

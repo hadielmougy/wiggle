@@ -106,7 +106,6 @@ ReportSteps(task, steps, final)
     SERVER      ->  apply each step as a completion; never lease the continuation back
     LOCAL_SYNC  ->  apply the run; lease the continuation back unless final
     LOCAL_ASYNC ->  apply the run; lease back unless final
-    OBSERVED    ->  refuse: an observed run is reported through ObserveRun, not by a worker
 ```
 
 The important consequence: there is now one procedure that applies a reported run, `StepChain`.
@@ -185,8 +184,6 @@ each run through the single-run path. That is now the same method at a different
 
 - **A multi-step report against a non-chaining mode is applied in order, not refused.** The steps
   ran; refusing them would discard work the worker already did.
-- **`OBSERVED` refuses `ReportSteps`.** An observed run is reported through `ObserveRun`, by an
-  instrumented application rather than a worker, and the refusal is a conflict naming that.
 - **`ReportStepsResult` still does not distinguish "final" from "this mode never chains".** A
   blank `next_task_id` covers both, and a worker that set `final` already knows which it asked
   for.

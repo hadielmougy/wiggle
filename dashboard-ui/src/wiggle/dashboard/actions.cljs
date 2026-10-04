@@ -1,7 +1,8 @@
 (ns wiggle.dashboard.actions
   "Side-effecting bridges between the API and the state atom: load-* fetch and store, the
    verbs (cancel, signal, schedule) act and then refresh what they touched."
-  (:require [wiggle.dashboard.api :as api]
+  (:require [clojure.string :as str]
+            [wiggle.dashboard.api :as api]
             [wiggle.dashboard.state :as st :refer [db]]))
 
 (defn- store! [k] (fn [v] (swap! db assoc k v)))
@@ -18,9 +19,14 @@
       (.catch (fn [_] nil))))
 
 (defn load-instances! []
-  (-> (api/instances (:filter @db))
-      (.then #(swap! db assoc :instances (:instances %)))
-      (.catch st/on-error)))
+  (let [f (:filter @db)]
+    (if (and (#{:text :meaning} (:search-by f)) (seq (:search f)))
+      (-> (api/search-instances f)
+          (.then #(swap! db assoc :instances (:hits %) :partial (:partial %)))
+          (.catch st/on-error))
+      (-> (api/instances f)
+          (.then #(swap! db assoc :instances (:instances %) :partial false))
+          (.catch st/on-error)))))
 
 (defn load-signals! []
   (-> (api/signals)
@@ -53,14 +59,8 @@
           (.then #(swap! db assoc :stats %))
           (.catch st/on-error)))))
 
-(defn load-anomalies! []
-  (-> (api/anomalies (get-in @db [:perf :workflow]) 200)
-      (.then #(swap! db assoc :anomalies (:anomalies %)))
-      (.catch st/on-error)))
-
 (defn load-perf! []
-  (load-stats!)
-  (load-anomalies!))
+  (load-stats!))
 
 (defn load-graph! [name]
   (-> (api/workflow-graph name)
@@ -94,7 +94,50 @@
   (when (st/can-manage-users?)
     (-> (api/users)
         (.then #(swap! db assoc :users (:users %)))
+        (.catch st/on-error))
+    (-> (api/roles)
+        (.then #(swap! db assoc :roles (:roles %) :actions (:actions %)))
+        (.catch st/on-error))
+    (-> (api/audit)
+        (.then #(swap! db assoc :audit (:entries %)))
+        (.catch st/on-error))
+    (-> (api/credentials)
+        (.then #(swap! db assoc :credentials (:credentials %)))
         (.catch st/on-error))))
+
+(defn create-credential! [body]
+  (-> (api/create-credential body)
+      (.then (fn [r]
+               (swap! db assoc :new-key (when (:key r) {:id (:id r) :key (:key r)}))
+               (st/toast! :ok (str "credential '" (:id r) "' created"))
+               (load-users!)))
+      (.catch st/on-error)))
+
+(defn delete-credential! [id]
+  (-> (api/delete-credential id)
+      (.then (fn [_] (st/toast! :ok (str "credential '" id "' deleted")) (load-users!)))
+      (.catch st/on-error)))
+
+(defn set-roles! [name roles]
+  (-> (api/set-roles name roles)
+      (.then (fn [_] (st/toast! :ok (str "'" name "' now holds " (str/join ", " roles))) (load-users!)))
+      (.catch st/on-error)))
+
+(defn set-disabled! [name disabled]
+  (-> (api/set-disabled name disabled)
+      (.then (fn [_] (st/toast! :ok (str "'" name "' " (if disabled "disabled; signed out" "enabled")))
+               (load-users!)))
+      (.catch st/on-error)))
+
+(defn put-role! [body]
+  (-> (api/put-role body)
+      (.then (fn [_] (st/toast! :ok (str "role '" (:name body) "' saved")) (load-users!)))
+      (.catch st/on-error)))
+
+(defn delete-role! [name]
+  (-> (api/delete-role name)
+      (.then (fn [_] (st/toast! :ok (str "role '" name "' deleted")) (load-users!)))
+      (.catch st/on-error)))
 
 (defn create-user! [body]
   (-> (api/create-user body)

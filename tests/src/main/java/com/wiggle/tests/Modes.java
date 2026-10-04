@@ -14,7 +14,6 @@ public final class Modes {
             case LOCAL_SYNC  -> f.executeInLocalSync();
             case LOCAL_ASYNC -> f.executeInLocalAsync();
             case DEFAULT     -> f;
-            case OBSERVED    -> throw new IllegalArgumentException("OBSERVED is stamped by an observer, not a spec");
         };
     }
 }

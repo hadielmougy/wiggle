@@ -111,8 +111,8 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds one image for **every role** (`WIGGLE_ROLE=server ∣ console`,
-every storage backend bundled, picked from the URL scheme); it reads the same env vars as the JAR
+The `Dockerfile` builds one image: the server, with the portal on `WIGGLE_PORTAL_PORT` (8070) and
+every storage backend bundled, picked from the URL scheme; it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
 keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
 and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whichever you prefer.
@@ -122,19 +122,19 @@ and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whic
 docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.9            # Docker Hub
 # docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.9  # …or GHCR
 
-# the ops console against it (same image, different role) → http://localhost:8090
-docker run --rm -p 8090:8090 -e WIGGLE_ROLE=console -e WIGGLE_URL=host.docker.internal:8080 \
+# the same, serving the portal → http://localhost:8070
+docker run --rm -p 8080:8080 -p 8070:8070 \
   -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.9
 
-# a complete stack: server + Postgres + console with login, durable volume, no TLS
-docker compose -f docker-compose.full.yml up -d      # → http://localhost:8090 (admin / change-me)
+# a complete stack: server with the portal + Postgres, login, durable volume, no TLS
+docker compose -f docker-compose.full.yml up -d      # → http://localhost:8070 (admin / change-me)
 
 # build locally / publish multi-arch
 docker build -t wiggle .
 scripts/docker-release.sh                             # buildx amd64+arm64, pushes to a registry
 ```
 
-The image is the control plane (+ optional console role) only; run **workers** as separate
+The image is the control plane (+ the optional portal) only; run **workers** as separate
 processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:runWorker`).
 
 ### 4.5 Handy scripts
@@ -388,7 +388,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
-| `WIGGLE_ROLE` | — | `server` | which process this image runs: `server` or `console`. `cell` is the old name for `server` and still works; an unrecognised value fails at startup |
+| `WIGGLE_ROLE` | — | `server` | which process this image runs: only `server`. `cell` is the old name for it and still works; `console` and `coordinator` were removed and are refused, as is any unrecognised value |
 | `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port (`0` = pick a free one) |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name shown in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | **unset = in-memory, single node**; set to cluster on a database |
@@ -402,7 +402,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_LEASE_MILLIS` | `wiggle.lease.millis` | `30000` | default task lease before a stalled step is reclaimed |
-| `WIGGLE_RECORD_STEP_IO` | `wiggle.stepIo.record` | `true` | record each step's input and output on its token, for the console |
+| `WIGGLE_RECORD_STEP_IO` | `wiggle.stepIo.record` | `true` | record each step's input and output on its token, for the portal |
 | `WIGGLE_STEP_IO_MAX_CHARS` | `wiggle.stepIo.maxChars` | `65536` | cap per recorded input/output; a longer one keeps its first 4096 characters and its length |
 | `WIGGLE_LONGPOLL_MAX_MILLIS` | `wiggle.longpoll.maxMillis` | `20000` | server-side cap on how long a `PollTasks` may block |
 | `WIGGLE_POLL_INTERVAL_MILLIS` | `wiggle.poll.intervalMillis` | `1000` | housekeeping tick cadence (timers, lease reclaim, deadlines) |
@@ -413,7 +413,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed, covering appends still in flight |
 | `WIGGLE_HOUSEKEEPING_BATCH` | `wiggle.housekeeping.batch` | `100` | max items a housekeeping sweep processes per tick |
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `true` | a sweep that fills its batch runs again immediately (drain mode) — removes the batch÷tick promotion ceiling under backlog (measured: 100 → ~1,700 timers/sec at defaults); idle cost unchanged. `false` restores one batch per tick |
-| `WIGGLE_SWEEP_PARALLELISM` | `wiggle.sweep.parallelism` | `4` | how many of a housekeeping sweep's due items (timers, retries, expired leases, signal deadlines, schedules, observed-run settles) run at once, each in its own transaction; each holds a pooled connection while it runs. `1` runs them one at a time |
+| `WIGGLE_SWEEP_PARALLELISM` | `wiggle.sweep.parallelism` | `4` | how many of a housekeeping sweep's due items (timers, retries, expired leases, signal deadlines, schedules) run at once, each in its own transaction; each holds a pooled connection while it runs. `1` runs them one at a time |
 | `WIGGLE_RETRY_TIMER_MIN_MILLIS` | `wiggle.retry.timerMinMillis` | `1000` | a retry backing off at least this long waits off the dispatch queue (WAITING) and is made dispatchable by the housekeeper once due, so it can land up to one housekeeping tick late; a shorter backoff waits READY. Keep it at or above `WIGGLE_POLL_INTERVAL_MILLIS` |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
 | `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `repeatWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `repeatWhile(guard, maxIterations, body)` |
@@ -504,28 +504,29 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 
 ## 7. Operations
 
-### 7.1 The ops console (web UI)
+### 7.1 The portal (web UI)
 
-The web UI is the standalone **ops console** — the `console` module, a separate process that is a
-**pure gRPC client** (embedded Tomcat + servlets). Server nodes serve **no UI**; a node's
-`WIGGLE_DASHBOARD_PORT` (default `0` = off) exposes only the **`/healthz`** probe for
-liveness/readiness checks.
+The web UI is the **portal**, served by the server process itself on `WIGGLE_PORTAL_PORT`
+(default `8070`; `0` turns it off), separate from the gRPC port (the `console` module, embedded Tomcat +
+servlets). It reads and acts through the engine in process, so any node with the portal on
+serves the whole cluster, and nothing it does goes over gRPC. A node's `WIGGLE_DASHBOARD_PORT`
+(default `0` = off) still serves only the **`/healthz`** probe for liveness/readiness checks.
 
-One binary, two modes, chosen by env:
+Several server nodes on one host each need their own `WIGGLE_PORTAL_PORT` (or `0`). To keep heavy
+portal use off the claim path, run a node or two with the portal on and route no
+workers to them; they are ordinary server nodes.
 
 ```bash
-# direct mode: one cluster
-WIGGLE_URL=localhost:8080 ./gradlew :console:run          # → http://localhost:8090
+# something to look at: a seeded server on :8080 with the portal on :8070 (a completed run,
+# two runs parked on a signal, two schedules)
+./gradlew :example:seedDashboard                         # → http://localhost:8070
 
-# something to look at: a seeded server on :8080 (a completed run, two runs parked on a
-# signal, two schedules), or one with sixty observed checkout runs for the Performance tab
-./gradlew :example:seedDashboard
-./gradlew :example:seedObserved
-
-
-# or via the Docker image
-WIGGLE_ROLE=console WIGGLE_URL=server:8080 …
+# or on any server node, e.g. the Docker image
+docker run -p 8080:8080 -p 8070:8070 hadielmougy/wiggle          # first visit sets the admin password
 ```
+
+Accounts and sessions live on the auth shard, so any portal node serves any signed-in request; a
+load balancer in front of several needs no sticky sessions.
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
 has seven tabs: **Instances** (filter, search by **instance id or correlation id**, each instance's
@@ -533,47 +534,64 @@ steps as a table — click one to expand its input, output, retries and timing �
 delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry policies), **Schedules** (create/delete interval and cron schedules), **Signals**,
 **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
 **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
-execution mode, slowest first, and the anomalies of observed runs —
-[observed-execution.md](observed-execution.md)), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
+execution mode, slowest first), and **Users** (§7.1a, for accounts holding `user.manage`). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
-npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a console on :8090).
+npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a portal on :8070).
 
-![The console's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
+![The portal's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
 
-**Auth.** Two roles: **admin** does everything, **viewer** sees everything but is refused any
-mutating call (cancel, signal, schedule, users — every non-GET `/api/*`). Browsers get a
+**Auth.** A role is a named set of permissions. Two are built in: **admin** (`*`, everything) and
+**viewer** (`read`, sees everything and is refused every write). The actions are
+`read`, `instance.cancel`, `instance.signal`, `schedule.write` and `user.manage` (plus
+`instance.start` and `task.poll`, reserved for gRPC authorization); the instance and schedule
+ones take a workflow scope, so `instance.cancel:orders` cancels only `orders` instances. Browsers get a
 `/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
 auth. Credentials travel cleartext over plain HTTP, so serve over TLS for anything exposed.
 
-Accounts come from two places. **Built-in** accounts are configured where the console is
-deployed: `WIGGLE_DASHBOARD_PASSWORD` for the admin (`WIGGLE_DASHBOARD_USER`, default `admin`)
+Accounts come from two places. **Built-in** accounts are configured in the environment of the
+nodes serving the portal: `WIGGLE_DASHBOARD_PASSWORD` for the admin (`WIGGLE_DASHBOARD_USER`, default `admin`)
 and optionally `WIGGLE_DASHBOARD_VIEWER_PASSWORD` for a viewer (`WIGGLE_DASHBOARD_VIEWER_USER`,
-default `viewer`). Nothing in the running console can change them. **Managed** accounts are the
-ones an admin creates in the console itself (§7.1a). With neither a built-in password nor a
-managed account, the console is open and every request is an admin (warning at startup).
+default `viewer`). Nothing in the running portal can change them. **Managed** accounts are the
+ones an admin creates in the portal itself (§7.1a).
+
+With no `WIGGLE_DASHBOARD_PASSWORD` and no account in the database yet, the portal starts in
+**first-run setup**: every page leads to a screen that sets the password of the admin account
+(`WIGGLE_DASHBOARD_USER`, default `admin`), stores it hashed in the database (the auth shard), and
+signs you in. After that the setup screen is gone for good, on every node, and the admin signs in
+like any other account. Until it is done, anyone who can reach the portal port can do it, so set
+it straight after the first start, or set `WIGGLE_DASHBOARD_PASSWORD` to skip setup. On the
+in-memory store the password goes with the process.
 
 ### 7.1a Users an admin manages
 
-An admin gets a **Users** tab: create an account with a name, a password and a role
-(`admin` or `viewer`), set someone's password, or delete an account. Everyone who signs in with
+An account holding `user.manage` gets a **Users** tab: create an account with a name, a password
+and a role, change its roles, set its password, disable or enable it, or delete it; define roles
+from permissions; and read the audit of every change to accounts, roles and sessions. Everyone who signs in with
 a managed account can change their own password from the header, proving their current one
 first. A viewer may do that too — it is the one write a viewer is allowed, since it changes
 nothing but their own account.
 
-Accounts live in a JSON file the console owns, `WIGGLE_CONSOLE_USERS_FILE` (default
-`wiggle-users.json` in the working directory), **not** in the workflow database. The gRPC
-control plane has no per-RPC authorization yet, so anything stored behind it is reachable by
-every worker that can dial the server; console credentials stay out of that blast radius. In
-Kubernetes that means mounting a volume for the file, or the accounts go when the pod does.
+Accounts, roles, sessions and the audit live on the **auth shard**: the database the storage
+topology gives the `auth` role, or the one database of a single-database deployment. Every node
+caches what it has looked up for at most `WIGGLE_AUTH_CACHE_MILLIS` (30 s) and polls the audit
+every second, so a password change, a role change, a disable or a deletion takes effect on every
+node within about a second. With the auth shard down, people already signed in keep working,
+nobody new signs in (503), and the built-in admin still can. No gRPC RPC reads or writes accounts.
 
-Passwords are stored as PBKDF2-HMAC-SHA256 hashes over a per-account random salt, never in the
-clear, and the file is rewritten atomically and kept owner-only where the filesystem allows.
+A console users file from before (`WIGGLE_CONSOLE_USERS_FILE`, default `wiggle-users.json`) is
+imported once by the first node to start with it, hashes as they are; after that it is no longer
+read, and every node says so at startup.
 
-Three rules keep a console reachable:
+Passwords are stored as PBKDF2-HMAC-SHA256 hashes over a per-account random salt, and sessions
+only as a hash of their token: nothing in the database signs anyone in.
+
+Three rules keep a portal reachable:
 
 - A managed account cannot take a built-in account's name, and built-in accounts cannot be
-  deleted or re-passworded from the console — they are set in the environment.
-- The last remaining admin cannot be deleted when there is no built-in admin to fall back on.
+  deleted or re-passworded from the portal — they are set in the environment.
+- With no built-in admin to fall back on, no change may leave no enabled account that can manage
+  users — not deleting, disabling or demoting the last one, not changing the role it relies on,
+  and not creating a first account that could not manage users.
 - Creating the first managed account **turns authentication on**, even if no password was
   configured. Sign in with the account you just made.
 
@@ -582,21 +600,54 @@ changing stays signed in. Deleting an account signs it out everywhere.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | direct mode: the one cluster to serve |
-| `WIGGLE_DASHBOARD_PORT` | `8090` | console HTTP port |
-| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
+| `WIGGLE_PORTAL_PORT` | `8070` | portal HTTP port; `0` turns it off (and give each node on one host its own) |
+| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | admin login from the environment; unset = the first visit sets the admin password, kept in the database |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
-| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where accounts an admin creates in the console are kept ([§7.1a](#71a-users-an-admin-manages)) |
-| `WIGGLE_TLS_*` | *(unset)* | HTTPS for the console + the client certs it presents to the server |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session before reading it again |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once ([§7.1a](#71a-users-an-admin-manages)) |
+| `WIGGLE_TLS_*` | *(unset)* | the server's keystore serves the portal over HTTPS too; with a truststore, the portal requires client certificates as gRPC does |
+
+### 7.1b Authorizing gRPC calls
+
+Off by default: any peer that can reach the gRPC port may call any RPC. To decide per call:
+
+1. In the portal's **Users** tab, define a role for each kind of caller, then create an **API
+   credential** holding it: an API key (shown once, starting `wgk_`) or a client certificate
+   subject such as `CN=orders-worker,O=Example` for an mTLS deployment.
+2. Give each worker and service its key as `WIGGLE_API_KEY` (or `-Dwiggle.api.key`; the Go and
+   Python clients send it as `authorization: Bearer <key>` metadata). Over plaintext the key is
+   readable on the wire, so use TLS.
+3. Start the servers with `WIGGLE_GRPC_AUTH=log` and watch for `gRPC auth (log mode)` warnings: each
+   is a call `enforce` would refuse. When there are none, switch to `WIGGLE_GRPC_AUTH=enforce`.
+
+Typical roles:
+
+| Caller | Permissions |
+|---|---|
+| a worker for `orders` | `task.poll` (or `task.poll:<queue>` per queue it serves) and `read:orders` (it reads the graph) |
+| a service starting `orders` | `instance.start:orders`, `read:orders`, plus `workflow.register:orders` if it publishes the graph |
+| an event consumer | `event.read` |
+| operations tooling | `read` and whatever it changes |
+
+Every RPC's permission is listed in [chapter 70 §11 of the spec](spec/70-api.md#11-per-rpc-authorization).
+A call without a known credential fails `UNAUTHENTICATED` (401 in the Java client), one its role does
+not allow `PERMISSION_DENIED` (403). `HealthCheck` stays open for probes. Deleting a credential, or
+changing its role, takes effect on every node within about a second, for the next call: a worker's
+open long poll ends as it began, at most `WIGGLE_LONGPOLL_MAX_MILLIS` later.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WIGGLE_GRPC_AUTH` | `off` | `off`, `log` (check and log, serve anyway) or `enforce` |
+| `WIGGLE_API_KEY` | *(unset)* | on a client or worker: the key it presents |
 
 ### 7.1a Transport security (TLS / mTLS)
 
-Opt-in and shared by the gRPC API and the console's HTTP. A **keystore** turns TLS on for both;
+Opt-in and shared by the gRPC API and the portal's HTTP. A **keystore** turns TLS on for both;
 a **truststore** additionally requires client certificates (mTLS on the server) and presents a
 client certificate (on a worker/client). Unset ⇒ plaintext for both. Stores are PKCS12 by default;
 a `.jks` path is loaded as JKS. Clients/workers read the same variables. TLS secures the channel
-and (with mTLS) authenticates the peer, but it is **not authorization** — any trusted peer may call
-any RPC; layer the console's login/Basic auth or an external gateway on top for role separation.
+and (with mTLS) authenticates the peer, but it is **not authorization**: what a peer may call is
+decided by per-RPC authorization ([§7.1b](#71b-authorizing-grpc-calls)), off unless you turn it on.
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
@@ -604,6 +655,50 @@ any RPC; layer the console's login/Basic auth or an external gateway on top for 
 | `WIGGLE_TLS_KEYSTORE_PASSWORD` | `wiggle.tls.keystore.password` | *(unset)* | keystore password |
 | `WIGGLE_TLS_TRUSTSTORE` | `wiggle.tls.truststore` | *(unset)* | truststore path; server ⇒ require client certs (mTLS) |
 | `WIGGLE_TLS_TRUSTSTORE_PASSWORD` | `wiggle.tls.truststore.password` | *(unset)* | truststore password |
+
+### 7.1c Full-text search
+
+Find instances by what they say: the words in their context, correlation id, termination reason or
+error. Off by default. Turn it on with a `search` shard in the storage topology (its own database,
+so indexing never costs the instance shards write capacity), or `WIGGLE_SEARCH_ENABLED=true` on a
+single database (the server warns that indexing then shares its capacity).
+
+The leader indexes from the event log, a second or so behind: an instance is indexed when it starts
+and each time its status changes, as it is at that moment. Every word you search for must occur;
+words are matched as written (no stemming), and results come best first. A document outlives its
+instance (`WIGGLE_SEARCH_RETENTION_MILLIS`, 30 days), so a hit can be shown **purged**.
+
+<!-- snippet: onboarding/search -->
+```java
+WiggleClient.SearchResult r = client.search("ada lovelace", "order-fulfilment", null, null, null, 20, false);
+for (WiggleClient.SearchHit hit : r.hits()) {
+    System.out.println(hit.instanceId() + " " + hit.status() + (hit.purged() ? " (purged)" : ""));
+}
+```
+
+**By meaning.** With an embedder, a search can rank by closeness in meaning rather than by the
+words: `client.search(text, …, semantic = true)` (the overload's last argument), or **by meaning**
+in the portal. Set `WIGGLE_EMBEDDER=http` with `WIGGLE_EMBEDDER_URL` (an OpenAI-compatible API root
+such as `https://api.openai.com/v1` or Ollama's `http://localhost:11434/v1`), `_MODEL`,
+`_DIMENSION` and `_API_KEY`; `WIGGLE_EMBEDDER=hashing` tries the path with no model at all. Install
+pgvector on the search database for an HNSW index; without it vectors are compared in Java, exactly
+and by scan, which suits thousands of documents rather than millions. Semantic search starts once
+every existing document has a vector. Changing the model builds a new index beside the old one, and
+queries switch when it is complete, as long as the old model stays configured as
+`WIGGLE_EMBEDDER_PREVIOUS_MODEL` until then.
+
+In the portal, pick **full text** next to the Instances search box. Searches see only the workflows
+the caller may read. With several search shards, documents spread by instance id; add or drain one
+and the leader moves documents in the background, a batch a minute.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WIGGLE_SEARCH_ENABLED` | `false` | search on the one database |
+| `WIGGLE_SEARCH_RETENTION_MILLIS` | 30 days | how long a document outlives its instance's last change |
+| `WIGGLE_SEARCH_WORKFLOWS` | *(all)* | comma-separated workflows to index |
+| `WIGGLE_EMBEDDER` | `none` | `none`, `hashing` or `http` |
+| `WIGGLE_EMBEDDER_URL` / `_MODEL` / `_DIMENSION` / `_API_KEY` | *(unset)* | the embedding API, model, vector size and key |
+| `WIGGLE_EMBEDDER_PREVIOUS_MODEL` / `_DIMENSION` | *(unset)* | the model being replaced, while the new index builds |
 
 ### 7.2 Storage backends
 
@@ -635,7 +730,7 @@ loses.
 ### 7.3 Signals, sub-workflows and schedules
 
 `thenAwait(name)` parks an instance until the named signal arrives; no worker is held. Deliver
-via `client.signal(instanceId, name, payload)` (gRPC), the console's Signals tab, or
+via `client.signal(instanceId, name, payload)` (gRPC), the portal's Signals tab, or
 `POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
 `thenAwait(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
 branch instead. Signals are not buffered -- an early delivery is a retryable conflict.

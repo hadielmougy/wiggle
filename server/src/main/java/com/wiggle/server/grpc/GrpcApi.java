@@ -1,5 +1,6 @@
 package com.wiggle.server.grpc;
 
+import com.wiggle.server.auth.Permissions;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.*;
 import com.wiggle.server.ServerConfig;
@@ -12,6 +13,7 @@ import io.grpc.Grpc;
 import io.grpc.InsecureServerCredentials;
 import io.grpc.Server;
 import io.grpc.ServerCredentials;
+import com.wiggle.server.store.ShardRetiredException;
 import com.wiggle.server.store.StorageException;
 import io.grpc.Status;
 import io.grpc.TlsServerCredentials;
@@ -44,16 +46,22 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private final ExecutorService pool;
     private final long maxLongPollMillis;
     private final MemoryGuard memory;
+    private final Authorizer authz;
+    private final com.wiggle.server.search.Search search;
     /** Versions already announced at INFO, so N workers registering the same graph log it once. */
     private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis)
             throws IOException {
-        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED, ServerConfig.Memory.DISABLED);
+        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED, ServerConfig.Memory.DISABLED, Authorizer.OFF,
+                null);
     }
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls,
-                   ServerConfig.Memory memoryConfig) throws IOException {
+                   ServerConfig.Memory memoryConfig, Authorizer authz, com.wiggle.server.search.Search search)
+            throws IOException {
+        this.authz = authz;
+        this.search = search;
         this.engine = engine;
         this.cluster = cluster;
         this.maxLongPollMillis = maxLongPollMillis;
@@ -62,6 +70,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         this.server = Grpc.newServerBuilderForPort(port, credentials(tls))
                 .executor(pool)
                 .intercept(new MemorySizeInterceptor(memory))   // sums in-flight request/response bytes
+                .intercept(authz)                                // runs first: who the caller is
                 .addService(this)
                 .build();
     }
@@ -118,21 +127,33 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void getCluster(Empty req, StreamObserver<ClusterView> resp) {
         LOG.log(System.Logger.Level.DEBUG, "rpc GetCluster");
-        run(resp, this::clusterView);
+        run(resp, () -> {
+            authz.require(Permissions.READ, null);
+            return clusterView();
+        });
     }
 
     @Override
     public void listWorkflows(Empty req, StreamObserver<WorkflowNames> resp) {
         LOG.log(System.Logger.Level.DEBUG, "rpc ListWorkflows");
-        run(resp, () -> WorkflowNames.newBuilder().addAllWorkflows(engine.workflowNames()).build());
+        run(resp, () -> {
+            authz.require(Permissions.READ, null);
+            return WorkflowNames.newBuilder().addAllWorkflows(engine.workflowNames()).build();
+        });
     }
 
     @Override
     public void registerWorkflow(WorkflowDefinition req, StreamObserver<RegisterWorkflowResult> resp) {
         LOG.log(System.Logger.Level.DEBUG, "rpc RegisterWorkflow");
         run(resp, () -> {
-            com.wiggle.core.WorkflowDefinition def =
-                    com.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(req.getDefinition()));
+            authz.requireAny(Permissions.WORKFLOW_REGISTER);
+            Map<String, Object> raw = com.wiggle.core.Json.asObject(ProtoJson.fromStruct(req.getDefinition()));
+            if ("OBSERVED".equals(raw.get("executionMode"))) {
+                throw new IllegalArgumentException("OBSERVED execution was removed; register the workflow "
+                        + "as SERVER, LOCAL_SYNC or LOCAL_ASYNC");
+            }
+            com.wiggle.core.WorkflowDefinition def = com.wiggle.core.WorkflowDefinition.fromJson(raw);
+            authz.require(Permissions.WORKFLOW_REGISTER, def.name());
             if (req.getForce() && !ServerConfig.allowGraphReplace()) {
                 throw EngineException.conflict("replacing the graph of '" + def.key()
                         + "' was requested but this server does not allow it; set "
@@ -155,6 +176,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void getWorkflow(GetWorkflowRequest req, StreamObserver<WorkflowDefinition> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetWorkflow name=" + req.getName());
         run(resp, () -> {
+            authz.require(Permissions.READ, req.getName());
             com.wiggle.core.WorkflowDefinition def = (req.hasVersion()
                     ? engine.definition(req.getName(), req.getVersion())
                     : engine.latestDefinition(req.getName()))
@@ -169,6 +191,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 + " version=" + (req.hasVersion() ? req.getVersion() : "latest")
                 + " correlationId=" + (req.hasCorrelationId() ? req.getCorrelationId() : null));
         run(resp, () -> {
+            authz.require(Permissions.INSTANCE_START, req.getWorkflow());
             Integer version = req.hasVersion() ? req.getVersion() : null;
             String correlationId = req.hasCorrelationId() ? req.getCorrelationId() : null;
             Object context = req.hasContext() ? ProtoJson.fromValue(req.getContext()) : null;
@@ -185,6 +208,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         run(resp, () -> {
             String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
             String status = req.hasStatus() ? req.getStatus() : null;
+            authz.require(Permissions.READ, req.hasCorrelationId() ? null : workflow);
             int limit = req.getLimit() > 0 ? req.getLimit() : 50;
             List<com.wiggle.core.InstanceView> views = req.hasCorrelationId()
                     ? engine.findByCorrelation(req.getCorrelationId(), limit)
@@ -199,8 +223,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void getInstance(InstanceIdRequest req, StreamObserver<InstanceDetail> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetInstance id=" + req.getInstanceId());
         run(resp, () -> {
+            authz.requireAny(Permissions.READ);
             com.wiggle.core.InstanceView v = engine.instance(req.getInstanceId())
                     .orElseThrow(() -> EngineException.notFound("instance"));
+            authz.require(Permissions.READ, v.workflow());
             InstanceDetail.Builder out = InstanceDetail.newBuilder().setInstance(viewProto(v));
             for (com.wiggle.server.store.Rows.Token t : engine.tokens(req.getInstanceId())) out.addTokens(tokenProto(t));
             return out.build();
@@ -212,6 +238,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc CancelInstance id=" + req.getInstanceId()
                 + " reason=" + req.getReason());
         run(resp, () -> {
+            authz.requireAny(Permissions.INSTANCE_CANCEL);
+            authz.require(Permissions.INSTANCE_CANCEL, workflowOf(req.getInstanceId()));
             engine.cancel(req.getInstanceId(),
                     req.getReason().isEmpty() ? "cancelled via API" : req.getReason());
             return CancelInstanceResult.newBuilder().setCancelled(req.getInstanceId()).build();
@@ -223,6 +251,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc SignalInstance id=" + req.getInstanceId()
                 + " signal=" + req.getSignal());
         run(resp, () -> {
+            authz.requireAny(Permissions.INSTANCE_SIGNAL);
+            authz.require(Permissions.INSTANCE_SIGNAL, workflowOf(req.getInstanceId()));
             Object payload = req.hasPayload() ? ProtoJson.fromValue(req.getPayload()) : null;
             engine.signal(req.getInstanceId(), req.getSignal(), payload);
             return Ack.newBuilder().setOk(true).build();
@@ -233,6 +263,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void createSchedule(CreateScheduleRequest req, StreamObserver<ScheduleView> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc CreateSchedule workflow=" + req.getWorkflow());
         run(resp, () -> {
+            authz.require(Permissions.SCHEDULE_WRITE, req.getWorkflow());
             Object context = req.hasContext() ? ProtoJson.fromValue(req.getContext()) : null;
             String id = req.getCadenceCase() == CreateScheduleRequest.CadenceCase.CRON
                     ? engine.createCronSchedule(req.getWorkflow(), req.getCron(), context)
@@ -246,6 +277,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void listSchedules(Empty req, StreamObserver<ScheduleList> resp) {
         run(resp, () -> {
+            authz.require(Permissions.READ, null);
             ScheduleList.Builder out = ScheduleList.newBuilder();
             engine.schedules().forEach(s -> out.addSchedules(scheduleView(s)));
             return out.build();
@@ -256,9 +288,19 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void deleteSchedule(ScheduleIdRequest req, StreamObserver<Ack> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc DeleteSchedule id=" + req.getId());
         run(resp, () -> {
+            authz.requireAny(Permissions.SCHEDULE_WRITE);
+            String workflow = engine.schedules().stream().filter(x -> x.id.equals(req.getId()))
+                    .map(x -> x.workflow).findFirst().orElse(null);
+            if (workflow != null) authz.require(Permissions.SCHEDULE_WRITE, workflow);
             engine.deleteSchedule(req.getId());
             return Ack.newBuilder().setOk(true).build();
         });
+    }
+
+    /** The workflow of instance {@code id}, which scopes what may be done to it; 404 when there is none. */
+    private String workflowOf(String id) {
+        return engine.instance(id).map(com.wiggle.core.InstanceView::workflow)
+                .orElseThrow(() -> EngineException.notFound("instance"));
     }
 
     private static ScheduleView scheduleView(com.wiggle.server.store.Rows.Schedule s) {
@@ -283,6 +325,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void getBacklogCoverage(BacklogCoverageRequest req, StreamObserver<BacklogCoverage> resp) {
         run(resp, () -> {
+            authz.require(Permissions.READ, null);
             int max = req.getMax() > 0 ? Math.min(req.getMax(), 500) : 100;
             BacklogCoverage.Builder out = BacklogCoverage.newBuilder()
                     .setLivePollers(engine.livePollers().size());
@@ -305,6 +348,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
         run(resp, () -> {
+            if (req.getQueuesCount() == 0) authz.require(Permissions.TASK_POLL, null);   // every queue
+            for (String q : req.getQueuesList()) authz.require(Permissions.TASK_POLL, q);
             // Admission control: under memory pressure, reject a configured fraction of incoming
             // polls outright (empty + a jittered hold-off), before doing any work. The other polls
             // are served normally, so load eases gently instead of stopping dead.
@@ -340,6 +385,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 + " leaseOwner=" + req.getLeaseOwner() + " retryable=" + req.getRetryable()
                 + " message=" + req.getMessage());
         run(resp, () -> {
+            authz.requireAny(Permissions.TASK_POLL);
             engine.fail(req.getTaskId(), req.getLeaseOwner(), req.getMessage(), req.getRetryable());
             return Ack.newBuilder().setOk(true).build();
         });
@@ -350,6 +396,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc HeartbeatTask taskId=" + req.getTaskId()
                 + " leaseOwner=" + req.getLeaseOwner() + " extendMillis=" + req.getExtendMillis());
         run(resp, () -> {
+            authz.requireAny(Permissions.TASK_POLL);
             long until = engine.extendLease(req.getTaskId(), req.getLeaseOwner(), req.getExtendMillis());
             return HeartbeatResult.newBuilder().setLeaseExpiresAt(until).build();
         });
@@ -359,6 +406,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void reportSteps(ReportStepsRequest req, StreamObserver<ReportStepsResult> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc ReportSteps runs=" + req.getRunsCount());
         run(resp, () -> {
+            authz.requireAny(Permissions.TASK_POLL);
             List<WorkflowEngine.Run> runs = new ArrayList<>(req.getRunsCount());
             for (ReportedRun r : req.getRunsList()) {
                 runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), stepInputs(r), r.getFinal()));
@@ -399,8 +447,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                     ? ProtoJson.fromValue(s.getMerge()) : null;
             Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
                     ? s.getPredicateValue() : null;
-            String error = s.getOutcomeCase() == StepResult.OutcomeCase.ERROR ? s.getError() : null;
-            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate, error,
+            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate,
                     s.getStartedAt() == 0 ? null : s.getStartedAt(),
                     s.getFinishedAt() == 0 ? null : s.getFinishedAt(),
                     emitted(s.getEventsList())));
@@ -419,48 +466,11 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void observeRun(ObserveRunRequest req, StreamObserver<ObserveRunResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ObserveRun workflow=" + req.getWorkflow()
-                + " instanceId=" + req.getInstanceId() + " steps=" + req.getStepsCount() + " final=" + req.getFinal());
-        run(resp, () -> observeProto(engine.observe(req.getWorkflow(), req.getVersion() == 0 ? null : req.getVersion(),
-                req.getInstanceId(), req.getCorrelationId().isEmpty() ? null : req.getCorrelationId(),
-                req.getReporter(), stepInputs(req.getStepsList()), req.getFinal())));
-    }
-
-    @Override
-    public void observeMany(ObserveManyRequest req, StreamObserver<ObserveManyResult> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ObserveMany runs=" + req.getRunsCount());
-        run(resp, () -> {
-            List<WorkflowEngine.ObservedRun> runs = new ArrayList<>(req.getRunsCount());
-            for (ObserveRunRequest r : req.getRunsList()) {
-                runs.add(new WorkflowEngine.ObservedRun(r.getWorkflow(), r.getVersion() == 0 ? null : r.getVersion(),
-                        r.getInstanceId(), r.getCorrelationId().isEmpty() ? null : r.getCorrelationId(),
-                        r.getReporter(), stepInputs(r.getStepsList()), r.getFinal()));
-            }
-            ObserveManyResult.Builder out = ObserveManyResult.newBuilder();
-            for (WorkflowEngine.ObserveOutcome o : engine.observeMany(runs)) {
-                ObserveOutcome.Builder one = ObserveOutcome.newBuilder();
-                if (o.ok()) one.setOutcome(observeProto(o.result()));
-                else one.setErrorStatus(o.errorStatus()).setError(o.error() == null ? "" : o.error());
-                out.addResults(one);
-            }
-            return out.build();
-        });
-    }
-
-    private static ObserveRunResult observeProto(com.wiggle.core.ObserveResult r) {
-        return ObserveRunResult.newBuilder()
-                .setInstanceId(r.instanceId())
-                .setInstanceStatus(r.instanceStatus())
-                .setAnomalies(r.anomalies())
-                .build();
-    }
-
-    @Override
     public void getStepStats(StepStatsRequest req, StreamObserver<StepStats> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetStepStats workflow=" + req.getWorkflow()
                 + " version=" + req.getVersion() + " since=" + req.getSince());
         run(resp, () -> {
+            authz.require(Permissions.READ, req.getWorkflow());
             int sample = req.getSample() > 0 ? req.getSample() : 10_000;
             StepStats.Builder out = StepStats.newBuilder().setWorkflow(req.getWorkflow()).setVersion(req.getVersion());
             for (com.wiggle.core.NodeStats n : engine.stepStats(req.getWorkflow(), req.getVersion(), req.getSince(), sample)) {
@@ -475,20 +485,38 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     }
 
     @Override
-    public void listAnomalies(ListAnomaliesRequest req, StreamObserver<AnomalyList> resp) {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ListAnomalies workflow="
-                + (req.hasWorkflow() ? req.getWorkflow() : null) + " limit=" + req.getLimit());
+    public void searchInstances(SearchRequest req, StreamObserver<SearchResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SearchInstances text=" + req.getText());
         run(resp, () -> {
-            int limit = req.getLimit() > 0 ? req.getLimit() : 100;
-            AnomalyList.Builder out = AnomalyList.newBuilder();
-            for (com.wiggle.core.AnomalyView a : engine.anomalies(req.hasWorkflow() ? req.getWorkflow() : null,
-                    req.hasInstanceId() ? req.getInstanceId() : null, limit)) {
-                Anomaly.Builder one = Anomaly.newBuilder().setInstanceId(a.instanceId()).setWorkflow(a.workflow())
-                        .setVersion(a.version()).setKind(a.kind()).setAt(a.at());
-                if (a.expectedNode() != null) one.setExpectedNode(a.expectedNode());
-                if (a.reportedNode() != null) one.setReportedNode(a.reportedNode());
-                if (a.detail() != null) one.setDetail(a.detail());
-                out.addAnomalies(one);
+            authz.requireAny(Permissions.READ);
+            if (search == null) {
+                throw EngineException.conflict("search is not enabled: give a shard the search role, "
+                        + "or set WIGGLE_SEARCH_ENABLED=true on a single database");
+            }
+            String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
+            String status = req.hasStatus() ? req.getStatus() : null;
+            Long from = req.getUpdatedFrom() > 0 ? req.getUpdatedFrom() : null;
+            Long to = req.getUpdatedTo() > 0 ? req.getUpdatedTo() : null;
+            int limit = req.getLimit() > 0 ? req.getLimit() : 20;
+            SearchResult.Builder out = SearchResult.newBuilder();
+            List<com.wiggle.server.search.Search.Hit> hits;
+            if (req.getSemantic()) {
+                com.wiggle.server.search.Search.SemanticResult r = search.semantic(req.getText(), workflow, status,
+                        from, to, limit, req.getPartialOk(), authz.readableWorkflows());
+                out.setPartial(r.partial()).setModel(r.model());
+                hits = r.hits();
+            } else {
+                com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
+                        limit, req.getPartialOk(), authz.readableWorkflows());
+                out.setPartial(r.partial());
+                hits = r.hits();
+            }
+            for (com.wiggle.server.search.Search.Hit h : hits) {
+                out.addHits(SearchHit.newBuilder().setInstanceId(h.instanceId()).setWorkflow(h.workflow())
+                        .setVersion(h.version()).setStatus(h.status())
+                        .setCorrelationId(h.correlationId() == null ? "" : h.correlationId())
+                        .setCreatedAt(h.createdAt()).setUpdatedAt(h.updatedAt()).setScore(h.score())
+                        .setPurged(h.purged()));
             }
             return out.build();
         });
@@ -499,6 +527,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollEvents consumer=" + req.getConsumer()
                 + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
         run(resp, () -> {
+            authz.require(Permissions.EVENT_READ, null);
             if (memory.rejectPoll()) {
                 long retryAfter = memory.retryAfterMillis();
                 LOG.log(System.Logger.Level.WARNING, () -> "memory pressure: rejecting event poll from "
@@ -518,9 +547,11 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void ackEvents(AckEventsRequest req, StreamObserver<Ack> resp) {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc AckEvents consumer=" + req.getConsumer()
-                + " ackedSeq=" + req.getAckedSeq());
+                + " ackedSeq=" + req.getAckedSeq() + " ackedCursor=" + req.getAckedCursor());
         run(resp, () -> {
-            engine.ackEvents(req.getConsumer(), req.getAckedSeq());
+            authz.require(Permissions.EVENT_READ, null);
+            if (req.getAckedCursor().isEmpty()) engine.ackEvents(req.getConsumer(), req.getAckedSeq());
+            else engine.ackEvents(req.getConsumer(), req.getAckedCursor());
             return Ack.newBuilder().setOk(true).build();
         });
     }
@@ -528,7 +559,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private static EventView eventProto(com.wiggle.core.EventView e) {
         EventView.Builder b = EventView.newBuilder()
                 .setSeq(e.seq()).setInstanceId(e.instanceId()).setWorkflow(e.workflow())
-                .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt());
+                .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt()).setShard(e.shard());
+        if (e.cursor() != null) b.setCursor(e.cursor());
         if (e.correlationId() != null) b.setCorrelationId(e.correlationId());
         if (e.nodeId() != null) b.setNodeId(e.nodeId());
         if (e.payload() != null && !e.payload().isEmpty()) b.setPayload(ProtoJson.toValue(e.payload()));
@@ -615,12 +647,17 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             T result = handler.call();
             resp.onNext(result);
             resp.onCompleted();
+        } catch (Authorizer.PermissionDeniedException e) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "rpc refused: " + e.getMessage());
+            resp.onError(Status.PERMISSION_DENIED.withDescription(e.getMessage()).asRuntimeException());
         } catch (EngineException e) {
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with " + e.statusCode() + ": " + e.getMessage());
             resp.onError(status(e.statusCode()).withDescription(e.getMessage()).asRuntimeException());
         } catch (IllegalArgumentException e) {
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with bad request: " + e.getMessage());
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
+        } catch (ShardRetiredException e) {
+            resp.onError(Status.NOT_FOUND.withDescription(e.getMessage()).asRuntimeException());
         } catch (StorageException e) {
             // A store failure that applied nothing is UNAVAILABLE, which is both the honest status and
             // the useful one: it promises the call did not take effect, which is exactly the client's
