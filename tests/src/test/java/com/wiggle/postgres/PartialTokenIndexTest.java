@@ -19,16 +19,17 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Migration 19: on PostgreSQL wf_token is indexed per status, and every status-filtered query the
- * store runs can use its partial index; on H2, which has no partial indexes, the migration is
+ * Migrations 19 and 32: on PostgreSQL wf_token is indexed per status, and every status-filtered query
+ * the store runs can use its partial index; on H2, which has no partial indexes, the migrations are
  * recorded and the full indexes stay.
  */
 class PartialTokenIndexTest {
 
     private static final Set<String> PARTIAL = Set.of("ix_token_ready_age", "ix_token_waiting", "ix_token_awaiting",
-            "ix_token_running", "ix_token_done", "ix_token_done_timed");
+            "ix_token_running", "ix_token_done_steps", "ix_token_step_timed", "ix_token_joined");
     private static final Set<String> REPLACED = Set.of("ix_token_dispatch", "ix_token_lease",
-            "ix_token_throughput", "ix_token_timed");
+            "ix_token_throughput", "ix_token_timed", "ix_token_barrier");
+    private static final Set<String> NARROWED = Set.of("ix_token_done", "ix_token_done_timed");
 
     private static Set<String> tokenIndexes(Connection c) throws Exception {
         Set<String> names = new HashSet<>();
@@ -57,7 +58,7 @@ class PartialTokenIndexTest {
         try (JdbcStorage storage = new JdbcStorage(url, "sa", "", 2, new H2Dialect())) {
             storage.migrate();
             try (Connection c = DriverManager.getConnection(url, "sa", "")) {
-                assertTrue(schemaVersion(c) >= 19, "the migration is recorded as applied");
+                assertTrue(schemaVersion(c) >= 32, "the migrations are recorded as applied");
                 Set<String> indexes = tokenIndexes(c);
                 assertTrue(indexes.containsAll(REPLACED), "full indexes kept: " + indexes);
                 assertTrue(indexes.stream().noneMatch(PARTIAL::contains), "no partial index created: " + indexes);
@@ -66,7 +67,7 @@ class PartialTokenIndexTest {
     }
 
     private static final Set<String> READY = Set.of("ix_token_ready_age");
-    private static final Set<String> DONE = Set.of("ix_token_done", "ix_token_done_timed");
+    private static final Set<String> INSTANCE = Set.of("ix_token_instance");
 
     /** Each query, as the store issues it, against the partial indexes over its status. Which of
      *  two indexes over the same status the planner picks depends on the table's statistics. */
@@ -84,10 +85,16 @@ class PartialTokenIndexTest {
         PLANS.put("SELECT * FROM wf_token WHERE status='RUNNING' AND lease_expires>0 AND lease_expires<1000"
                 + " ORDER BY lease_expires LIMIT 10", Set.of("ix_token_running"));
         PLANS.put("SELECT COUNT(*) FROM wf_token WHERE kind IN ('TASK','PREDICATE') AND status='DONE'"
-                + " AND updated_at>1000", DONE);
+                + " AND updated_at>1000", Set.of("ix_token_done_steps"));
         PLANS.put("SELECT node_id, started_at, finished_at, available_at FROM wf_token WHERE workflow='w'"
                 + " AND version=1 AND status='DONE' AND finished_at > 1000 AND started_at IS NOT NULL"
-                + " ORDER BY finished_at DESC LIMIT 10", DONE);
+                + " ORDER BY finished_at DESC LIMIT 10", Set.of("ix_token_step_timed"));
+        PLANS.put("SELECT * FROM wf_token WHERE instance_id='i' AND node_id='n' AND status='JOINED' ORDER BY id",
+                Set.of("ix_token_joined"));
+        PLANS.put("SELECT 1 FROM wf_token WHERE instance_id='i'"
+                + " AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1", INSTANCE);
+        PLANS.put("SELECT * FROM wf_token WHERE instance_id='i' AND status='AWAITING' AND kind='SIGNAL'"
+                + " AND activity='s' ORDER BY id LIMIT 1", Set.of("ix_token_instance", "ix_token_awaiting"));
     }
 
     @Test @DisplayName("PostgreSQL indexes wf_token per status, and each status query uses an index over its status")
@@ -102,6 +109,7 @@ class PartialTokenIndexTest {
             Set<String> indexes = tokenIndexes(c);
             assertTrue(indexes.containsAll(PARTIAL), "partial indexes created: " + indexes);
             assertTrue(indexes.stream().noneMatch(REPLACED::contains), "full indexes dropped: " + indexes);
+            assertTrue(indexes.stream().noneMatch(NARROWED::contains), "wider partial indexes dropped: " + indexes);
 
             try (Statement st = c.createStatement()) {
                 // A test table is small enough that a sequential scan always wins; take it off the
