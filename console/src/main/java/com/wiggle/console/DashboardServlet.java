@@ -51,6 +51,8 @@ public final class DashboardServlet extends HttpServlet {
             if (path.equals("/api/login")) { login(req, res); return; }
             if (path.equals("/logout")) { logout(req, res); return; }
             if (path.equals("/login")) { loginPage(req, res); return; }
+            if (path.equals("/setup")) { setupPage(res); return; }
+            if (path.equals("/api/setup")) { setup(req, res); return; }
             if (path.equals("/healthz")) { text(res, 200, "ok"); return; }   // k8s probe for the console pod
             if (path.equals("/api/cluster")) { clusterView(res); return; }
             if (path.equals("/api/signals")) { signals(req, res); return; }
@@ -97,6 +99,7 @@ public final class DashboardServlet extends HttpServlet {
         ConsoleAuth.Principal p = auth.principal(req);   // null if auth is required and the caller isn't authenticated
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("required", auth.required());
+        out.put("setupRequired", auth.setupRequired());
         out.put("user", p == null ? null : p.user());
         out.put("permissions", p == null ? List.of() : List.copyOf(new TreeSet<>(p.permissions())));
         out.put("role", p == null ? null : p.writes() ? "admin" : "viewer");
@@ -353,7 +356,27 @@ public final class DashboardServlet extends HttpServlet {
         res.setHeader("Location", "/login");
     }
 
+    private void setupPage(HttpServletResponse res) throws IOException {
+        if (!auth.setupRequired()) { redirect(res, "/login"); return; }
+        html(res, ConsoleAuth.SETUP_HTML.replace("__USER__", escape(auth.user())));
+    }
+
+    /** First run: sets the admin's password and signs it in. 409 once the portal is set up. */
+    private void setup(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        if (!req.getMethod().equals("POST")) { error(res, 405, "POST required"); return; }
+        if (!auth.setupRequired()) { error(res, 409, "the portal is already set up; sign in instead"); return; }
+        Map<String, Object> body = Json.asObject(readBody(req));
+        String cookie = auth.setUpAdmin(String.valueOf(body.get("password")));
+        res.addHeader("Set-Cookie", cookie);
+        json(res, 200, Map.of("ok", true, "user", auth.user()));
+    }
+
+    private static String escape(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
     private void loginPage(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        if (auth.setupRequired()) { redirect(res, "/setup"); return; }
         if (!auth.required() || auth.authenticated(req)) { redirect(res, "/"); return; }
         html(res, ConsoleAuth.LOGIN_HTML);
     }

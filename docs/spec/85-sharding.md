@@ -539,7 +539,7 @@ are on the auth shard ([§13](#13-users-and-authorization)). WGL-SHARD-174 needs
 are not pointed at.
 
 **WGL-SHARD-170** (MUST) The portal MUST be served by the server process, on its own HTTP port
-(`WIGGLE_PORTAL_PORT`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
+(`WIGGLE_PORTAL_PORT`, default `8070`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
 existing `WIGGLE_DASHBOARD_PORT` contract until that variable is retired.
 
 **WGL-SHARD-171** (MUST) The portal MUST read through `DashboardData` backed by the engine in

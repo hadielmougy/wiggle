@@ -380,7 +380,8 @@ with forwards:
     st.markdown("**Portal (web UI)**")
     st.caption("Every server node serves the portal; forward a server's and open the link. Set "
                "WIGGLE_DASHBOARD_PASSWORD (and optionally WIGGLE_DASHBOARD_VIEWER_PASSWORD) in the "
-               "server's config to require a login; blank leaves it open. Further accounts and roles are "
+               "server's config, or leave it blank and set the admin password on the portal's first visit. "
+               "Further accounts and roles are "
                "managed in the portal's Users tab and kept in the server's database.")
     if not cells:
         st.caption("No servers yet — deploy one on the Servers tab first.")

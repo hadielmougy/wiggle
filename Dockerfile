@@ -7,9 +7,9 @@
 #   docker build -t ghcr.io/hadielmougy/wiggle:0.0.5 .
 #   docker run --rm -p 8080:8080 -p 8090:8090 ghcr.io/hadielmougy/wiggle:0.0.5      # in-memory
 #
-# The web portal is off unless WIGGLE_PORTAL_PORT is set:
-#   docker run --rm -p 8080:8080 -p 8070:8070 -e WIGGLE_PORTAL_PORT=8070 \
-#     -e WIGGLE_DASHBOARD_PASSWORD=change-me ghcr.io/hadielmougy/wiggle:0.0.5
+# The web portal is on :8070 (WIGGLE_PORTAL_PORT=0 turns it off). Its first visit sets the admin
+# password, unless WIGGLE_DASHBOARD_PASSWORD sets one:
+#   docker run --rm -p 8080:8080 -p 8070:8070 ghcr.io/hadielmougy/wiggle:0.0.5
 #
 # The image bundles every storage backend (PostgreSQL/H2, MySQL/MariaDB, Oracle, SQL Server,
 # Cassandra); the engine is picked from the URL scheme, so pointing it at a database is just env:
@@ -57,8 +57,8 @@ FROM gcr.io/distroless/java21-debian12:nonroot AS runtime
 WORKDIR /opt/wiggle
 COPY --from=build /src/dist/build/install/wiggle-server/lib ./lib
 
-# gRPC control plane, the port that serves the always-open /healthz probe, and the portal's
-# conventional port (off until WIGGLE_PORTAL_PORT is set). Storage defaults to in-memory; set
+# gRPC control plane, the port that serves the always-open /healthz probe, and the portal
+# (WIGGLE_PORTAL_PORT, default 8070; 0 turns it off). Storage defaults to in-memory; set
 # WIGGLE_JDBC_URL to run against PostgreSQL. Secure the portal with WIGGLE_DASHBOARD_PASSWORD and
 # turn on TLS with WIGGLE_TLS_KEYSTORE (see the README).
 ENV WIGGLE_PORT=8080 \

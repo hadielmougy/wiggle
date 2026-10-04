@@ -236,6 +236,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 | `GET` | `/api/auth` | who am I, and my permissions |
 | `POST` | `/api/login` · `/logout` · `GET /login` | session cookie login and the browser form |
 | `GET` | `/healthz` | a probe on the portal port |
+| `GET` · `POST` | `/setup` · `/api/setup` | first run only: the screen that sets the admin's password, and the call that does ([WGL-OPS-051](90-ops.md)); 409 once any account exists |
 | `GET` | `/api/cluster` | cluster view |
 | `GET` | `/api/workflows` · `/api/workflows/{name}` | names, and one compiled graph as JSON |
 | `GET` | `/api/instances` | list, filtered by workflow/status/limit or searched by instance or correlation id |

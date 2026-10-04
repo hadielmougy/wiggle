@@ -161,6 +161,54 @@ class ConsoleUsersTest {
         });
     }
 
+    @Test @DisplayName("first run: everything leads to the setup screen until the admin password is set, then never again")
+    void firstRunSetup() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             ConsoleServer one = portal(server, null)) {
+            HttpClient http = HttpClient.newHttpClient();
+            String base = "http://localhost:" + one.port();
+            HttpResponse<String> root = http.send(HttpRequest.newBuilder(URI.create(base + "/")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(302, root.statusCode());
+            assertEquals("/setup", root.headers().firstValue("Location").orElseThrow());
+            HttpResponse<String> api = send(http, "GET", base + "/api/instances", null, null);
+            assertEquals(401, api.statusCode(), "no API answers before setup");
+            assertTrue(send(http, "GET", base + "/api/auth", null, null).body().contains("\"setupRequired\":true"));
+            assertTrue(send(http, "GET", base + "/setup", null, null).body().contains("value=\"admin\""),
+                    "the setup screen names the admin account it creates");
+
+            assertEquals(400, send(http, "POST", base + "/api/setup", null, "{\"password\":\"short\"}").statusCode());
+            HttpResponse<String> set = send(http, "POST", base + "/api/setup", null, "{\"password\":\"first-run-pass\"}");
+            assertEquals(200, set.statusCode(), set.body());
+            assertEquals(200, withCookie(http, base + "/api/instances", cookieOf(set)).statusCode(),
+                    "setting the password signs the admin in");
+
+            assertEquals(409, send(http, "POST", base + "/api/setup", null, "{\"password\":\"take-over-pass\"}").statusCode(),
+                    "once set up, the setup endpoint cannot be used to take the portal over");
+            assertEquals(401, send(http, "GET", base + "/api/instances", "admin:take-over-pass", null).statusCode());
+            assertEquals(200, send(http, "GET", base + "/api/instances", "admin:first-run-pass", null).statusCode());
+            HttpResponse<String> setupAgain = http.send(HttpRequest.newBuilder(URI.create(base + "/setup")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals("/login", setupAgain.headers().firstValue("Location").orElseThrow());
+
+            assertTrue(server.accounts().account("admin").orElseThrow().permissions().contains("*"),
+                    "the admin is an account in the database, with the admin role");
+            try (ConsoleServer two = portal(server, null)) {
+                assertEquals(200, send(http, "GET", "http://localhost:" + two.port() + "/api/instances",
+                        "admin:first-run-pass", null).statusCode(), "every portal node knows it");
+            }
+        }
+    }
+
+    @Test @DisplayName("a password in the environment skips setup: the built-in admin signs in directly")
+    void builtinAdminSkipsSetup() throws Exception {
+        withPortal("env-password", (base, http) -> {
+            assertTrue(send(http, "GET", base + "/api/auth", null, null).body().contains("\"setupRequired\":false"));
+            assertEquals(200, send(http, "GET", base + "/api/instances", "admin:env-password", null).statusCode());
+            assertEquals(409, send(http, "POST", base + "/api/setup", null, "{\"password\":\"take-over-pass\"}").statusCode());
+        });
+    }
+
     @Test @DisplayName("an admin issues an API key once, lists credentials without it, and deletes them")
     void credentials() throws Exception {
         withPortal("root-pass", (base, http) -> {
@@ -236,21 +284,15 @@ class ConsoleUsersTest {
         });
 
         withPortal(null, (base, http) -> {
-            assertTrue(send(http, "GET", base + "/api/auth", null, null).body().contains("\"required\":false"),
-                    "no password and no accounts: open mode");
-            assertEquals(400, send(http, "POST", base + "/api/users", null,
-                    json("user", "rey", "password", "rey-password", "role", "viewer")).statusCode(),
-                    "a first account that could not manage users would lock everyone out");
-            assertEquals(200, send(http, "POST", base + "/api/users", null,
-                    json("user", "dana", "password", "dana-password", "role", "admin")).statusCode());
-            Thread.sleep(300);
-            assertEquals(401, send(http, "GET", base + "/api/instances", null, null).statusCode(),
-                    "the first account turns authentication on");
-            String refused = send(http, "DELETE", base + "/api/users/dana", "dana:dana-password", null).body();
-            assertTrue(refused.contains("no account that can manage users"), "and the portal cannot be locked out: " + refused);
-            assertEquals(200, send(http, "POST", base + "/api/users", "dana:dana-password",
+            HttpResponse<String> set = send(http, "POST", base + "/api/setup", null, "{\"password\":\"admin-password\"}");
+            assertEquals(200, set.statusCode(), set.body());
+            assertEquals(400, send(http, "DELETE", base + "/api/users/admin", "admin:admin-password", null).statusCode(),
+                    "the admin set up on first run is the only one that can manage users, so it stays");
+            assertTrue(send(http, "DELETE", base + "/api/users/admin", "admin:admin-password", null).body()
+                    .contains("no account that can manage users"));
+            assertEquals(200, send(http, "POST", base + "/api/users", "admin:admin-password",
                     json("user", "sam", "password", "sam-password", "role", "admin")).statusCode());
-            assertEquals(200, send(http, "DELETE", base + "/api/users/dana", "dana:dana-password", null).statusCode(),
+            assertEquals(200, send(http, "DELETE", base + "/api/users/admin", "sam:sam-password", null).statusCode(),
                     "with a second admin, the first may go");
         });
     }

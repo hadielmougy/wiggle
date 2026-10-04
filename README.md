@@ -183,10 +183,11 @@ helm install wiggle deploy/helm/wiggle \
 
 ### 2.3 The portal
 
-A web UI the server serves on its own port when `WIGGLE_PORTAL_PORT` is set, reading the engine
+A web UI the server serves on its own port (`WIGGLE_PORTAL_PORT`, default 8070), reading the engine
 in process — any node with it on serves the whole cluster. Every instance as a table of the steps it ran — click a step to expand its **input, output,
 retries and timing** — plus cancel, deliver signals, schedules, and search by
-**instance id or correlation id**. Optional login: built-in admin and **read-only viewer**
+**instance id or correlation id**. The first visit sets the `admin` password and stores it in the
+database (or set `WIGGLE_DASHBOARD_PASSWORD` to skip that). Login: built-in admin and **read-only viewer**
 accounts from the environment, plus accounts and **roles built from permissions** (scoped to a
 workflow if you like) managed in the portal and kept in the database, with an audit of every
 change. Any node serves any signed-in session. The `/healthz` probe for Kubernetes stays on its own port.
@@ -508,7 +509,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint |
-| `WIGGLE_PORTAL_PORT` | `0` (off) | port for the web **portal** (below) |
+| `WIGGLE_PORTAL_PORT` | `8070` | port for the web **portal** (below); `0` turns it off |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
@@ -523,8 +524,8 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_PORTAL_PORT` | `0` (off) | HTTP port |
-| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; **unset = open access** |
+| `WIGGLE_PORTAL_PORT` | `8070` | HTTP port; `0` turns it off |
+| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | admin login from the environment; **unset = the first visit sets the admin password**, kept in the database |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional **read-only** account — sees everything, can't cancel/signal/schedule |
 | `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session; accounts, roles and sessions live on the auth shard |
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once and then no longer read |

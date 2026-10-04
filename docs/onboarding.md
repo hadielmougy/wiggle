@@ -111,7 +111,7 @@ scripts/kind-down.sh                   # tear down
 
 ### 4.4 As a container (Docker)
 
-The `Dockerfile` builds one image: the server, with the portal behind `WIGGLE_PORTAL_PORT` and
+The `Dockerfile` builds one image: the server, with the portal on `WIGGLE_PORTAL_PORT` (8070) and
 every storage backend bundled, picked from the URL scheme; it reads the same env vars as the JAR
 ([§6](#6-configuration-reference)). TLS is set the same way — `WIGGLE_TLS_KEYSTORE` + a mounted
 keystore. The signed, multi-arch image is published to **both** `hadielmougy/wiggle` (Docker Hub)
@@ -123,7 +123,7 @@ docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.9            # Docker Hub
 # docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.9  # …or GHCR
 
 # the same, serving the portal → http://localhost:8070
-docker run --rm -p 8080:8080 -p 8070:8070 -e WIGGLE_PORTAL_PORT=8070 \
+docker run --rm -p 8080:8080 -p 8070:8070 \
   -e WIGGLE_DASHBOARD_PASSWORD=change-me hadielmougy/wiggle:0.0.9
 
 # a complete stack: server with the portal + Postgres, login, durable volume, no TLS
@@ -507,12 +507,13 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 ### 7.1 The portal (web UI)
 
 The web UI is the **portal**, served by the server process itself on `WIGGLE_PORTAL_PORT`
-(default `0` = off), separate from the gRPC port (the `console` module, embedded Tomcat +
+(default `8070`; `0` turns it off), separate from the gRPC port (the `console` module, embedded Tomcat +
 servlets). It reads and acts through the engine in process, so any node with the portal on
 serves the whole cluster, and nothing it does goes over gRPC. A node's `WIGGLE_DASHBOARD_PORT`
 (default `0` = off) still serves only the **`/healthz`** probe for liveness/readiness checks.
 
-To keep heavy portal use off the claim path, run a node or two with the portal on and route no
+Several server nodes on one host each need their own `WIGGLE_PORTAL_PORT` (or `0`). To keep heavy
+portal use off the claim path, run a node or two with the portal on and route no
 workers to them; they are ordinary server nodes.
 
 ```bash
@@ -521,7 +522,7 @@ workers to them; they are ordinary server nodes.
 ./gradlew :example:seedDashboard                         # → http://localhost:8070
 
 # or on any server node, e.g. the Docker image
-docker run -p 8080:8080 -p 8070:8070 -e WIGGLE_PORTAL_PORT=8070 -e WIGGLE_DASHBOARD_PASSWORD=… hadielmougy/wiggle
+docker run -p 8080:8080 -p 8070:8070 hadielmougy/wiggle          # first visit sets the admin password
 ```
 
 Accounts and sessions live on the auth shard, so any portal node serves any signed-in request; a
@@ -551,8 +552,15 @@ Accounts come from two places. **Built-in** accounts are configured in the envir
 nodes serving the portal: `WIGGLE_DASHBOARD_PASSWORD` for the admin (`WIGGLE_DASHBOARD_USER`, default `admin`)
 and optionally `WIGGLE_DASHBOARD_VIEWER_PASSWORD` for a viewer (`WIGGLE_DASHBOARD_VIEWER_USER`,
 default `viewer`). Nothing in the running portal can change them. **Managed** accounts are the
-ones an admin creates in the portal itself (§7.1a). With neither a built-in password nor a
-managed account, the portal is open and every request is an admin (warning at startup).
+ones an admin creates in the portal itself (§7.1a).
+
+With no `WIGGLE_DASHBOARD_PASSWORD` and no account in the database yet, the portal starts in
+**first-run setup**: every page leads to a screen that sets the password of the admin account
+(`WIGGLE_DASHBOARD_USER`, default `admin`), stores it hashed in the database (the auth shard), and
+signs you in. After that the setup screen is gone for good, on every node, and the admin signs in
+like any other account. Until it is done, anyone who can reach the portal port can do it, so set
+it straight after the first start, or set `WIGGLE_DASHBOARD_PASSWORD` to skip setup. On the
+in-memory store the password goes with the process.
 
 ### 7.1a Users an admin manages
 
@@ -592,8 +600,8 @@ changing stays signed in. Deleting an account signs it out everywhere.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `WIGGLE_PORTAL_PORT` | `0` (off) | portal HTTP port |
-| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
+| `WIGGLE_PORTAL_PORT` | `8070` | portal HTTP port; `0` turns it off (and give each node on one host its own) |
+| `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | admin login from the environment; unset = the first visit sets the admin password, kept in the database |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
 | `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session before reading it again |
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once ([§7.1a](#71a-users-an-admin-manages)) |
