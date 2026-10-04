@@ -1,5 +1,7 @@
 package com.wiggle.console;
 
+import com.wiggle.server.auth.Permissions;
+import com.wiggle.server.store.StorageException;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -13,15 +15,15 @@ import java.util.Set;
 
 /**
  * Guards every request. Authentication: an unauthenticated API call gets 401 (with the Basic challenge
- * for curl); an unauthenticated browser hitting a page is redirected to {@code /login}. Authorization: a
- * read-only viewer that tries to mutate (any non-GET {@code /api/*} call -- cancel, signal, schedule
- * changes, user management) gets 403. A few endpoints are always open, and a few are self-service:
- * signed in is enough, whatever the role, because they act on the caller's own account.
+ * for curl); an unauthenticated browser hitting a page is redirected to {@code /login}. Authorization:
+ * every {@code /api/*} call needs the action {@link #action} names, on at least one scope; the servlet
+ * then checks the scope the call touches. A few endpoints are always open, and a few are
+ * self-service: signed in is enough, because they act on the caller's own account.
  */
 public final class AuthFilter implements Filter {
 
     private static final Set<String> OPEN = Set.of("/api/auth", "/api/login", "/login", "/logout", "/healthz");
-    /** Writes a viewer may make, because they change nothing but their own account. */
+    /** Writes any signed-in account may make, because they change nothing but its own account. */
     private static final Set<String> SELF_SERVICE = Set.of("/api/password");
     private static final Set<String> READ_METHODS = Set.of("GET", "HEAD", "OPTIONS");
 
@@ -31,15 +33,39 @@ public final class AuthFilter implements Filter {
         this.auth = auth;
     }
 
+    /**
+     * The action an {@code /api/*} call needs. A write not listed here needs {@value Permissions#ALL},
+     * so a new mutating endpoint is locked down until it is given its own action.
+     */
+    static String action(String method, String path) {
+        if (path.startsWith("/api/users") || path.startsWith("/api/roles") || path.startsWith("/api/audit")) {
+            return Permissions.USER_MANAGE;
+        }
+        if (READ_METHODS.contains(method)) return Permissions.PORTAL_READ;
+        if (path.startsWith("/api/instances/") && path.endsWith("/cancel")) return Permissions.INSTANCE_CANCEL;
+        if (path.startsWith("/api/instances/") && path.contains("/signal/")) return Permissions.INSTANCE_SIGNAL;
+        if (path.startsWith("/api/schedules")) return Permissions.SCHEDULE_WRITE;
+        return Permissions.ALL;
+    }
+
     @Override
     public void doFilter(ServletRequest sreq, ServletResponse sres, FilterChain chain)
             throws IOException, ServletException {
         HttpServletRequest req = (HttpServletRequest) sreq;
         HttpServletResponse res = (HttpServletResponse) sres;
         String path = req.getRequestURI();
-        boolean open = !auth.required() || OPEN.contains(path);
-
-        if (!open && !auth.authenticated(req)) {
+        if (OPEN.contains(path)) {
+            chain.doFilter(sreq, sres);
+            return;
+        }
+        ConsoleAuth.Principal principal;
+        try {
+            principal = auth.principal(req);
+        } catch (StorageException e) {
+            res.sendError(503, "the auth shard is unreachable; try again shortly");
+            return;
+        }
+        if (principal == null) {
             if (path.startsWith("/api/")) {
                 String challenge = auth.apiChallenge();
                 if (challenge != null) res.setHeader("WWW-Authenticate", challenge);
@@ -49,12 +75,14 @@ public final class AuthFilter implements Filter {
             }
             return;
         }
-        // Authenticated (or an open path): a viewer may read but not mutate. Any non-GET /api call is a
-        // write; default-deny keeps new mutating endpoints locked down without touching this filter.
-        if (!open && path.startsWith("/api/") && !READ_METHODS.contains(req.getMethod())
-                && !SELF_SERVICE.contains(path) && !auth.canWrite(req)) {
-            res.sendError(403, "read-only: admin role required");
-            return;
+        if (path.startsWith("/api/") && !SELF_SERVICE.contains(path)) {
+            String action = action(req.getMethod(), path);
+            boolean allowed = action.equals(Permissions.ALL)
+                    ? principal.permissions().contains(Permissions.ALL) : principal.allowsAny(action);
+            if (!allowed) {
+                res.sendError(403, "permission '" + action + "' required");
+                return;
+            }
         }
         chain.doFilter(sreq, sres);
     }

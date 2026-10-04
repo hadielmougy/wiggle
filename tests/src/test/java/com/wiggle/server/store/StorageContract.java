@@ -1475,6 +1475,108 @@ abstract class StorageContract {
         return e;
     }
 
+    // -- WGL-SHARD-181: accounts, roles, sessions and their audit on the auth shard --
+
+    @Test
+    @DisplayName("an account is written, replaced, granted roles, and deleted with its grants and sessions")
+    void authAccounts() {
+        String name = id("u");
+        String role = id("r");
+        storage.inTx(tx -> {
+            tx.putAuthRole(new Rows.AuthRole(role, Set.of("portal.read", "instance.cancel:orders"), false, now, now));
+            tx.putAuthUser(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now));
+            tx.setAuthRolesOf(name, List.of(role, "viewer-" + run));
+            return null;
+        });
+        Rows.AuthUser read = storage.inTx(tx -> tx.findAuthUser(name)).orElseThrow();
+        assertEquals(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now), read);
+        assertEquals(List.of(role, "viewer-" + run).stream().sorted().toList(), storage.inTx(tx -> tx.authRolesOf(name)));
+        Rows.AuthRole r = storage.inTx(tx -> tx.authRoles()).stream().filter(x -> x.name().equals(role)).findFirst()
+                .orElseThrow();
+        assertEquals(Set.of("portal.read", "instance.cancel:orders"), r.permissions());
+        assertTrue(storage.inTx(tx -> tx.authUsers()).stream().anyMatch(u -> u.name().equals(name)));
+
+        storage.inTx(tx -> {
+            tx.putAuthUser(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5));
+            tx.setAuthRolesOf(name, List.of(role));
+            return null;
+        });
+        assertEquals(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5),
+                storage.inTx(tx -> tx.findAuthUser(name)).orElseThrow(), "a put replaces the account");
+        assertEquals(List.of(role), storage.inTx(tx -> tx.authRolesOf(name)), "and roles are replaced, not added");
+
+        String session = id("sess");
+        storage.inTx(tx -> { tx.insertAuthSession(new Rows.AuthSession(session, name, now + 60_000, now)); return null; });
+        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthUser(name)));
+        assertTrue(storage.inTx(tx -> tx.findAuthUser(name)).isEmpty());
+        assertTrue(storage.inTx(tx -> tx.authRolesOf(name)).isEmpty(), "its grants go with it");
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(session)).isEmpty(), "and its sessions");
+        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthUser(name)), "a second delete finds nothing");
+    }
+
+    @Test
+    @DisplayName("deleting a role removes every grant of it")
+    void authRoleDeletion() {
+        String name = id("u");
+        String role = id("r");
+        String other = id("r");
+        storage.inTx(tx -> {
+            tx.putAuthRole(new Rows.AuthRole(role, Set.of("portal.read"), false, now, now));
+            tx.putAuthRole(new Rows.AuthRole(other, Set.of("*"), false, now, now));
+            tx.putAuthUser(new Rows.AuthUser(name, "h", "s", 1, false, now, now));
+            tx.setAuthRolesOf(name, List.of(role, other));
+            return null;
+        });
+        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthRole(role)));
+        assertEquals(List.of(other), storage.inTx(tx -> tx.authRolesOf(name)));
+        assertTrue(storage.inTx(tx -> tx.authRoles()).stream().noneMatch(r -> r.name().equals(role)));
+        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthRole(role)));
+    }
+
+    @Test
+    @DisplayName("sessions are found by hash, ended one at a time, per account except one, or once expired")
+    void authSessions() {
+        String name = id("u");
+        String a = id("sa"), b = id("sb"), c = id("sc"), old = id("so");
+        storage.inTx(tx -> {
+            tx.insertAuthSession(new Rows.AuthSession(a, name, now + 60_000, now));
+            tx.insertAuthSession(new Rows.AuthSession(b, name, now + 60_000, now));
+            tx.insertAuthSession(new Rows.AuthSession(c, name, now + 60_000, now));
+            tx.insertAuthSession(new Rows.AuthSession(old, name, ANCIENT, ANCIENT));
+            return null;
+        });
+        assertEquals(new Rows.AuthSession(a, name, now + 60_000, now), storage.inTx(tx -> tx.findAuthSession(a)).orElseThrow());
+        storage.inTx(tx -> { tx.deleteAuthSession(a); return null; });
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(a)).isEmpty());
+
+        int expired = storage.inTx(tx -> tx.deleteExpiredAuthSessions(ANCIENT + 1, 1000));
+        assertTrue(expired >= 1);
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(old)).isEmpty(), "an expired session is swept");
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isPresent(), "a live one is not");
+
+        assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, c)));
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isEmpty());
+        assertTrue(storage.inTx(tx -> tx.findAuthSession(c)).isPresent(), "the kept session stays");
+        assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, null)), "null keeps none");
+    }
+
+    @Test
+    @DisplayName("the audit assigns increasing seqs and is read after a seq, in order")
+    void authAudit() {
+        long head = storage.inTx(tx -> tx.authAuditHead());
+        String action = id("act");
+        long first = storage.inTx(tx -> tx.appendAuthAudit(new Rows.AuthAudit(0, now, "dana", action, "rey", "x")));
+        long second = storage.inTx(tx -> tx.appendAuthAudit(new Rows.AuthAudit(0, now + 1, null, action, null, null)));
+        assertTrue(first > head && second > first, head + " < " + first + " < " + second);
+        assertTrue(storage.inTx(tx -> tx.authAuditHead()) >= second);
+        List<Rows.AuthAudit> after = storage.inTx(tx -> tx.authAuditAfter(first - 1, 1000)).stream()
+                .filter(e -> e.action().equals(action)).toList();
+        assertEquals(List.of(new Rows.AuthAudit(first, now, "dana", action, "rey", "x"),
+                new Rows.AuthAudit(second, now + 1, null, action, null, null)), after);
+        assertTrue((boolean) storage.inTx(tx -> tx.authAuditHas(action)));
+        assertFalse((boolean) storage.inTx(tx -> tx.authAuditHas(id("never"))));
+    }
+
     // -- WGL-STOR-005: the store's own identity --
 
     @Test

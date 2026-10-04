@@ -233,7 +233,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/auth` | who am I, and which role |
+| `GET` | `/api/auth` | who am I, and my permissions |
 | `POST` | `/api/login` · `/logout` · `GET /login` | session cookie login and the browser form |
 | `GET` | `/healthz` | a probe on the portal port |
 | `GET` | `/api/cluster` | cluster view |
@@ -246,13 +246,19 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 | `GET` | `/api/backlog` | backlog coverage, with uncovered slices and stranded task counts |
 | `GET` | `/api/stats` | per-step duration statistics |
 | `GET`/`POST`/`DELETE` | `/api/schedules[/{id}]` | list, create (interval or cron), delete |
-| `GET`/`POST`/`DELETE` | `/api/users[/{name}[/password]]` | managed accounts (admin only) |
+| `GET`/`POST`/`DELETE` | `/api/users[/{name}]` | managed accounts: list, create with roles, delete |
+| `POST` | `/api/users/{name}/password` · `/roles` · `/disabled` | reset a password, replace roles, disable or enable |
+| `GET`/`POST`/`DELETE` | `/api/roles[/{name}]` | roles: list with the known actions, create or replace, delete |
+| `GET` | `/api/audit?after=&limit=` | changes to accounts, roles and sessions, oldest first |
 | `POST` | `/api/password` | change one's own password |
 
 **WGL-API-101** (MUST) An unknown `/api/*` path MUST be 404; a mutating call on a GET-only endpoint MUST
 be 405.
 
-**WGL-API-102** (MUST) A viewer MUST be refused every non-`GET` `/api/*` call except `/api/password`.
+**WGL-API-102** (MUST) Every `/api/*` call except `/api/password` MUST need a permission: `portal.read`
+for a read, `user.manage` for users, roles and the audit, `instance.cancel`, `instance.signal` or
+`schedule.write` for those writes, scoped to the workflow they touch, and `*` for any other write.
+A call without it is 403. A viewer is therefore refused every write.
 
 **WGL-API-103** (MUST) The backend MUST sit behind one neutral seam (`DashboardData`) carrying no engine
 or storage types, so the SPA's JSON does not follow engine or storage changes.

@@ -524,8 +524,8 @@ workers to them; they are ordinary server nodes.
 docker run -p 8080:8080 -p 8070:8070 -e WIGGLE_PORTAL_PORT=8070 -e WIGGLE_DASHBOARD_PASSWORD=… hadielmougy/wiggle
 ```
 
-Sessions are held by the node that signed you in, so a load balancer in front of several portal
-nodes needs sticky sessions for now.
+Accounts and sessions live on the auth shard, so any portal node serves any signed-in request; a
+load balancer in front of several needs no sticky sessions.
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
 has seven tabs: **Instances** (filter, search by **instance id or correlation id**, each instance's
@@ -533,14 +533,17 @@ steps as a table — click one to expand its input, output, retries and timing �
 delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry policies), **Schedules** (create/delete interval and cron schedules), **Signals**,
 **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
 **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
-execution mode, slowest first), and **Users** (§7.1a, admins only). `./gradlew :console:build` compiles the bundle automatically (needs Node;
+execution mode, slowest first), and **Users** (§7.1a, for accounts holding `user.manage`). `./gradlew :console:build` compiles the bundle automatically (needs Node;
 `-PskipDashboard` or a missing Node toolchain skips it). Dev loop: `cd dashboard-ui &&
 npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a portal on :8070).
 
 ![The portal's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
 
-**Auth.** Two roles: **admin** does everything, **viewer** sees everything but is refused any
-mutating call (cancel, signal, schedule, users — every non-GET `/api/*`). Browsers get a
+**Auth.** A role is a named set of permissions. Two are built in: **admin** (`*`, everything) and
+**viewer** (`portal.read`, sees everything and is refused every write). The actions are
+`portal.read`, `instance.cancel`, `instance.signal`, `schedule.write` and `user.manage` (plus
+`instance.start` and `task.poll`, reserved for gRPC authorization); the instance and schedule
+ones take a workflow scope, so `instance.cancel:orders` cancels only `orders` instances. Browsers get a
 `/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
 auth. Credentials travel cleartext over plain HTTP, so serve over TLS for anything exposed.
 
@@ -553,25 +556,35 @@ managed account, the portal is open and every request is an admin (warning at st
 
 ### 7.1a Users an admin manages
 
-An admin gets a **Users** tab: create an account with a name, a password and a role
-(`admin` or `viewer`), set someone's password, or delete an account. Everyone who signs in with
+An account holding `user.manage` gets a **Users** tab: create an account with a name, a password
+and a role, change its roles, set its password, disable or enable it, or delete it; define roles
+from permissions; and read the audit of every change to accounts, roles and sessions. Everyone who signs in with
 a managed account can change their own password from the header, proving their current one
 first. A viewer may do that too — it is the one write a viewer is allowed, since it changes
 nothing but their own account.
 
-Accounts live in a JSON file the node serving the portal owns, `WIGGLE_CONSOLE_USERS_FILE`
-(default `wiggle-users.json` in the working directory), **not** in the workflow database; each
-portal node keeps its own. In Kubernetes that means mounting a volume for the file, or the
-accounts go when the pod does.
+Accounts, roles, sessions and the audit live on the **auth shard**: the database the storage
+topology gives the `auth` role, or the one database of a single-database deployment. Every node
+caches what it has looked up for at most `WIGGLE_AUTH_CACHE_MILLIS` (30 s) and polls the audit
+every second, so a password change, a role change, a disable or a deletion takes effect on every
+node within about a second. With the auth shard down, people already signed in keep working,
+nobody new signs in (503), and the built-in admin still can. The accounts are not reachable over
+gRPC, which has no per-RPC authorization yet.
 
-Passwords are stored as PBKDF2-HMAC-SHA256 hashes over a per-account random salt, never in the
-clear, and the file is rewritten atomically and kept owner-only where the filesystem allows.
+A console users file from before (`WIGGLE_CONSOLE_USERS_FILE`, default `wiggle-users.json`) is
+imported once by the first node to start with it, hashes as they are; after that it is no longer
+read, and every node says so at startup.
+
+Passwords are stored as PBKDF2-HMAC-SHA256 hashes over a per-account random salt, and sessions
+only as a hash of their token: nothing in the database signs anyone in.
 
 Three rules keep a portal reachable:
 
 - A managed account cannot take a built-in account's name, and built-in accounts cannot be
   deleted or re-passworded from the portal — they are set in the environment.
-- The last remaining admin cannot be deleted when there is no built-in admin to fall back on.
+- With no built-in admin to fall back on, no change may leave no enabled account that can manage
+  users — not deleting, disabling or demoting the last one, not changing the role it relies on,
+  and not creating a first account that could not manage users.
 - Creating the first managed account **turns authentication on**, even if no password was
   configured. Sign in with the account you just made.
 
@@ -583,7 +596,8 @@ changing stays signed in. Deleting an account signs it out everywhere.
 | `WIGGLE_PORTAL_PORT` | `0` (off) | portal HTTP port |
 | `WIGGLE_DASHBOARD_USER` / `WIGGLE_DASHBOARD_PASSWORD` | `admin` / *(unset)* | operator login; unset = open |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
-| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | where accounts an admin creates in the portal are kept ([§7.1a](#71a-users-an-admin-manages)) |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session before reading it again |
+| `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once ([§7.1a](#71a-users-an-admin-manages)) |
 | `WIGGLE_TLS_*` | *(unset)* | the server's keystore serves the portal over HTTPS too; with a truststore, the portal requires client certificates as gRPC does |
 
 ### 7.1a Transport security (TLS / mTLS)

@@ -1,7 +1,8 @@
 (ns wiggle.dashboard.actions
   "Side-effecting bridges between the API and the state atom: load-* fetch and store, the
    verbs (cancel, signal, schedule) act and then refresh what they touched."
-  (:require [wiggle.dashboard.api :as api]
+  (:require [clojure.string :as str]
+            [wiggle.dashboard.api :as api]
             [wiggle.dashboard.state :as st :refer [db]]))
 
 (defn- store! [k] (fn [v] (swap! db assoc k v)))
@@ -88,7 +89,34 @@
   (when (st/can-manage-users?)
     (-> (api/users)
         (.then #(swap! db assoc :users (:users %)))
+        (.catch st/on-error))
+    (-> (api/roles)
+        (.then #(swap! db assoc :roles (:roles %) :actions (:actions %)))
+        (.catch st/on-error))
+    (-> (api/audit)
+        (.then #(swap! db assoc :audit (:entries %)))
         (.catch st/on-error))))
+
+(defn set-roles! [name roles]
+  (-> (api/set-roles name roles)
+      (.then (fn [_] (st/toast! :ok (str "'" name "' now holds " (str/join ", " roles))) (load-users!)))
+      (.catch st/on-error)))
+
+(defn set-disabled! [name disabled]
+  (-> (api/set-disabled name disabled)
+      (.then (fn [_] (st/toast! :ok (str "'" name "' " (if disabled "disabled; signed out" "enabled")))
+               (load-users!)))
+      (.catch st/on-error)))
+
+(defn put-role! [body]
+  (-> (api/put-role body)
+      (.then (fn [_] (st/toast! :ok (str "role '" (:name body) "' saved")) (load-users!)))
+      (.catch st/on-error)))
+
+(defn delete-role! [name]
+  (-> (api/delete-role name)
+      (.then (fn [_] (st/toast! :ok (str "role '" name "' deleted")) (load-users!)))
+      (.catch st/on-error)))
 
 (defn create-user! [body]
   (-> (api/create-user body)

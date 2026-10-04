@@ -15,7 +15,7 @@ Liveness/readiness use the always-open /healthz on port {{ .Values.service.healt
 
 The portal is on port {{ .Values.service.portalPort }} of every pod:
     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.portalPort }}:{{ .Values.service.portalPort }}
-Sessions are held by the pod that signed you in, so put sticky sessions on any load balancer in front.
+Accounts and sessions are in the database, so any pod serves any signed-in request.
 {{- end }}
 
 {{- if not (or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret) }}

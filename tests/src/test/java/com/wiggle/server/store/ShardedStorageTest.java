@@ -55,6 +55,21 @@ class ShardedStorageTest {
         assertEquals(2, s.home());
     }
 
+    @Test @DisplayName("accounts go to the auth shard, which defaults to home and must be one of the shards")
+    void authShard() {
+        Probe seven = new Probe("a"), two = new Probe("b");
+        ShardedStorage s = new ShardedStorage(List.of(new ShardedStorage.Member(7, ShardState.ACTIVE, false, seven),
+                new ShardedStorage.Member(2, ShardState.ACTIVE, true, two)), 2, 7);
+        s.inAuth(tx -> null);
+        assertEquals(1, seven.txs.get());
+        assertEquals(0, two.txs.get());
+        assertEquals(7, s.auth());
+        assertEquals(List.of(2), s.instanceShards(), "an auth-only shard holds no instances");
+        assertEquals(2, new ShardedStorage(shards(new Probe("a"), new Probe("b")), 2).auth());
+        assertThrows(IllegalArgumentException.class, () -> new ShardedStorage(
+                List.of(new ShardedStorage.Member(2, ShardState.ACTIVE, true, new Probe("b"))), 2, 9));
+    }
+
     @Test @DisplayName("an unrouted transaction is refused")
     void unroutedIsRefused() {
         ShardedStorage s = new ShardedStorage(shards(new Probe("a"), new Probe("b")), 2);
