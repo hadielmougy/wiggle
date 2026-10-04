@@ -1,5 +1,9 @@
 package com.wiggle.server.store;
 
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.flow.Wiggle;
+import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.server.engine.DefinitionRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -179,5 +184,48 @@ class ShardedStorageTest {
         dropped.migrate();   // once retired, a shard may leave the topology
         assertThrows(ShardRetiredException.class, () -> dropped.inTxFor("wfi.s1.live", tx -> null),
                 "and its ids are still not found, rather than unknown");
+    }
+
+    interface ForkSteps {
+        Map<String, Object> a(Map<String, Object> ctx);
+        Map<String, Object> b(Map<String, Object> ctx);
+        Map<String, Object> pick(Map<String, Object> left, Map<String, Object> right);
+    }
+
+    @Test @DisplayName("a shard added to the topology receives every registered definition when it is migrated")
+    void addedShardReceivesDefinitions() {
+        WorkflowDefinition v1 = FlowSpec.define("grow", 1, Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b)).combine(s::pick)).definition();
+        WorkflowDefinition v2 = FlowSpec.define("grow", 2, Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::b), f.thenApply(s::a)).combine(s::pick)).definition();
+        InMemoryStorage home = new InMemoryStorage();
+        InMemoryStorage added = new InMemoryStorage();
+
+        ShardedStorage before = new ShardedStorage(Map.of(0, home), 0);
+        before.migrate();
+        DefinitionRegistry registry = new DefinitionRegistry(before);
+        registry.register(v1);
+        registry.register(v2);
+
+        Map<Integer, Storage> grown = new LinkedHashMap<>();
+        grown.put(0, home);
+        grown.put(1, added);
+        ShardedStorage after = new ShardedStorage(grown, 0);
+        after.migrate();
+
+        for (WorkflowDefinition def : List.of(v1, v2)) {
+            added.inTx(tx -> {
+                assertTrue(tx.definition(def.name(), def.version()).isPresent(), def.key() + " copied");
+                assertEquals(def.fingerprint(), tx.definitionFingerprint(def.name(), def.version()).orElseThrow().value(),
+                        def.key() + " keeps its fingerprint, so a re-registration is a no-op, not a conflict");
+                assertEquals(def.numberOfNodes(), tx.graphNodeCount(def.name(), def.version()), def.key() + " graph rows");
+                return null;
+            });
+        }
+        assertEquals(List.of(1, 2), added.inTx(tx -> tx.definitionVersions("grow")));
+
+        after.migrate();
+        new DefinitionRegistry(after).register(v1);
+        assertFalse(added.inTx(tx -> tx.definitionVersions("grow")).isEmpty(), "a second migrate and a re-registration change nothing");
     }
 }

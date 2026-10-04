@@ -346,7 +346,9 @@ runtime state on one database ([chapter 80](80-storage.md), lazy graph loading).
 that fails on any shard MUST fail as a whole and MUST be safe to retry.
 
 **WGL-SHARD-101** (MUST) A shard added later MUST receive every registered definition before it
-takes a positive weight.
+takes a positive weight. *Implemented in `ShardedStorage.migrate()`: every node start copies onto each
+instance shard the definitions, fingerprints and graph rows the home shard holds and it lacks.
+Verified by `server/store/ShardedStorageTest`.*
 
 **WGL-SHARD-102** (MUST) The node table, and therefore leader election
 ([WGL-OPS-022](90-ops.md)), MUST live on the home shard. There is one leader for the whole cluster.

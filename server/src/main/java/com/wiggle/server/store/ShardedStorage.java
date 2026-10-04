@@ -1,6 +1,8 @@
 package com.wiggle.server.store;
 
 import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.Json;
+import com.wiggle.core.WorkflowDefinition;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -88,7 +90,9 @@ public final class ShardedStorage implements Storage {
      *   <li>the registry on the home shard gains every new shard, and a shard's state only moves
      *       forward: ACTIVE, then DRAINING, then RETIRED, the last only once it holds no live
      *       instance;</li>
-     *   <li>a shard the registry holds as not RETIRED must still be listed.</li>
+     *   <li>a shard the registry holds as not RETIRED must still be listed;</li>
+     *   <li>every instance shard holds every definition the home shard holds, so a shard added to
+     *       the topology can run what it is given once it takes weight.</li>
      * </ul>
      * Any mismatch fails here, so a node refuses to start rather than route to the wrong database.
      */
@@ -105,7 +109,39 @@ public final class ShardedStorage implements Storage {
             }
         }
         retired = inHome(this::reconcileRegistry);
+        copyDefinitions();
     }
+
+    /** Copies onto each instance shard every definition, and its graph, the home shard has and it lacks. */
+    private void copyDefinitions() {
+        List<StoredDefinition> registered = inHome(tx -> {
+            List<StoredDefinition> out = new ArrayList<>();
+            for (String name : tx.definitionNames()) {
+                for (int version : tx.definitionVersions(name)) {
+                    String body = tx.definition(name, version).orElseThrow();
+                    GraphStore.StoredFingerprint fp = tx.definitionFingerprint(name, version).orElse(null);
+                    out.add(new StoredDefinition(name, version, body, fp));
+                }
+            }
+            return out;
+        });
+        if (registered.isEmpty()) return;
+        for (int shard : instanceShards) {
+            if (shard == home) continue;
+            inShard(shard, tx -> {
+                for (StoredDefinition d : registered) {
+                    if (tx.definition(d.name(), d.version()).isPresent()) continue;
+                    tx.putDefinition(d.name(), d.version(), d.body(),
+                            d.fingerprint() == null ? null : d.fingerprint().value(),
+                            d.fingerprint() == null ? null : d.fingerprint().algo());
+                    tx.putGraph(WorkflowDefinition.fromJson(Json.parse(d.body())));
+                }
+                return null;
+            });
+        }
+    }
+
+    private record StoredDefinition(String name, int version, String body, GraphStore.StoredFingerprint fingerprint) {}
 
     /** Brings the registry up to the listed states and returns the retired shard ids. */
     private Set<Integer> reconcileRegistry(Tx tx) {
