@@ -22,7 +22,8 @@ import java.util.Set;
  */
 public final class AuthFilter implements Filter {
 
-    private static final Set<String> OPEN = Set.of("/api/auth", "/api/login", "/login", "/logout", "/healthz");
+    private static final Set<String> OPEN = Set.of("/api/auth", "/api/login", "/login", "/logout", "/healthz",
+            "/setup", "/api/setup");
     /** Writes any signed-in account may make, because they change nothing but its own account. */
     private static final Set<String> SELF_SERVICE = Set.of("/api/password");
     private static final Set<String> READ_METHODS = Set.of("GET", "HEAD", "OPTIONS");
@@ -57,6 +58,15 @@ public final class AuthFilter implements Filter {
         String path = req.getRequestURI();
         if (OPEN.contains(path)) {
             chain.doFilter(sreq, sres);
+            return;
+        }
+        // First run: until the admin's password is set, that screen is all there is.
+        if (auth.setupRequired()) {
+            if (path.startsWith("/api/")) {
+                res.sendError(401, "the portal is not set up: set the admin password at /setup");
+            } else {
+                res.sendRedirect("/setup");
+            }
             return;
         }
         ConsoleAuth.Principal principal;

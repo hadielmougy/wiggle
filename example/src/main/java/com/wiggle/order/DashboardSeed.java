@@ -10,7 +10,6 @@ import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -72,10 +71,8 @@ public final class DashboardSeed {
                 .thenApply(s::gather)
                 .thenApply(s::render));
 
-        Map<String, String> env = new HashMap<>(System.getenv());
-        env.putIfAbsent(Portal.PORT_ENV, "8070");
         try (WiggleServer server = new WiggleServer(config).start();
-             Portal portal = Portal.fromEnvironment(server, config.tls(), env).orElseThrow();
+             Portal portal = Portal.fromEnvironment(server, config.tls(), System.getenv()).orElseThrow();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "seed-worker")
                      .registerHandler(new OnboardingHandlers())
@@ -96,7 +93,8 @@ public final class DashboardSeed {
             client.createSchedule("kyc-checks", Duration.ofHours(6), Map.of("source", "timer"));
 
             System.out.println("\nData seeded on the server at " + server.baseUrl() + ".");
-            System.out.println("Explore it in the portal: http://localhost:" + portal.port());
+            System.out.println("Explore it in the portal: http://localhost:" + portal.port()
+                    + " (the first visit sets the admin password, unless WIGGLE_DASHBOARD_PASSWORD did)");
             System.out.println("Two 'onboarding' instances are parked on the 'manager-approval' signal.");
             System.out.println("Press Ctrl-C to stop.\n");
             Thread.currentThread().join();

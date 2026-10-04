@@ -33,10 +33,11 @@ class PortalTest {
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
     }
 
-    @Test @DisplayName("an unset or zero WIGGLE_PORTAL_PORT serves no portal")
-    void offByDefault() throws Exception {
+    @Test @DisplayName("the portal is on by default, on 8070; WIGGLE_PORTAL_PORT=0 turns it off")
+    void onByDefault() throws Exception {
+        assertEquals(8070, Portal.port(Map.of()));
+        assertEquals(9000, Portal.port(Map.of(Portal.PORT_ENV, "9000")));
         try (WiggleServer server = new WiggleServer(config()).start()) {
-            assertTrue(Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of()).isEmpty());
             assertTrue(Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(Portal.PORT_ENV, "0")).isEmpty());
             assertThrows(IllegalArgumentException.class,
                     () -> Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(Portal.PORT_ENV, "web")));

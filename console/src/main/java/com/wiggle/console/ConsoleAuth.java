@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -30,8 +31,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * signed-in request; a built-in account signing in while the auth shard is unreachable gets a
  * session held by this node only.
  *
- * <p>With neither a built-in password nor a managed account the portal is unauthenticated and every
- * request may do anything (open mode); creating the first managed account turns authentication on.
+ * <p>With neither a built-in password nor a single managed account, the portal is in <b>setup</b>:
+ * nothing is served but the screen that sets the admin's password ({@link #setUpAdmin}), which
+ * creates the admin account on the auth shard. A portal built without accounts (tests, embedding)
+ * has nowhere to keep that password, so it is open instead: every request may do anything.
  */
 final class ConsoleAuth {
 
@@ -95,18 +98,35 @@ final class ConsoleAuth {
         this.secureCookies = secureCookies;
     }
 
-    /**
-     * Whether anyone must sign in: a built-in password, or any managed account, turns auth on. When
-     * the auth shard cannot say, it is required: an outage never opens the portal.
-     */
+    /** Whether anyone must sign in: always, unless this portal has no accounts at all to sign in with. */
     boolean required() {
-        if (password != null) return true;
-        if (cache == null) return false;
+        return password != null || cache != null;
+    }
+
+    /**
+     * Whether the admin's password is still to be set: no built-in password, and no account on the
+     * auth shard yet. When the auth shard cannot say, it is not: setup only ever starts from a
+     * database known to be empty.
+     */
+    boolean setupRequired() {
+        if (password != null || cache == null) return false;
         try {
-            return cache.anyAccount();
+            return !cache.anyAccount();
         } catch (StorageException e) {
-            return true;
+            return false;
         }
+    }
+
+    /**
+     * Sets the admin's password on first run: creates the admin account ({@link #user}) with the
+     * admin role on the auth shard and signs it in, returning the {@code Set-Cookie} value. Refused
+     * once any account exists, so it cannot be used to take over a portal already set up.
+     */
+    String setUpAdmin(String newPassword) {
+        if (!setupRequired()) throw new IllegalStateException("the portal is already set up; sign in instead");
+        accounts.create(null, user, newPassword, List.of(Permissions.ADMIN), builtinNames(), false);
+        cache.forgetUser(user);
+        return cookie(accounts.openSession(user, SESSION_TTL_MILLIS), SESSION_TTL_MILLIS / 1000);
     }
 
     /** The built-in admin's name, which is also the login form's default. */
@@ -310,6 +330,78 @@ final class ConsoleAuth {
         if (a == null || b == null) return false;
         return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
+
+    /** The first-run screen: sets the admin's password, then opens the portal signed in. */
+    static final String SETUP_HTML = """
+            <!doctype html>
+            <html lang="en">
+            <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Wiggle — set the admin password</title>
+            <style>
+              :root { color-scheme: light dark; --bg:#0e1420; --panel:#161d2b; --line:#28324a;
+                      --fg:#eef1f6; --muted:#8892a6; --accent:#f5b544; }
+              * { box-sizing:border-box; }
+              body { margin:0; min-height:100vh; display:grid; place-items:center;
+                     background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif; }
+              .card { width:min(400px,92vw); background:var(--panel); border:1px solid var(--line);
+                      border-radius:14px; padding:32px 28px; }
+              .brand { display:flex; align-items:center; gap:10px; font-size:20px; font-weight:800;
+                       letter-spacing:.02em; margin-bottom:4px; }
+              .brand .dot { color:var(--accent); }
+              p.sub { margin:0 0 18px; color:var(--muted); font-size:13px; }
+              label { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+                      color:var(--muted); margin:14px 0 6px; }
+              input { width:100%; background:#0d0f14; color:var(--fg); border:1px solid var(--line);
+                      border-radius:8px; padding:10px 12px; font:inherit; }
+              input[readonly] { color:var(--muted); }
+              input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+              button { width:100%; margin-top:22px; background:var(--accent); color:#0e1420; border:0;
+                       border-radius:8px; padding:11px; font:inherit; font-weight:700; cursor:pointer; }
+              button:disabled { opacity:.6; cursor:default; }
+              .err { min-height:18px; margin-top:12px; color:#ff8080; font-size:13px; }
+            </style>
+            </head>
+            <body>
+              <form class="card" id="f">
+                <div class="brand"><span class="dot">🌀</span> WIGGLE</div>
+                <p class="sub">First run: set the password of the admin account. It is stored, hashed,
+                  in the database; sign in with it from now on.</p>
+                <label for="u">Username</label>
+                <input id="u" readonly value="__USER__">
+                <label for="p">Password</label>
+                <input id="p" type="password" autocomplete="new-password" autofocus minlength="8"
+                       placeholder="at least 8 characters">
+                <label for="c">Confirm password</label>
+                <input id="c" type="password" autocomplete="new-password" minlength="8">
+                <button type="submit" id="b">Set password and sign in</button>
+                <div class="err" id="err" role="alert"></div>
+              </form>
+            <script>
+              const f = document.getElementById('f'), err = document.getElementById('err'),
+                    p = document.getElementById('p'), c = document.getElementById('c'), b = document.getElementById('b');
+              f.onsubmit = async (e) => {
+                e.preventDefault();
+                err.textContent = '';
+                if (p.value.length < 8) { err.textContent = 'A password is at least 8 characters'; p.focus(); return; }
+                if (p.value !== c.value) { err.textContent = 'The passwords do not match'; c.value=''; c.focus(); return; }
+                b.disabled = true;
+                try {
+                  const r = await fetch('/api/setup', { method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ password: p.value }) });
+                  if (r.ok) { location.href = '/'; return; }
+                  const body = await r.json().catch(() => ({}));
+                  err.textContent = body.error || ('Could not set the password (' + r.status + ')');
+                  if (r.status === 409) setTimeout(() => location.href = '/login', 1500);
+                } catch (_) { err.textContent = 'Could not reach the server'; }
+                b.disabled = false;
+              };
+            </script>
+            </body>
+            </html>
+            """;
 
     static final String LOGIN_HTML = """
             <!doctype html>

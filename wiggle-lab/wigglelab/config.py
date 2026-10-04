@@ -103,9 +103,9 @@ CELL_TUNABLES = [
      "help": "Random jitter added to the shed-poll hold-off."},
     {"key": "WIGGLE_LOG_LEVEL", "kind": "enum", "default": "INFO", "choices": LOG_LEVELS,
      "help": "File log level (only takes effect with WIGGLE_LOG_FILE set)."},
-    # Portal login. Blank = open access.
+    # Portal login. Blank = the portal's first visit sets the admin password.
     {"key": "WIGGLE_DASHBOARD_PASSWORD", "kind": "secret", "default": None,
-     "help": "Portal operator password; blank leaves the portal open (full access)."},
+     "help": "Portal admin password; blank means the first visit to the portal sets it (kept in the database)."},
     {"key": "WIGGLE_DASHBOARD_VIEWER_PASSWORD", "kind": "secret", "default": None,
      "help": "Portal read-only account (can view, not cancel/signal/schedule); needs an operator password."},
 ]

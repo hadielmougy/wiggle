@@ -16,6 +16,7 @@ Liveness/readiness use the always-open /healthz on port {{ .Values.service.healt
 The portal is on port {{ .Values.service.portalPort }} of every pod:
     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.portalPort }}:{{ .Values.service.portalPort }}
 Accounts and sessions are in the database, so any pod serves any signed-in request.
+Without WIGGLE_DASHBOARD_PASSWORD in env, open /setup first to set the admin password.
 {{- end }}
 
 {{- if not (or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret) }}

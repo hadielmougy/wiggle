@@ -54,7 +54,7 @@ conventions, not the library's.
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN when the backlog will not drain within this budget |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `wiggle.allowGraphReplace` | `false` | development only: honour a forced re-registration |
 | `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | port for the `/healthz` probe on a server node |
-| `WIGGLE_PORTAL_PORT` | — | `0` (off) | port the node serves the portal on ([§4](#4-the-portal)) |
+| `WIGGLE_PORTAL_PORT` | — | `8070` | port the node serves the portal on, `0` for none ([§4](#4-the-portal)) |
 
 ### 1.3 Memory admission control
 
@@ -97,7 +97,7 @@ Read by a server node that serves the portal.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_DASHBOARD_USER` / `_PASSWORD` | `admin` / *(unset)* | built-in admin; unset password = open access |
+| `WIGGLE_DASHBOARD_USER` / `_PASSWORD` | `admin` / *(unset)* | built-in admin; unset password = first-run setup of the admin account ([WGL-OPS-051](#4-the-portal)) |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `_PASSWORD` | `viewer` / *(unset)* | optional built-in read-only account |
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | a console users file from before the auth shard, imported once ([WGL-SHARD-180](85-sharding.md#13-users-and-authorization)) |
 | `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account, session or credential before reading it again |
@@ -207,14 +207,19 @@ salt, never in the clear, and a session MUST be stored only as a hash of its tok
 **WGL-OPS-049** (MUST) Three rules MUST keep a portal reachable: a managed account cannot take a built-in
 account's name and built-in accounts cannot be deleted or re-passworded from the portal; with no
 built-in admin to fall back on, no change may leave no enabled account that can manage users;
-creating the first managed account turns authentication on even when no password was configured.
+and the first-run setup of WGL-OPS-051 is offered only while no account exists.
 
 **WGL-OPS-050** (MUST) Any account MAY change its own password after proving the current one — the one
 write a viewer is allowed. Changing or resetting a password MUST sign out that account's **other**
 sessions; deleting an account MUST sign it out everywhere.
 
-**WGL-OPS-051** (MUST) With neither a built-in password nor a managed account, the portal is open and
-every request is an admin, and MUST warn at startup.
+**WGL-OPS-051** (MUST) With neither a built-in password nor any managed account, the portal MUST
+be in first-run setup: every page MUST lead to a screen that sets the admin account's password
+(`WIGGLE_DASHBOARD_USER`, default `admin`), and every other API call MUST be refused 401. Setting it
+MUST create the account with the `admin` role on the auth shard and sign it in, and the server MUST
+warn at startup while setup is pending. Once any account exists, setup MUST be refused (409), so it
+cannot be used to take over a portal already set up. A portal with nowhere to keep accounts (built
+without the auth shard, as in tests) is open instead, and every request is an admin.
 
 *Verified by:* `console/ConsoleWebTest`, `console/ConsoleUsersTest`, `console/ConsoleDataTest`,
 `console/PortalTest`, `tests/HealthzTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.
