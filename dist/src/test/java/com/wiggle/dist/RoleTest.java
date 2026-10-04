@@ -25,19 +25,25 @@ class RoleTest {
         assertSame(Role.SERVER, Role.of(" cell "));
     }
 
-    @Test @DisplayName("the three roles parse, case- and space-insensitively")
-    void theThreeRoles() {
-        assertSame(Role.SERVER, Role.of("server"));
-        assertSame(Role.COORDINATOR, Role.of("  Coordinator "));
+    @Test @DisplayName("both roles parse, case- and space-insensitively")
+    void bothRoles() {
+        assertSame(Role.SERVER, Role.of(" Server "));
         assertSame(Role.CONSOLE, Role.of("CONSOLE"));
+    }
+
+    @Test @DisplayName("the removed coordinator role is refused with a pointer to what replaces it")
+    void coordinatorRoleIsRemoved() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Role.of("Coordinator"));
+        assertTrue(e.getMessage().contains("removed"), e.getMessage());
     }
 
     @Test @DisplayName("an unrecognised role is refused, not silently run as a server")
     void unknownRoleFails() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> Role.of("coordinatr"));
-        assertTrue(e.getMessage().contains("coordinatr"), e.getMessage());
-        assertTrue(e.getMessage().contains("server, coordinator, console"), e.getMessage());
+                () -> Role.of("sever"));
+        assertTrue(e.getMessage().contains("sever"), e.getMessage());
+        assertTrue(e.getMessage().contains("server, console"), e.getMessage());
     }
 
     @Test @DisplayName("every role has a name the parser accepts back")

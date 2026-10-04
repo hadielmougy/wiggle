@@ -11,8 +11,7 @@ import java.util.List;
 /**
  * Submits a batch of orders and waits for them. Usage: SubmitOrders [count].
  *
- * <p>Connecting starts from {@link WiggleConnection#direct(String)} -- the same entry point the sharded
- * {@link NamespaceSubmitter} uses via {@code coordinator(...)}; only the factory differs.
+ * <p>Connecting starts from {@link WiggleConnection#direct(String)}, the single entry point.
  */
 public final class SubmitOrders {
 

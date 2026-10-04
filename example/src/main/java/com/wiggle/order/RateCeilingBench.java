@@ -1,8 +1,6 @@
 package com.wiggle.order;
 
-import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
@@ -10,8 +8,6 @@ import com.wiggle.core.Tls;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -37,16 +33,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * each other, and it re-confirms the found ceiling with one longer stage.
  *
  * <pre>
- *   WIGGLE_SERVER_URL=127.0.0.1:8080 ./gradlew :example:rateCeiling          # one direct node
- *
- *   WIGGLE_COORDINATOR_URL=127.0.0.1:18099 WIGGLE_NAMESPACE=abc \
- *   WIGGLE_ENDPOINT_REWRITE="10.244.0.7:8080=127.0.0.1:18100" \
- *     ./gradlew :example:rateCeiling                                         # a coordinated ring
+ *   WIGGLE_SERVER_URL=127.0.0.1:8080 ./gradlew :example:rateCeiling
  * </pre>
  *
  * Tune with {@code BENCH_RATES} (csv, default 300..1000), {@code BENCH_STAGE_SECONDS} (default 30),
  * {@code BENCH_CONFIRM_SECONDS} (default 60), {@code BENCH_THREADS} (default 16). A worker (e.g.
- * {@link NamespaceWorkerMain}) must be running against the same deployment.
+ * {@link WorkerMain}) must be running against the same server.
  */
 public final class RateCeilingBench {
 
@@ -55,76 +47,24 @@ public final class RateCeilingBench {
     private static final long PROBE_POLL_MILLIS = 250;
     private static final long DRAIN_TIMEOUT_MILLIS = 300_000;
 
-    /**
-     * Where the bench points: one direct node, or a coordinated namespace. These four touchpoints
-     * are everything the two deployments answer differently.
-     */
-    interface Target extends AutoCloseable {
-        void register(FlowSpec bp);
-        /** A client to start the next instance on -- resolved per call so a multi-cell ring spreads. */
-        WiggleClient starter();
-        /** A client that can read {@code instanceId} -- the cell that owns it. */
-        WiggleClient reader(String instanceId);
-        /** One client per cell, for the drain's RUNNING counts. */
-        Map<String, WiggleClient> cells();
-        @Override void close();
-
-        static Target direct(String url) {
-            WiggleClient client = new WiggleClient(url, Tls.Options.DISABLED);
-            Map<String, WiggleClient> cells = Map.of(url, client);
-            return new Target() {
-                @Override public void register(FlowSpec bp) { client.register(bp); }
-                @Override public WiggleClient starter() { return client; }
-                @Override public WiggleClient reader(String instanceId) { return client; }
-                @Override public Map<String, WiggleClient> cells() { return cells; }
-                @Override public void close() { client.close(); }
-                @Override public String toString() { return "direct " + url; }
-            };
-        }
-
-        static Target coordinated(String coordinatorUrl, String ns) {
-            CoordinatedConnection resolver = WiggleConnection.coordinator(coordinatorUrl, Tls.Options.DISABLED, "us");
-            Map<String, WiggleClient> cellCache = new ConcurrentHashMap<>();
-            return new Target() {
-                @Override public void register(FlowSpec bp) { resolver.registerWorkflow(ns, bp); }
-                @Override public WiggleClient starter() { return resolver.clientForNamespace(ns); }
-                @Override public WiggleClient reader(String instanceId) { return resolver.clientForInstance(instanceId); }
-                @Override public Map<String, WiggleClient> cells() {
-                    Map<String, WiggleClient> out = new java.util.LinkedHashMap<>();
-                    for (String t : resolver.activeCellTargets(ns)) {
-                        out.put(t, cellCache.computeIfAbsent(t, x -> new WiggleClient(x, Tls.Options.DISABLED)));
-                    }
-                    return out;
-                }
-                @Override public void close() {
-                    try { resolver.close(); } catch (Exception ignored) { }
-                    cellCache.values().forEach(WiggleClient::close);
-                }
-                @Override public String toString() { return "coordinator " + coordinatorUrl + " ns=" + ns; }
-            };
-        }
-    }
-
     record ProbeSample(long atStageMillis, long sojournMillis) {}   // sojourn -1 = timed out
 
     record StageResult(int targetRate, double achievedRate, long submitP50, long submitP99, long maxLagMillis,
                        long probeFirstMed, long probeLastMed, int probes, boolean pass, String note) {}
 
     public static void main(String[] args) throws Exception {
-        String coord = env("WIGGLE_COORDINATOR_URL", "127.0.0.1:18099");
-        String ns = env("WIGGLE_NAMESPACE", "abc");
+        String server = env("WIGGLE_SERVER_URL", "127.0.0.1:8080");
         int[] rates = parseRates(env("BENCH_RATES", "300,400,500,600,700,800,900,1000"));
         long stageMillis = Long.parseLong(env("BENCH_STAGE_SECONDS", "30")) * 1000;
         long confirmMillis = Long.parseLong(env("BENCH_CONFIRM_SECONDS", "60")) * 1000;
         int threads = Integer.parseInt(env("BENCH_THREADS", "16"));
 
-        String server = env("WIGGLE_SERVER_URL", "");
-        try (Target target = server.isBlank() ? Target.coordinated(coord, ns) : Target.direct(server)) {
+        try (WiggleClient target = new WiggleClient(server, Tls.Options.DISABLED)) {
             FlowSpec bp = OrderFulfilment.flowSpec();
             target.register(bp);
 
-            System.out.printf("rate-ceiling bench: target=[%s] stage=%ds threads=%d rates=%s%n",
-                    target, stageMillis / 1000, threads, java.util.Arrays.toString(rates));
+            System.out.printf("rate-ceiling bench: server=%s stage=%ds threads=%d rates=%s%n",
+                    server, stageMillis / 1000, threads, java.util.Arrays.toString(rates));
             System.out.println("(a worker must be running; verdicts come from probe sojourn drift)\n");
 
             drain(target, bp, "warm-up");
@@ -164,12 +104,8 @@ public final class RateCeilingBench {
         }
     }
 
-    /**
-     * Run one paced stage at {@code rate}/s and judge it by probe-sojourn drift. Each start resolves
-     * the namespace afresh ({@code clientForNamespace} per call) — that per-start resolve is what
-     * spreads new instances across a multi-cell ring; a cached client would pin them to one cell.
-     */
-    private static StageResult stage(Target target, FlowSpec bp, int rate,
+    /** Run one paced stage at {@code rate}/s and judge it by probe-sojourn drift. */
+    private static StageResult stage(WiggleClient target, FlowSpec bp, int rate,
                                      long stageMillis, int threads) throws Exception {
         ConcurrentLinkedQueue<Long> submitNanos = new ConcurrentLinkedQueue<>();
         ConcurrentLinkedQueue<ProbeSample> probes = new ConcurrentLinkedQueue<>();
@@ -201,7 +137,7 @@ public final class RateCeilingBench {
                         Order order = Order.of("B-" + seq, "bench-" + seq, 1 + (int) (seq % 3),
                                 new BigDecimal("100.00"));
                         long s = System.nanoTime();
-                        target.starter().start(bp, order);   // resolved per start -> a multi-cell ring spreads
+                        target.start(bp, order);
                         submitNanos.add(System.nanoTime() - s);
                     }
                 } catch (Exception e) {
@@ -264,16 +200,15 @@ public final class RateCeilingBench {
                 midMed, lastMed, ordered.size(), pass, note);
     }
 
-    /** Start one probe instance and poll it to a terminal state; -1 on timeout. The poll routes by the
-     *  instance id ({@code clientForInstance}), so it reads the cell that actually owns the probe. */
-    private static long probeSojourn(Target target, FlowSpec bp) {
+    /** Start one probe instance and poll it to a terminal state; -1 on timeout. */
+    private static long probeSojourn(WiggleClient target, FlowSpec bp) {
         long s = System.nanoTime();
         try {
             Order order = Order.of("PROBE-" + s, "probe", 1, new BigDecimal("1.00"));
-            String id = target.starter().start(bp, order);
+            String id = target.start(bp, order);
             long deadline = s + PROBE_TIMEOUT_MILLIS * 1_000_000L;
             while (System.nanoTime() < deadline) {
-                InstanceView v = target.reader(id).instance(id);
+                InstanceView v = target.instance(id);
                 if (v.isTerminal()) return (System.nanoTime() - s) / 1_000_000;
                 Thread.sleep(PROBE_POLL_MILLIS);
             }
@@ -284,36 +219,26 @@ public final class RateCeilingBench {
     }
 
     /**
-     * Wait until the backlog is actually gone: the RUNNING count for the workflow — summed across
-     * every active cell of the namespace — stays small over two consecutive checks. (A fresh probe
-     * completing fast is NOT proof — dispatch isn't FIFO per instance, so a new instance's first step
-     * can jump ahead of older instances' queued branches.) The per-cell counts double as a check that
-     * the epoch ring actually spreads load across the cells.
+     * Wait until the backlog is actually gone: the RUNNING count for the workflow stays small over two
+     * consecutive checks. (A fresh probe completing fast is NOT proof — dispatch isn't FIFO per
+     * instance, so a new instance's first step can jump ahead of older instances' queued branches.)
      */
-    private static long drain(Target target, FlowSpec bp, String label)
+    private static long drain(WiggleClient target, FlowSpec bp, String label)
             throws Exception {
         long s = System.currentTimeMillis();
         int consecutive = 0;
-        String perCell = "";
+        int running = 0;
         while (System.currentTimeMillis() - s < DRAIN_TIMEOUT_MILLIS) {
-            int total = 0;
-            StringBuilder counts = new StringBuilder();
-            for (Map.Entry<String, WiggleClient> cell : target.cells().entrySet()) {
-                int n = cell.getValue().listInstances(bp.name(), "RUNNING", 2000).size();
-                total += n;
-                if (counts.length() > 0) counts.append(", ");
-                counts.append(cell.getKey()).append('=').append(n);
-            }
-            perCell = counts.toString();
-            consecutive = total < 50 ? consecutive + 1 : 0;
+            running = target.listInstances(bp.name(), "RUNNING", 2000).size();
+            consecutive = running < 50 ? consecutive + 1 : 0;
             if (consecutive >= 2) {
                 long took = System.currentTimeMillis() - s;
-                System.out.printf("   drained (%s) in %.1fs — running: %s%n", label, took / 1000.0, perCell);
+                System.out.printf("   drained (%s) in %.1fs — running: %d%n", label, took / 1000.0, running);
                 return took;
             }
             Thread.sleep(2000);
         }
-        System.out.println("   DRAIN TIMEOUT (" + label + ") — still RUNNING: " + perCell);
+        System.out.println("   DRAIN TIMEOUT (" + label + ") — still RUNNING: " + running);
         return DRAIN_TIMEOUT_MILLIS;
     }
 

@@ -3,15 +3,13 @@ plugins {
 }
 
 // The standalone ops console: a read/ops web UI (embedded Tomcat + servlets) that is a pure gRPC client
-// of the control plane. It owns the dashboard SPA + JSON API and works the same against a single cluster
-// (direct) or a coordinator-sharded namespace (fan-out). No storage drivers, no coordinator, no engine
-// -- a thin console. Not published to Maven Central.
+// of the control plane. It owns the dashboard SPA + JSON API. No storage drivers, no engine -- a thin
+// console. Not published to Maven Central.
 dependencies {
     implementation(project(":client"))
     implementation("org.apache.tomcat.embed:tomcat-embed-core:${property("tomcatVersion")}")
 
     testImplementation(project(":server"))        // an embedded WiggleServer for direct-mode tests
-    testImplementation(project(":coordinator"))   // an in-process coordinator for coordinator-mode tests
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

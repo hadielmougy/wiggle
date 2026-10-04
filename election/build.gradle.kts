@@ -1,8 +1,5 @@
-// Leader election, shared by the cell engine (:server) and the control plane (:coordinator).
-//
-// It depends on nothing. That is the point: :server and :coordinator must never depend on each
-// other in source -- their only link is the gRPC contract -- so the election they now share has to
-// live below both, with its own persistence SPI that each implements over its own tables.
+// Leader election for the server's clock-driven duties. It depends on nothing and persists through
+// its own SPI, which the server implements over its node table.
 dependencies {
     testImplementation(platform("org.junit:junit-bom:${property("junitVersion")}"))
     testImplementation("org.junit.jupiter:junit-jupiter")

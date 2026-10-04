@@ -1,5 +1,5 @@
 """Manages background `kubectl port-forward` processes so the host-side lab can reach in-cluster
-gRPC services (the coordinator and each cell)."""
+gRPC services (each server, its pods, and its console)."""
 from __future__ import annotations
 
 import socket

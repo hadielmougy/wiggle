@@ -1,6 +1,5 @@
 package com.wiggle.server;
 
-import com.wiggle.placement.LivePlacement;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -14,10 +13,8 @@ import java.io.IOException;
  * cluster: they all serve the API and hand out work, and exactly one of them holds the
  * leader role and runs the clock-driven housekeeping.
  *
- * <p>A {@code WiggleServer} is a <em>cell</em>: the engine + control plane, over shared storage and a
- * {@link ClusterManager} (membership + leader election). The coordinator is a separate, engine-free
- * control plane ({@code com.wiggle.server.coord.CoordinatorServer}) that shares nothing with the engine
- * but the gRPC contract.
+ * <p>A {@code WiggleServer} is the engine + control plane, over shared storage and a
+ * {@link ClusterManager} (membership + leader election).
  *
  * <p>The server core is storage-agnostic. With no URL configured it uses the in-memory store; to
  * run on a database, pass a {@link StorageFactory} that knows how to build the store for the URL
@@ -59,7 +56,7 @@ public final class WiggleServer implements AutoCloseable {
     public WiggleServer start() {
         cluster.start();
         bundle.start();
-        LOG.log(System.Logger.Level.INFO, () -> "cell node '" + config.nodeName()
+        LOG.log(System.Logger.Level.INFO, () -> "server node '" + config.nodeName()
                 + "' started on port " + port()
                 + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc") + ")");
         return this;
@@ -67,32 +64,11 @@ public final class WiggleServer implements AutoCloseable {
 
     public int port() { return bundle.port(); }
 
-    /**
-     * The address this node advertises to a coordinator (and, via Resolve, to clients). Defaults to
-     * {@code 127.0.0.1} — correct for single-host/local runs — but must be overridden to a
-     * coordinator-reachable host when nodes and the coordinator run in separate pods/hosts. Set it with
-     * {@code WIGGLE_ADVERTISE_HOST} (or {@code -Dwiggle.advertiseHost}), e.g. the pod IP on Kubernetes.
-     */
-    public String baseUrl() { return advertiseHost() + ":" + port(); }
-
-    private static String advertiseHost() {
-        String host = System.getProperty("wiggle.advertiseHost",
-                System.getenv().getOrDefault("WIGGLE_ADVERTISE_HOST", "127.0.0.1"));
-        return (host == null || host.isBlank()) ? "127.0.0.1" : host;
-    }
+    /** This node's gRPC address on the loopback interface, for in-process clients and local runs. */
+    public String baseUrl() { return "127.0.0.1:" + port(); }
 
     /** The workflow engine. */
     public WorkflowEngine engine() { return bundle.engine(); }
-
-    /**
-     * The coordinator-managed placement (mint epoch + owned shards), or {@code null} for a standalone
-     * cell (no namespace). The coordinator link updates it as policy moves.
-     */
-    public LivePlacement placement() { return bundle.placement(); }
-
-    /** The stable identity of this cell's shared storage; {@code null} when the backend has none
-     *  (e.g. in-memory). The coordinator uses it to reject two cells reusing a cell id. */
-    public String cellFingerprint() { return storage.fingerprint(); }
 
     public ClusterManager cluster() { return cluster; }
 

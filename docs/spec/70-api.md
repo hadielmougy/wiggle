@@ -219,9 +219,7 @@ errors (4xx) from others.
 **WGL-API-093** (MUST) A single-run `reportSteps` MUST read the one answer and raise
 `WiggleApiException` with that status, so an ordinary one-step report reads as a plain call.
 
-**WGL-API-094** (MUST) `WiggleConnection` MUST offer `direct(target[, tls])` for one server and
-`coordinator(url[, tls[, callerRegion]])` for a coordinator-routed namespace
-([WGL-COORD-030](90-ops.md)).
+**WGL-API-094** (MUST) `WiggleConnection` MUST offer `direct(target[, tls])` for one cluster.
 
 **WGL-API-095** (MUST) `register` MUST raise `WorkflowRegistrationException` carrying the server's
 explanation when a registration is refused.
@@ -260,10 +258,8 @@ be 405.
 **WGL-API-102** (MUST) A viewer MUST be refused every non-`GET` `/api/*` call except `/api/password`.
 
 **WGL-API-103** (MUST) The backend MUST sit behind one neutral seam (`DashboardData`) carrying no engine
-or storage types, so the same JSON is produced whether it is served from one cell or fanned out across a
-namespace's cells.
+or storage types, so the same JSON is produced whether it is served in process or over gRPC.
 
-**WGL-API-104** (MUST) Under a coordinator, merged statistics MUST add counts, weight means, and keep the
-worst cell's p50 and p95 — percentiles cannot be recombined exactly.
+**WGL-API-104** *Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).*
 
 *Verified by:* `console/ConsoleWebTest`, `console/ConsoleDataTest`, `console/ConsoleUsersTest`.

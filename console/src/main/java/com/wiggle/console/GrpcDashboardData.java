@@ -14,9 +14,8 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * {@link DashboardData} backed by a gRPC {@link ConsoleBackend} instead of a local engine, so the
- * standalone console serves the same dashboard SPA. Instance listing fans out across the backend's
- * cells and merges newest-first; instance detail / cancel / signal route to the owning cell.
+ * {@link DashboardData} backed by a gRPC {@link WiggleClient} instead of a local engine, so the
+ * standalone console serves the same dashboard SPA.
  *
  * <p>Degradations vs. the in-process dashboard (documented, not silent): pending signals aren't
  * enumerable over gRPC (returns empty), and the wire {@code Token} omits queue / leaseExpiresAt /
@@ -24,19 +23,19 @@ import java.util.Optional;
  */
 public final class GrpcDashboardData implements DashboardData {
 
-    private final ConsoleBackend backend;
+    private final WiggleClient client;
 
-    public GrpcDashboardData(ConsoleBackend backend) {
-        this.backend = backend;
+    public GrpcDashboardData(WiggleClient client) {
+        this.client = client;
     }
 
     @Override public List<String> workflowNames() {
-        return backend.reads().workflowNames();
+        return client.workflowNames();
     }
 
     @Override public Optional<Object> workflowGraph(String name) {
         try {
-            return Optional.of(backend.reads().getWorkflow(name).toJson());
+            return Optional.of(client.getWorkflow(name).toJson());
         } catch (WiggleApiException e) {
             if (e.status() == 404) return Optional.empty();
             throw e;
@@ -44,31 +43,16 @@ public final class GrpcDashboardData implements DashboardData {
     }
 
     @Override public List<InstanceView> listInstances(String workflow, String status, int limit) {
-        List<InstanceView> merged = new ArrayList<>();
-        for (WiggleClient c : backend.cells()) {
-            merged.addAll(c.listInstances(workflow, status, limit));
-        }
-        return newestFirstCapped(merged, limit);
+        return client.listInstances(workflow, status, limit);
     }
 
     @Override public List<InstanceView> findByCorrelation(String correlationId, int limit) {
-        // The correlation key isn't the instance id, so we can't route to one cell -- fan the lookup
-        // across every active cell and merge, exactly like listInstances.
-        List<InstanceView> merged = new ArrayList<>();
-        for (WiggleClient c : backend.cells()) {
-            merged.addAll(c.findByCorrelation(correlationId, limit));
-        }
-        return newestFirstCapped(merged, limit);
-    }
-
-    private static List<InstanceView> newestFirstCapped(List<InstanceView> merged, int limit) {
-        merged.sort(Comparator.comparingLong(InstanceView::createdAt).reversed());
-        return merged.size() > limit ? new ArrayList<>(merged.subList(0, limit)) : merged;
+        return client.findByCorrelation(correlationId, limit);
     }
 
     @Override public Optional<InstanceDetail> instance(String id) {
         try {
-            WiggleClient.InstanceWithTokens d = backend.forInstance(id).instanceDetail(id);
+            WiggleClient.InstanceWithTokens d = client.instanceDetail(id);
             List<TokenView> tokens = d.tokens().stream().map(GrpcDashboardData::token).toList();
             return Optional.of(new InstanceDetail(d.instance(), tokens));
         } catch (WiggleApiException e) {
@@ -78,62 +62,36 @@ public final class GrpcDashboardData implements DashboardData {
     }
 
     @Override public void cancel(String id, String reason) {
-        backend.forInstance(id).cancel(id, reason);
+        client.cancel(id, reason);
     }
 
     @Override public void signal(String id, String name, Object payload) {
-        backend.forInstance(id).signal(id, name, payload);
+        client.signal(id, name, payload);
     }
 
     @Override public List<BacklogView> backlogCoverage(int limit) {
-        // Each cell knows only its own pollers, so ask every one and merge. A slice is covered if ANY
-        // cell that holds it has a worker for it -- reporting it uncovered because a sibling cell
-        // happens to have no backlog there would be a false alarm.
-        List<BacklogView> merged = new ArrayList<>();
-        for (WiggleClient c : backend.cells()) {
-            for (WiggleClient.BacklogSlice s : c.backlogCoverage(limit)) {
-                merged.add(new BacklogView(s.workflow(), s.version(), s.queue(), s.readyCount(),
-                        s.oldestAvailableAt(), s.covered(), s.livePollers()));
-            }
+        List<BacklogView> out = new ArrayList<>();
+        for (WiggleClient.BacklogSlice s : client.backlogCoverage(limit)) {
+            out.add(new BacklogView(s.workflow(), s.version(), s.queue(), s.readyCount(),
+                    s.oldestAvailableAt(), s.covered(), s.livePollers()));
         }
-        merged.sort((a, b) -> {
+        out.sort((a, b) -> {
             if (a.covered() != b.covered()) return a.covered() ? 1 : -1;   // uncovered first
             return Integer.compare(b.readyCount(), a.readyCount());
         });
-        return merged.size() > limit ? merged.subList(0, limit) : merged;
+        return out;
     }
 
-    /**
-     * Every cell keeps its own timed steps, so ask each and merge per node. Percentiles cannot be
-     * recombined from summaries: a merged row keeps the WORST cell's p50 and p95 (the bottleneck
-     * view is a pessimistic one by design), sums the counts, and weights the mean by them.
-     */
     @Override public List<NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
-        Map<String, NodeStats> merged = new java.util.LinkedHashMap<>();
-        for (WiggleClient c : backend.cells()) {
-            for (NodeStats n : c.stepStats(workflow, version, since, sample)) {
-                merged.merge(n.nodeId(), n, (a, b) -> new NodeStats(a.nodeId(), a.name() != null ? a.name() : b.name(),
-                        a.count() + b.count(),
-                        (a.meanMillis() * a.count() + b.meanMillis() * b.count()) / Math.max(1, a.count() + b.count()),
-                        Math.max(a.p50Millis(), b.p50Millis()), Math.max(a.p95Millis(), b.p95Millis()),
-                        Math.max(a.maxMillis(), b.maxMillis()),
-                        Math.max(a.waitP50Millis(), b.waitP50Millis()), Math.max(a.waitP95Millis(), b.waitP95Millis())));
-            }
-        }
-        List<NodeStats> out = new ArrayList<>(merged.values());
+        List<NodeStats> out = new ArrayList<>(client.stepStats(workflow, version, since, sample));
         out.sort(Comparator.comparingLong(NodeStats::p95Millis).reversed());
         return out;
     }
 
     @Override public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
-        List<AnomalyView> merged = new ArrayList<>();
-        if (instanceId != null) {
-            merged.addAll(backend.forInstance(instanceId).anomalies(workflow, instanceId, limit));
-        } else {
-            for (WiggleClient c : backend.cells()) merged.addAll(c.anomalies(workflow, null, limit));
-        }
-        merged.sort(Comparator.comparingLong(AnomalyView::at).reversed());
-        return merged.size() > limit ? new ArrayList<>(merged.subList(0, limit)) : merged;
+        List<AnomalyView> out = new ArrayList<>(client.anomalies(workflow, instanceId, limit));
+        out.sort(Comparator.comparingLong(AnomalyView::at).reversed());
+        return out;
     }
 
     @Override public List<SignalView> pendingSignals(int limit) {
@@ -141,25 +99,25 @@ public final class GrpcDashboardData implements DashboardData {
     }
 
     @Override public List<ScheduleView> schedules() {
-        return backend.reads().schedules().stream()
+        return client.schedules().stream()
                 .map(s -> new ScheduleView(s.id(), s.workflow(), s.everyMillis(), s.cron(), s.nextFireAt(), s.createdAt()))
                 .toList();
     }
 
     @Override public String createSchedule(String workflow, Duration every, Object context) {
-        return backend.reads().createSchedule(workflow, every, context);
+        return client.createSchedule(workflow, every, context);
     }
 
     @Override public String createCronSchedule(String workflow, String cron, Object context) {
-        return backend.reads().createCronSchedule(workflow, cron, context);
+        return client.createCronSchedule(workflow, cron, context);
     }
 
     @Override public void deleteSchedule(String id) {
-        backend.reads().deleteSchedule(id);
+        client.deleteSchedule(id);
     }
 
     @Override public ClusterView cluster() {
-        Map<String, Object> c = backend.reads().cluster();
+        Map<String, Object> c = client.cluster();
         List<MemberView> members = new ArrayList<>();
         Object raw = c.get("members");
         if (raw instanceof List<?> list) {

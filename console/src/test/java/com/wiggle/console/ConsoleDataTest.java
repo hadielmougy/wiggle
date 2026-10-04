@@ -1,6 +1,5 @@
 package com.wiggle.console;
 
-import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
@@ -11,14 +10,8 @@ import com.wiggle.core.NodeStats;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.core.InstanceView;
-import com.wiggle.core.Tls;
-import com.wiggle.proto.RegisteredNode;
-import com.wiggle.proto.RingSlot;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.coord.CoordinatorApi;
-import com.wiggle.server.coord.CoordinatorService;
-import com.wiggle.server.coord.InMemoryCoordinatorStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,10 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The console's gRPC-backed {@link DashboardData}: it lists/details/cancels instances the same way in
- * direct mode (one cluster) and coordinator mode (fanned out across a namespace's cells, operate-by-id
- * routed to the owning cell). Instances are started without a worker, so they sit RUNNING at their
- * first step -- enough to exercise the read/ops surface.
+ * The console's gRPC-backed {@link DashboardData}: it lists, details and cancels instances of one
+ * cluster. Instances are started without a worker, so they sit RUNNING at their first step -- enough
+ * to exercise the read/ops surface.
  */
 class ConsoleDataTest {
 
@@ -68,7 +60,7 @@ class ConsoleDataTest {
             for (int i = 0; i < 3; i++) c.start("wf", Map.of("i", i), null, null);
             String target = c.start("wf", Map.of(), null, "cust-B");
 
-            GrpcDashboardData data = new GrpcDashboardData(new ConsoleBackend.Direct(conn));
+            GrpcDashboardData data = new GrpcDashboardData(conn.client());
 
             assertEquals(4, data.listInstances(null, null, 100).size(), "all instances");
             assertEquals(4, data.listInstances("wf", "RUNNING", 100).size(), "filtered by workflow+status");
@@ -90,42 +82,6 @@ class ConsoleDataTest {
         }
     }
 
-    @Test @DisplayName("coordinator mode: fans listing across the namespace's cells; operate-by-id routes")
-    void coordinatorMode() throws Exception {
-        InMemoryCoordinatorStore store = new InMemoryCoordinatorStore();
-        try (WiggleServer cell = new WiggleServer(config().withNamespace("acme")).start();
-             CoordinatorService svc = new CoordinatorService(store);
-             CoordinatorApi coord = new CoordinatorApi(svc, 0, Tls.Options.DISABLED)) {
-            coord.start();
-            svc.doRegister("acme", RegisteredNode.newBuilder().setCellId("CellA")
-                    .setName("cell-node").setEndpoint(cell.baseUrl()).setRegion("eu-west").build());
-            svc.doOpenEpoch("acme", List.of(RingSlot.newBuilder().setShard(0).setCellId("CellA").build()));
-
-            try (CoordinatedConnection conn = WiggleConnection.coordinator("127.0.0.1:" + coord.port(),
-                    Tls.Options.DISABLED, "eu-west")) {
-                WiggleClient starter = conn.clientForNamespace("acme");
-                starter.register(wf());
-                String a = starter.start("wf", Map.of());
-                String b = starter.start("wf", Map.of());
-                String keyed = starter.start("wf", Map.of(), null, "cust-Z");
-
-                GrpcDashboardData data = new GrpcDashboardData(
-                        new ConsoleBackend.Coordinated(conn, "acme", Tls.Options.DISABLED));
-
-                List<InstanceView> all = data.listInstances(null, null, 100);
-                assertTrue(all.stream().anyMatch(v -> v.id().equals(a))
-                        && all.stream().anyMatch(v -> v.id().equals(b)), "fanned out to CellA");
-
-                List<InstanceView> byKey = data.findByCorrelation("cust-Z", 100);
-                assertTrue(byKey.stream().anyMatch(v -> v.id().equals(keyed)), "correlation fanned across cells");
-
-                assertEquals(a, data.instance(a).orElseThrow().instance().id(), "detail routed by id");
-                data.cancel(a, "from test");
-                assertEquals("CANCELLED", data.instance(a).orElseThrow().instance().status(), "cancel routed by id");
-            }
-        }
-    }
-
     @Test @DisplayName("direct mode: step stats and anomalies read through the seam")
     void statsAndAnomalies() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -143,7 +99,7 @@ class ConsoleDataTest {
                     new StepInput(a, null, null, null, t0, t0 + 5)), true);   // closed before END
             server.engine().settleObservedRuns(10);
 
-            GrpcDashboardData data = new GrpcDashboardData(new ConsoleBackend.Direct(conn));
+            GrpcDashboardData data = new GrpcDashboardData(conn.client());
             List<NodeStats> stats = data.stepStats("obs", null, 0, 100);
             assertEquals(2, stats.size());
             assertEquals("more", stats.get(0).name(), "slowest p95 first");

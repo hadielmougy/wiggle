@@ -11,8 +11,7 @@ import java.util.Optional;
 /**
  * The read/ops surface the {@link HttpDashboard} needs, decoupled from any particular source. The
  * embedded dashboard is backed by the in-process engine ({@code EngineDashboardData}); the standalone
- * ops console backs the same dashboard with a gRPC client (single cell, or fanned out across a
- * namespace's cells under a coordinator). Everything here is neutral (no engine or storage types), so
+ * ops console backs the same dashboard with a gRPC client. Everything here is neutral (no engine or storage types), so
  * both backends produce identical JSON to the SPA.
  */
 public interface DashboardData {

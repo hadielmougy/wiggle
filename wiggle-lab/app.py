@@ -1,6 +1,6 @@
-"""Wiggle Lab — a Streamlit control panel to spin up a wiggle cell cluster on kind and play with it:
-deploy cells (each with its own database), reshard via epochs, scale/kill/remove, and run client
-scenarios against the real environment.
+"""Wiggle Lab — a Streamlit control panel to spin up wiggle servers on kind and play with them:
+deploy servers (each with its own database), scale/kill/remove, and run client scenarios against the
+real environment.
 
 Run:  streamlit run app.py
 """
@@ -13,7 +13,6 @@ import streamlit as st
 from wigglelab import config as C
 from wigglelab import kind, workflows
 from wigglelab.controller import Lab
-from wigglelab.ringspec import parse_ring
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -125,12 +124,6 @@ with st.sidebar:
             st.rerun()
         if c2.button("② Load image → kind", use_container_width=True, disabled=not img):
             action("Load image into kind", lab.load_image, spinner="kind load docker-image…")
-        if st.button("③ Deploy coordinator", use_container_width=True, disabled=not img,
-                     help="Deploys the control-plane database and the coordinator pods over it. "
-                          "Redeploying keeps the state -- it lives in that database."):
-            action("Deploy coordinator", lab.deploy_coordinator,
-                   st.session_state.get("coord_replicas", C.COORD_DEFAULT_REPLICAS), lab.coord_config)
-            st.rerun()
         with st.expander("🗄 disk"):
             st.caption("Postgres `initdb` fails with \"No space left on device\" when the node fills — "
                        "check **inodes** too, not just bytes.")
@@ -213,71 +206,58 @@ with st.sidebar:
 
 # ─────────────────────────────── main ───────────────────────
 if not lab.cluster_exists():
-    st.info("No cluster yet. Use the sidebar: **Create kind cluster → Build/Load image → Deploy coordinator**.")
+    st.info("No cluster yet. Use the sidebar: **Create kind cluster → Build/Load image**, then deploy a "
+            "server.")
     st.stop()
 
-coord_ready = lab.coordinator_ready()
-st.header("Wiggle cell cluster" + ("  🔴 recording" if lab.is_recording() else ""))
-cols = st.columns(3)
-cols[0].metric("Coordinator", "ready" if coord_ready else "pending")
+st.header("Wiggle servers" + ("  🔴 recording" if lab.is_recording() else ""))
 cells = lab.cells()
-cols[1].metric("Cells", len(cells))
-cols[2].metric("Namespaces", len({c["namespace"] for c in cells if c["namespace"]}))
+st.metric("Servers", len(cells))
 
-overview, cells_tab, placement, coord_tab, client, forwards, logs_tab, db_tab = st.tabs(
-    ["📊 Overview", "🗄 Servers", "🧭 Placement (epochs)", "⚙️ Coordinator", "🚀 Client tests",
-     "🔌 Forwards", "📜 Logs", "🗃 Database"])
+overview, cells_tab, client, forwards, logs_tab, db_tab = st.tabs(
+    ["📊 Overview", "🗄 Servers", "🚀 Client tests", "🔌 Forwards", "📜 Logs", "🗃 Database"])
 
 # ---- Overview ----
 with overview:
-    st.subheader("Cells")
+    st.subheader("Servers")
     if cells:
         st.dataframe(
-            [{"cell": c["cell"], "namespace": c["namespace"], "ready": f'{c["ready"]}/{c["desired"]}'}
-             for c in cells],
+            [{"server": c["cell"], "ready": f'{c["ready"]}/{c["desired"]}'} for c in cells],
             use_container_width=True, hide_index=True)
     else:
-        st.caption("No cells yet — create one in the **Cells** tab.")
+        st.caption("No servers yet — deploy one in the **Servers** tab.")
 
     st.subheader("Pods")
     pods = lab.pods()
     if pods:
         st.dataframe(
             [{"pod": p["name"], "role": p["labels"].get("wiggle-lab/role", ""),
-              "cell": p["labels"].get("wiggle-lab/cell", ""), "phase": p["phase"],
+              "server": p["labels"].get("wiggle-lab/cell", ""), "phase": p["phase"],
               "ready": "✅" if p["ready"] else "⏳", "restarts": p["restarts"]} for p in pods],
             use_container_width=True, hide_index=True)
 
-# ---- Cells ----
+# ---- Servers ----
 with cells_tab:
     st.subheader("Deploy a server")
     st.caption("A server gets its **own Postgres** container and one or more wiggle nodes pointed at "
-               "it. Leave **Namespace** blank for a standalone server — no coordinator needed, which "
-               "is the ordinary way to run wiggle. Set a namespace to place it in a coordinated ring "
-               "instead.")
+               "it; the nodes form one cluster over that database.")
     with st.form("create_cell"):
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         cell_id = c1.text_input("Server id", value="srv1")
-        ns = c2.text_input("Namespace (blank = standalone)", value="")
-        replicas = c3.number_input("Nodes", min_value=1, max_value=9, value=1)
-        region = c4.text_input("Region", value="")
-        standalone = not ns.strip()
-        if st.form_submit_button("Deploy server", disabled=not (standalone or coord_ready)):
-            action(f"Deploy server {cell_id}", lab.create_cell, cell_id, ns.strip(), int(replicas),
-                   region, spinner="Applying DB + server manifests…")
+        replicas = c2.number_input("Nodes", min_value=1, max_value=9, value=1)
+        if st.form_submit_button("Deploy server"):
+            action(f"Deploy server {cell_id}", lab.create_cell, cell_id, int(replicas),
+                   spinner="Applying DB + server manifests…")
             st.rerun()
-    if not coord_ready:
-        st.info("No coordinator running — that is fine. Leave the namespace blank to deploy a "
-                "standalone server. A namespace needs a coordinator (sidebar).")
 
     st.divider()
-    st.subheader("Manage cells")
+    st.subheader("Manage servers")
     cell_cfgs = lab.all_cell_configs() if cells else {}   # one kubectl for all cells' live config
     for c in cells:
         cell = c["cell"]
         with st.container(border=True):
             h1, h2, h3, h4, h5, h6 = st.columns([2.6, 1, 1.1, 1.3, 1.2, 1.2])
-            h1.markdown(f"**{cell}**  · ns `{c['namespace']}`  · {c['ready']}/{c['desired']} ready")
+            h1.markdown(f"**{cell}**  · {c['ready']}/{c['desired']} ready")
             n = h2.number_input("scale", 0, 9, value=c["desired"], key=f"scale-{cell}",
                                 label_visibility="collapsed")
             if h3.button("Scale", key=f"do-scale-{cell}"):
@@ -290,60 +270,30 @@ with cells_tab:
                 action(f"Kill a pod of {cell}", lab.kill_cell_pod, cell)
                 st.rerun()
             if h6.button("Remove", key=f"rm-{cell}"):
-                action(f"Remove cell {cell}", lab.remove_cell, cell)
+                action(f"Remove server {cell}", lab.remove_cell, cell)
                 st.rerun()
             with st.expander("⚙️ Config"):
                 st.caption("Operational tuning applied as pod env. Blank = server default. "
-                           "**Apply & redeploy** rolls this cell's pods with the new config.")
+                           "**Apply & redeploy** rolls this server's pods with the new config.")
                 with st.form(f"cellcfg-{cell}"):
                     values = render_tunables(C.CELL_TUNABLES, cell_cfgs.get(cell, {}), f"cellcfg-{cell}")
                     if st.form_submit_button("Apply & redeploy"):
                         action(f"Update config for {cell}", lab.update_cell_config, cell, values,
-                               spinner="Re-applying cell manifest (pods will roll)…")
+                               spinner="Re-applying server manifest (pods will roll)…")
                         st.rerun()
-
-# ---- Placement ----
-with placement:
-    st.subheader("Open an epoch (reshard)")
-    st.caption("Publish a shard→cell ring. Opening a new epoch marks the previous one **DRAINING**; "
-               "the coordinator retires it automatically once its instances finish.")
-    all_ns = sorted({c["namespace"] for c in cells if c["namespace"]})
-    with st.form("open_epoch"):
-        ns = st.selectbox("Namespace", all_ns or ["orders"])
-        st.caption("Ring slots as `shard=cellId[@region]`, separated by commas/spaces/newlines "
-                   "(e.g. `0=cellA, 1=cellB`).")
-        ring_text = st.text_area("Ring", value="0=cellA", height=80, label_visibility="collapsed")
-        if st.form_submit_button("Open epoch", disabled=not coord_ready):
-            ring = parse_ring(ring_text)
-            if ring is None:
-                st.error("Bad ring — use `shard=cellId[@region]` per line.")
-            else:
-                pol = action(f"Open epoch for {ns}", lab.open_epoch, ns, ring)
-                if pol:
-                    st.json(pol)
-
-    st.divider()
-    st.subheader("Current policy (cached)")
-    for ns in all_ns:
-        pol = lab.policy(ns)
-        if pol:
-            with st.expander(f"namespace `{ns}` — current epoch {pol.get('current_epoch')}  "
-                             f"(rev {pol.get('revision')})"):
-                st.json(pol)
-
 
 # ---- Client tests ----
 with client:
     st.subheader("Run a client scenario")
-    st.caption("Allocate a built-in workflow to a namespace, start instances, and watch where they "
-               "land across cells/epochs. (v1 deploys no workers; `sleep`/`instant` flows still "
-               "progress on the server; `park` stays RUNNING so you can see distribution.)")
-    all_ns = sorted({c["namespace"] for c in cells if c["namespace"]})
-    if not all_ns:
-        st.info("Create a cell and open an epoch first.")
+    st.caption("Register a built-in workflow on a server, start instances, and watch them run. (The lab "
+               "deploys no workers; `sleep`/`instant` flows still progress on the server; `park` stays "
+               "RUNNING.)")
+    servers = [c["cell"] for c in cells]
+    if not servers:
+        st.info("Deploy a server first.")
     else:
         c1, c2, c3 = st.columns([2, 2, 1])
-        ns = c1.selectbox("Namespace", all_ns, key="client-ns")
+        srv = c1.selectbox("Server", servers, key="client-srv")
         wf_key = c2.selectbox("Workflow", list(workflows.BUILTINS),
                               format_func=lambda k: f"{k} — {workflows.BUILTINS[k][0]}")
         count = c3.number_input("Instances", 1, 500, value=10)
@@ -352,66 +302,50 @@ with client:
         wf_name = wf_def["name"]
 
         b1, b2, b3 = st.columns(3)
-        if b1.button("① Allocate workflow", use_container_width=True):
-            action(f"Allocate {wf_name} → {ns}", lab.allocate, ns, wf_name, wf_def)
+        if b1.button("① Register workflow", use_container_width=True):
+            action(f"Register {wf_name} on {srv}", lab.register, srv, wf_def)
         if b2.button("② Start instances", use_container_width=True):
-            res = action(f"Start {count} × {wf_name}", lab.start_instances, ns, wf_name, int(count))
+            res = action(f"Start {count} × {wf_name}", lab.start_instances, srv, wf_name, int(count))
             if res:
-                st.write("started per cell:", res["started"])
+                st.write("started:", res["started"])
                 for err in res["errors"][:5]:
                     st.warning(err)
         if b3.button("③ Observe", use_container_width=True):
-            st.session_state["observe_ns"] = ns
+            st.session_state["observe_srv"] = srv
 
-        obs_ns = st.session_state.get("observe_ns")
-        if obs_ns:
+        obs_srv = st.session_state.get("observe_srv")
+        if obs_srv:
             st.divider()
-            st.subheader(f"Instances in `{obs_ns}`")
-            obs = lab.observe(obs_ns)
-            st.write("totals by status:", obs["totals"] or "—")
-            rows = []
-            for cell, info in obs["per_cell"].items():
-                if "error" in info:
-                    rows.append({"cell": cell, "total": "error", "detail": info["error"][:60]})
-                else:
-                    rows.append({"cell": cell, "total": info["total"],
-                                 "detail": ", ".join(f"{k}:{v}" for k, v in info["by_status"].items())})
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.subheader(f"Instances on `{obs_srv}`")
+            try:
+                obs = lab.observe(obs_srv)
+            except Exception as e:  # noqa: BLE001
+                st.warning(f"could not read instances: {e}")
+                obs = None
+            if obs is not None:
+                st.write(f"{obs['total']} instance(s) by status:", obs["by_status"] or "—")
             o1, o2 = st.columns(2)
             if o1.button("🔄 Re-observe"):
                 st.rerun()
-            if lab.is_recording() and o2.button("📌 Snapshot into recording"):
-                lab.snapshot(f"observe:{obs_ns}", obs)
+            if obs is not None and lab.is_recording() and o2.button("📌 Snapshot into recording"):
+                lab.snapshot(f"observe:{obs_srv}", obs)
                 st.toast("state snapshot added to recording")
 
 # ---- Port-forwards ----
 with forwards:
     st.subheader("Port-forwards")
-    st.caption("Open a local port to the coordinator or a cell so your host-run workers/clients can "
-               "reach it. Point a worker at a cell with `WIGGLE_URL=<address>`. A cell forward targets "
-               "one backing pod (fine for a worker).")
+    st.caption("Open a local port to a server so your host-run workers/clients can reach it. Point a "
+               "worker at it with `WIGGLE_URL=<address>`. A server forward targets one backing pod (fine "
+               "for a worker).")
     status = lab.forward_status()
 
-    fc1, fc2, fc3 = st.columns([2, 3, 1.3])
-    fc1.markdown("**coordinator**")
-    caddr = status.get("coordinator")
-    fc2.code(caddr or "— not forwarded —", language=None)
-    if caddr:
-        if fc3.button("Stop", key="fw-stop-coord"):
-            lab.stop_forward_coordinator()
-            st.rerun()
-    elif fc3.button("Forward", key="fw-coord"):
-        action("Forward coordinator", lab.forward_coordinator)
-        st.rerun()
-
-    st.divider()
     if not cells:
-        st.caption("No cells yet — create one in the Cells tab.")
+        st.caption("No servers yet — deploy one in the Servers tab.")
     for c in cells:
         cell = c["cell"]
         addr = status.get(cell)
         r1, r2, r3 = st.columns([2, 3, 1.3])
-        r1.markdown(f"**{cell}** · ns `{c['namespace']}`")
+        r1.markdown(f"**{cell}**")
         r2.code(addr or "— not forwarded —", language=None)
         if addr:
             r2.caption(f"gRPC (worker): WIGGLE_URL={addr}")
@@ -422,7 +356,7 @@ with forwards:
             action(f"Forward {cell}", lab.forward_cell, cell)
             st.rerun()
 
-        # The Service balances over this cell's pods; these rows pin a forward to ONE pod, for
+        # The Service balances over this server's pods; these rows pin a forward to ONE pod, for
         # talking to a specific node (the leader, a follower, a pod being debugged).
         pod_status = lab.pod_forward_status(cell)
         for pod, paddr in pod_status.items():
@@ -440,22 +374,16 @@ with forwards:
 
     st.divider()
     st.markdown("**Ops console (web UI)**")
-    st.caption("The console is a pod serving the web UI: a pure gRPC client. Point it at a **standalone "
-               "server** (no coordinator, no namespace) or at a **namespace** whose cells a coordinator "
-               "places. Deploy one, forward it, and open the link. (Server nodes serve no dashboard — "
+    st.caption("The console is a pod serving the web UI: a pure gRPC client of one server. Deploy one, "
+               "forward it, and open the link. (Server nodes serve no dashboard — "
                "they expose only a /healthz probe.) Leave passwords blank for open access; set an "
                "**operator** password to require login, and optionally a **viewer** password for a "
                "read-only account (can view, but not cancel/signal/schedule).")
-    # A target is either a standalone server (keyed by its id) or a coordinated namespace.
-    standalone = sorted(c["cell"] for c in cells if not c["namespace"])
-    all_ns = sorted({c["namespace"] for c in cells if c["namespace"]})
-    targets = [(s, s) for s in standalone] + [(n, None) for n in all_ns]
     consoles = {cn["target"]: cn for cn in lab.consoles()}
-    if not targets:
+    if not cells:
         st.caption("No servers yet — deploy one on the Servers tab first.")
-    for ns, server in targets:
-        cn = consoles.get(ns.lower())
-        st.caption(f"`{ns}` — " + ("standalone server" if server else "coordinated namespace"))
+    for ns in sorted(c["cell"] for c in cells):
+        cn = consoles.get(C.dns_safe(ns))
         k1, k2, k3 = st.columns([2, 3, 1.3])
         deployed = cn is not None
         ready = deployed and cn["ready"] == cn["desired"] and cn["desired"] > 0
@@ -470,8 +398,7 @@ with forwards:
             if vw and not op:
                 k2.caption("⚠️ a viewer password needs an operator password too — it's ignored otherwise")
             if k3.button("Deploy", key=f"console-deploy-{ns}"):
-                action(f"Deploy console for {ns}", lab.deploy_console, ns, op or None, vw or None,
-                       server)
+                action(f"Deploy console for {ns}", lab.deploy_console, ns, op or None, vw or None)
                 st.rerun()
             continue
         addr = lab.console_target(ns)
@@ -488,19 +415,6 @@ with forwards:
         if st.button("Remove", key=f"console-rm-{ns}"):
             action(f"Remove console for {ns}", lab.remove_console, ns)
             st.rerun()
-
-    st.divider()
-    st.markdown("**Client routing (multi-cell)**")
-    st.caption("The coordinator hands clients in-cluster cell addresses (pod IPs). To reach them from a "
-               "host-run worker/client AND spread starts across cells, run it with this "
-               "`WIGGLE_ENDPOINT_REWRITE` — it maps each cell's pod IP to its own port-forward. Without it, "
-               "every start lands on whichever single cell you rewrote to.")
-    if st.button("Generate WIGGLE_ENDPOINT_REWRITE (forwards all cells)"):
-        with st.spinner("forwarding cells…"):
-            st.session_state["rewrite_spec"] = lab.endpoint_rewrite_spec()
-    spec = st.session_state.get("rewrite_spec")
-    if spec:
-        st.code(spec, language="bash")
 
 # ---- Logs ----
 with logs_tab:
@@ -527,70 +441,9 @@ with logs_tab:
         text = lab.logs(pod, int(tail), previous=prev)
         st.code(text or "(no output)", language="text")
 
-# ---- Coordinator ----
-with coord_tab:
-    st.subheader("Coordinator")
-    cpods = lab.pods(role="coordinator")
-    ready = sum(1 for p in cpods if p["ready"])
-    replicas = lab.coordinator_replicas()
-    dbup = lab.coordinator_db_ready()
-    s1, s2, s3 = st.columns([2, 1, 1])
-    s1.markdown(f"Coordinators: **{ready}/{len(cpods)}** ready"
-                + (f" · replicas {replicas}" if replicas else " · (none)")
-                + (" · db ✅" if dbup else " · db ⏳"))
-    opts = [1, 2, 3]
-    cur = st.session_state.get("coord_replicas", C.COORD_DEFAULT_REPLICAS)
-    chosen = s2.selectbox("replicas", opts, index=opts.index(cur) if cur in opts else 0,
-                          key="coord-replicas-sel", label_visibility="collapsed")
-    st.session_state["coord_replicas"] = chosen
-    st.caption("Coordinators are stateless — their state is in the control-plane database, so any pod "
-               "serves the same thing and the replica count is just a scale. No group to re-form, no "
-               "size pinned at deploy time, and a redeploy keeps the state.")
-    with st.form("coordcfg"):
-        st.caption("Coordinator config (applied on deploy). It runs the control plane, not the engine, "
-                   "so it has few knobs. Deploying does **not** wipe the store.")
-        coord_vals = render_tunables(C.COORD_TUNABLES, lab.coordinator_config(), "coordcfg", cols=3)
-        if st.form_submit_button(f"Deploy {chosen} coordinator(s) with this config"):
-            action(f"Deploy {chosen} coordinator(s)", lab.deploy_coordinator, int(chosen), coord_vals,
-                   spinner="Applying the coordinator Deployment…")
-            st.rerun()
-    if s3.button("Deploy", key="coord-deploy-btn", help="apply at this replica count — state is kept"):
-        action(f"Deploy {chosen} coordinator(s)", lab.deploy_coordinator, int(chosen), lab.coord_config)
-        st.rerun()
-    if cpods:
-        st.dataframe([{"pod": p["name"], "phase": p["phase"], "ready": "✅" if p["ready"] else "⏳",
-                       "restarts": p["restarts"]} for p in cpods], use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.markdown("**Election** — who is in the coordinator roster and who leads")
-    st.caption("The same announce-and-heartbeat election the cells run: every process announces itself "
-               "and heartbeats, the longest-running live one leads (ties by id), and one whose own "
-               "heartbeat goes stale stands down. Only the leader runs the reconcile/retire loop — so "
-               "with several coordinators, delete the leader's pod and watch it move.")
-    if st.button("Show roster", disabled=not dbup):
-        st.code(lab.coordinator_roster(), language="text")
-
-    st.divider()
-    st.markdown("**Store contents** — policies / namespaces / node roster / definitions "
-                "(via the coordinator the Service routes to)")
-    if st.button("Dump store", disabled=not lab.coordinator_ready()):
-        try:
-            st.json(lab.dump_coordinator_store())
-        except Exception as e:  # noqa: BLE001
-            st.error(f"dump failed: {e}")
-
-    st.divider()
-    st.markdown("**Reset the control plane** — drop the database and start blank")
-    st.caption("A redeploy no longer wipes anything, so this is the deliberate way to clear policies, "
-               "epochs, the node roster and the definition registry.")
-    if st.button("🧨 Reset control-plane store", disabled=not dbup):
-        action("Reset control-plane store", lab.reset_coordinator_store,
-               spinner="Recreating the control-plane database…")
-        st.rerun()
-
 # ---- Database ----
 with db_tab:
-    st.subheader("Databases (one Postgres per cell)")
+    st.subheader("Databases (one Postgres per server)")
     dbpods = lab.db_pods()
     if not dbpods:
         st.caption("No database pods yet.")
@@ -609,7 +462,7 @@ with db_tab:
                 tables = []
                 st.warning(f"could not list tables: {e}")
             if not tables:
-                st.caption("no user tables yet (has the cell finished migrating?)")
+                st.caption("no user tables yet (has the server finished migrating?)")
             for t in tables:
                 if st.button(f'{t["table"]}  ·  {t["rows"]} rows', use_container_width=True,
                              key=f'tbl-{pod}-{t["schema"]}-{t["table"]}'):

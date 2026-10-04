@@ -1,37 +1,22 @@
 # Wiggle Lab
 
-A local control panel for **playing with a real wiggle cell cluster** on Kubernetes (via
-[kind](https://kind.sigs.k8s.io/)) — deploy cells, reshard partitions/epochs, scale, kill, and run
-client scenarios, all from a Streamlit UI. Built to make manual, multi-scenario testing fast instead
+A local control panel for **playing with real wiggle servers** on Kubernetes (via
+[kind](https://kind.sigs.k8s.io/)) — deploy servers, scale, kill, and run client scenarios, all from a
+Streamlit UI. Built to make manual, multi-scenario testing fast instead
 of tedious.
 
 It talks to the cluster two ways:
-- **kind / kubectl** (subprocess) for infrastructure: cluster, coordinator, cells (each with its own
-  Postgres), scaling, killing pods.
-- **gRPC** (Python stubs generated from `proto/`) for control + data plane: open epochs, allocate
-  workflows, start instances, observe state.
+- **kind / kubectl** (subprocess) for infrastructure: cluster, servers (each with its own Postgres),
+  consoles, scaling, killing pods.
+- **gRPC** (Python stubs generated from `proto/`) for the control plane: register workflows, start
+  instances, observe state.
 
 ## What you can do
 
 - Create/tear down a kind cluster.
-- Deploy a **server**: its own Postgres container and N wiggle nodes over it. Leave the namespace
-  blank and that is all you need — no coordinator, no placement. This is the ordinary way to run
-  wiggle and the fastest path through this lab.
+- Deploy a **server**: its own Postgres container and N wiggle nodes over it.
 - **Scale** a server up/down, **kill** individual pods, **remove** it (and its DB).
 - Run **client scenarios**: start instances and watch them run.
-
-<details>
-<summary>Multi-cell placement (optional, needs a coordinator)</summary>
-
-Give a server a **namespace** and it joins a coordinated ring instead of standing alone. That path
-needs the coordinator deployed first (sidebar), and adds:
-
-- **Reshard**: open a placement epoch with a `shard→cell` ring; opening a new epoch drains the old one
-  (the coordinator retires it automatically once instances finish).
-- Client scenarios that allocate a workflow to a namespace and show where instances land across
-  cells and epochs.
-
-</details>
 
 ## Prerequisites
 
@@ -46,7 +31,7 @@ source .venv/bin/activate
 streamlit run app.py           # opens http://localhost:8501
 ```
 
-`setup.sh` runs `gen_proto.sh`, which compiles `proto/src/main/proto/{wiggle,coordinator}.proto` into
+`setup.sh` runs `gen_proto.sh`, which compiles `proto/src/main/proto/wiggle.proto` into
 `wigglelab/pb/`. Re-run `./gen_proto.sh` if the protos change.
 
 ## Typical flow (in the UI)
@@ -54,30 +39,20 @@ streamlit run app.py           # opens http://localhost:8501
 1. **Sidebar → Create kind cluster.**
 2. **Build image** (compiles the Java dist + dashboard — several minutes; or build `wiggle:local`
    yourself first with `docker build -t wiggle:local ..`), then **Load image → kind**.
-3. **Servers tab →** deploy `srv1` with the namespace **left blank** (1 node). You get a Postgres and
-   a wiggle node; no coordinator is involved.
-4. **Forwards tab →** deploy the **ops console** against `srv1` and open the link. A console for a
-   standalone server talks straight to it (`WIGGLE_URL`) — no coordinator, no namespace.
-5. **Client tests tab →** pick the `sleep` workflow → **Start instances → Observe**.
+3. **Servers tab →** deploy `srv1` (1 node). You get a Postgres and a wiggle node.
+4. **Forwards tab →** deploy the **ops console** against `srv1` and open the link. It talks straight
+   to the server (`WIGGLE_URL`).
+5. **Client tests tab →** pick `srv1` and the `sleep` workflow → **Register workflow → Start
+   instances → Observe**.
 6. **Scale/kill/remove** the server from the Servers tab; **Tear down cluster** from the sidebar when
    done.
-
-<details>
-<summary>The coordinated path (optional)</summary>
-
-Deploy the coordinator from the sidebar first, then create `cellA` **with** namespace `orders`, open
-an epoch for `orders` with ring `0=cellA` on the Placement tab, and run the client scenarios. Add
-`cellB` and open `0=cellB` to watch a reshard drain the old epoch.
-
-</details>
 
 ## Record & replay (reproduce an issue)
 
 When something misbehaves, capture the exact sequence and hand it off for a fix:
 
 1. **Sidebar → Recording → ● Start recording** (optionally note what you're testing).
-2. Do your thing — every mutating action (create cell, scale, kill, open epoch, allocate, start
-   instances, …) is captured with its arguments and outcome. A failing action is recorded as an error.
+2. Do your thing — every mutating action (create server, scale, kill, register, start instances, …) is captured with its arguments and outcome. A failing action is recorded as an error.
    For a *behavioural* issue (no crash — e.g. instances stuck), hit **📌 Snapshot into recording** in the
    Client-tests tab to bake the observed state in.
 3. **■ Stop recording**, describe the issue, **⬇︎ Download recording JSON**, and send that file over.
@@ -88,7 +63,7 @@ Recordings also save to `~/.wiggle-lab/recordings/<id>.json`. To reproduce one:
 python replay.py wiggle-lab-<id>.json
 ```
 
-It re-runs the steps in order (waiting for the coordinator/cells to be ready between infra steps) and
+It re-runs the steps in order (waiting for each new server to be ready) and
 **stops at the first step that errors — the reproduction point** — leaving the cluster up for
 inspection (`kubectl get pods -n wiggle-lab`). `--no-wait` and `--settle N` tune the pacing. Replay is
 what makes a bug report actionable: same sequence, same failure, then a fix.
@@ -96,19 +71,12 @@ what makes a bug report actionable: same sequence, same failure, then a fix.
 ## Notes & limits (v1)
 
 - **No workers yet.** The built-in `sleep` and `instant` flows are advanced by the server itself
-  (so they actually complete); the `park` flow holds a task in a queue and stays `RUNNING`, which is
-  the clearest way to *see* how work distributes across cells and epochs. Deploying real workers
-  (the `example` order workflow) is the natural next iteration.
-- Host↔cluster gRPC goes over `kubectl port-forward` (managed automatically): coordinator on
-  `127.0.0.1:18099`, each cell on `127.0.0.1:1810x`.
-- The coordinator is an ordinary **Deployment** over its own small Postgres — no StatefulSet,
-  no per-pod volume, no peer list. Scale the replica count and they elect one leader between
-  themselves (the Coordinator tab shows the roster and who leads); only the leader runs the
-  reconcile/retire loop, so deleting the leader's pod is a failover you can watch. Like every
-  database in this lab it has no volume, so its state is ephemeral — a redeploy keeps it, but
-  a node restart does not.
-- Placement policy is cached from `OpenEpoch` responses (the coordinator has no read-policy RPC) and
-  persisted to `~/.wiggle-lab/state.json`, so "start into namespace" needs an epoch opened first.
+  (so they actually complete); the `park` flow holds a task in a queue and stays `RUNNING`.
+  Deploying real workers (the `example` order workflow) is the natural next iteration.
+- Host↔cluster gRPC goes over `kubectl port-forward` (managed automatically): each server on
+  `127.0.0.1:1810x`.
+- No database in this lab has a volume, so its state is ephemeral — a redeploy keeps it, but a node
+  restart does not.
 
 ## Config (env vars)
 
@@ -117,7 +85,7 @@ what makes a bug report actionable: same sequence, same failure, then a fix.
 | `WIGGLE_LAB_CLUSTER` | `wiggle-lab` | kind cluster name |
 | `WIGGLE_LAB_NAMESPACE` | `wiggle-lab` | Kubernetes namespace for all lab resources |
 | `WIGGLE_LAB_IMAGE` | `wiggle:local` | the wiggle server image to deploy |
-| `WIGGLE_LAB_HOME` | `~/.wiggle-lab` | where the policy cache is stored |
+| `WIGGLE_LAB_HOME` | `~/.wiggle-lab` | where server config and recordings are stored |
 
 ## Layout
 
@@ -131,10 +99,9 @@ wiggle-lab/
     config.py            names, ports, labels
     shell.py             subprocess helpers
     kind.py              cluster lifecycle + image build/load
-    manifests.py         coordinator / cell(+DB) Kubernetes manifests
+    manifests.py         server (+DB) and console Kubernetes manifests
     k8s.py               kubectl apply/scale/delete/list
     portforward.py       managed kubectl port-forwards
-    coord_client.py      CellCoordinator gRPC (OpenEpoch, RegisterWorkflow, Resolve, …)
     cell_client.py       WiggleControlPlane gRPC (StartInstance, ListInstances, …)
     workflows.py         built-in workflow definitions (JSON-native)
     recorder.py          @record decorator + Recording (capture actions for replay)

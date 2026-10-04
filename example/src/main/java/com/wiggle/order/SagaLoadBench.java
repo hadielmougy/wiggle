@@ -1,16 +1,14 @@
 package com.wiggle.order;
 
-import com.wiggle.client.CoordinatedConnection;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Activity;
 import com.wiggle.client.worker.Compensable;
 import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.client.worker.Compensation;
 import com.wiggle.client.worker.ForFlow;
-import com.wiggle.client.worker.NamespaceWorker;
 import com.wiggle.client.worker.PermanentActivityException;
+import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Tls;
@@ -20,7 +18,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -35,9 +32,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * COMPENSATED), effective task throughput (forward + reverse), and a status histogram — any
  * outcome other than COMPENSATED is a correctness failure, printed loudly.
  *
- * <p>Runs against a coordinator deployment like {@link RateCeilingBench} (same env:
- * {@code WIGGLE_COORDINATOR_URL}, {@code WIGGLE_NAMESPACE}, {@code WIGGLE_ENDPOINT_REWRITE}), and
- * brings its own worker. Tune with {@code BENCH_COUNT} (2000), {@code BENCH_RATE} (starts/sec,
+ * <p>Runs against the server at {@code WIGGLE_SERVER_URL} (default {@code 127.0.0.1:8080}), like
+ * {@link RateCeilingBench}, and brings its own worker. Tune with {@code BENCH_COUNT} (2000), {@code BENCH_RATE} (starts/sec,
  * 200), {@code BENCH_THREADS} (8).
  */
 public final class SagaLoadBench {
@@ -86,26 +82,22 @@ public final class SagaLoadBench {
     }
 
     public static void main(String[] args) throws Exception {
-        String coord = env("WIGGLE_COORDINATOR_URL", "127.0.0.1:18099");
-        String ns = env("WIGGLE_NAMESPACE", "abc");
+        String server = env("WIGGLE_SERVER_URL", "127.0.0.1:8080");
         int count = Integer.parseInt(env("BENCH_COUNT", "2000"));
         int rate = Integer.parseInt(env("BENCH_RATE", "200"));
         int threads = Integer.parseInt(env("BENCH_THREADS", "8"));
 
-        try (CoordinatedConnection resolver = WiggleConnection.coordinator(coord, Tls.Options.DISABLED, "saga")) {
+        try (WiggleClient client = new WiggleClient(server, Tls.Options.DISABLED)) {
             FlowSpec bp = flowSpec();
-            resolver.registerWorkflow(ns, bp);
+            client.register(bp);
 
-            NamespaceWorker worker = new NamespaceWorker(
-                    () -> resolver.activeCellTargets(ns),
-                    WiggleClient::new,
-                    "saga-load",
-                    WorkerOptions.defaults().withConcurrency(100).withLongPollWait(Duration.ofSeconds(10)),
-                    w -> w.registerHandler(new SagaHandlers())
-            ).start();
+            Worker worker = new Worker(client, "saga-load",
+                    WorkerOptions.defaults().withConcurrency(100).withLongPollWait(Duration.ofSeconds(10)))
+                    .registerHandler(new SagaHandlers());
+            worker.start();
 
-            System.out.printf("saga load: %d instances at %d/s (%d threads) via %s ns=%s%n",
-                    count, rate, threads, coord, ns);
+            System.out.printf("saga load: %d instances at %d/s (%d threads) via %s%n",
+                    count, rate, threads, server);
 
             ConcurrentLinkedQueue<String> ids = new ConcurrentLinkedQueue<>();
             AtomicLong seq = new AtomicLong();
@@ -122,7 +114,7 @@ public final class SagaLoadBench {
                             long at = t0 + slot * intervalNanos;
                             long wait = at - System.nanoTime();
                             if (wait > 0) TimeUnit.NANOSECONDS.sleep(wait);
-                            ids.add(resolver.clientForNamespace(ns).start(bp, Map.of("seq", slot)));
+                            ids.add(client.start(bp, Map.of("seq", slot)));
                         }
                     } catch (Exception e) {
                         System.err.println("submitter died: " + e);
@@ -137,14 +129,13 @@ public final class SagaLoadBench {
             System.out.printf("submitted %d in %.1fs (%.0f/s)%n", ids.size(), submitSecs, ids.size() / submitSecs);
 
             // Poll every instance to a terminal state; histogram the outcomes.
-            Map<String, WiggleClient> cellCache = new ConcurrentHashMap<>();
             ExecutorService pollPool = Executors.newFixedThreadPool(32);
             List<java.util.concurrent.Future<String>> outcomes = new ArrayList<>();
             long pollDeadline = System.nanoTime() + Duration.ofMinutes(10).toNanos();
             for (String id : ids) {
                 outcomes.add(pollPool.submit(() -> {
                     while (System.nanoTime() < pollDeadline) {
-                        InstanceView v = resolver.clientForInstance(id).instance(id);
+                        InstanceView v = client.instance(id);
                         if (v.isTerminal()) return v.status();
                         Thread.sleep(200);
                     }

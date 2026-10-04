@@ -1,28 +1,13 @@
 package com.wiggle.dist;
 
-import com.wiggle.dist.coord.ConfigSource;
-import com.wiggle.dist.coord.CoordinatorConfigSource;
-import com.wiggle.dist.coord.CoordinatorLink;
-import com.wiggle.dist.coord.EnvConfigSource;
-import com.wiggle.dist.coord.HttpCoordinatorLink;
-import com.wiggle.dist.coord.NoopCoordinatorLink;
 import com.wiggle.server.Logging;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.coordinator.jdbc.JdbcCoordinatorStoreProvider;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.coord.CoordinatorServer;
-import com.wiggle.server.coord.CoordinatorStore;
-import com.wiggle.server.coord.InMemoryCoordinatorStore;
 
 /**
  * Entry point for the standalone server distribution. Reads configuration from the environment,
  * wires the all-backends {@link WiggleStorageFactory}, and runs until the JVM is stopped.
- *
- * <p>The cell coordinator is optional and off by default: with no {@code WIGGLE_COORDINATOR_URL} the
- * node uses env config and a no-op coordinator link -- behaviour identical to a standalone server.
- * When the URL is set, config comes through a {@link CoordinatorConfigSource} and the node announces
- * itself via a {@link CoordinatorLink} (both best-effort; a coordinator outage never blocks boot).
  */
 public final class Main {
 
@@ -30,30 +15,16 @@ public final class Main {
 
     public static void main(String[] args) throws Exception {
         Logging.configureFromEnv();   // opt-in file logging, before anything logs
+        RemovedSettings.reject(System.getenv());
 
-        Role role = Role.fromEnvironment();
-
-        // The ops console is a third role in the one image: a pure gRPC client + web UI, not a
-        // server (no engine, no storage). It reads its own env (WIGGLE_URL + namespace).
-        if (role == Role.CONSOLE) {
+        // The ops console is a second role in the one image: a pure gRPC client + web UI, not a
+        // server (no engine, no storage). It reads its own env (WIGGLE_URL).
+        if (Role.fromEnvironment() == Role.CONSOLE) {
             com.wiggle.console.ConsoleMain.main(args);
             return;
         }
 
-        String coordinatorUrl = System.getenv("WIGGLE_COORDINATOR_URL");
-        boolean coordinated = coordinatorUrl != null && !coordinatorUrl.isBlank();
-        ConfigSource configSource = coordinated
-                ? new CoordinatorConfigSource(new EnvConfigSource(), coordinatorUrl)
-                : new EnvConfigSource();
-
-        ServerConfig config = configSource.load();
-
-        // Server vs coordinator is an app-layer choice (WIGGLE_ROLE), not an engine concept: the
-        // engine and the coordinator are decoupled libraries composed here.
-        if (role == Role.COORDINATOR) {
-            runCoordinator(config);   // a separate, engine-free control plane; never a WiggleServer
-            return;
-        }
+        ServerConfig config = ServerConfig.fromEnvironment();
 
         // One-shot schema migration then exit, for a CI/DBA-owned schema (run this, then run the app
         // with WIGGLE_SCHEMA_MODE=verify). Forces APPLY even if the app env pins verify.
@@ -67,91 +38,15 @@ public final class Main {
             return;
         }
 
-        CoordinatorLink coordinator = coordinated
-                ? new HttpCoordinatorLink(coordinatorUrl)
-                : new NoopCoordinatorLink();
-
         WiggleServer server = new WiggleServer(config, new WiggleStorageFactory()).start();
         boolean tls = config.tls().hasKeyStore();
-        System.out.println("Wiggle server '" + config.nodeName() + "' on " + server.baseUrl()
+        System.out.println("Wiggle server '" + config.nodeName() + "' on port " + server.port()
                 + " (gRPC: " + (tls ? "TLS" : "plaintext")
                 + ", storage: " + (config.isInMemory() ? "in-memory" : config.jdbcUrl()) + ")");
         String logFile = System.getenv("WIGGLE_LOG_FILE");
         if (logFile != null && !logFile.isBlank()) System.out.println("Logging to " + logFile);
 
-        // read once, by ServerConfig -- the cell also stamps it into every id it mints
-        String cellId = config.cellId() == null ? "" : config.cellId();
-        // A coordinator-role node runs no cell (no placement, no engine) -> no runtime to report.
-        CoordinatorLink.CellRuntime runtime = server.placement() == null ? null
-                : new CoordinatorLink.CellRuntime(server.placement(), server.engine()::liveCountByEpoch);
-        coordinator.register(new CoordinatorLink.NodeInfo(
-                config.nodeName(), config.namespace(), cellId, server.baseUrl(), engineVersion(),
-                server.cellFingerprint()), runtime);
-        // Self-heal: if a start hits standby (routed here right after an epoch bump, before our next
-        // heartbeat applied it), re-fetch placement on-demand and retry instead of failing.
-        if (server.placement() != null) {
-            server.placement().onStandby(coordinator::refreshPlacement);
-        }
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                coordinator.close();
-            } finally {
-                server.close();
-            }
-        }));
+        Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         Thread.currentThread().join();
-    }
-
-    /**
-     * Runs the coordinator control plane: build its store, then a self-hosted {@link CoordinatorServer}.
-     * No engine, no cell.
-     *
-     * <p>{@code WIGGLE_COORD_STORE=jdbc:<url>} points it at its own (small) database; several
-     * coordinator processes may share one, and the leader election over that store keeps them
-     * single-writer. With the variable unset the coordinator keeps its state in memory, which is a
-     * single process with nothing to install -- fine for a local run, not for HA, since the control
-     * plane's state does not survive a restart.
-     */
-    private static void runCoordinator(ServerConfig config) throws Exception {
-        String uri = System.getenv("WIGGLE_COORD_STORE");
-        String backend;
-        CoordinatorStore store;
-        if (uri == null || uri.isBlank()) {
-            backend = "in-memory (not durable -- set WIGGLE_COORD_STORE=jdbc:<url> for HA)";
-            store = new InMemoryCoordinatorStore();
-        } else if (uri.startsWith("jdbc:")) {
-            backend = "jdbc " + uri;
-            store = new JdbcCoordinatorStoreProvider(uri,
-                    System.getenv("WIGGLE_COORD_JDBC_USER"),
-                    System.getenv("WIGGLE_COORD_JDBC_PASSWORD"),
-                    intEnv("WIGGLE_COORD_JDBC_POOL", 4)).coordinatorStore();
-        } else {
-            throw new IllegalArgumentException("unknown coordinator store; set "
-                    + "WIGGLE_COORD_STORE=jdbc:<url>, or leave it unset for an in-memory one "
-                    + "(got '" + uri + "')");
-        }
-        CoordinatorServer coordinator = new CoordinatorServer(store, config.port(), config.tls(),
-                config.missedHeartbeatsBeforeDead(), config.nodeName()).start();
-        boolean tls = config.tls().hasKeyStore();
-        System.out.println("Wiggle coordinator '" + config.nodeName() + "' on 127.0.0.1:" + coordinator.port()
-                + " (gRPC: " + (tls ? "TLS" : "plaintext") + ", store: " + backend + ")");
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            coordinator.close();
-            try { store.close(); } catch (Exception ignored) { }
-        }));
-        Thread.currentThread().join();
-    }
-
-    private static int intEnv(String key, int def) {
-        String v = System.getenv(key);
-        if (v == null || v.isBlank()) return def;
-        try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return def; }
-    }
-
-    private static String engineVersion() {
-        String v = WiggleServer.class.getPackage().getImplementationVersion();
-        return v != null ? v : "dev";
     }
 }
