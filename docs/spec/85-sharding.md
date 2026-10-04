@@ -280,6 +280,15 @@ shards, instead of silently writing to the wrong database.
 **WGL-SHARD-073** (MUST) Each shard keeps the failure classification and replay rules of
 [chapter 80 §9](80-storage.md) unchanged; a transaction is replayed only on the shard it ran on.
 
+**WGL-SHARD-074** (MUST) *Implemented.* A shard whose primary cannot be reached (a pool timeout
+caused by a failed connect, `StorageUnreachableException`) MUST NOT be replayed in place, and MUST be
+marked down on that node: every route to it then fails at once as a transient failure (UNAVAILABLE)
+without opening a connection, except a replica-allowed read on a shard with replicas. A background
+probe, backing off from 1 s to 30 s, MUST bring the shard back once its primary answers. A claim MUST
+pass over a down shard, and fail only when it reaches no shard. A start minted onto a down shard thus
+fails in milliseconds, and the client's UNAVAILABLE retry mints again; only the call that first finds
+the shard unreachable waits out the pool's connection timeout.
+
 ### 4.2 Read-only transactions
 
 **WGL-SHARD-080** (MUST) The read-only part of `Tx` MUST be split out as `ReadTx`, and `Tx` MUST
