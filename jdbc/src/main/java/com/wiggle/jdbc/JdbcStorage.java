@@ -603,7 +603,19 @@ public final class JdbcStorage implements Storage {
               started_at     BIGINT       NOT NULL,
               ready_at       BIGINT
             );
-            """));
+            """),
+            // Every token write lands in every index whose predicate the row satisfies, so each one
+            // covers only the rows its queries read: the join reads JOINED tokens, throughput counts
+            // finished tasks and predicates, step durations read tokens that were claimed. The
+            // instance index serves every other read by instance. Same caveat as migration 19.
+            new Migration(32, "narrow-token-indexes", """
+            CREATE INDEX IF NOT EXISTS ix_token_joined ON wf_token (instance_id, node_id) WHERE status='JOINED';
+            CREATE INDEX IF NOT EXISTS ix_token_done_steps ON wf_token (updated_at) WHERE status='DONE' AND kind IN ('TASK','PREDICATE');
+            CREATE INDEX IF NOT EXISTS ix_token_step_timed ON wf_token (workflow, version, finished_at) WHERE status='DONE' AND started_at IS NOT NULL;
+            DROP INDEX IF EXISTS ix_token_barrier;
+            DROP INDEX IF EXISTS ix_token_done;
+            DROP INDEX IF EXISTS ix_token_done_timed;
+            """, Dialect::supportsPartialIndexes));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
