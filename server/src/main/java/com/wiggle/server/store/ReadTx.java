@@ -8,6 +8,7 @@ import com.wiggle.server.store.Rows.Token;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 
 /**
  * The reads of one transaction: everything a caller may do on a read-only connection, such as a
@@ -18,6 +19,10 @@ public interface ReadTx extends GraphReads {
 
     /** The shard this database was claimed for, or empty when no shard has claimed it. */
     OptionalInt shardIdentity();
+
+    /** When this database's primary last wrote the replica-lag heartbeat (epoch millis), or empty when it
+     *  never has. Read on a replica, its distance from now is the replica's lag. */
+    OptionalLong shardBeat();
 
     /** Every shard the cluster has used, by id. Held on the home shard. */
     List<Rows.ShardRecord> shardRegistry();

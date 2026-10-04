@@ -3,6 +3,7 @@ package com.wiggle.server;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
 import com.wiggle.server.cluster.QueueLagMonitor;
+import com.wiggle.server.cluster.ReplicaMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -22,6 +23,7 @@ final class ServerBundle {
 
     private final WorkflowEngine engine;
     private final Housekeeper housekeeper;
+    private final ReplicaMonitor replicaMonitor;
     private final QueueLagMonitor queueLagMonitor;
     private final GrpcApi api;
     /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
@@ -32,6 +34,7 @@ final class ServerBundle {
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
                 config.topology() == null ? InstanceIds.across(storage.instanceShards())
                         : new Placement(config.topology(), System::currentTimeMillis));
+        this.replicaMonitor = new ReplicaMonitor(storage, cluster, 1_000);
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch(), Housekeeper.adaptiveByDefault(),
                 config.defaultLease());
@@ -45,6 +48,7 @@ final class ServerBundle {
 
     public void start() {
         housekeeper.start();
+        replicaMonitor.start();
         queueLagMonitor.start();
         api.start();
         if (health != null) health.start();
@@ -55,6 +59,7 @@ final class ServerBundle {
         api.close();
         queueLagMonitor.close();
         housekeeper.close();
+        replicaMonitor.close();
     }
 
     public int port() { return api.port(); }

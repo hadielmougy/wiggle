@@ -55,6 +55,16 @@ public interface Storage extends AutoCloseable {
         return readShard(shardOf(id), freshness, work);
     }
 
+    /** Whether any shard has read replicas, so something must keep their lag measured. */
+    default boolean hasReplicas() { return false; }
+
+    /** Stamps the replica-lag heartbeat on every primary that has replicas. The leader calls it about
+     *  once a second. */
+    default void beatPrimaries(long now) { }
+
+    /** Re-measures every replica's lag and health. Every node calls it about once a second. */
+    default void probeReplicas(long now) { }
+
     /**
      * A stable identity of the underlying store: the same for every node pointed at the same
      * database, and different across databases. Returns {@code null} when the backend has no

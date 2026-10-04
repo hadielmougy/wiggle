@@ -1,5 +1,6 @@
 package com.wiggle.server.topology;
 
+import com.wiggle.server.store.ReplicatedStorage;
 import com.wiggle.server.store.ShardState;
 
 import java.util.List;
@@ -27,8 +28,18 @@ public record Topology(List<Shard> shards, List<Generation> generations) {
         }
     }
 
-    /** One shard: a permanent id, its state, its roles and its primary. */
-    public record Shard(int id, ShardState state, Set<Role> roles, Connection primary) {
+    /**
+     * One shard: a permanent id, its state, its roles, its primary and its read replicas.
+     *
+     * @param maxReplicaLagMillis a replica further behind than this serves no reads
+     * @param replicaFallback     what a replica-allowed read does when no replica is within the lag
+     */
+    public record Shard(int id, ShardState state, Set<Role> roles, Connection primary, List<Connection> replicas,
+                        long maxReplicaLagMillis, ReplicatedStorage.Fallback replicaFallback) {
+        public Shard {
+            replicas = List.copyOf(replicas);
+        }
+
         public boolean has(Role role) { return roles.contains(role); }
     }
 

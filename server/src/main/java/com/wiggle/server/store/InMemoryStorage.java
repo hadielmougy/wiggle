@@ -80,6 +80,7 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, Rows.Schedule> schedules = new ConcurrentHashMap<>();
     /** The shard this store was claimed for, or null. */
     private volatile Integer shardIdentity;
+    private volatile Long shardBeat;
     private final Map<Integer, Rows.ShardRecord> shardRegistry = new ConcurrentSkipListMap<>();
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -490,6 +491,15 @@ public final class InMemoryStorage implements Storage {
             synchronized (InMemoryStorage.this) {
                 if (shardIdentity == null) shardIdentity = shardId;
             }
+        }
+
+        @Override public OptionalLong shardBeat() {
+            Long beat = shardBeat;
+            return beat == null ? OptionalLong.empty() : OptionalLong.of(beat);
+        }
+
+        @Override public void writeShardBeat(long now) {
+            if (shardIdentity != null) shardBeat = now;
         }
 
         @Override public List<Rows.ShardRecord> shardRegistry() {
