@@ -354,7 +354,11 @@ per-node single claimer of `docs/performance-plan.md` §2 SHOULD land before or 
 **WGL-SHARD-100** (MUST) Registering a workflow MUST write the definition and its graph rows to
 every non-`RETIRED` shard, idempotently, so a hot transaction still reads the graph and mutates
 runtime state on one database ([chapter 80](80-storage.md), lazy graph loading). A registration
-that fails on any shard MUST fail as a whole and MUST be safe to retry.
+that fails on any shard MUST fail as a whole and MUST be safe to retry. The home shard MUST be
+written last, so a graph it holds is held by every shard: re-registering a graph the home shard
+already holds MUST read only the home shard, so it succeeds (and a worker starts) while an
+instance shard is down. *Implemented in `DefinitionRegistry.register`; a registration left partial
+by an earlier order is completed by `ShardedStorage.migrate()` on the next node start.*
 
 **WGL-SHARD-101** (MUST) A shard added later MUST receive every registered definition before it
 takes a positive weight. *Implemented in `ShardedStorage.migrate()`: every node start copies onto each

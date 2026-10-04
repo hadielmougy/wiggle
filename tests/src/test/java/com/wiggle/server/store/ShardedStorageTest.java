@@ -45,11 +45,13 @@ class ShardedStorageTest {
     /** A {@link Probe} whose database can be taken out of reach. */
     private static final class Outageable extends Probe {
         volatile boolean unreachable;
+        /** Transactions served before it goes out of reach by itself. */
+        volatile int servesUpTo = Integer.MAX_VALUE;
 
         Outageable(String fingerprint) { super(fingerprint); }
 
         @Override public <R> R inTx(Function<Tx, R> work) {
-            if (unreachable) {
+            if (unreachable || txs.get() >= servesUpTo) {
                 txs.incrementAndGet();
                 throw new StorageUnreachableException("connection refused", null);
             }
@@ -334,5 +336,34 @@ class ShardedStorageTest {
         two.unreachable = true;
         assertThrows(StorageUnreachableException.class, () -> engine.reclaimExpiredLeases(10));
         assertThrows(StorageUnreachableException.class, () -> engine.fireDueTimers(10));
+    }
+
+    @Test @DisplayName("home is registered last, so a graph it holds is re-registered while an instance shard is down")
+    void reRegistrationNeedsOnlyHome() throws InterruptedException {
+        WorkflowDefinition v1 = FlowSpec.define("again", 1, Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b)).combine(s::pick)).definition();
+        WorkflowDefinition v2 = FlowSpec.define("again", 2, Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::b), f.thenApply(s::a)).combine(s::pick)).definition();
+        Outageable seven = new Outageable("a");
+        Outageable two = new Outageable("b");
+        ShardedStorage s = new ShardedStorage(shards(seven, two), 2);
+        s.migrate();
+
+        two.servesUpTo = two.txs.get() + 1;   // home answers the check, then is gone before its write
+        assertThrows(StorageUnreachableException.class, () -> new DefinitionRegistry(s).register(v1));
+        assertTrue(seven.mem.inTx(tx -> tx.definition("again", 1)).isPresent(), "the instance shard is written first");
+        two.servesUpTo = Integer.MAX_VALUE;
+        assertTrue(two.mem.inTx(tx -> tx.definition("again", 1)).isEmpty(), "home, written last, was not");
+        assertThrows(StorageUnreachableException.class, () -> s.inHome(tx -> null));
+        await(() -> !s.isDown(2), "a probe finds home reachable");
+        new DefinitionRegistry(s).register(v1);
+        assertTrue(two.mem.inTx(tx -> tx.definition("again", 1)).isPresent(), "registering again completes it");
+
+        seven.unreachable = true;
+        int reached = seven.txs.get();
+        new DefinitionRegistry(s).register(v1);
+        assertEquals(reached, seven.txs.get(), "a graph home holds is not written to the instance shards again");
+        assertThrows(StorageUnreachableException.class, () -> new DefinitionRegistry(s).register(v2),
+                "a new version still needs every shard");
     }
 }
