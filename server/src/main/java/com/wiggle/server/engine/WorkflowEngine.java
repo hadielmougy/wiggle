@@ -1,6 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.*;
+import com.wiggle.server.store.BufferedTx;
 import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
@@ -130,7 +131,8 @@ public final class WorkflowEngine {
 
     public String start(String workflow, Integer version, Object context, String correlationId) {
         String id = idMinter.next();
-        return transactions.inTx(id, tx -> instances.start(tx, id, workflow, version, context, correlationId, null));
+        return transactions.inTx(id, raw -> buffered(raw,
+                tx -> instances.start(tx, id, workflow, version, context, correlationId, null)));
     }
 
     public void cancel(String instanceId, String reason) {
@@ -276,14 +278,14 @@ public final class WorkflowEngine {
      */
     public ReportOutcome report(Run run) {
         if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
-        return transactions.inTx(run.startTaskId, tx -> {
+        return transactions.inTx(run.startTaskId, raw -> buffered(raw, tx -> {
             LockedTask task = Tokens.lock(tx, run.startTaskId);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             if (compensated(tx, task, run)) {
                 return new ReportOutcome(task.inst().status.name(), 0, null);
             }
             return stepChain.apply(tx, task, run, ExecutionModes.chainsBack(mode));
-        });
+        }));
     }
 
     /**
@@ -575,7 +577,7 @@ public final class WorkflowEngine {
      * {@code payload} merges into the context and the flow advances down the signal's path.
      */
     public void signal(String instanceId, String name, Object payload) {
-        transactions.inTxVoid(instanceId, tx -> {
+        transactions.inTxVoid(instanceId, raw -> bufferedVoid(raw, tx -> {
             Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             Instances.requireRunning(inst);
             Token t = tx.awaitingSignal(instanceId, name)
@@ -591,6 +593,28 @@ public final class WorkflowEngine {
             LOG.log(System.Logger.Level.DEBUG, () -> "signal: '" + name + "' delivered to instance "
                     + inst.id + " -> " + node.next());
             drive(tx, def, inst, new ArrayDeque<>(List.of(cont)), now);
+        }));
+    }
+
+    /**
+     * Runs {@code body} over a write-buffered view of {@code raw}, flushing before the transaction
+     * commits. Every transaction that locks an instance runs this way: the lock is held until commit
+     * and every other mutation of that instance waits on it, so its writes go out together at the
+     * end, not one round trip each, and a token inserted and moved on is written once. A store whose
+     * transactions do not roll back gets the body as it is.
+     */
+    private static <R> R buffered(Tx raw, java.util.function.Function<Tx, R> body) {
+        if (!raw.transactional()) return body.apply(raw);
+        BufferedTx tx = BufferedTx.of(raw);
+        R result = body.apply(tx);
+        tx.flush();
+        return result;
+    }
+
+    private static void bufferedVoid(Tx raw, java.util.function.Consumer<Tx> body) {
+        buffered(raw, tx -> {
+            body.accept(tx);
+            return null;
         });
     }
 
@@ -602,7 +626,7 @@ public final class WorkflowEngine {
     /** Runs {@code action} once per token, each in its own transaction, isolating failures. */
     private int sweep(List<Token> due, String what, SweepAction action) {
         return sweeper.run(due, token -> what + " " + token.id, token -> {
-            transactions.inTxVoid(token.id, tx -> action.apply(tx, token));
+            transactions.inTxVoid(token.id, raw -> bufferedVoid(raw, tx -> action.apply(tx, token)));
             return true;
         });
     }
@@ -713,7 +737,7 @@ public final class WorkflowEngine {
 
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
-        transactions.inTxVoid(taskId, tx -> {
+        transactions.inTxVoid(taskId, raw -> bufferedVoid(raw, tx -> {
             LockedTask locked = Tokens.lock(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
@@ -722,7 +746,7 @@ public final class WorkflowEngine {
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
             if (StepIo.ENABLED) StepIo.record(t, Scopes.dispatchContext(inst, t), null);
             settleFailure(tx, inst, t, node, message, message, retryable, System.currentTimeMillis());
-        });
+        }));
     }
 
     /**

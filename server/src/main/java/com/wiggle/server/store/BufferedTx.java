@@ -16,10 +16,12 @@ import java.util.List;
  * then delegates, so a read can never observe state the buffer is still holding, and a method
  * added to {@link Tx} tomorrow is safe by default rather than wrong by omission.
  *
- * <p>Flush order is inserts, then token updates, then instance updates: a token inserted and then
- * settled inside one buffer must exist before its update runs. Within one shape, order is
- * preserved. The buffer holds references, not copies -- engine writes hand a row to the store and
- * never touch it again, which is what makes that safe.
+ * <p>Flush order is inserts, then token updates, then instance updates. Within one shape, order is
+ * preserved. The buffer holds references, not copies, and a token is written once with the state
+ * it has at the flush: an update of a token the buffer already inserted adds nothing, since the
+ * insert carries it, and an update of one it already holds as an update moves that update last. This is what makes the INSERT-then-UPDATE of a token
+ * created and moved on in one transaction a single INSERT. An instance update is never folded,
+ * because each one advances the row's revision, which counts its writes.
  *
  * <p>{@link #flush()} must be called before the transaction body returns: the wrapper cannot know
  * when the underlying transaction is about to commit, and unflushed writes are simply lost.
@@ -46,7 +48,15 @@ public interface BufferedTx extends Tx {
         };
         InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
             case "insertToken"    -> { inserts.add((Token) args[0]); yield null; }
-            case "updateToken"    -> { tokenUpdates.add((Token) args[0]); yield null; }
+            case "updateToken"    -> {
+                Token t = (Token) args[0];
+                boolean wasHeld = tokenUpdates.removeIf(r -> r == t);
+                // An inserted token's insert carries this update, unless another row of the same id
+                // was updated since: then this one goes last, so the newest state is written last.
+                boolean insertCarriesIt = holds(inserts, t) && tokenUpdates.stream().noneMatch(r -> r.id.equals(t.id));
+                if (!insertCarriesIt || wasHeld) tokenUpdates.add(t);
+                yield null;
+            }
             case "updateInstance" -> { instanceUpdates.add((Instance) args[0]); yield null; }
             case "flush"          -> { flush.run(); yield null; }
             case "toString"       -> "BufferedTx(" + delegate + ")";
@@ -63,5 +73,11 @@ public interface BufferedTx extends Tx {
         };
         return (BufferedTx) Proxy.newProxyInstance(BufferedTx.class.getClassLoader(),
                 new Class<?>[]{BufferedTx.class}, handler);
+    }
+
+    /** Whether {@code rows} holds this very row: identity, since a row is the engine's own object. */
+    private static boolean holds(List<Token> rows, Token t) {
+        for (Token r : rows) if (r == t) return true;
+        return false;
     }
 }

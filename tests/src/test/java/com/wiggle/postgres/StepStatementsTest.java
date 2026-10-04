@@ -101,7 +101,62 @@ class StepStatementsTest {
                 assertEquals(steps, lockReads, "a report locks its task with one statement");
                 assertFalse(reports.containsKey("SELECT * FROM wf_token WHERE id=?"),
                         "the task is read by the lock, not again on its own");
+                long graphReads = reports.entrySet().stream()
+                        .filter(e -> e.getKey().contains("wf_graph_") || e.getKey().contains("wf_definition"))
+                        .mapToLong(Map.Entry::getValue).sum();
+                assertTrue(graphReads <= 2, node + ": a report reads the graph at most once to hold it, not on "
+                        + "every step under the instance lock: " + graphReads + " graph reads over " + steps + " steps");
             }
+        }
+    }
+
+    /** Two arms of two steps each, combined, then a last step: the shape of the order flow. */
+    interface ForkSteps {
+        Map<String, Object> a1(Map<String, Object> ctx);
+        Map<String, Object> a2(Map<String, Object> ctx);
+        Map<String, Object> b1(Map<String, Object> ctx);
+        Map<String, Object> b2(Map<String, Object> ctx);
+        Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b);
+        Map<String, Object> last(Map<String, Object> ctx);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static FlowSpec forked() {
+        return FlowSpec.define("pg-fork-" + Ids.next("wf"), 1, Map.class, ForkSteps.class, (f, s) -> {
+            var a = f.thenApply(s::a1).thenApply(s::a2);
+            var b = f.thenApply(s::b1).thenApply(s::b2);
+            return com.wiggle.client.flow.Wiggle.allOf(a, b).combine(s::merge).thenApply(s::last);
+        });
+    }
+
+    /**
+     * Each report of a fork/combine flow, statement by statement in the order issued: what a step
+     * holds its instance's lock across. Printed, not asserted: it is where to look for round trips.
+     */
+    @Test @DisplayName("the statements of each report of a fork/combine flow, in order")
+    void forkJoinReports() {
+        try (JdbcStorage storage = storage()) {
+            WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
+            FlowSpec flow = forked();
+            engine.register(flow.definition());
+            engine.start(flow.name(), flow.version(), Map.of(), null);
+            StringBuilder out = new StringBuilder("\n== fork/combine: each report in order\n");
+            int reports = 0;
+            for (List<TaskActivation> batch = claim(engine, flow, new java.util.TreeMap<>()); !batch.isEmpty();
+                 batch = claim(engine, flow, new java.util.TreeMap<>())) {
+                for (TaskActivation task : batch) {
+                    CountingDriver.trace();
+                    engine.report(new Run(task.taskId(), WORKER,
+                            List.of(new StepInput(task.nodeId(), Map.of(), null)), false));
+                    List<String> statements = CountingDriver.traced();
+                    out.append("  report ").append(task.nodeId()).append(" (").append(statements.size() - 1)
+                            .append(" statements)\n");
+                    statements.forEach(st -> out.append("      ").append(st).append('\n'));
+                    reports++;
+                }
+            }
+            System.out.print(out);
+            assertTrue(reports >= 6, "every step was reported: " + reports);
         }
     }
 

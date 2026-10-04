@@ -21,4 +21,7 @@ public interface GraphReads {
 
     /** The graph's entry node, without loading any other node. */
     Optional<String> graphStartNode(String workflow, int version);
+
+    /** How many nodes the graph has, without loading any; 0 when it is not registered. */
+    int graphNodeCount(String workflow, int version);
 }
