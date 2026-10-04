@@ -70,6 +70,7 @@ public final class WorkflowEngine {
     private final NodeBehaviourFactory nodeBehaviourFactory;
     private final StepChain stepChain;
     private final LocalAsyncBatch localAsyncBatch;
+    private final SiblingReports siblings = new SiblingReports();
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
         this(storage, definitions, defaultLeaseMillis, InstanceIds.onShard(0));
@@ -195,7 +196,9 @@ public final class WorkflowEngine {
     public List<TaskActivation> poll(String workerId, Set<String> queues, Set<WorkflowVersion> versions, int max,
                                      Long leaseMillis, long deadline,
                                      Cancellation cancelled) {
-        return dispatch.poll(workerId, queues, versions, max, leaseMillis, deadline, cancelled);
+        List<TaskActivation> leased = dispatch.poll(workerId, queues, versions, max, leaseMillis, deadline, cancelled);
+        for (TaskActivation a : leased) siblings.leased(a.taskId(), a.instanceId());
+        return leased;
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -278,14 +281,81 @@ public final class WorkflowEngine {
      */
     public ReportOutcome report(Run run) {
         if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
-        return transactions.inTx(run.startTaskId, raw -> buffered(raw, tx -> {
-            LockedTask task = Tokens.lock(tx, run.startTaskId);
-            ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
-            if (compensated(tx, task, run)) {
-                return new ReportOutcome(task.inst().status.name(), 0, null);
+        String instanceId = siblings.reported(run.startTaskId);
+        if (instanceId == null) return reportAlone(run);
+        SiblingReports.Joined joined = siblings.join(instanceId, run);
+        if (joined.led() != null) return lead(joined.led(), run);
+        SiblingReports.Outcome outcome = joined.follower().result().join();
+        if (outcome.failure() != null) throw outcome.failure();
+        return outcome.alone() ? reportAlone(run) : outcome.applied();
+    }
+
+    private ReportOutcome reportAlone(Run run) {
+        return transactions.inTx(run.startTaskId, raw -> buffered(raw, tx ->
+                applyRun(tx, Tokens.lock(tx, run.startTaskId), run)));
+    }
+
+    /**
+     * Applies this report and every sibling that joined its group by the time the instance is
+     * locked, in that order, in one transaction. A sibling whose task does not check out under the
+     * lock is left to report on its own; a transaction refused for any engine reason is retried with
+     * every run on its own, so one bad run never fails another.
+     */
+    private ReportOutcome lead(SiblingReports.Group group, Run run) {
+        List<SiblingReports.Follower> taken = new ArrayList<>();
+        Map<SiblingReports.Follower, ReportOutcome> applied = new HashMap<>();
+        try {
+            ReportOutcome own = transactions.inTx(run.startTaskId, raw -> buffered(raw, tx -> {
+                LockedTask task = Tokens.lock(tx, run.startTaskId);
+                if (taken.isEmpty()) taken.addAll(group.seal());
+                applied.clear();
+                ReportOutcome mine = applyRun(tx, task, run);
+                for (SiblingReports.Follower f : taken) {
+                    ReportOutcome theirs = applySibling(tx, task.inst().id, f.run());
+                    if (theirs != null) applied.put(f, theirs);
+                }
+                return mine;
+            }));
+            for (SiblingReports.Follower f : taken) {
+                ReportOutcome theirs = applied.get(f);
+                f.result().complete(theirs == null ? SiblingReports.Outcome.ALONE
+                        : new SiblingReports.Outcome(theirs, null));
             }
-            return stepChain.apply(tx, task, run, ExecutionModes.chainsBack(mode));
-        }));
+            return own;
+        } catch (EngineException e) {
+            if (taken.isEmpty()) throw e;
+            taken.forEach(f -> f.result().complete(SiblingReports.Outcome.ALONE));
+            return reportAlone(run);
+        } catch (RuntimeException e) {
+            taken.forEach(f -> f.result().complete(new SiblingReports.Outcome(null, e)));
+            throw e;
+        } finally {
+            taken.forEach(f -> f.result().complete(SiblingReports.Outcome.ALONE));
+            siblings.close(group);
+        }
+    }
+
+    /** A sibling's run under the instance lock its leader holds; null when it must report alone. */
+    private ReportOutcome applySibling(Tx tx, String instanceId, Run run) {
+        LockedTask task = tx.lockTask(run.startTaskId).orElse(null);
+        if (task == null || !task.inst().id.equals(instanceId)) return null;
+        try {
+            Tokens.requireLease(task.token(), run.leaseOwner());
+            StepChain.requireMatchingNode(task.token(), run.steps().getFirst());
+        } catch (EngineException e) {
+            return null;
+        }
+        return applyRun(tx, task, run);
+    }
+
+    private ReportOutcome applyRun(Tx tx, LockedTask task, Run run) {
+        ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
+        if (compensated(tx, task, run)) {
+            return new ReportOutcome(task.inst().status.name(), 0, null);
+        }
+        ReportOutcome outcome = stepChain.apply(tx, task, run, ExecutionModes.chainsBack(mode));
+        if (outcome.nextTaskId() != null) siblings.leased(outcome.nextTaskId(), task.inst().id);
+        return outcome;
     }
 
     /**
