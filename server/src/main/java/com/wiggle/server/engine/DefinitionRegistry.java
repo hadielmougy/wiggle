@@ -63,9 +63,11 @@ public final class DefinitionRegistry {
      * only honours when it is configured to (see {@code WIGGLE_ALLOW_GRAPH_REPLACE}); the gRPC
      * layer rejects an unpermitted force before reaching here.
      *
-     * <p>It is written to every instance shard and the home shard, one transaction each, so an
+     * <p>It is written to every instance shard and then the home shard, one transaction each, so an
      * instance's transaction reads its graph from its own database. Each write is idempotent, so a
-     * registration that fails part-way is completed by registering again.
+     * registration that fails part-way is completed by registering again. The home shard is written
+     * last, so a graph it holds is held by every shard: re-registering it reads only the home shard,
+     * and succeeds while an instance shard is down.
      *
      * <p>A stored fingerprint from a different algorithm is treated as unknown rather than as a
      * mismatch, and is upgraded in place: a change to how the topology is serialised must not read
@@ -73,13 +75,16 @@ public final class DefinitionRegistry {
      */
     public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
         Registration registration = new Registration(def, force);
-        Set<Integer> shards = new LinkedHashSet<>(storage.instanceShards());
-        shards.add(storage.home());
-        for (int shard : shards) {
-            storage.inShard(shard, tx -> {
-                registration.accept(tx);
-                return null;
-            });
+        if (force || !storage.inHome(registration::stored)) {
+            Set<Integer> shards = new LinkedHashSet<>(storage.instanceShards());
+            shards.remove(storage.home());
+            shards.add(storage.home());
+            for (int shard : shards) {
+                storage.inShard(shard, tx -> {
+                    registration.accept(tx);
+                    return null;
+                });
+            }
         }
         modeCache.put(def.key(), def.executionMode());
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
@@ -162,6 +167,13 @@ public final class DefinitionRegistry {
             this.fingerprint = def.fingerprint();
             this.force = force;
             this.def = def;
+        }
+
+        /** Whether {@code tx}'s database already holds this very graph. */
+        boolean stored(Tx tx) {
+            GraphStore.StoredFingerprint stored = tx.definitionFingerprint(def.name(), def.version()).orElse(null);
+            return stored != null && fingerprint.equals(stored.value())
+                    && WorkflowDefinition.FINGERPRINT_ALGO.equals(stored.algo());
         }
 
         @Override
