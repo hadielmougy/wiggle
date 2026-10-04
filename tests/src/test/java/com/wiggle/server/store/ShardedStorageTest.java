@@ -308,4 +308,31 @@ class ShardedStorageTest {
         two.unreachable = true;
         assertThrows(StorageUnreachableException.class, () -> engine.poll("w1", def.queues(), 1, null));
     }
+
+    @Test @DisplayName("the leader's sweeps carry on over the shards they reach, and fail only when they reach none")
+    void sweepsPassOverAnUnreachableShard() throws InterruptedException {
+        WorkflowDefinition def = FlowSpec.define("sweep", 1, Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b)).combine(s::pick)).definition();
+        Outageable seven = new Outageable("a");
+        Outageable two = new Outageable("b");
+        ShardedStorage s = new ShardedStorage(shards(seven, two), 2);
+        s.migrate();
+        WorkflowEngine engine = new WorkflowEngine(s, new DefinitionRegistry(s), 30_000, InstanceIds.onShard(2));
+        new DefinitionRegistry(s).register(def);
+        engine.start("sweep", 1, Map.of(), null);
+        assertEquals(1, engine.poll("w1", def.queues(), 1, 1L).size());
+        Thread.sleep(20);
+        seven.unreachable = true;
+
+        assertEquals(0, engine.fireDueTimers(10));
+        assertEquals(0, engine.promoteDueRetries(10));
+        assertEquals(0, engine.fireDueSignalDeadlines(10));
+        assertEquals(1, engine.reclaimExpiredLeases(10), "the expired lease on shard 2 is reclaimed");
+        engine.purgeTerminalInstancesOlderThan(0, 10);
+        engine.trimEvents(10);
+
+        two.unreachable = true;
+        assertThrows(StorageUnreachableException.class, () -> engine.reclaimExpiredLeases(10));
+        assertThrows(StorageUnreachableException.class, () -> engine.fireDueTimers(10));
+    }
 }

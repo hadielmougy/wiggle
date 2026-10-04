@@ -556,12 +556,12 @@ public final class WorkflowEngine {
     public int trimEvents(int max) {
         long cutoff = System.currentTimeMillis() - eventRetentionMillis;
         int home = transactions.home();
-        int trimmed = 0;
-        for (int shard : transactions.instanceShards()) {
+        int[] trimmed = {0};
+        transactions.eachReachable(shard -> {
             Long upTo = transactions.readHome(tx -> shard == home ? tx.oldestAckedSeq() : tx.oldestEventPosition(shard));
-            trimmed += transactions.readShard(shard, tx -> tx.deleteEvents(cutoff, upTo, max));
-        }
-        int removed = trimmed;
+            trimmed[0] += transactions.readShard(shard, tx -> tx.deleteEvents(cutoff, upTo, max));
+        });
+        int removed = trimmed[0];
         if (removed > 0) LOG.log(System.Logger.Level.DEBUG, () -> "trimEvents: removed " + removed + " event(s)");
         return removed;
     }
@@ -639,7 +639,7 @@ public final class WorkflowEngine {
 
     /** Leader duty: advance sleep timers that have come due. */
     public int fireDueTimers(int max) {
-        List<Token> due = transactions.readEach(tx -> tx.dueTimers(System.currentTimeMillis(), max));
+        List<Token> due = transactions.readEachReachable(tx -> tx.dueTimers(System.currentTimeMillis(), max));
         logDue("fireDueTimers", due);
         return sweep(due, "timer", this::fireTimer);
     }
@@ -661,7 +661,7 @@ public final class WorkflowEngine {
 
     /** Leader duty: retries parked for their backoff become dispatchable once it has run out. */
     public int promoteDueRetries(int max) {
-        List<Token> due = transactions.readEach(tx -> tx.dueRetries(System.currentTimeMillis(), max));
+        List<Token> due = transactions.readEachReachable(tx -> tx.dueRetries(System.currentTimeMillis(), max));
         logDue("promoteDueRetries", due);
         return sweep(due, "retry promotion of", this::promoteRetry);
     }
@@ -679,7 +679,7 @@ public final class WorkflowEngine {
 
     /** Leader duty: signal waits whose deadline has passed escalate (to {@code altNext}) or fail. */
     public int fireDueSignalDeadlines(int max) {
-        List<Token> due = transactions.readEach(tx -> tx.dueSignals(System.currentTimeMillis(), max));
+        List<Token> due = transactions.readEachReachable(tx -> tx.dueSignals(System.currentTimeMillis(), max));
         logDue("fireDueSignalDeadlines", due);
         return sweep(due, "signal deadline", this::escalateOrFailSignal);
     }
@@ -716,7 +716,7 @@ public final class WorkflowEngine {
      * their lease may have run out only because their worker could not reach the cell, so it stays put.
      */
     public int reclaimExpiredLeases(int max, long spareClaimedBefore) {
-        List<Token> orphans = transactions.readEach(tx -> tx.expiredLeases(System.currentTimeMillis(), max)).stream()
+        List<Token> orphans = transactions.readEachReachable(tx -> tx.expiredLeases(System.currentTimeMillis(), max)).stream()
                 .filter(t -> t.startedAt == null || t.startedAt >= spareClaimedBefore)
                 .toList();
         logDue("reclaimExpiredLeases", orphans);
@@ -794,7 +794,7 @@ public final class WorkflowEngine {
 
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {
         long cutoff = System.currentTimeMillis() - retentionMillis;
-        int purged = transactions.sumEach(tx -> Instances.purgeTerminalBefore(tx, cutoff, max));
+        int purged = transactions.sumEachReachable(tx -> Instances.purgeTerminalBefore(tx, cutoff, max));
         if (purged > 0) {
             LOG.log(System.Logger.Level.DEBUG, () -> "purgeTerminalInstancesOlderThan: removed " + purged
                     + " instance(s) updated before " + cutoff);

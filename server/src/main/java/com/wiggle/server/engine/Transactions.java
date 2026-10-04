@@ -1,12 +1,14 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.server.store.Storage;
+import com.wiggle.server.store.StorageUnreachableException;
 import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntConsumer;
 
 /**
  * The engine's transaction scope: a storage transaction plus the wake-on-produce signal that must
@@ -148,5 +150,37 @@ final class Transactions {
         int total = 0;
         for (int shard : storage.instanceShards()) total += readShard(shard, body);
         return total;
+    }
+
+    /** {@link #readEach}, passing over an unreachable shard; see {@link #eachReachable}. */
+    <T> List<T> readEachReachable(TxBody<List<T>> body) {
+        List<T> out = new ArrayList<>();
+        eachReachable(shard -> out.addAll(readShard(shard, body)));
+        return out;
+    }
+
+    /** {@link #sumEach}, passing over an unreachable shard; see {@link #eachReachable}. */
+    int sumEachReachable(TxBody<Integer> body) {
+        int[] total = {0};
+        eachReachable(shard -> total[0] += readShard(shard, body));
+        return total[0];
+    }
+
+    /**
+     * Runs {@code action} on every instance shard in turn, passing over one that is unreachable, so
+     * a down shard does not hold up the others. Fails only when it reaches no shard.
+     */
+    void eachReachable(IntConsumer action) {
+        StorageUnreachableException unreachable = null;
+        int reached = 0;
+        for (int shard : storage.instanceShards()) {
+            try {
+                action.accept(shard);
+                reached++;
+            } catch (StorageUnreachableException e) {
+                unreachable = e;
+            }
+        }
+        if (reached == 0 && unreachable != null) throw unreachable;
     }
 }
