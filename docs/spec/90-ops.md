@@ -103,6 +103,9 @@ Read by a server node that serves the portal.
 | `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account, session or credential before reading it again |
 | `WIGGLE_GRPC_AUTH` | `off` | per-RPC authorization of the gRPC API: `off`, `log` or `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)) |
 | `WIGGLE_API_KEY` | *(unset)* | on a client or worker, the API key it presents |
+| `WIGGLE_SEARCH_ENABLED` | `false` | full-text search on the one database (a topology enables it with a `search` shard instead) |
+| `WIGGLE_SEARCH_RETENTION_MILLIS` | `2592000000` | how long a search document outlives its instance's last change (30 days) |
+| `WIGGLE_SEARCH_WORKFLOWS` | *(all)* | comma-separated workflows to index; unset indexes every one |
 | `WIGGLE_TLS_*` | *(unset)* | the server's keystore and truststore serve the portal's HTTPS too |
 
 **WGL-OPS-004** (MUST) A definition's `DEFAULT` execution mode MUST resolve to `SERVER`. There is

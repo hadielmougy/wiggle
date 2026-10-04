@@ -1603,6 +1603,79 @@ abstract class StorageContract {
         assertFalse((boolean) storage.inTx(tx -> tx.authAuditHas(id("never"))));
     }
 
+    // -- WGL-SHARD-191/194: search documents on a search shard --
+
+    private Rows.SearchDoc searchDoc(String id, String workflow, String status, String text, long updatedAt) {
+        return new Rows.SearchDoc(id, workflow, 1, status, null, text, updatedAt, updatedAt);
+    }
+
+    @Test
+    @DisplayName("a search document is replaced only by one at least as new")
+    void searchDocUpsert() {
+        String id = id("wfi");
+        String word = "w" + run;
+        assertTrue((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " first", ANCIENT + 10))));
+        assertFalse((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " stale", ANCIENT + 5))),
+                "an older copy, delivered late, does not replace the newer one");
+        assertTrue((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "COMPLETED", word + " second", ANCIENT + 20))));
+        List<Rows.SearchHit> hits = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10)));
+        assertEquals(1, hits.size());
+        assertEquals("COMPLETED", hits.getFirst().doc().status());
+        assertTrue(hits.getFirst().doc().text().contains("second"));
+        storage.inTx(tx -> { tx.deleteSearchDoc(id); return null; });
+        assertTrue(storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10))).isEmpty());
+    }
+
+    @Test
+    @DisplayName("a search needs every word, ranks by how often they occur, and filters inside the query")
+    void searchDocMatching() {
+        String a = "a" + run, b = "b" + run;
+        String one = id("wfi"), many = id("wfi"), other = id("wfi"), onlyA = id("wfi");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(searchDoc(one, "orders", "RUNNING", a + " " + b, ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(many, "orders", "FAILED", a + " " + a + " " + a + " " + b + " " + b, ANCIENT + 2));
+            tx.upsertSearchDoc(searchDoc(other, "billing", "RUNNING", a + " " + b, ANCIENT + 3));
+            tx.upsertSearchDoc(searchDoc(onlyA, "orders", "RUNNING", "{\"note\":\"" + a + "\"}", ANCIENT + 4));
+            return null;
+        });
+        List<String> both = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(a + " " + b, null, null, null, null, 10)))
+                .stream().map(h -> h.doc().instanceId()).toList();
+        assertEquals(List.of(many, other, one), both, "both words needed; more occurrences first, then newest");
+        assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).contains(onlyA),
+                "a word inside JSON text is found");
+        assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, Set.of("orders"), "FAILED", null, null, 10)));
+        assertEquals(List.of(other), ids(new Rows.SearchQuery(a + " " + b, Set.of("billing"), null, null, null, 10)));
+        assertEquals(List.of(), ids(new Rows.SearchQuery(a + " " + b, Set.of(), null, null, null, 10)), "no workflow allowed");
+        assertEquals(List.of(other, one), ids(new Rows.SearchQuery(a + " " + b, null, "RUNNING", null, null, 10)));
+        assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, null, null, ANCIENT + 2, ANCIENT + 2, 10)),
+                "the time bounds are inclusive");
+        assertEquals(1, ids(new Rows.SearchQuery(a + " " + b, null, null, null, null, 1)).size(), "the limit holds");
+        assertEquals(List.of(onlyA, other), ids(new Rows.SearchQuery("", null, null, ANCIENT + 3, ANCIENT + 4, 10)),
+                "no words: newest first, by the filters alone");
+
+        assertTrue(storage.inTx(tx -> tx.deleteSearchDocsBefore(ANCIENT + 5, 1000)) >= 4);
+        assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).isEmpty(), "retention deletes by updatedAt");
+    }
+
+    private List<String> ids(Rows.SearchQuery q) {
+        return storage.inTx(tx -> tx.searchDocs(q)).stream().map(h -> h.doc().instanceId()).toList();
+    }
+
+    @Test
+    @DisplayName("search documents are read in instance id order, a page at a time")
+    void searchDocPaging() {
+        String prefix = "zz-" + run + "-";
+        List<String> mine = List.of(prefix + "1", prefix + "2", prefix + "3");
+        storage.inTx(tx -> {
+            mine.forEach(id -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", "x", ANCIENT)));
+            return null;
+        });
+        List<Rows.SearchDoc> page = storage.inTx(tx -> tx.searchDocsAfter(prefix, 2));
+        assertEquals(List.of(prefix + "1", prefix + "2"), page.stream().map(Rows.SearchDoc::instanceId).toList());
+        assertEquals(prefix + "3", storage.inTx(tx -> tx.searchDocsAfter(prefix + "2", 1)).getFirst().instanceId());
+        storage.inTx(tx -> { mine.forEach(tx::deleteSearchDoc); return null; });
+    }
+
     // -- WGL-STOR-005: the store's own identity --
 
     @Test

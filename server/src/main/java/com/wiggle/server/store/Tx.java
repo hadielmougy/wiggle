@@ -75,6 +75,17 @@ public interface Tx extends ReadTx, GraphStore {
     /** Appends to the auth audit and returns the seq the store assigned. */
     long appendAuthAudit(Rows.AuthAudit entry);
 
+    /**
+     * Writes a search document unless one for the same instance is newer; returns whether it wrote.
+     * Held on a search shard.
+     */
+    boolean upsertSearchDoc(Rows.SearchDoc doc);
+
+    void deleteSearchDoc(String instanceId);
+
+    /** Deletes up to {@code max} documents whose instance last changed before {@code updatedBefore}. */
+    int deleteSearchDocsBefore(long updatedBefore, int max);
+
     void insertInstance(Instance instance);
 
     /** Acquires the instance write-lock for the remainder of this transaction. */

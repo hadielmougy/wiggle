@@ -59,6 +59,11 @@ public record Topology(List<Shard> shards, List<Generation> generations) {
         return shards.stream().filter(s -> s.has(role)).findFirst().orElseThrow();
     }
 
+    /** The shards with the search role that are not retired, in the order the document lists them. */
+    public List<Shard> searchShards() {
+        return shards.stream().filter(s -> s.has(Role.SEARCH) && s.state() != ShardState.RETIRED).toList();
+    }
+
     public int home() {
         return only(Role.HOME).id();
     }

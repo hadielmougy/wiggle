@@ -19,9 +19,14 @@
       (.catch (fn [_] nil))))
 
 (defn load-instances! []
-  (-> (api/instances (:filter @db))
-      (.then #(swap! db assoc :instances (:instances %)))
-      (.catch st/on-error)))
+  (let [f (:filter @db)]
+    (if (and (= :text (:search-by f)) (seq (:search f)))
+      (-> (api/search-instances f)
+          (.then #(swap! db assoc :instances (:hits %) :partial (:partial %)))
+          (.catch st/on-error))
+      (-> (api/instances f)
+          (.then #(swap! db assoc :instances (:instances %) :partial false))
+          (.catch st/on-error)))))
 
 (defn load-signals! []
   (-> (api/signals)

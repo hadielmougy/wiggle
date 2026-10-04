@@ -47,6 +47,14 @@ public final class Permissions {
         return scope != null && granted.contains(action + ":" + scope);
     }
 
+    /** The workflows {@code granted} may read, or null when it may read every one. */
+    public static Set<String> readableWorkflows(Set<String> granted) {
+        if (granted.contains(ALL) || granted.contains(READ)) return null;
+        Set<String> out = new LinkedHashSet<>();
+        for (String p : granted) if (p.startsWith(READ + ":")) out.add(p.substring(READ.length() + 1));
+        return out;
+    }
+
     /** {@code permissions} with each one checked; throws naming the first that is not a permission. */
     public static Set<String> validate(Iterable<String> permissions) {
         Set<String> out = new LinkedHashSet<>();

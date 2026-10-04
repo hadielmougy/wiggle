@@ -64,7 +64,7 @@ class DocSnippetsTest {
         EXPECTED.put("EventLogSnippet.java", List.of("consume", "emit"));
         EXPECTED.put("onboarding/OnboardingSnippet.java",
                 List.of("contract", "register-line", "topology", "client-lifecycle",
-                        "start-by-name", "version-pinning", "worker-options"));
+                        "start-by-name", "search", "version-pinning", "worker-options"));
         EXPECTED.put("onboarding/OrderHandlers.java", List.of("handlers"));
         EXPECTED.put("decode/OrderHandlers.java", List.of("decode"));
         // the tutorial -- also run end to end by TutorialTest

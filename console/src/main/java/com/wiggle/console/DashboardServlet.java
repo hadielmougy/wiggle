@@ -60,6 +60,7 @@ public final class DashboardServlet extends HttpServlet {
             if (path.startsWith("/api/users")) { users(req, res, sub(path, "/api/users")); return; }
             if (path.startsWith("/api/roles")) { roles(req, res, sub(path, "/api/roles")); return; }
             if (path.equals("/api/audit")) { audit(req, res); return; }
+            if (path.equals("/api/search")) { search(req, res); return; }
             if (path.startsWith("/api/credentials")) { credentials(req, res, sub(path, "/api/credentials")); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
@@ -103,6 +104,7 @@ public final class DashboardServlet extends HttpServlet {
         // A built-in account's password lives in the environment, so the portal cannot change it.
         out.put("canChangePassword", auth.accounts() != null && p != null && p.user() != null && !p.builtin());
         out.put("managesUsers", auth.accounts() != null);
+        out.put("searchEnabled", data.searchEnabled());
         json(res, 200, out);
     }
 
@@ -408,6 +410,29 @@ public final class DashboardServlet extends HttpServlet {
         if (!permitted(req, res, Permissions.INSTANCE_SIGNAL, workflowOf(id))) return;
         data.signal(id, name, readBody(req));
         json(res, 200, Map.of("ok", true));
+    }
+
+    /** Full-text search, limited to the workflows the caller may read. */
+    private void search(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        DashboardData.SearchView found = data.search(trimToNull(req.getParameter("q")),
+                trimToNull(req.getParameter("workflow")), trimToNull(req.getParameter("status")),
+                parseInt(req.getParameter("limit"), 50), "true".equals(req.getParameter("partial")),
+                Permissions.readableWorkflows(principal(req).permissions())).orElse(null);
+        if (found == null) { error(res, 404, "search is not enabled on this deployment"); return; }
+        List<Object> hits = new ArrayList<>();
+        for (DashboardData.SearchHitView h : found.hits()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", h.instanceId());
+            m.put("workflow", h.workflow());
+            m.put("version", h.version());
+            m.put("status", h.status());
+            m.put("correlationId", h.correlationId());
+            m.put("updatedAt", h.updatedAt());
+            m.put("score", h.score());
+            m.put("purged", h.purged());
+            hits.add(m);
+        }
+        json(res, 200, Map.of("hits", hits, "partial", found.partial()));
     }
 
     /** The workflow of instance {@code id}, which scopes what may be done to it. */

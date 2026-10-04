@@ -154,4 +154,42 @@ class PostgresTopologyTest {
         }
         assertEquals(0, count(auth, "SELECT COUNT(*) FROM wf_instance"), "the auth shard holds no instances");
     }
+
+    @Test @DisplayName("search documents live on the search shard, and only there, and full-text queries find them")
+    void searchShard() throws Exception {
+        Topology t = TopologyParser.parse("""
+                {
+                  "defaults": { "user": "${U}", "password": "${P}", "pool": 4 },
+                  "generations": [ { "id": 1, "activeFrom": "2000-01-01T00:00:00Z", "weights": { "0": 1 } } ],
+                  "shards": [
+                    { "id": 0, "state": "ACTIVE", "roles": ["instances", "home"], "primary": { "url": "%s" } },
+                    { "id": 1, "state": "ACTIVE", "roles": ["search"], "primary": { "url": "%s" } }
+                  ]
+                }
+                """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
+                Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
+        ServerConfig config = new ServerConfig(0, "pg-search", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
+                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+        FlowSpec flow = FlowSpec.define("pg-search", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+            client.register(flow);
+            String ada = client.start("pg-search", Map.of("customer", "Ada Lovelace"), null, null);
+            client.start("pg-search", Map.of("customer", "Alan Turing"), null, null);
+            long deadline = System.currentTimeMillis() + 15_000;
+            List<WiggleClient.SearchHit> hits = List.of();
+            while (hits.isEmpty() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(200);
+                hits = client.search("lovelace", null, null, null, null, 10, false).hits();
+            }
+            assertEquals(List.of(ada), hits.stream().map(WiggleClient.SearchHit::instanceId).toList());
+            assertEquals(true, hits.getFirst().score() > 0, "ranked by the database's own full-text search");
+        }
+        assertEquals(2, count(databases.get(1), "SELECT COUNT(*) FROM wf_search_doc"), "both instances are indexed");
+        assertEquals(1, count(databases.get(1), "SELECT COUNT(*) FROM wf_search_doc WHERE tsv @@ plainto_tsquery('simple', 'turing')"));
+        assertEquals(0, count(databases.get(0), "SELECT COUNT(*) FROM wf_search_doc"), "and nothing on the instance shard");
+        assertEquals(0, count(databases.get(1), "SELECT COUNT(*) FROM wf_instance"), "nor instances on the search shard");
+    }
 }

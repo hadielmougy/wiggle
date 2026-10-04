@@ -248,13 +248,14 @@
 
 (defn instances-toolbar []
   (let [f (:filter @db)
-        searching (seq (:search f))]
+        searching (seq (:search f))
+        exact? (and searching (not= :text (:search-by f)))]
     [:div.toolbar
-     [:select {:value (:workflow f) :disabled (boolean searching)
+     [:select {:value (:workflow f) :disabled (boolean exact?)
                :on-change #(do (st/set-filter! :workflow (.. % -target -value)) (act/load-instances!))}
       [:option {:value ""} "all workflows"]
       (for [w (:workflows @db)] ^{:key w} [:option {:value w} w])]
-     [:select {:value (:status f) :disabled (boolean searching)
+     [:select {:value (:status f) :disabled (boolean exact?)
                :on-change #(do (st/set-filter! :status (.. % -target -value)) (act/load-instances!))}
       [:option {:value ""} "all statuses"]
       (for [s ["RUNNING" "COMPLETED" "FAILED" "CANCELLED"]] ^{:key s} [:option {:value s} s])]
@@ -267,9 +268,10 @@
                :on-change #(do (st/set-filter! :search-by (keyword (.. % -target -value)))
                                (when searching (act/load-instances!)))}
       [:option {:value "correlation"} "correlation id"]
-      [:option {:value "id"} "instance id"]]
+      [:option {:value "id"} "instance id"]
+      (when (get-in @db [:auth :searchEnabled]) [:option {:value "text"} "full text"])]
      [:input {:type "search" :style {:width 220}
-              :placeholder (if (= :id (:search-by f)) "instance id…" "correlation id…")
+              :placeholder (case (:search-by f) :id "instance id…" :text "words in the context or error…" "correlation id…")
               :value (:search f)
               :on-change #(st/set-filter! :search (.. % -target -value))
               :on-key-down #(when (= (.-key %) "Enter") (act/load-instances!))}]
@@ -283,7 +285,10 @@
   (let [{:keys [instances selected]} @db]
     (if-not (seq instances)
       [:div.empty "no instances"]
-      [:table
+      [:<>
+       (when (:partial @db)
+         [:p.muted {:style {:padding "0 14px"}} "A search shard did not answer; these results are partial."])
+       [:table
        [:thead [:tr [:th "id"] [:th "workflow"] [:th "status"] [:th "updated"]]]
        [:tbody
         (for [i instances]
@@ -291,7 +296,8 @@
           [:tr {:class (when (= (:id i) selected) "sel")
                 :on-click #(do (act/load-detail! (:id i)) (st/open-window! :detail))}
            [:td [:code (:id i)]] [:td (:workflow i)]
-           [:td [badge (:status i)]] [:td.muted (u/ago (:updatedAt i)) " ago"]])]])))
+           [:td [badge (:status i)] (when (:purged i) [:span.badge {:style {:margin-left 6}} "purged"])]
+           [:td.muted (u/ago (:updatedAt i)) " ago"]])]]])))
 
 (defn instances-tab []
   [:div

@@ -237,6 +237,30 @@ public final class Rows {
         public static final String MTLS = "MTLS";
     }
 
+    /**
+     * An instance as the search shards hold it: derived from its instance shard, never the source of
+     * truth. {@code text} is what full-text queries match; {@code updatedAt} is the instance's own, so
+     * an older copy never replaces a newer one.
+     */
+    public record SearchDoc(String instanceId, String workflow, int version, String status, String correlationId,
+                            String text, long createdAt, long updatedAt) { }
+
+    /**
+     * A search: the words {@code text} must all contain (blank: any document), and filters applied
+     * inside each shard's query. {@code workflows} null means every workflow; {@code from}/{@code to}
+     * bound {@code updatedAt}, null for open.
+     */
+    public record SearchQuery(String text, java.util.Set<String> workflows, String status, Long from, Long to,
+                              int limit) {
+        public SearchQuery {
+            if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
+            if (workflows != null) workflows = java.util.Set.copyOf(workflows);
+        }
+    }
+
+    /** One match, best first by {@code score}, then newest. */
+    public record SearchHit(SearchDoc doc, double score) { }
+
     /** A signed-in session. Only a hash of its token is stored, so a read of the table signs no one in. */
     public record AuthSession(String idHash, String user, long expiresAt, long createdAt) { }
 

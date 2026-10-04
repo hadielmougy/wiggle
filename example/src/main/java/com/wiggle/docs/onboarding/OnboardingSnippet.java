@@ -94,6 +94,15 @@ public final class OnboardingSnippet {
         // docs:end start-by-name
     }
 
+    static void search(WiggleClient client) {
+        // docs:begin search
+        WiggleClient.SearchResult r = client.search("ada lovelace", "order-fulfilment", null, null, null, 20, false);
+        for (WiggleClient.SearchHit hit : r.hits()) {
+            System.out.println(hit.instanceId() + " " + hit.status() + (hit.purged() ? " (purged)" : ""));
+        }
+        // docs:end search
+    }
+
     static void versionScoped(WiggleClient client, FlowSpec v1, FlowSpec v2) {
         // docs:begin version-pinning
         new Worker(client, "service-a").registerHandler(new OrderHandlers(), v1.version());  // claims only v1

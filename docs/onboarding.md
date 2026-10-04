@@ -648,6 +648,36 @@ decided by per-RPC authorization ([§7.1b](#71b-authorizing-grpc-calls)), off un
 | `WIGGLE_TLS_TRUSTSTORE` | `wiggle.tls.truststore` | *(unset)* | truststore path; server ⇒ require client certs (mTLS) |
 | `WIGGLE_TLS_TRUSTSTORE_PASSWORD` | `wiggle.tls.truststore.password` | *(unset)* | truststore password |
 
+### 7.1c Full-text search
+
+Find instances by what they say: the words in their context, correlation id, termination reason or
+error. Off by default. Turn it on with a `search` shard in the storage topology (its own database,
+so indexing never costs the instance shards write capacity), or `WIGGLE_SEARCH_ENABLED=true` on a
+single database (the server warns that indexing then shares its capacity).
+
+The leader indexes from the event log, a second or so behind: an instance is indexed when it starts
+and each time its status changes, as it is at that moment. Every word you search for must occur;
+words are matched as written (no stemming), and results come best first. A document outlives its
+instance (`WIGGLE_SEARCH_RETENTION_MILLIS`, 30 days), so a hit can be shown **purged**.
+
+<!-- snippet: onboarding/search -->
+```java
+WiggleClient.SearchResult r = client.search("ada lovelace", "order-fulfilment", null, null, null, 20, false);
+for (WiggleClient.SearchHit hit : r.hits()) {
+    System.out.println(hit.instanceId() + " " + hit.status() + (hit.purged() ? " (purged)" : ""));
+}
+```
+
+In the portal, pick **full text** next to the Instances search box. Searches see only the workflows
+the caller may read. With several search shards, documents spread by instance id; add or drain one
+and the leader moves documents in the background, a batch a minute.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WIGGLE_SEARCH_ENABLED` | `false` | search on the one database |
+| `WIGGLE_SEARCH_RETENTION_MILLIS` | 30 days | how long a document outlives its instance's last change |
+| `WIGGLE_SEARCH_WORKFLOWS` | *(all)* | comma-separated workflows to index |
+
 ### 7.2 Storage backends
 
 No URL → in-memory (single node, dev/test). With one, the server builds its store from an injected

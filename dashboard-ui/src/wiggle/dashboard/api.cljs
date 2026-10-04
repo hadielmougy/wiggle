@@ -50,6 +50,12 @@
 
 (defn instance [id] (GET (str "/api/instances/" (enc id))))
 
+(defn search-instances [{:keys [workflow status limit search]}]
+  (GET (str "/api/search?partial=true&q=" (enc (str/trim search))
+            (when (seq workflow) (str "&workflow=" (enc workflow)))
+            (when (seq status) (str "&status=" (enc status)))
+            (when limit (str "&limit=" limit)))))
+
 (defn stats [workflow since]
   (GET (str "/api/stats?workflow=" (enc workflow) "&since=" (or since 0))))
 

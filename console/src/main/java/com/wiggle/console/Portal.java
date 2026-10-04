@@ -51,7 +51,7 @@ public final class Portal implements AutoCloseable {
                 tls.hasKeyStore(), accounts, cache);
         importUsersFile(accounts, Path.of(get(env, "WIGGLE_CONSOLE_USERS_FILE", "wiggle-users.json")),
                 auth.builtinNames());
-        DashboardData data = new EngineDashboardData(server.engine(), server.cluster());
+        DashboardData data = new EngineDashboardData(server.engine(), server.cluster(), server.search().orElse(null));
         return Optional.of(new Portal(new ConsoleServer(data, auth, port, tls).start()));
     }
 
