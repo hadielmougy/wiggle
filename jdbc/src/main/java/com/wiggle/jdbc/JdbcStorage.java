@@ -1892,12 +1892,17 @@ public final class JdbcStorage implements Storage {
         }
 
         private static <S extends SqlStatement<S>> S bindInstanceUpdate(S s, Instance i) {
-            return s.bind("status", i.status.name())
-                    .bind("termReason", i.terminationReason)
-                    .bind("error", i.error)
-                    .bind("context", i.context.json())
-                    .bind("updatedAt", i.updatedAt)
-                    .bind("id", i.id);
+            return bindInstanceUpdate(s, "", i);
+        }
+
+        /** {@link #bindInstanceUpdate}, each name prefixed with {@code p}. */
+        private static <S extends SqlStatement<S>> S bindInstanceUpdate(S s, String p, Instance i) {
+            return s.bind(p + "status", i.status.name())
+                    .bind(p + "termReason", i.terminationReason)
+                    .bind(p + "error", i.error)
+                    .bind(p + "context", i.context.json())
+                    .bind(p + "updatedAt", i.updatedAt)
+                    .bind(p + "id", i.id);
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
@@ -1953,35 +1958,44 @@ public final class JdbcStorage implements Storage {
         /** Every wf_token column, by name. The empty join-stack sentinel is applied here, not
          *  assumed of the row. */
         private static <S extends SqlStatement<S>> S bindToken(S s, Token t) {
-            return bindUpdatable(s, t)
-                    .bind("instanceId", t.instanceId)
-                    .bind("workflow", t.workflow)
-                    .bind("version", t.version)
-                    .bind("createdAt", t.createdAt)
-                    .bind("instCreatedAt", t.instCreatedAt)
-                    .bind("payload", PayloadCodec.encode(t.payload));
+            return bindToken(s, "", t);
+        }
+
+        /** {@link #bindToken}, each name prefixed with {@code p}. */
+        private static <S extends SqlStatement<S>> S bindToken(S s, String p, Token t) {
+            return bindUpdatable(s, p, t)
+                    .bind(p + "instanceId", t.instanceId)
+                    .bind(p + "workflow", t.workflow)
+                    .bind(p + "version", t.version)
+                    .bind(p + "createdAt", t.createdAt)
+                    .bind(p + "instCreatedAt", t.instCreatedAt)
+                    .bind(p + "payload", PayloadCodec.encode(t.payload));
         }
 
         /** The columns {@link #UPDATE_TOKEN_KEEP_PAYLOAD} sets, and the id it matches on. */
         private static <S extends SqlStatement<S>> S bindUpdatable(S s, Token t) {
-            return s.bind("id", t.id)
-                    .bind("nodeId", t.nodeId)
-                    .bind("kind", t.kind.name())
-                    .bind("status", t.status.name())
-                    .bind("activity", t.activity)
-                    .bind("queue", t.queue)
-                    .bind("attempt", t.attempt)
-                    .bind("availableAt", t.availableAt)
-                    .bind("leaseOwner", t.leaseOwner)
-                    .bind("leaseExpires", t.leaseExpiresAt)
-                    .bind("joinStack", t.joinStack == null ? "" : t.joinStack)
-                    .bind("lastError", t.lastError)
-                    .bind("updatedAt", t.updatedAt)
-                    .bindByType("compSeq", t.compSeq, Long.class)
-                    .bindByType("startedAt", t.startedAt, Long.class)
-                    .bindByType("finishedAt", t.finishedAt, Long.class)
-                    .bindByType("stepInput", t.stepInput, String.class)
-                    .bindByType("stepOutput", t.stepOutput, String.class);
+            return bindUpdatable(s, "", t);
+        }
+
+        private static <S extends SqlStatement<S>> S bindUpdatable(S s, String p, Token t) {
+            return s.bind(p + "id", t.id)
+                    .bind(p + "nodeId", t.nodeId)
+                    .bind(p + "kind", t.kind.name())
+                    .bind(p + "status", t.status.name())
+                    .bind(p + "activity", t.activity)
+                    .bind(p + "queue", t.queue)
+                    .bind(p + "attempt", t.attempt)
+                    .bind(p + "availableAt", t.availableAt)
+                    .bind(p + "leaseOwner", t.leaseOwner)
+                    .bind(p + "leaseExpires", t.leaseExpiresAt)
+                    .bind(p + "joinStack", t.joinStack == null ? "" : t.joinStack)
+                    .bind(p + "lastError", t.lastError)
+                    .bind(p + "updatedAt", t.updatedAt)
+                    .bindByType(p + "compSeq", t.compSeq, Long.class)
+                    .bindByType(p + "startedAt", t.startedAt, Long.class)
+                    .bindByType(p + "finishedAt", t.finishedAt, Long.class)
+                    .bindByType(p + "stepInput", t.stepInput, String.class)
+                    .bindByType(p + "stepOutput", t.stepOutput, String.class);
         }
 
         @Override public Optional<Token> findToken(String id) {
@@ -2062,6 +2076,114 @@ public final class JdbcStorage implements Storage {
             updateBatch(write, false);
             updateBatch(keep, true);
             for (Token t : tokens) recorded(t);
+        }
+
+        /** The most rows {@link #writeAll} sends as one statement; more go as bulk statements, which batch well. */
+        private static final int ONE_STATEMENT_TOKENS = 32;
+        private static final int ONE_STATEMENT_INSTANCES = 8;
+
+        /**
+         * Where the dialect allows it, the buffered writes as one statement: each insert, token update
+         * and instance update a data-modifying part of one {@code WITH}, so the transaction's writes
+         * cost one round trip while it holds its instance's lock. Every part reads the same snapshot
+         * and a row may be changed only once in one statement, so this is done only when every token
+         * appears once and every instance row is one object; otherwise, and for a large flush, the
+         * bulk calls run as before. Repeated updates of one instance object -- a step, then the
+         * instance completing -- are one part that advances the revision by the number of writes,
+         * which leaves the row exactly as the separate writes would. Each part returns its rows, and
+         * the counts are checked as the bulk calls check theirs.
+         */
+        @Override public void writeAll(List<Token> inserts, List<Token> tokenUpdates, List<Instance> instanceUpdates) {
+            Map<Instance, Integer> writesOf = new IdentityHashMap<>();
+            List<Instance> instances = new ArrayList<>();
+            for (Instance i : instanceUpdates) {
+                if (writesOf.merge(i, 1, Integer::sum) == 1) instances.add(i);
+            }
+            if (!dialect.supportsWritableCte() || !oneStatementFits(inserts, tokenUpdates, instances)) {
+                Tx.super.writeAll(inserts, tokenUpdates, instanceUpdates);
+                return;
+            }
+            StringBuilder sql = new StringBuilder("WITH ");
+            List<String> parts = new ArrayList<>();
+            if (!inserts.isEmpty()) {
+                StringBuilder values = new StringBuilder();
+                for (int k = 0; k < inserts.size(); k++) {
+                    if (k > 0) values.append(',');
+                    values.append(prefixed(INSERT_VALUES, "i" + k + "_"));
+                }
+                parts.add("ins AS (" + INSERT_TOKEN_HEAD + values + " RETURNING 1)");
+            }
+            boolean[] keep = new boolean[tokenUpdates.size()];
+            for (int k = 0; k < tokenUpdates.size(); k++) {
+                keep[k] = payloadUnchanged(tokenUpdates.get(k));
+                parts.add("tu" + k + " AS (" + prefixed(keep[k] ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN, "u" + k + "_")
+                        + " RETURNING 1)");
+            }
+            for (int k = 0; k < instances.size(); k++) {
+                parts.add("iu" + k + " AS (" + prefixed(UPDATE_INSTANCE_BY, "x" + k + "_") + " RETURNING 1)");
+            }
+            sql.append(String.join(", ", parts)).append(" SELECT ")
+                    .append(inserts.isEmpty() ? "0" : "(SELECT count(*) FROM ins)").append(", ")
+                    .append(countOf("tu", tokenUpdates.size())).append(", ")
+                    .append(countOf("iu", instances.size()));
+            Query q = h.createQuery(sql.toString());
+            for (int k = 0; k < inserts.size(); k++) bindToken(q, "i" + k + "_", inserts.get(k));
+            for (int k = 0; k < tokenUpdates.size(); k++) {
+                Token t = tokenUpdates.get(k);
+                if (keep[k]) bindUpdatable(q, "u" + k + "_", t);
+                else bindToken(q, "u" + k + "_", t);
+            }
+            for (int k = 0; k < instances.size(); k++) {
+                Instance i = instances.get(k);
+                bindInstanceUpdate(q, "x" + k + "_", i).bind("x" + k + "_writes", writesOf.get(i));
+            }
+            long[] counts = q.map((rs, ctx) -> new long[] {rs.getLong(1), rs.getLong(2), rs.getLong(3)}).one();
+            requireCount(counts[0], inserts.size(), "insert wf_token");
+            requireCount(counts[1], tokenUpdates.size(), "update wf_token");
+            requireCount(counts[2], instances.size(), "update wf_instance");
+            for (Token t : inserts) recorded(t);
+            for (Token t : tokenUpdates) recorded(t);
+            writesOf.forEach((i, n) -> i.revision += n);
+        }
+
+        private static boolean oneStatementFits(List<Token> inserts, List<Token> tokenUpdates, List<Instance> instanceUpdates) {
+            if (inserts.size() + tokenUpdates.size() > ONE_STATEMENT_TOKENS) return false;
+            if (instanceUpdates.size() > ONE_STATEMENT_INSTANCES) return false;
+            if (inserts.size() + tokenUpdates.size() + instanceUpdates.size() < 2) return false;
+            Set<String> tokens = new HashSet<>();
+            for (Token t : inserts) if (!tokens.add(t.id)) return false;
+            for (Token t : tokenUpdates) if (!tokens.add(t.id)) return false;
+            Set<String> instanceIds = new HashSet<>();
+            for (Instance i : instanceUpdates) if (!instanceIds.add(i.id)) return false;   // two objects, one row
+            return true;
+        }
+
+        private static String countOf(String prefix, int n) {
+            if (n == 0) return "0";
+            StringBuilder s = new StringBuilder();
+            for (int k = 0; k < n; k++) {
+                if (k > 0) s.append(" + ");
+                s.append("(SELECT count(*) FROM ").append(prefix).append(k).append(')');
+            }
+            return s.toString();
+        }
+
+        /** {@code sql} with every {@code :name} parameter renamed {@code :<p>name}. */
+        private static String prefixed(String sql, String p) {
+            return PARAMETER.matcher(sql).replaceAll(":" + p + "$1");
+        }
+
+        private static final java.util.regex.Pattern PARAMETER = java.util.regex.Pattern.compile(":([A-Za-z][A-Za-z0-9]*)");
+        /** {@link #UPDATE_INSTANCE}, advancing the revision by {@code :writes} instead of one. */
+        private static final String UPDATE_INSTANCE_BY = UPDATE_INSTANCE.replace("revision=revision+1", "revision=revision+:writes");
+        private static final String INSERT_TOKEN_HEAD = INSERT_TOKEN.substring(0, INSERT_TOKEN.indexOf("VALUES ") + 7);
+        private static final String INSERT_VALUES = INSERT_TOKEN.substring(INSERT_TOKEN.indexOf("VALUES ") + 7);
+
+        private static void requireCount(long touched, int expected, String what) {
+            if (touched != expected) {
+                throw new IllegalStateException(what + ": the combined statement touched " + touched
+                        + " rows where " + expected + " were expected");
+            }
         }
 
         private void updateBatch(List<Token> tokens, boolean keepPayload) {

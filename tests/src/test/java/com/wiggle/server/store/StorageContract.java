@@ -1763,6 +1763,93 @@ abstract class StorageContract {
                 storage.inTx(tx -> tx.searchModels()).stream().filter(m -> m.model().equals(model)).findFirst().orElseThrow());
     }
 
+    // -- the buffered write: inserts, token updates and instance updates in one call --
+
+    @Test
+    @DisplayName("writeAll writes every row once as the bulk calls would: inserts, updates with and without payload, instances")
+    void writeAll() {
+        Instance inst = instance("write-all");
+        Token settled = token(inst, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        Token kept = token(inst, NodeKind.TASK, TokenStatus.WAITING, "q");
+        store(inst, settled, kept);
+        Token next = token(inst, NodeKind.TASK, TokenStatus.READY, "q");
+        Token second = token(inst, NodeKind.SLEEP, TokenStatus.WAITING, null);
+        long revision = storage.inTx(tx -> tx.findInstance(inst.id)).orElseThrow().revision;
+
+        storage.inTxVoid(tx -> {
+            Instance locked = tx.lockInstance(inst.id).orElseThrow();
+            Token s = tx.findToken(settled.id).orElseThrow();
+            Token k = tx.findToken(kept.id).orElseThrow();
+            s.status = TokenStatus.DONE;
+            s.payload = s.payload.push(TokenPayload.FrameKind.ITEM, 3, null, doc("x", 1));   // payload changed
+            k.status = TokenStatus.READY;                                                    // payload kept
+            locked.context = doc("stage", "written");
+            locked.updatedAt = now + 1;
+            tx.writeAll(List.of(next, second), List.of(s, k), List.of(locked));
+            assertEquals(revision + 1, locked.revision, "the caller's copy advances as the row did");
+        });
+
+        Instance back = storage.inTx(tx -> tx.findInstance(inst.id)).orElseThrow();
+        assertEquals(revision + 1, back.revision);
+        assertTrue(back.context.json().contains("written"), back.context.json());
+        assertEquals(TokenStatus.DONE, storage.inTx(tx -> tx.findToken(settled.id)).orElseThrow().status);
+        assertEquals(3L, storage.inTx(tx -> tx.findToken(settled.id)).orElseThrow().payload.top().idx(),
+                "a changed payload is written");
+        assertEquals(TokenStatus.READY, storage.inTx(tx -> tx.findToken(kept.id)).orElseThrow().status);
+        assertEquals(TokenStatus.READY, storage.inTx(tx -> tx.findToken(next.id)).orElseThrow().status);
+        assertEquals(NodeKind.SLEEP, storage.inTx(tx -> tx.findToken(second.id)).orElseThrow().kind);
+    }
+
+    @Test
+    @DisplayName("writeAll writing one instance twice leaves it as two writes would: the last state, two revisions on")
+    void writeAllInstanceTwice() {
+        Instance inst = instance("write-all-instance-twice");
+        Token t = token(inst, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(inst, t);
+        long revision = storage.inTx(tx -> tx.findInstance(inst.id)).orElseThrow().revision;
+        storage.inTxVoid(tx -> {
+            Instance locked = tx.lockInstance(inst.id).orElseThrow();
+            Token step = tx.findToken(t.id).orElseThrow();
+            step.status = TokenStatus.DONE;
+            locked.status = com.wiggle.core.InstanceStatus.COMPLETED;
+            tx.writeAll(List.of(), List.of(step), List.of(locked, locked));
+            assertEquals(revision + 2, locked.revision);
+        });
+        Instance back = storage.inTx(tx -> tx.findInstance(inst.id)).orElseThrow();
+        assertEquals(revision + 2, back.revision, "each write counts");
+        assertEquals(com.wiggle.core.InstanceStatus.COMPLETED, back.status);
+    }
+
+    @Test
+    @DisplayName("writeAll with one token twice still writes the last state last")
+    void writeAllRepeatedRow() {
+        Instance inst = instance("write-all-twice");
+        Token t = token(inst, NodeKind.TASK, TokenStatus.RUNNING, "q");
+        store(inst, t);
+        storage.inTxVoid(tx -> {
+            Token first = tx.findToken(t.id).orElseThrow();
+            Token again = tx.findToken(t.id).orElseThrow();
+            first.status = TokenStatus.WAITING;
+            again.status = TokenStatus.DONE;
+            Instance locked = tx.lockInstance(inst.id).orElseThrow();
+            tx.writeAll(List.of(), List.of(first, again), List.of(locked));
+        });
+        assertEquals(TokenStatus.DONE, storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().status);
+    }
+
+    @Test
+    @DisplayName("writeAll refuses, and writes nothing, when a row it updates is not there")
+    void writeAllMissingRow() {
+        Instance inst = instance("write-all-missing");
+        store(inst);
+        Token ghost = token(inst, NodeKind.TASK, TokenStatus.DONE, "q");
+        Token fresh = token(inst, NodeKind.TASK, TokenStatus.READY, "q");
+        if (!storage.inTx(tx -> tx.transactional())) return;   // a store that cannot roll back cannot promise this
+        assertThrows(RuntimeException.class, () -> storage.inTxVoid(tx ->
+                tx.writeAll(List.of(fresh), List.of(ghost), List.of(tx.lockInstance(inst.id).orElseThrow()))));
+        assertTrue(storage.inTx(tx -> tx.findToken(fresh.id)).isEmpty(), "the whole write rolled back");
+    }
+
     // -- WGL-STOR-005: the store's own identity --
 
     @Test

@@ -34,6 +34,12 @@ public interface Dialect {
      *  is recorded but not run elsewhere, leaving that database on the full indexes it replaces. */
     default boolean supportsPartialIndexes() { return false; }
 
+    /**
+     * Whether one statement may carry several data-modifying parts ({@code WITH x AS (INSERT ...)
+     * UPDATE ...}), so a transaction's buffered writes go to the database in one round trip.
+     */
+    default boolean supportsWritableCte() { return false; }
+
     /** Whether the database has its own full-text search ({@code tsvector}); without it, matching runs in Java. */
     default boolean supportsFullText() { return false; }
 

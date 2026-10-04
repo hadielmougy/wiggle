@@ -16,7 +16,7 @@ import java.util.List;
  * then delegates, so a read can never observe state the buffer is still holding, and a method
  * added to {@link Tx} tomorrow is safe by default rather than wrong by omission.
  *
- * <p>Flush order is inserts, then token updates, then instance updates. Within one shape, order is
+ * <p>A flush is one {@link Tx#writeAll}: inserts, then token updates, then instance updates. Within one shape, order is
  * preserved. The buffer holds references, not copies, and a token is written once with the state
  * it has at the flush: an update of a token the buffer already inserted adds nothing, since the
  * insert carries it, and an update of one it already holds as an update moves that update last. This is what makes the INSERT-then-UPDATE of a token
@@ -42,9 +42,11 @@ public interface BufferedTx extends Tx {
         List<Token> tokenUpdates = new ArrayList<>();
         List<Instance> instanceUpdates = new ArrayList<>();
         Runnable flush = () -> {
-            if (!inserts.isEmpty()) { delegate.insertTokens(List.copyOf(inserts)); inserts.clear(); }
-            if (!tokenUpdates.isEmpty()) { delegate.updateTokens(List.copyOf(tokenUpdates)); tokenUpdates.clear(); }
-            if (!instanceUpdates.isEmpty()) { delegate.updateInstances(List.copyOf(instanceUpdates)); instanceUpdates.clear(); }
+            if (inserts.isEmpty() && tokenUpdates.isEmpty() && instanceUpdates.isEmpty()) return;
+            delegate.writeAll(List.copyOf(inserts), List.copyOf(tokenUpdates), List.copyOf(instanceUpdates));
+            inserts.clear();
+            tokenUpdates.clear();
+            instanceUpdates.clear();
         };
         InvocationHandler handler = (proxy, method, args) -> switch (method.getName()) {
             case "insertToken"    -> { inserts.add((Token) args[0]); yield null; }

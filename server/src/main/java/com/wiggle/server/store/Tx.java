@@ -163,6 +163,18 @@ public interface Tx extends ReadTx, GraphStore {
 
     void updateToken(Token token);
 
+    /**
+     * Writes a transaction's buffered rows: the token inserts, then the token updates, then the
+     * instance updates, each in its own order. The default is the three bulk calls; a store that can
+     * send them as one statement overrides it, and keeps their meaning: every row is written exactly
+     * once, as the bulk calls would write it.
+     */
+    default void writeAll(List<Token> inserts, List<Token> tokenUpdates, List<Instance> instanceUpdates) {
+        if (!inserts.isEmpty()) insertTokens(inserts);
+        if (!tokenUpdates.isEmpty()) updateTokens(tokenUpdates);
+        if (!instanceUpdates.isEmpty()) updateInstances(instanceUpdates);
+    }
+
     /** {@code updateToken} for a set of rows; same contract as {@link #insertTokens}. */
     default void updateTokens(List<Token> tokens) {
         for (Token t : tokens) updateToken(t);

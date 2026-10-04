@@ -13,17 +13,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /** What reaches the store when the buffer flushes: each token once, in its final state, newest write last. */
 class BufferedTxTest {
 
-    /** Records the writes a flush sends, as "op id status". */
+    /** Records the writes a flush sends through {@link Tx#writeAll}, as "op id status". */
     private final List<String> writes = new ArrayList<>();
 
     private BufferedTx buffered() {
         Tx recorder = (Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(), new Class<?>[] {Tx.class},
                 (proxy, method, args) -> {
-                    switch (method.getName()) {
-                        case "insertTokens" -> ((List<?>) args[0]).forEach(t -> writes.add("insert " + line((Rows.Token) t)));
-                        case "updateTokens" -> ((List<?>) args[0]).forEach(t -> writes.add("update " + line((Rows.Token) t)));
-                        case "updateInstances" -> ((List<?>) args[0]).forEach(i -> writes.add("instance " + ((Rows.Instance) i).id));
-                        default -> { }
+                    if (method.getName().equals("writeAll")) {
+                        ((List<?>) args[0]).forEach(t -> writes.add("insert " + line((Rows.Token) t)));
+                        ((List<?>) args[1]).forEach(t -> writes.add("update " + line((Rows.Token) t)));
+                        ((List<?>) args[2]).forEach(i -> writes.add("instance " + ((Rows.Instance) i).id));
                     }
                     return null;
                 });

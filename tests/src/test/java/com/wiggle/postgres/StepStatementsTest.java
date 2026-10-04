@@ -160,6 +160,76 @@ class StepStatementsTest {
         }
     }
 
+    /** Four steps in a line, run locally and reported as one chain, as a LOCAL_ASYNC worker does. */
+    interface FourSteps {
+        Map<String, Object> s1(Map<String, Object> ctx);
+        Map<String, Object> s2(Map<String, Object> ctx);
+        Map<String, Object> s3(Map<String, Object> ctx);
+        Map<String, Object> s4(Map<String, Object> ctx);
+    }
+
+    @Test @DisplayName("the statements of one report carrying a chain of steps, in order")
+    void chainedReport() {
+        try (JdbcStorage storage = storage()) {
+            WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
+            FlowSpec flow = FlowSpec.define("pg-chain-" + Ids.next("wf"), 1, Map.class, FourSteps.class,
+                    (f, s) -> f.executeInLocalAsync().thenApply(s::s1).thenApply(s::s2).thenApply(s::s3).thenApply(s::s4));
+            engine.register(flow.definition());
+            engine.start(flow.name(), flow.version(), Map.of(), null);
+            TaskActivation task = claim(engine, flow, new java.util.TreeMap<>()).getFirst();
+            List<StepInput> steps = new java.util.ArrayList<>();
+            for (com.wiggle.core.Node n = flow.definition().node(task.nodeId());
+                 n.kind() == com.wiggle.core.NodeKind.TASK; n = flow.definition().node(n.next())) {
+                steps.add(new StepInput(n.id(), Map.of(), null));
+            }
+            CountingDriver.trace();
+            engine.report(new Run(task.taskId(), WORKER, steps, true));
+            List<String> statements = CountingDriver.traced();
+            StringBuilder out = new StringBuilder("\n== one report of " + steps.size() + " chained steps ("
+                    + (statements.size() - 1) + " statements)\n");
+            statements.forEach(st -> out.append("      ").append(st).append('\n'));
+            System.out.print(out);
+        }
+    }
+
+    /** The order flow's shape: a step, a filter, two arms of two steps, a combine, a last step. */
+    interface OrderShape {
+        Map<String, Object> validate(Map<String, Object> ctx);
+        boolean inStock(Map<String, Object> ctx);
+        Map<String, Object> a1(Map<String, Object> ctx);
+        Map<String, Object> a2(Map<String, Object> ctx);
+        Map<String, Object> b1(Map<String, Object> ctx);
+        Map<String, Object> b2(Map<String, Object> ctx);
+        Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b);
+        Map<String, Object> last(Map<String, Object> ctx);
+    }
+
+    @Test @DisplayName("the statements of a local-async run through a filter into a fork, in order")
+    void chainedIntoFork() {
+        try (JdbcStorage storage = storage()) {
+            WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
+            FlowSpec flow = FlowSpec.define("pg-order-" + Ids.next("wf"), 1, Map.class, OrderShape.class, (f, s) -> {
+                var v = f.executeInLocalAsync().thenApply(s::validate).thenFilter(s::inStock);
+                var a = v.thenApply(s::a1).thenApply(s::a2);
+                var b = v.thenApply(s::b1).thenApply(s::b2);
+                return com.wiggle.client.flow.Wiggle.allOf(a, b).combine(s::merge).thenApply(s::last);
+            });
+            engine.register(flow.definition());
+            engine.start(flow.name(), flow.version(), Map.of(), null);
+            TaskActivation task = claim(engine, flow, new java.util.TreeMap<>()).getFirst();
+            com.wiggle.core.Node first = flow.definition().node(task.nodeId());
+            com.wiggle.core.Node filter = flow.definition().node(first.next());
+            CountingDriver.trace();
+            engine.report(new Run(task.taskId(), WORKER, List.of(new StepInput(first.id(), Map.of(), null),
+                    new StepInput(filter.id(), null, true)), false));
+            List<String> statements = CountingDriver.traced();
+            StringBuilder out = new StringBuilder("\n== a run of " + first.kind() + ", " + filter.kind()
+                    + " into the fork (" + (statements.size() - 1) + " statements)\n");
+            statements.forEach(st -> out.append("      ").append(st).append('\n'));
+            System.out.print(out);
+        }
+    }
+
     private static List<TaskActivation> claim(WorkflowEngine engine, FlowSpec flow, Map<String, Long> into) {
         CountingDriver.reset();
         List<TaskActivation> batch = engine.poll(WORKER, flow.definition().workerQueues(), INSTANCES, null);
