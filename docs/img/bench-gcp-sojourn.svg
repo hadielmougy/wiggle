@@ -1,23 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 470" width="980" height="470" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
   <rect width="980" height="470" fill="#ffffff"/>
   <title id="t">Wiggle rate-ceiling benchmark on GCP — end-to-end completion latency over time at four sustained loads</title>
-  <desc id="d">Probe sojourn (start to COMPLETED) during sustained-load stages against one server node on Cloud SQL for PostgreSQL. On a 16 vCPU database, 5,600 durable step executions per second (700 instances per second) stays flat near 260 milliseconds, and 7,200 steps per second (900 instances per second) holds at roughly 2.5 to 3.5 seconds. On an 8 vCPU database, 4,000 steps per second (500 instances per second) stays flat near 260 milliseconds and 4,800 steps per second (600 instances per second) holds near 2.5 seconds.</desc>
+  <desc id="d">Probe sojourn (start to COMPLETED) during sustained-load stages against one server node on Cloud SQL for PostgreSQL. On a 16 vCPU database, 8,000 durable step executions per second (1,000 instances per second) stays flat near 260 milliseconds, and 9,600 steps per second (1,200 instances per second) holds at roughly 0.9 to 1.4 seconds. On an 8 vCPU database, 5,600 steps per second (700 instances per second) stays flat near 260 milliseconds and 7,200 steps per second (900 instances per second) holds at roughly 2.3 to 3.6 seconds over 60 seconds.</desc>
   <text x="80" y="30" font-size="15" font-weight="700" fill="#1e2233">End-to-end latency under sustained load — one node, Cloud SQL PostgreSQL 16, GCP</text>
   <text x="80" y="50" font-size="11.5" fill="#7c8296">probe sojourn (start → COMPLETED) during each stage · 8-step order-fulfilment fork/join workflow</text>
   <g stroke="#e3e6ee" stroke-width="1">
-    <line x1="80" y1="274" x2="760" y2="274"/>
-    <line x1="80" y1="209" x2="760" y2="209"/>
-    <line x1="80" y1="144" x2="760" y2="144"/>
-    <line x1="80" y1="78" x2="760" y2="78"/>
+    <line x1="80" y1="286" x2="760" y2="286"/>
+    <line x1="80" y1="233" x2="760" y2="233"/>
+    <line x1="80" y1="179" x2="760" y2="179"/>
+    <line x1="80" y1="126" x2="760" y2="126"/>
+    <line x1="80" y1="72" x2="760" y2="72"/>
   </g>
   <line x1="80" y1="340" x2="760" y2="340" stroke="#8a90a2" stroke-width="1.5"/>
   <line x1="80" y1="72" x2="80" y2="340" stroke="#8a90a2" stroke-width="1.5"/>
   <g font-size="10.5" fill="#7c8296" text-anchor="end">
     <text x="72" y="344">0s</text>
-    <text x="72" y="278">1s</text>
-    <text x="72" y="213">2s</text>
-    <text x="72" y="148">3s</text>
-    <text x="72" y="82">4s</text>
+    <text x="72" y="290">1s</text>
+    <text x="72" y="237">2s</text>
+    <text x="72" y="183">3s</text>
+    <text x="72" y="130">4s</text>
+    <text x="72" y="76">5s</text>
   </g>
   <g font-size="10.5" fill="#7c8296" text-anchor="middle">
     <text x="80" y="358">0s</text>
@@ -27,23 +29,23 @@
     <text x="760" y="358">60s</text>
   </g>
   <text x="420" y="378" font-size="11" fill="#7c8296" text-anchor="middle">time into the stage</text>
-  <polyline fill="none" stroke="#2f6fd6" stroke-width="2.5" stroke-linejoin="round" points="80,287 103,216 125,171 148,167 171,175 193,161 216,174 239,181 261,156 284,177 307,176 329,173 352,183 375,162 397,155 420,133 443,131 465,113 488,126 511,124 533,118 556,140 579,133 601,117 624,133 647,114 669,97 692,94 715,108 737,99"/>
+  <polyline fill="none" stroke="#2f6fd6" stroke-width="2.5" stroke-linejoin="round" points="80,326 103,308 125,310 148,312 171,289 193,295 216,299 239,290 261,292 284,285 307,268 329,269 352,264 375,267 397,247"/>
   <line x1="780" y1="106" x2="804" y2="106" stroke="#2f6fd6" stroke-width="2.5"/>
-  <text x="812" y="110" font-size="11.5" font-weight="600" fill="#2f6fd6">7,200 steps/s (900/s)</text>
+  <text x="812" y="110" font-size="11.5" font-weight="600" fill="#2f6fd6">9,600 steps/s (1,200/s)</text>
   <text x="812" y="122" font-size="10" fill="#7c8296">16 vCPU</text>
-  <polyline fill="none" stroke="#2f9e63" stroke-width="2.5" stroke-linejoin="round" points="80,323 103,323 125,323 148,323 171,323 193,323 216,323 239,323 261,323 284,323 307,322 329,323 352,323 375,323 397,323"/>
+  <polyline fill="none" stroke="#2f9e63" stroke-width="2.5" stroke-linejoin="round" points="80,326 103,326 125,326 148,326 171,326 193,326 216,326 239,326 261,326 284,326 307,326 329,326 352,326 375,326 397,312"/>
   <line x1="780" y1="132" x2="804" y2="132" stroke="#2f9e63" stroke-width="2.5"/>
-  <text x="812" y="136" font-size="11.5" font-weight="600" fill="#2f9e63">5,600 steps/s (700/s)</text>
+  <text x="812" y="136" font-size="11.5" font-weight="600" fill="#2f9e63">8,000 steps/s (1,000/s)</text>
   <text x="812" y="148" font-size="10" fill="#7c8296">16 vCPU</text>
-  <polyline fill="none" stroke="#c78a2d" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="6 4" points="80,305 103,245 125,241 148,223 171,217 193,207 216,221 239,222 261,189 284,175 307,181 329,178 352,153 375,178 397,169"/>
+  <polyline fill="none" stroke="#c78a2d" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="6 4" points="80,261 103,235 125,237 148,217 171,230 193,229 216,234 239,237 261,215 284,228 307,218 329,208 352,214 375,198 397,212 420,217 443,210 465,205 488,185 511,192 533,181 556,184 579,186 601,178 624,163 647,160 669,148 692,132 715,108 737,116"/>
   <line x1="780" y1="158" x2="804" y2="158" stroke="#c78a2d" stroke-width="2.5" stroke-dasharray="6 4"/>
-  <text x="812" y="162" font-size="11.5" font-weight="600" fill="#c78a2d">4,800 steps/s (600/s)</text>
+  <text x="812" y="162" font-size="11.5" font-weight="600" fill="#c78a2d">7,200 steps/s (900/s)</text>
   <text x="812" y="174" font-size="10" fill="#7c8296">8 vCPU</text>
-  <polyline fill="none" stroke="#8a6bd1" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="6 4" points="80,323 103,323 125,322 148,323 171,323 193,322 216,323 239,306 261,304 284,323 307,323 329,321 352,322 375,306 397,306 420,322 443,323 465,306 488,323 511,306 533,321 556,323 579,323 601,317 624,323 647,323 669,323 692,323 715,323 737,323"/>
+  <polyline fill="none" stroke="#8a6bd1" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="6 4" points="80,326 103,326 125,326 148,326 171,326 193,326 216,312 239,326 261,326 284,326 307,326 329,326 352,326 375,326 397,326"/>
   <line x1="780" y1="184" x2="804" y2="184" stroke="#8a6bd1" stroke-width="2.5" stroke-dasharray="6 4"/>
-  <text x="812" y="188" font-size="11.5" font-weight="600" fill="#8a6bd1">4,000 steps/s (500/s)</text>
+  <text x="812" y="188" font-size="11.5" font-weight="600" fill="#8a6bd1">5,600 steps/s (700/s)</text>
   <text x="812" y="200" font-size="10" fill="#7c8296">8 vCPU</text>
   <rect x="80" y="398" width="820" height="52" rx="9" fill="#f6f8fc" stroke="#aab0c0" stroke-width="1.2"/>
-  <text x="98" y="420" font-size="12.5" fill="#1e2233"><tspan font-weight="700">Ceiling: 7,200 durable step executions/sec (900 instances/sec)</tspan> on a 16 vCPU database; 4,800 (600/s) on 8 vCPU.</text>
-  <text x="98" y="438" font-size="11" fill="#7c8296">Below the ceiling latency is flat at ≈260ms. The database CPU saturates first; the server node stays at 25–40% CPU.</text>
+  <text x="98" y="420" font-size="12.5" fill="#1e2233"><tspan font-weight="700">Ceiling: 9,600 durable step executions/sec (1,200 instances/sec)</tspan> on a 16 vCPU database; 7,200 (900/s) on 8 vCPU.</text>
+  <text x="98" y="438" font-size="11" fill="#7c8296">Below the ceiling latency is flat at ≈260ms. The server node stays under 50% CPU at every load.</text>
 </svg>
