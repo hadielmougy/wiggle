@@ -76,7 +76,8 @@ from the token, so a worker cannot claim an event belongs to another run.
 beyond its cursor and acknowledges what it handled; the cursor moves only on the ack.
 
 **WGL-EVT-021** (MUST) Delivery MUST be at-least-once: a consumer that dies mid-batch is served the same
-entries again. Keying on instance id and `seq` MUST be enough to deduplicate.
+entries again. Keying on `shard` and `seq` MUST be enough to deduplicate
+([WGL-SHARD-135](85-sharding.md#10-event-log)).
 
 **WGL-EVT-022** (MUST) `PollEvents(consumer, max, waitMillis, startFrom)` MUST long-poll exactly as a
 worker poll does, clamped by the server's long-poll maximum, and MUST carry the same backpressure hint
@@ -84,11 +85,14 @@ when the server is shedding load.
 
 **WGL-EVT-023** (MUST) `startFrom` MUST apply only when the poll **registers** the consumer: `0` = tail
 (only what is appended from now on), `-1` = the earliest entry still retained, any other value = resume
-after that seq. Once a cursor exists `startFrom` MUST be ignored, so a restarting consumer keeps its
-place with no special case in its own code.
+after that seq (refused on a sharded log, [WGL-SHARD-136](85-sharding.md#10-event-log)). Once a cursor
+exists `startFrom` MUST be ignored, so a restarting consumer keeps its place with no special case in its
+own code.
 
-**WGL-EVT-024** (MUST) `AckEvents(consumer, ackedSeq)` MUST be cumulative, MUST never move backwards,
-and MUST clamp an ack past the log's head to the head.
+**WGL-EVT-024** (MUST) `AckEvents(consumer, ackedCursor)`, with the cursor a served entry carries, MUST
+be cumulative, MUST never move backwards on any shard, and MUST clamp a position past a shard's head
+to that head. `AckEvents(consumer, ackedSeq)` behaves the same on a log that is not sharded
+([WGL-SHARD-134](85-sharding.md#10-event-log)).
 
 **WGL-EVT-025** (MUST) Consumers MUST NOT interfere: each has its own cursor and its own pace.
 
@@ -116,9 +120,10 @@ and an abandoned consumer MUST NOT be able to pin the log forever.
 
 ## 5. Storage and wire
 
-**WGL-EVT-040** (MUST) `wf_event` holds the log keyed by a store-generated `seq`, indexed by instance and
-by creation time (the access paths of the retention sweep and the visibility window).
-`wf_event_cursor` holds one row per consumer: its acknowledged seq and when it last polled.
+**WGL-EVT-040** (MUST) Each shard's `wf_event` holds its log keyed by a store-generated `seq`, indexed by
+instance and by creation time (the access paths of the retention sweep and the visibility window).
+`wf_event_cursor`, on the home shard, holds one row per consumer: its acknowledged seq on the home shard
+and when it last polled; `wf_event_cursor_shard` holds its position on every other shard.
 
 **WGL-EVT-041** (MUST) Emitted events MUST travel on the report a worker already sends
 (`StepResult.events`), carrying only a type and a payload.

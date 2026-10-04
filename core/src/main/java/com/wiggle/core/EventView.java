@@ -9,9 +9,20 @@ import java.util.Map;
  * {@code wf.cancelled}, {@code wf.compensating}, {@code wf.compensated} or
  * {@code wf.compensation_failed}, and {@code payload} carries the transition's reason or error;
  * or it is a handler's own {@link EmittedEvent}, and {@code nodeId} names the step that emitted it.
+ *
+ * <p>{@code seq} increases within one {@code shard}'s log; {@code (shard, seq)} identifies an entry.
+ * {@code cursor} is the consumer's place just after this entry, to hand back on an ack; null when the
+ * entry was not served by a consumer's poll.
  */
 public record EventView(long seq, String instanceId, String workflow, int version, String correlationId,
-                        String type, String nodeId, long createdAt, Map<String, Object> payload) {
+                        String type, String nodeId, long createdAt, Map<String, Object> payload,
+                        int shard, String cursor) {
+
+    /** An entry of shard 0, outside any consumer's poll. */
+    public EventView(long seq, String instanceId, String workflow, int version, String correlationId,
+                     String type, String nodeId, long createdAt, Map<String, Object> payload) {
+        this(seq, instanceId, workflow, version, correlationId, type, nodeId, createdAt, payload, 0, null);
+    }
 
     public Map<String, Object> toJson() {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -24,6 +35,8 @@ public record EventView(long seq, String instanceId, String workflow, int versio
         m.put("nodeId", nodeId);
         m.put("createdAt", createdAt);
         m.put("payload", payload);
+        m.put("shard", shard);
+        if (cursor != null) m.put("cursor", cursor);
         return m;
     }
 }

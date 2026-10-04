@@ -6,6 +6,7 @@ import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.server.store.Rows.Token;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
@@ -23,6 +24,14 @@ public interface ReadTx extends GraphReads {
     /** When this database's primary last wrote the replica-lag heartbeat (epoch millis), or empty when it
      *  never has. Read on a replica, its distance from now is the replica's lag. */
     OptionalLong shardBeat();
+
+    /** A consumer's acknowledged event position on each shard other than home, by shard; its home
+     *  position is its {@link #eventCursor}. Held on the home shard. */
+    Map<Integer, Long> eventPositions(String consumer);
+
+    /** The lowest position any consumer holds on {@code shard}, a consumer with none holding 0, or null
+     *  when no consumer exists. For a shard other than home; held on the home shard. */
+    Long oldestEventPosition(int shard);
 
     /** Every shard the cluster has used, by id. Held on the home shard. */
     List<Rows.ShardRecord> shardRegistry();

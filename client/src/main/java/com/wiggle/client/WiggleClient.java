@@ -112,17 +112,28 @@ public final class WiggleClient implements AutoCloseable {
      * The next entries of the event log for {@code consumer}, oldest first, long-polling up to
      * {@code waitMillis} for one to appear. A consumer is a named cursor: its first poll registers
      * it at the log's tail ({@code startFrom} 0), at the earliest entry still retained ({@code -1}),
-     * or after the seq it names, and later polls ignore {@code startFrom}.
+     * or, on a log that is not sharded, after the seq it names; later polls ignore {@code startFrom}.
      *
-     * <p>Delivery is at-least-once and the cursor only moves on {@link #ackEvents}, so a consumer
-     * that dies mid-batch is served the same entries again. Acknowledge what you have handled.
+     * <p>Delivery is at-least-once and the cursor only moves on an ack, so a consumer that dies
+     * mid-batch is served the same entries again. Acknowledge what you have handled with
+     * {@link #ackEvents(String, String)} and the last entry's {@link com.wiggle.core.EventView#cursor()}.
      */
     public java.util.List<com.wiggle.core.EventView> pollEvents(String consumer, int max, long waitMillis, long startFrom) {
         return Wire.events(call(() -> stub.pollEvents(com.wiggle.proto.PollEventsRequest.newBuilder()
                 .setConsumer(consumer).setMax(max).setWaitMillis(waitMillis).setStartFrom(startFrom).build())));
     }
 
-    /** Acknowledges every event up to {@code ackedSeq} for {@code consumer}; cumulative, never backwards. */
+    /**
+     * Acknowledges, for {@code consumer}, the event whose {@link com.wiggle.core.EventView#cursor()} this
+     * is and every event served before it; cumulative, never backwards.
+     */
+    public void ackEvents(String consumer, String cursor) {
+        call(() -> stub.ackEvents(com.wiggle.proto.AckEventsRequest.newBuilder()
+                .setConsumer(consumer).setAckedCursor(cursor).build()));
+    }
+
+    /** Acknowledges every event up to {@code ackedSeq} for {@code consumer}; cumulative, never backwards.
+     *  Only for a log that is not sharded: a sharded one refuses it, and takes {@link #ackEvents(String, String)}. */
     public void ackEvents(String consumer, long ackedSeq) {
         call(() -> stub.ackEvents(com.wiggle.proto.AckEventsRequest.newBuilder()
                 .setConsumer(consumer).setAckedSeq(ackedSeq).build()));

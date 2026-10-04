@@ -41,7 +41,8 @@ rollback. Order is what the log promises; density is not.
 A consumer is a **named cursor**, not a subscription. It polls for what lies beyond its cursor
 and acknowledges what it has handled; the cursor moves only on the ack. So a consumer that dies
 mid-batch is served the same entries again on its next poll — **at-least-once**, and handlers
-must be idempotent. Keying on instance id and `seq` is enough.
+must be idempotent. Keying on `shard` and `seq` is enough: with sharded storage every shard keeps
+its own log, and `seq` increases within one shard.
 
 <!-- snippet: event-log/consume -->
 ```java
@@ -49,26 +50,31 @@ while (true) {
     List<EventView> batch = client.pollEvents("billing", 100, 20_000, -1);
     if (batch.isEmpty()) continue;                 // the long poll expired: ask again
     for (EventView e : batch) {
-        handle(e);                                 // your side of it, idempotent by instance + seq
+        handle(e);                                 // your side of it, idempotent by shard + seq
     }
-    client.ackEvents("billing", batch.getLast().seq());
+    client.ackEvents("billing", batch.getLast().cursor());
 }
 ```
 
 `pollEvents(consumer, max, waitMillis, startFrom)` long-polls exactly as a worker poll does,
 clamped by `WIGGLE_LONGPOLL_MAX_MILLIS`. `startFrom` applies only when the poll **registers** a
 consumer: `0` starts at the tail, so only what is appended from now on; `-1` starts at the
-earliest entry still retained; any other value resumes after that seq. Once a cursor exists,
-`startFrom` is ignored, so a restarting consumer keeps its place with no special case in its
-own code.
+earliest entry still retained; any other value resumes after that seq, which only a log that is
+not sharded accepts. Once a cursor exists, `startFrom` is ignored, so a restarting consumer keeps
+its place with no special case in its own code.
 
-`ackEvents(consumer, ackedSeq)` is cumulative and never moves backwards, so a replayed ack is
-harmless and an ack past the log's head is clamped to it. Two consumers never interfere: each
-has its own cursor and its own pace.
+A poll reads every shard's log beyond the consumer's place there and merges them oldest first,
+keeping each shard's own order. Every entry it serves carries a `cursor`: the consumer's place just
+after that entry, on every shard. `ackEvents(consumer, cursor)` with the last handled entry's
+cursor acknowledges it and everything served before it. An ack is cumulative and never moves
+backwards on any shard, so a replayed ack is harmless, and a position past a shard's head is
+clamped to it. `ackEvents(consumer, ackedSeq)` still works on a log that is not sharded; a sharded
+one refuses it, since one seq cannot say where a consumer is on every shard. Two consumers never
+interfere: each has its own cursor and its own pace.
 
 ### Why an entry is not served the instant it is written
 
-`seq` is assigned by the database, and two appends can be assigned seqs in one order while
+`seq` is assigned by each shard's database, and two appends can be assigned seqs in one order while
 committing in the other. A consumer served the later seq immediately would step over the
 earlier one forever, since its cursor has already passed it. So the feed holds back entries
 younger than `WIGGLE_EVENTS_VISIBILITY_MILLIS` (default 50), which is longer than an append

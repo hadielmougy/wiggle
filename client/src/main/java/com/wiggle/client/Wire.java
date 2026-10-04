@@ -94,7 +94,8 @@ final class Wire {
             out.add(new com.wiggle.core.EventView(e.getSeq(), e.getInstanceId(), e.getWorkflow(), e.getVersion(),
                     e.getCorrelationId().isEmpty() ? null : e.getCorrelationId(), e.getType(),
                     e.getNodeId().isEmpty() ? null : e.getNodeId(), e.getCreatedAt(),
-                    payload instanceof Map<?, ?> m ? com.wiggle.core.Json.asObject(m) : Map.of()));
+                    payload instanceof Map<?, ?> m ? com.wiggle.core.Json.asObject(m) : Map.of(),
+                    e.getShard(), e.getCursor().isEmpty() ? null : e.getCursor()));
         }
         return out;
     }

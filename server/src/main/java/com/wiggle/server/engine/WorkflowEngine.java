@@ -462,17 +462,26 @@ public final class WorkflowEngine {
         });
     }
 
-    /** Departures of observed runs from their topology, newest first; either filter may be null. */
-    /** Up to {@code max} entries of the event log after {@code afterSeq}, oldest first. */
+    /** Up to {@code max} entries of the event log after {@code afterSeq} on every shard, oldest first. */
     public List<EventView> events(long afterSeq, int max) {
-        return view(transactions.readHome(tx -> tx.eventsAfter(afterSeq, max)));
+        List<List<Rows.Event>> perShard = new ArrayList<>();
+        List<Integer> shards = transactions.instanceShards();
+        for (int shard : shards) perShard.add(transactions.readShard(shard, tx -> tx.eventsAfter(afterSeq, max)));
+        List<EventView> out = new ArrayList<>();
+        merge(shards, perShard, max, (shard, e) -> out.add(view(e, shard, null)));
+        return out;
     }
 
     /**
      * Serves one consumer's next events and leaves its cursor where it was: delivery is
      * at-least-once, and only {@link #ackEvents} moves the cursor on. The first poll of a
-     * consumer registers it, at the tail ({@code startFrom} 0), at the earliest event still
-     * retained ({@code -1}), or after a seq it names; later polls ignore {@code startFrom}.
+     * consumer registers it: at the tail of every shard's log ({@code startFrom} 0), at the
+     * earliest entry each still retains ({@code -1}), or, on one shard, after a seq it names;
+     * later polls ignore {@code startFrom}.
+     *
+     * <p>Every shard keeps its own log; a poll reads each beyond the consumer's position there and
+     * merges them oldest first, keeping each shard's own order. Each served entry carries the
+     * cursor that acknowledges it and everything served before it.
      *
      * <p>Long-polls until {@code deadline} the way a worker poll does, and never serves an event
      * younger than the visibility window, so a consumer cannot read past an append still in flight.
@@ -481,16 +490,27 @@ public final class WorkflowEngine {
                                       Cancellation cancelled) {
         String name = requireConsumer(consumer);
         int limit = max > 0 ? max : 1;
-        long from = transactions.readHome(tx -> cursorSeq(tx, name, startFrom, System.currentTimeMillis()));
+        List<Integer> shards = transactions.instanceShards();
+        FeedCursor from = cursorOf(name, startFrom, shards);
         long interval = Math.max(10, Math.min(eventVisibilityMillis, 200));
         while (true) {
             if (cancelled.cancelled()) return List.of();
             long visibleBefore = System.currentTimeMillis() - eventVisibilityMillis;
-            List<Rows.Event> batch = transactions.readHome(tx -> tx.eventsAfter(from, visibleBefore, limit));
+            List<List<Rows.Event>> perShard = new ArrayList<>();
+            for (int shard : shards) {
+                long after = from.at(shard);
+                perShard.add(transactions.readShard(shard, tx -> tx.eventsAfter(after, visibleBefore, limit)));
+            }
+            List<EventView> batch = new ArrayList<>();
+            FeedCursor[] running = {from};
+            merge(shards, perShard, limit, (shard, e) -> {
+                running[0] = running[0].with(shard, e.seq());
+                batch.add(view(e, shard, running[0].format()));
+            });
             if (!batch.isEmpty()) {
                 LOG.log(System.Logger.Level.DEBUG, () -> "pollEvents: consumer " + name + " served "
-                        + batch.size() + " event(s) after seq " + from);
-                return view(batch);
+                        + batch.size() + " event(s) after " + from.format());
+                return batch;
             }
             long remaining = deadline - System.currentTimeMillis();
             if (remaining <= 0) return List.of();
@@ -504,28 +524,100 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Acknowledges every event up to {@code ackedSeq} for one consumer and returns where its
-     * cursor now stands. Cumulative and never backwards, so a replayed ack is harmless; an ack
-     * past the log's head is clamped to it, since nothing beyond has been delivered.
+     * Merges each shard's events, oldest first, into {@code sink}, up to {@code max}. Each shard's list
+     * is in seq order and stays so: the merge always takes the head of some shard's list.
      */
-    public long ackEvents(String consumer, long ackedSeq) {
-        String name = requireConsumer(consumer);
+    private static void merge(List<Integer> shards, List<List<Rows.Event>> perShard, int max,
+                              java.util.function.BiConsumer<Integer, Rows.Event> sink) {
+        int[] next = new int[shards.size()];
+        for (int served = 0; served < max; served++) {
+            int pick = -1;
+            for (int i = 0; i < shards.size(); i++) {
+                if (next[i] >= perShard.get(i).size()) continue;
+                if (pick < 0 || perShard.get(i).get(next[i]).createdAt()
+                        < perShard.get(pick).get(next[pick]).createdAt()) pick = i;
+            }
+            if (pick < 0) return;
+            sink.accept(shards.get(pick), perShard.get(pick).get(next[pick]++));
+        }
+    }
+
+    /**
+     * The consumer's place: its acknowledged position on every shard, registered at {@code startFrom}
+     * on a first poll. A shard the consumer has no position on yet -- one added after it registered --
+     * is read from its start.
+     */
+    private FeedCursor cursorOf(String consumer, long startFrom, List<Integer> shards) {
+        int home = transactions.home();
+        FeedCursor existing = transactions.readHome(tx -> stored(tx, consumer, shards, home));
+        if (existing != null) return existing;
+        if (startFrom > 0 && shards.size() > 1) {
+            throw EngineException.badRequest("startFrom names one seq, but every shard keeps its own log; "
+                    + "register at the tail (0) or the earliest entry (-1)");
+        }
+        Map<Integer, Long> start = new HashMap<>();
+        for (int shard : shards) {
+            long latest = transactions.readShard(shard, Tx::latestEventSeq);
+            start.put(shard, startFrom == 0 ? latest : Math.max(0, startFrom));
+        }
+        long now = System.currentTimeMillis();
         return transactions.readHome(tx -> {
-            long target = Math.max(0, Math.min(ackedSeq, tx.latestEventSeq()));
-            tx.advanceEventCursor(name, target, System.currentTimeMillis());
-            Rows.EventCursor cursor = tx.eventCursor(name);
-            return cursor == null ? target : cursor.ackedSeq();
+            tx.createEventCursorIfAbsent(new Rows.EventCursor(consumer, start.getOrDefault(home, 0L), now, now));
+            for (int shard : shards) {
+                if (shard != home) tx.advanceEventPosition(consumer, shard, start.get(shard));
+            }
+            return stored(tx, consumer, shards, home);
         });
     }
 
-    /** The seq a consumer resumes after: its cursor, registered at {@code startFrom} on a first poll. */
-    private static long cursorSeq(Tx tx, String consumer, long startFrom, long now) {
+    /** The consumer's stored positions on {@code shards}, or null when it has never polled. */
+    private static FeedCursor stored(Tx tx, String consumer, List<Integer> shards, int home) {
         Rows.EventCursor cursor = tx.eventCursor(consumer);
-        if (cursor != null) return cursor.ackedSeq();
-        long from = startFrom == 0 ? tx.latestEventSeq() : Math.max(0, startFrom);
-        tx.createEventCursorIfAbsent(new Rows.EventCursor(consumer, from, now, now));
-        Rows.EventCursor created = tx.eventCursor(consumer);
-        return created == null ? from : created.ackedSeq();
+        if (cursor == null) return null;
+        Map<Integer, Long> others = tx.eventPositions(consumer);
+        java.util.SortedMap<Integer, Long> at = new java.util.TreeMap<>();
+        for (int shard : shards) at.put(shard, shard == home ? cursor.ackedSeq() : others.getOrDefault(shard, 0L));
+        return new FeedCursor(at);
+    }
+
+    /**
+     * Acknowledges every event up to {@code cursor} -- the cursor of the last event handled -- for one
+     * consumer, and returns where it now stands. Cumulative and never backwards on any shard, so a
+     * replayed ack is harmless; a position past a shard's head is clamped to it.
+     */
+    public String ackEvents(String consumer, String cursor) {
+        String name = requireConsumer(consumer);
+        FeedCursor acked = FeedCursor.parse(cursor);
+        List<Integer> shards = transactions.instanceShards();
+        int home = transactions.home();
+        Map<Integer, Long> target = new HashMap<>();
+        for (Map.Entry<Integer, Long> e : acked.positions().entrySet()) {
+            if (!shards.contains(e.getKey())) continue;   // a shard no longer read holds nothing to ack
+            long latest = transactions.readShard(e.getKey(), Tx::latestEventSeq);
+            target.put(e.getKey(), Math.max(0, Math.min(e.getValue(), latest)));
+        }
+        long now = System.currentTimeMillis();
+        return transactions.readHome(tx -> {
+            tx.advanceEventCursor(name, target.getOrDefault(home, 0L), now);
+            target.forEach((shard, seq) -> {
+                if (shard != home) tx.advanceEventPosition(name, shard, seq);
+            });
+            return stored(tx, name, shards, home).format();
+        });
+    }
+
+    /**
+     * {@link #ackEvents(String, String)} by a bare seq, for a log on one shard. A sharded log has no
+     * single seq, so there the ack must carry the event's cursor.
+     */
+    public long ackEvents(String consumer, long ackedSeq) {
+        List<Integer> shards = transactions.instanceShards();
+        if (shards.size() > 1) {
+            throw EngineException.badRequest("the event log is sharded, so a seq alone does not say where a "
+                    + "consumer is: ack with the cursor of the last event handled");
+        }
+        int shard = shards.getFirst();
+        return FeedCursor.parse(ackEvents(consumer, shard + ":" + Math.max(0, ackedSeq))).at(shard);
     }
 
     private static String requireConsumer(String consumer) {
@@ -536,23 +628,28 @@ public final class WorkflowEngine {
         return consumer;
     }
 
-    private static List<EventView> view(List<Rows.Event> events) {
-        return events.stream()
-                .map(e -> new EventView(e.seq(), e.instanceId(), e.workflow(), e.version(), e.correlationId(),
-                        e.type(), e.nodeId(), e.createdAt(),
-                        e.payload() == null ? Map.of() : Json.parseObject(e.payload())))
-                .toList();
+    private static EventView view(Rows.Event e, int shard, String cursor) {
+        return new EventView(e.seq(), e.instanceId(), e.workflow(), e.version(), e.correlationId(),
+                e.type(), e.nodeId(), e.createdAt(),
+                e.payload() == null ? Map.of() : Json.parseObject(e.payload()), shard, cursor);
     }
 
     /**
      * Drops events older than the retention window that every consumer has acknowledged (all of
-     * them, while no consumer exists). Leader-only, from the housekeeper's retention sweep.
+     * them, while no consumer exists), shard by shard against what consumers hold on that shard.
+     * Leader-only, from the housekeeper's retention sweep.
      */
     public int trimEvents(int max) {
         long cutoff = System.currentTimeMillis() - eventRetentionMillis;
-        int trimmed = transactions.readHome(tx -> tx.deleteEvents(cutoff, tx.oldestAckedSeq(), max));
-        if (trimmed > 0) LOG.log(System.Logger.Level.DEBUG, () -> "trimEvents: removed " + trimmed + " event(s)");
-        return trimmed;
+        int home = transactions.home();
+        int trimmed = 0;
+        for (int shard : transactions.instanceShards()) {
+            Long upTo = transactions.readHome(tx -> shard == home ? tx.oldestAckedSeq() : tx.oldestEventPosition(shard));
+            trimmed += transactions.readShard(shard, tx -> tx.deleteEvents(cutoff, upTo, max));
+        }
+        int removed = trimmed;
+        if (removed > 0) LOG.log(System.Logger.Level.DEBUG, () -> "trimEvents: removed " + removed + " event(s)");
+        return removed;
     }
 
     public List<AnomalyView> anomalies(String workflow, String instanceId, int limit) {
