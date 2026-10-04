@@ -36,6 +36,8 @@ public final class AuthCache implements AutoCloseable {
     private final Map<String, Entry<Optional<Accounts.Account>>> users = new ConcurrentHashMap<>();
     private final Map<String, Entry<Optional<Rows.AuthSession>>> sessions = new ConcurrentHashMap<>();
     private final Map<String, Entry<Boolean>> anyAccount = new ConcurrentHashMap<>();
+    private final Map<String, Entry<Optional<Accounts.Machine>>> keys = new ConcurrentHashMap<>();
+    private final Map<String, Entry<Optional<Accounts.Machine>>> subjects = new ConcurrentHashMap<>();
     private volatile long seenSeq = -1;
     private ScheduledExecutorService poller;
 
@@ -46,8 +48,9 @@ public final class AuthCache implements AutoCloseable {
         this.clock = clock;
     }
 
-    /** Polls the audit every {@code intervalMillis} on a daemon thread until {@link #close}. */
-    public AuthCache start(long intervalMillis) {
+    /** Polls the audit every {@code intervalMillis} on a daemon thread until {@link #close}; a second call does nothing. */
+    public synchronized AuthCache start(long intervalMillis) {
+        if (poller != null) return this;
         poller = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "wiggle-auth-cache");
             t.setDaemon(true);
@@ -64,6 +67,17 @@ public final class AuthCache implements AutoCloseable {
     /** The session stored under {@code idHash}, if any; expiry is the caller's to check. */
     public Optional<Rows.AuthSession> session(String idHash) {
         return cached(sessions, idHash, () -> accounts.session(idHash));
+    }
+
+    /** The credential an API key belongs to, if any; expiry is the caller's to check. */
+    public Optional<Accounts.Machine> machineByKey(String key) {
+        String hash = Accounts.tokenHash(key);
+        return cached(keys, hash, () -> accounts.machineByKeyHash(hash));
+    }
+
+    /** The credential for a client certificate subject, if any; expiry is the caller's to check. */
+    public Optional<Accounts.Machine> machineBySubject(String subject) {
+        return cached(subjects, subject, () -> accounts.machineBySubject(subject));
     }
 
     /** Whether any account exists. */
@@ -94,6 +108,11 @@ public final class AuthCache implements AutoCloseable {
             for (Rows.AuthAudit e : entries) {
                 if (e.action().startsWith("role.")) {
                     users.clear();
+                    keys.clear();
+                    subjects.clear();
+                } else if (e.action().startsWith("credential.")) {
+                    keys.clear();
+                    subjects.clear();
                 } else if (e.action().equals("session.close")) {
                     if (e.detail() != null) sessions.remove(e.detail());
                 } else if (e.target() != null) {
@@ -127,7 +146,7 @@ public final class AuthCache implements AutoCloseable {
         }
     }
 
-    @Override public void close() {
+    @Override public synchronized void close() {
         if (poller != null) poller.shutdownNow();
     }
 }

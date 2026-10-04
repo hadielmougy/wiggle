@@ -100,7 +100,9 @@ Read by a server node that serves the portal.
 | `WIGGLE_DASHBOARD_USER` / `_PASSWORD` | `admin` / *(unset)* | built-in admin; unset password = open access |
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `_PASSWORD` | `viewer` / *(unset)* | optional built-in read-only account |
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | a console users file from before the auth shard, imported once ([WGL-SHARD-180](85-sharding.md#13-users-and-authorization)) |
-| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session before reading it again |
+| `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account, session or credential before reading it again |
+| `WIGGLE_GRPC_AUTH` | `off` | per-RPC authorization of the gRPC API: `off`, `log` or `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)) |
+| `WIGGLE_API_KEY` | *(unset)* | on a client or worker, the API key it presents |
 | `WIGGLE_TLS_*` | *(unset)* | the server's keystore and truststore serve the portal's HTTPS too |
 
 **WGL-OPS-004** (MUST) A definition's `DEFAULT` execution mode MUST resolve to `SERVER`. There is
@@ -221,8 +223,9 @@ certificate on a client or worker. Unset means plaintext.
 **WGL-OPS-062** (MUST) Clients and workers MUST read the same variables.
 
 **WGL-OPS-063** (MUST) TLS MUST NOT be mistaken for authorization: it secures the channel and, with mTLS,
-authenticates the peer, but any trusted peer may call any RPC. Role separation exists only in the
-portal.
+authenticates the peer. What a peer may call is decided by per-RPC authorization when
+`WIGGLE_GRPC_AUTH` is `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)); with it off,
+any trusted peer may call any RPC.
 
 *Verified by:* `tests/TlsTest`.
 

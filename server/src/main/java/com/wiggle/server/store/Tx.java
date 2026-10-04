@@ -56,6 +56,12 @@ public interface Tx extends ReadTx, GraphStore {
     /** Deletes a role and every grant of it; false when there was none. */
     boolean deleteAuthRole(String name);
 
+    /** Adds a machine credential; its id, key hash and subject are each unique. */
+    void insertAuthCredential(Rows.AuthCredential credential);
+
+    /** Deletes a machine credential; false when there was none. */
+    boolean deleteAuthCredential(String id);
+
     void insertAuthSession(Rows.AuthSession session);
 
     void deleteAuthSession(String idHash);

@@ -95,7 +95,23 @@
         (.catch st/on-error))
     (-> (api/audit)
         (.then #(swap! db assoc :audit (:entries %)))
+        (.catch st/on-error))
+    (-> (api/credentials)
+        (.then #(swap! db assoc :credentials (:credentials %)))
         (.catch st/on-error))))
+
+(defn create-credential! [body]
+  (-> (api/create-credential body)
+      (.then (fn [r]
+               (swap! db assoc :new-key (when (:key r) {:id (:id r) :key (:key r)}))
+               (st/toast! :ok (str "credential '" (:id r) "' created"))
+               (load-users!)))
+      (.catch st/on-error)))
+
+(defn delete-credential! [id]
+  (-> (api/delete-credential id)
+      (.then (fn [_] (st/toast! :ok (str "credential '" id "' deleted")) (load-users!)))
+      (.catch st/on-error)))
 
 (defn set-roles! [name roles]
   (-> (api/set-roles name roles)

@@ -136,7 +136,7 @@ class ConsoleUsersTest {
     void scopedRoles() throws Exception {
         withPortal("root-pass", (base, http) -> {
             assertEquals(200, send(http, "POST", base + "/api/roles", "admin:root-pass",
-                    "{\"name\":\"orders-ops\",\"permissions\":[\"portal.read\",\"schedule.write:orders\"]}").statusCode());
+                    "{\"name\":\"orders-ops\",\"permissions\":[\"read\",\"schedule.write:orders\"]}").statusCode());
             assertEquals(400, send(http, "POST", base + "/api/roles", "admin:root-pass",
                     "{\"name\":\"bad\",\"permissions\":[\"instance.delete\"]}").statusCode());
             assertEquals(200, send(http, "POST", base + "/api/users", "admin:root-pass",
@@ -158,6 +158,27 @@ class ConsoleUsersTest {
             Matcher m = Pattern.compile("\"action\":\"role.put\",\"target\":\"orders-ops\"").matcher(audit);
             assertTrue(m.find(), audit);
             assertTrue(audit.contains("\"actor\":\"admin\""), "who made the change is recorded: " + audit);
+        });
+    }
+
+    @Test @DisplayName("an admin issues an API key once, lists credentials without it, and deletes them")
+    void credentials() throws Exception {
+        withPortal("root-pass", (base, http) -> {
+            HttpResponse<String> created = send(http, "POST", base + "/api/credentials", "admin:root-pass",
+                    "{\"id\":\"orders-worker\",\"kind\":\"api-key\",\"role\":\"viewer\"}");
+            assertEquals(200, created.statusCode(), created.body());
+            Matcher key = Pattern.compile("\"key\":\"(wgk_[^\"]+)\"").matcher(created.body());
+            assertTrue(key.find(), created.body());
+            assertEquals(200, send(http, "POST", base + "/api/credentials", "admin:root-pass",
+                    "{\"id\":\"orders-cert\",\"kind\":\"mtls\",\"subject\":\"CN=orders\",\"role\":\"admin\"}").statusCode());
+
+            String list = send(http, "GET", base + "/api/credentials", "admin:root-pass", null).body();
+            assertTrue(list.contains("orders-worker") && list.contains("CN=orders"), list);
+            assertFalse(list.contains(key.group(1)), "the key is never listed");
+            assertFalse(list.contains("keyHash"), "nor its hash");
+
+            assertEquals(200, send(http, "DELETE", base + "/api/credentials/orders-worker", "admin:root-pass", null).statusCode());
+            assertFalse(send(http, "GET", base + "/api/credentials", "admin:root-pass", null).body().contains("orders-worker"));
         });
     }
 

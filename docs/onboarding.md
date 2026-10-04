@@ -540,8 +540,8 @@ npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a portal on 
 ![The portal's instance detail: an onboarding run as a table of its steps, the first expanded to its input, output, retries and timing, with an inline signal form.](img/console-instance-trace.png)
 
 **Auth.** A role is a named set of permissions. Two are built in: **admin** (`*`, everything) and
-**viewer** (`portal.read`, sees everything and is refused every write). The actions are
-`portal.read`, `instance.cancel`, `instance.signal`, `schedule.write` and `user.manage` (plus
+**viewer** (`read`, sees everything and is refused every write). The actions are
+`read`, `instance.cancel`, `instance.signal`, `schedule.write` and `user.manage` (plus
 `instance.start` and `task.poll`, reserved for gRPC authorization); the instance and schedule
 ones take a workflow scope, so `instance.cancel:orders` cancels only `orders` instances. Browsers get a
 `/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
@@ -568,8 +568,7 @@ topology gives the `auth` role, or the one database of a single-database deploym
 caches what it has looked up for at most `WIGGLE_AUTH_CACHE_MILLIS` (30 s) and polls the audit
 every second, so a password change, a role change, a disable or a deletion takes effect on every
 node within about a second. With the auth shard down, people already signed in keep working,
-nobody new signs in (503), and the built-in admin still can. The accounts are not reachable over
-gRPC, which has no per-RPC authorization yet.
+nobody new signs in (503), and the built-in admin still can. No gRPC RPC reads or writes accounts.
 
 A console users file from before (`WIGGLE_CONSOLE_USERS_FILE`, default `wiggle-users.json`) is
 imported once by the first node to start with it, hashes as they are; after that it is no longer
@@ -600,14 +599,47 @@ changing stays signed in. Deleting an account signs it out everywhere.
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once ([§7.1a](#71a-users-an-admin-manages)) |
 | `WIGGLE_TLS_*` | *(unset)* | the server's keystore serves the portal over HTTPS too; with a truststore, the portal requires client certificates as gRPC does |
 
+### 7.1b Authorizing gRPC calls
+
+Off by default: any peer that can reach the gRPC port may call any RPC. To decide per call:
+
+1. In the portal's **Users** tab, define a role for each kind of caller, then create an **API
+   credential** holding it: an API key (shown once, starting `wgk_`) or a client certificate
+   subject such as `CN=orders-worker,O=Example` for an mTLS deployment.
+2. Give each worker and service its key as `WIGGLE_API_KEY` (or `-Dwiggle.api.key`; the Go and
+   Python clients send it as `authorization: Bearer <key>` metadata). Over plaintext the key is
+   readable on the wire, so use TLS.
+3. Start the servers with `WIGGLE_GRPC_AUTH=log` and watch for `gRPC auth (log mode)` warnings: each
+   is a call `enforce` would refuse. When there are none, switch to `WIGGLE_GRPC_AUTH=enforce`.
+
+Typical roles:
+
+| Caller | Permissions |
+|---|---|
+| a worker for `orders` | `task.poll` (or `task.poll:<queue>` per queue it serves) and `read:orders` (it reads the graph) |
+| a service starting `orders` | `instance.start:orders`, `read:orders`, plus `workflow.register:orders` if it publishes the graph |
+| an event consumer | `event.read` |
+| operations tooling | `read` and whatever it changes |
+
+Every RPC's permission is listed in [chapter 70 §11 of the spec](spec/70-api.md#11-per-rpc-authorization).
+A call without a known credential fails `UNAUTHENTICATED` (401 in the Java client), one its role does
+not allow `PERMISSION_DENIED` (403). `HealthCheck` stays open for probes. Deleting a credential, or
+changing its role, takes effect on every node within about a second, for the next call: a worker's
+open long poll ends as it began, at most `WIGGLE_LONGPOLL_MAX_MILLIS` later.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WIGGLE_GRPC_AUTH` | `off` | `off`, `log` (check and log, serve anyway) or `enforce` |
+| `WIGGLE_API_KEY` | *(unset)* | on a client or worker: the key it presents |
+
 ### 7.1a Transport security (TLS / mTLS)
 
 Opt-in and shared by the gRPC API and the portal's HTTP. A **keystore** turns TLS on for both;
 a **truststore** additionally requires client certificates (mTLS on the server) and presents a
 client certificate (on a worker/client). Unset ⇒ plaintext for both. Stores are PKCS12 by default;
 a `.jks` path is loaded as JKS. Clients/workers read the same variables. TLS secures the channel
-and (with mTLS) authenticates the peer, but it is **not authorization** — any trusted peer may call
-any RPC; layer the portal's login/Basic auth or an external gateway on top for role separation.
+and (with mTLS) authenticates the peer, but it is **not authorization**: what a peer may call is
+decided by per-RPC authorization ([§7.1b](#71b-authorizing-grpc-calls)), off unless you turn it on.
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|

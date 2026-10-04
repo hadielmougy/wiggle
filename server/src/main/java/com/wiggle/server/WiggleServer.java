@@ -1,6 +1,7 @@
 package com.wiggle.server;
 
 import com.wiggle.server.auth.Accounts;
+import com.wiggle.server.auth.AuthCache;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -28,11 +29,15 @@ public final class WiggleServer implements AutoCloseable {
 
     private static final System.Logger LOG = System.getLogger(WiggleServer.class.getName());
 
+    /** How often a node reads the auth audit for changes made through any node. */
+    private static final long AUTH_POLL_MILLIS = 1_000;
+
     private final ServerConfig config;
     private final Storage storage;
     private final ClusterManager cluster;
     private final ServerBundle bundle;
     private final Accounts accounts;
+    private final AuthCache authCache;
 
     /** In-memory only. To run on a database, use {@link #WiggleServer(ServerConfig, StorageFactory)}. */
     public WiggleServer(ServerConfig config) throws IOException {
@@ -45,12 +50,13 @@ public final class WiggleServer implements AutoCloseable {
         this.storage.migrate();
         this.accounts = new Accounts(storage, System::currentTimeMillis);
         this.accounts.bootstrap();
+        this.authCache = new AuthCache(accounts, config.auth().cache().toMillis(), System::currentTimeMillis);
         Topology topology = config.topology();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead(),
                 topology == null ? 0 : topology.newestGeneration().id(),
                 topology == null ? () -> 0 : () -> topology.generationAt(System.currentTimeMillis()).id());
-        this.bundle = new ServerBundle(config, storage, cluster);
+        this.bundle = new ServerBundle(config, storage, cluster, authCache);
     }
 
     /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
@@ -62,6 +68,7 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer start() {
+        if (config.auth().grpc() != ServerConfig.GrpcAuth.OFF) authCache.start(AUTH_POLL_MILLIS);
         cluster.start();
         bundle.start();
         LOG.log(System.Logger.Level.INFO, () -> "server node '" + config.nodeName()
@@ -83,9 +90,13 @@ public final class WiggleServer implements AutoCloseable {
     /** Portal accounts, roles and sessions on the auth shard. Not reachable over gRPC. */
     public Accounts accounts() { return accounts; }
 
+    /** This node's cache of accounts, sessions and credentials, polling the audit once started. */
+    public AuthCache authCache() { return authCache.start(AUTH_POLL_MILLIS); }
+
     @Override public void close() {
         LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' stopping");
         bundle.close();
+        authCache.close();
         cluster.close();
         storage.close();
     }

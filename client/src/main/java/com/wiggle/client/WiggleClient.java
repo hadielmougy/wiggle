@@ -10,9 +10,11 @@ import io.grpc.ChannelCredentials;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;
 import io.grpc.ManagedChannel;
+import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.TlsChannelCredentials;
+import io.grpc.stub.MetadataUtils;
 import io.github.shield.internal.RetriesExhaustedException;
 
 import java.util.*;
@@ -23,7 +25,10 @@ public final class WiggleClient implements AutoCloseable {
     private final ManagedChannel channel;
     private final WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub stub;
 
-    /** Connects with TLS if {@code WIGGLE_TLS_*} is configured, otherwise plaintext. */
+    /**
+     * Connects with TLS if {@code WIGGLE_TLS_*} is configured, otherwise plaintext, presenting the
+     * API key in {@code WIGGLE_API_KEY} when one is set.
+     */
     public WiggleClient(String target) {
         this(target, Tls.Options.fromEnvironment());
     }
@@ -31,7 +36,7 @@ public final class WiggleClient implements AutoCloseable {
     /**
      * Connects to {@code target}, using TLS when {@code tls} carries a keystore and/or truststore:
      * the truststore verifies the server, and the keystore presents a client certificate for mTLS.
-     * With neither, the channel is plaintext.
+     * With neither, the channel is plaintext. Presents the API key in {@code WIGGLE_API_KEY} when set.
      */
     public WiggleClient(String target, Tls.Options tls) {
         this(target, tls, tls.any());
@@ -44,8 +49,30 @@ public final class WiggleClient implements AutoCloseable {
      * still overrides the default trust and adds a client certificate for mTLS.
      */
     public WiggleClient(String target, Tls.Options tls, boolean requireTls) {
+        this(target, tls, requireTls, apiKeyFromEnvironment());
+    }
+
+    /**
+     * As {@link #WiggleClient(String, Tls.Options, boolean)}, presenting {@code apiKey} on every
+     * call as {@code authorization: Bearer <key>}; null presents none. A key travels in the clear on a
+     * plaintext channel, so use one with TLS.
+     */
+    public WiggleClient(String target, Tls.Options tls, boolean requireTls, String apiKey) {
         this.channel = Grpc.newChannelBuilder(stripScheme(target), channelCredentials(tls, requireTls)).build();
-        this.stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
+        WiggleControlPlaneGrpc.WiggleControlPlaneBlockingStub s = WiggleControlPlaneGrpc.newBlockingStub(channel);
+        if (apiKey != null && !apiKey.isBlank()) {
+            Metadata headers = new Metadata();
+            headers.put(Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER), "Bearer " + apiKey.trim());
+            s = s.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers));
+        }
+        this.stub = s;
+    }
+
+    /** {@code -Dwiggle.api.key}, else {@code WIGGLE_API_KEY}; null when neither is set. */
+    static String apiKeyFromEnvironment() {
+        String v = System.getProperty("wiggle.api.key");
+        if (v == null) v = System.getenv("WIGGLE_API_KEY");
+        return v == null || v.isBlank() ? null : v;
     }
 
     private static ChannelCredentials channelCredentials(Tls.Options tls, boolean requireTls) {
@@ -430,6 +457,8 @@ public final class WiggleClient implements AutoCloseable {
     private static int statusCode(Status status) {
         return switch (status.getCode()) {
             case INVALID_ARGUMENT -> 400;
+            case UNAUTHENTICATED -> 401;
+            case PERMISSION_DENIED -> 403;
             case NOT_FOUND -> 404;
             case FAILED_PRECONDITION, ALREADY_EXISTS -> 409;
             case UNAVAILABLE, DEADLINE_EXCEEDED -> 0;
