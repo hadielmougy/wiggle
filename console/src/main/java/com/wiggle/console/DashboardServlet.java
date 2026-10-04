@@ -2,7 +2,10 @@ package com.wiggle.console;
 
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.server.auth.Accounts;
+import com.wiggle.server.auth.Permissions;
 import com.wiggle.server.engine.EngineException;
+import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.ShardRetiredException;
 import com.wiggle.server.store.StorageException;
 import jakarta.servlet.http.HttpServlet;
@@ -16,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.UUID;
 
 /**
@@ -54,6 +58,8 @@ public final class DashboardServlet extends HttpServlet {
             if (path.equals("/api/stats")) { stats(req, res); return; }
             if (path.equals("/api/password")) { changeOwnPassword(req, res); return; }
             if (path.startsWith("/api/users")) { users(req, res, sub(path, "/api/users")); return; }
+            if (path.startsWith("/api/roles")) { roles(req, res, sub(path, "/api/roles")); return; }
+            if (path.equals("/api/audit")) { audit(req, res); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
             if (path.startsWith("/api/schedules")) { schedules(req, res, sub(path, "/api/schedules")); return; }
@@ -86,43 +92,65 @@ public final class DashboardServlet extends HttpServlet {
     }
 
     private void authInfo(HttpServletRequest req, HttpServletResponse res) throws IOException {
-        ConsoleAuth.Role role = auth.role(req);   // null if auth is required and the caller isn't authenticated
+        ConsoleAuth.Principal p = auth.principal(req);   // null if auth is required and the caller isn't authenticated
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("required", auth.required());
-        out.put("user", auth.signedInUser(req));
-        out.put("role", role == null ? null : role.wire());
-        out.put("canWrite", role == ConsoleAuth.Role.ADMIN);
-        // A built-in account's password lives in the environment, so this console cannot change it.
-        out.put("canChangePassword", auth.users() != null && auth.signedInUser(req) != null
-                && !auth.builtinNames().contains(auth.signedInUser(req)));
-        out.put("managesUsers", auth.users() != null);
+        out.put("user", p == null ? null : p.user());
+        out.put("permissions", p == null ? List.of() : List.copyOf(new TreeSet<>(p.permissions())));
+        out.put("role", p == null ? null : p.writes() ? "admin" : "viewer");
+        out.put("canWrite", p != null && p.writes());
+        // A built-in account's password lives in the environment, so the portal cannot change it.
+        out.put("canChangePassword", auth.accounts() != null && p != null && p.user() != null && !p.builtin());
+        out.put("managesUsers", auth.accounts() != null);
         json(res, 200, out);
     }
 
-    /**
-     * The managed accounts. Reading them is admin-only too: the filter guards writes, and who can
-     * sign in is not a viewer's business.
-     */
+    /** The principal the filter resolved for this request. */
+    private ConsoleAuth.Principal principal(HttpServletRequest req) {
+        ConsoleAuth.Principal p = auth.principal(req);
+        if (p == null) throw new IllegalStateException("not signed in");
+        return p;
+    }
+
+    /** The signed-in account's name, for the audit; null in open mode. */
+    private String actor(HttpServletRequest req) {
+        return principal(req).user();
+    }
+
+    /** Whether the caller may do {@code action} on {@code scope}; answers 403 when not. */
+    private boolean permitted(HttpServletRequest req, HttpServletResponse res, String action, String scope)
+            throws IOException {
+        if (principal(req).allows(action, scope)) return true;
+        error(res, 403, "permission '" + action + "' on '" + scope + "' required");
+        return false;
+    }
+
+    /** The accounts managed on the auth shard. The filter has checked {@code user.manage}. */
     private void users(HttpServletRequest req, HttpServletResponse res, String[] parts) throws IOException {
-        if (auth.users() == null) { error(res, 404, "this console manages no users"); return; }
-        if (!auth.canWrite(req)) { error(res, 403, "admin role required"); return; }
-        ConsoleUsers users = auth.users();
+        Accounts accounts = auth.accounts();
+        if (accounts == null) { error(res, 404, "this portal manages no users"); return; }
+        boolean fallback = auth.hasBuiltinAdmin();
         switch (req.getMethod()) {
             case "GET" -> {
                 if (parts.length != 0) { error(res, 404, "not found"); return; }
                 List<Object> list = new ArrayList<>();
                 for (String name : auth.builtinNames()) {
+                    String role = name.equals(auth.user()) ? Permissions.ADMIN : Permissions.VIEWER;
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", name);
-                    m.put("role", name.equals(auth.user()) ? "admin" : "viewer");
+                    m.put("role", role);
+                    m.put("roles", List.of(role));
                     m.put("builtin", true);
+                    m.put("disabled", false);
                     list.add(m);
                 }
-                for (ConsoleUsers.User u : users.list()) {
+                for (Accounts.User u : accounts.users()) {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", u.name());
-                    m.put("role", u.role().wire());
+                    m.put("role", u.roles().isEmpty() ? null : u.roles().getFirst());
+                    m.put("roles", u.roles());
                     m.put("builtin", false);
+                    m.put("disabled", u.disabled());
                     m.put("createdAt", u.createdAt());
                     m.put("updatedAt", u.updatedAt());
                     list.add(m);
@@ -131,45 +159,115 @@ public final class DashboardServlet extends HttpServlet {
             }
             case "POST" -> {
                 Map<String, Object> body = Json.asObject(readBody(req));
-                long now = System.currentTimeMillis();
-                if (parts.length == 2 && parts[1].equals("password")) {   // an admin resets someone's password
-                    users.setPassword(parts[0], String.valueOf(body.get("password")), now);
-                    auth.revokeSessions(parts[0], null);   // whoever held that password is signed out
+                if (parts.length == 2) {
+                    String name = parts[0];
+                    if (auth.builtinNames().contains(name)) {
+                        error(res, 400, "'" + name + "' is a built-in account set in the environment; "
+                                + "change it where the server is deployed");
+                        return;
+                    }
+                    switch (parts[1]) {
+                        case "password" -> accounts.setPassword(actor(req), name, String.valueOf(body.get("password")), null);
+                        case "roles" -> accounts.setRoles(actor(req), name, roleList(body), fallback);
+                        case "disabled" -> accounts.setDisabled(actor(req), name, Boolean.TRUE.equals(body.get("disabled")),
+                                fallback);
+                        default -> { error(res, 404, "not found"); return; }
+                    }
                     json(res, 200, Map.of("ok", true));
                     return;
                 }
                 if (parts.length != 0) { error(res, 404, "not found"); return; }
                 String name = String.valueOf(body.get("user"));
-                ConsoleAuth.Role role = ConsoleAuth.Role.of(String.valueOf(body.get("role")));
-                users.create(name, String.valueOf(body.get("password")), role, auth.builtinNames(), now);
-                json(res, 200, Map.of("user", name, "role", role.wire()));
+                List<String> roles = roleList(body);
+                accounts.create(actor(req), name, String.valueOf(body.get("password")), roles, auth.builtinNames(),
+                        fallback);
+                json(res, 200, Map.of("user", name, "roles", roles));
             }
             case "DELETE" -> {
                 if (parts.length != 1) { error(res, 404, "not found"); return; }
                 String name = parts[0];
                 if (auth.builtinNames().contains(name)) {
                     error(res, 400, "'" + name + "' is a built-in account set in the environment; "
-                            + "remove it where the console is deployed");
+                            + "remove it where the server is deployed");
                     return;
                 }
-                // Refuse the move that locks everyone out: the last admin, with no built-in behind it.
-                if (!auth.hasBuiltinAdmin() && users.has(name)
-                        && ConsoleAuth.Role.ADMIN == roleOf(users, name) && users.admins() <= 1) {
-                    error(res, 400, "'" + name + "' is the only admin and there is no built-in admin "
-                            + "to fall back on; add another admin first");
-                    return;
-                }
-                users.delete(name);
-                auth.revokeSessions(name, null);
+                accounts.delete(actor(req), name, fallback);
                 json(res, 200, Map.of("ok", true));
             }
             default -> error(res, 405, "GET, POST or DELETE");
         }
     }
 
-    private static ConsoleAuth.Role roleOf(ConsoleUsers users, String name) {
-        return users.list().stream().filter(u -> u.name().equals(name))
-                .map(ConsoleUsers.User::role).findFirst().orElse(null);
+    /** {@code roles} as a list, or the one {@code role}, lower-cased; {@code operator} is the old name for admin. */
+    private static List<String> roleList(Map<String, Object> body) {
+        List<String> out = new ArrayList<>();
+        Object roles = body.get("roles");
+        if (roles instanceof List<?> l) l.forEach(r -> out.add(roleName(r)));
+        else if (body.get("role") != null) out.add(roleName(body.get("role")));
+        return out;
+    }
+
+    private static String roleName(Object raw) {
+        String r = String.valueOf(raw).trim().toLowerCase();
+        return r.equals("operator") ? Permissions.ADMIN : r;
+    }
+
+    /** Roles: named permission sets. The filter has checked {@code user.manage}. */
+    private void roles(HttpServletRequest req, HttpServletResponse res, String[] parts) throws IOException {
+        Accounts accounts = auth.accounts();
+        if (accounts == null) { error(res, 404, "this portal manages no roles"); return; }
+        switch (req.getMethod()) {
+            case "GET" -> {
+                if (parts.length != 0) { error(res, 404, "not found"); return; }
+                List<Object> list = new ArrayList<>();
+                for (Rows.AuthRole r : accounts.roles()) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", r.name());
+                    m.put("permissions", List.copyOf(new TreeSet<>(r.permissions())));
+                    m.put("builtin", r.builtin());
+                    m.put("updatedAt", r.updatedAt());
+                    list.add(m);
+                }
+                json(res, 200, Map.of("roles", list, "actions", Permissions.ACTIONS));
+            }
+            case "POST" -> {
+                if (parts.length != 0) { error(res, 404, "not found"); return; }
+                Map<String, Object> body = Json.asObject(readBody(req));
+                List<String> perms = new ArrayList<>();
+                Object raw = body.get("permissions");
+                if (raw instanceof List<?> l) l.forEach(x -> perms.add(String.valueOf(x)));
+                else if (raw != null) perms.addAll(List.of(String.valueOf(raw).trim().split("[\\s,]+")));
+                String name = String.valueOf(body.get("name")).trim().toLowerCase();
+                accounts.putRole(actor(req), name, perms, auth.hasBuiltinAdmin());
+                json(res, 200, Map.of("ok", true));
+            }
+            case "DELETE" -> {
+                if (parts.length != 1) { error(res, 404, "not found"); return; }
+                accounts.deleteRole(actor(req), parts[0], auth.hasBuiltinAdmin());
+                json(res, 200, Map.of("ok", true));
+            }
+            default -> error(res, 405, "GET, POST or DELETE");
+        }
+    }
+
+    /** Changes to accounts, roles and sessions, oldest first after {@code after}. */
+    private void audit(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        Accounts accounts = auth.accounts();
+        if (accounts == null) { error(res, 404, "this portal manages no users"); return; }
+        long after = parseLong(req.getParameter("after"), 0);
+        int limit = Math.min(parseInt(req.getParameter("limit"), 100), 1000);
+        List<Object> list = new ArrayList<>();
+        for (Rows.AuthAudit a : accounts.auditAfter(after, limit)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("seq", a.seq());
+            m.put("at", a.at());
+            m.put("actor", a.actor());
+            m.put("action", a.action());
+            m.put("target", a.target());
+            if (!a.action().startsWith("session.")) m.put("detail", a.detail());
+            list.add(m);
+        }
+        json(res, 200, Map.of("entries", list));
     }
 
     /** Self-service: the signed-in account changes its own password, proving the current one. */
@@ -246,6 +344,7 @@ public final class DashboardServlet extends HttpServlet {
 
     private void cancel(HttpServletRequest req, HttpServletResponse res, String id) throws IOException {
         if (!req.getMethod().equals("POST")) { error(res, 405, "POST required"); return; }
+        if (!permitted(req, res, Permissions.INSTANCE_CANCEL, workflowOf(id))) return;
         String reason = trimToNull(req.getParameter("reason"));
         data.cancel(id, reason == null ? "cancelled from console" : reason);
         json(res, 200, Map.of("ok", true));
@@ -253,8 +352,15 @@ public final class DashboardServlet extends HttpServlet {
 
     private void signal(HttpServletRequest req, HttpServletResponse res, String id, String name) throws IOException {
         if (!req.getMethod().equals("POST")) { error(res, 405, "POST required"); return; }
+        if (!permitted(req, res, Permissions.INSTANCE_SIGNAL, workflowOf(id))) return;
         data.signal(id, name, readBody(req));
         json(res, 200, Map.of("ok", true));
+    }
+
+    /** The workflow of instance {@code id}, which scopes what may be done to it. */
+    private String workflowOf(String id) {
+        return data.instance(id).map(d -> d.instance().workflow())
+                .orElseThrow(() -> EngineException.notFound("instance " + id));
     }
 
     private void instanceDetail(HttpServletResponse res, String id) throws IOException {
@@ -322,6 +428,7 @@ public final class DashboardServlet extends HttpServlet {
             case "POST" -> {
                 Map<String, Object> body = Json.asObject(readBody(req));
                 String workflow = String.valueOf(body.get("workflow"));
+                if (!permitted(req, res, Permissions.SCHEDULE_WRITE, workflow)) return;
                 String id = body.get("cron") != null
                         ? data.createCronSchedule(workflow, String.valueOf(body.get("cron")), body.get("context"))
                         : data.createSchedule(workflow, Duration.ofMillis(((Number) body.get("everyMillis")).longValue()),
@@ -330,6 +437,10 @@ public final class DashboardServlet extends HttpServlet {
             }
             case "DELETE" -> {
                 if (parts.length != 1) { error(res, 404, "not found"); return; }
+                String workflow = data.schedules().stream().filter(x -> x.id().equals(parts[0]))
+                        .map(DashboardData.ScheduleView::workflow).findFirst().orElse(null);
+                if (workflow == null) { error(res, 404, "no such schedule"); return; }
+                if (!permitted(req, res, Permissions.SCHEDULE_WRITE, workflow)) return;
                 data.deleteSchedule(parts[0]);
                 json(res, 200, Map.of("ok", true));
             }

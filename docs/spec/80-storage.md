@@ -95,6 +95,9 @@ store does with the answer is [section 9](#9-failure-classification-and-replay).
 | `wf_event` | the event log, keyed by a store-generated `seq`, with payload envelope version and node id |
 | `wf_event_cursor` | one row per consumer: acknowledged seq, last poll, creation |
 | `wf_node` | cluster membership: node id, name, first/last heartbeat, worker count, leader flag |
+| `wf_auth_user` · `wf_auth_role` · `wf_auth_user_role` | portal accounts (name, PBKDF2 hash, salt, rounds, disabled), roles as permission sets, and grants; on the auth shard ([WGL-SHARD-181](85-sharding.md#13-users-and-authorization)) |
+| `wf_auth_session` · `wf_auth_audit` | sessions by token hash with their account and expiry, and every change to accounts, roles and sessions by a store-generated `seq` |
+| `wf_auth_credential` | machine credentials bound to a role; unused until gRPC authorization |
 | `wf_schema_version` | applied migrations: version, name, time, source checksum |
 
 **WGL-STOR-031** (MUST) A graph MUST be stored **twice**: the raw submitted blob (write-once, the source

@@ -533,11 +533,9 @@ becomes an RPC that the server then fans out, and the gRPC surface lacks reads t
 (pending signals, [WGL-OPS-042a](90-ops.md)). The server already connects to every shard and its
 replicas, and the `DashboardData` seam already has an in-process adapter (`EngineDashboardData`).
 
-**Status: implemented**, with these limits until [§13](#13-users-and-authorization) lands:
-sessions are held by the node that signed the user in, so WGL-SHARD-172 needs sticky sessions at a
-load balancer; and the permission check of WGL-SHARD-173 is the admin/viewer role. The portal is the
-`console` module, started by `dist` when `WIGGLE_PORTAL_PORT` is set, reading through
-`EngineDashboardData`. WGL-SHARD-174 needs no code: a portal-only node is a server node workers
+**Status: implemented.** The portal is the `console` module, started by `dist` when
+`WIGGLE_PORTAL_PORT` is set, reading through `EngineDashboardData`. Sessions and permission checks
+are on the auth shard ([§13](#13-users-and-authorization)). WGL-SHARD-174 needs no code: a portal-only node is a server node workers
 are not pointed at.
 
 **WGL-SHARD-170** (MUST) The portal MUST be served by the server process, on its own HTTP port
@@ -569,6 +567,17 @@ matches its views ([WGL-OPS-042](90-ops.md)). WGL-OPS-040 and WGL-OPS-041 are th
 Users, roles and credentials do not shard by instance. A sign-in names a user, not an instance, and
 a role assignment must be read the same way by every node. They live on one shard with the `auth`
 role.
+
+**Status: implemented**, except WGL-SHARD-187 (the next step of [§16](#16-delivery-plan)).
+`wf_auth_credential` exists in the schema and nothing reads or writes it until then. `Accounts`
+(server module) holds the rows and appends an audit entry with every change; `AuthCache` is the
+per-node cache, and each node polls the audit every second to drop what a change names. Built-in
+roles are `admin` (`*`) and `viewer` (`portal.read`); the actions are `portal.read`,
+`instance.cancel`, `instance.signal`, `instance.start`, `schedule.write`, `user.manage` and
+`task.poll`, the scoped ones taking `:<workflow>` or `:<queue>`. The reachability rule of
+WGL-SHARD-183 is now: no change may leave no enabled account holding `user.manage` when there is
+no built-in admin, deleting the last account included. A topology whose auth shard holds nothing
+else is opened for it alone.
 
 **WGL-SHARD-180** (MUST) Accounts MUST move from the console-owned file
 ([WGL-OPS-047](90-ops.md)) to the auth shard. At first start on a deployment that has

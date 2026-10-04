@@ -32,6 +32,7 @@ public final class ShardedStorage implements Storage {
     private final List<Member> members;
     private final List<Integer> instanceShards;
     private final int home;
+    private final int auth;
     /** Shards the registry records as retired, filled by {@link #migrate}. */
     private volatile Set<Integer> retired = Set.of();
 
@@ -41,11 +42,17 @@ public final class ShardedStorage implements Storage {
                 .map(e -> new Member(e.getKey(), ShardState.ACTIVE, true, e.getValue())).toList(), home);
     }
 
+    /** {@link #ShardedStorage(List, int, int)} with accounts on the home shard. */
+    public ShardedStorage(List<Member> members, int home) {
+        this(members, home, home);
+    }
+
     /**
      * @param members the shards, in the order fan-out visits them
      * @param home    the shard holding the cluster-global rows
+     * @param auth    the shard holding accounts, roles and sessions
      */
-    public ShardedStorage(List<Member> members, int home) {
+    public ShardedStorage(List<Member> members, int home, int auth) {
         if (members.isEmpty()) throw new IllegalArgumentException("a sharded store needs at least one shard");
         Map<Integer, Storage> byId = new LinkedHashMap<>();
         for (Member m : members) {
@@ -57,12 +64,16 @@ public final class ShardedStorage implements Storage {
         if (!byId.containsKey(home)) {
             throw new IllegalArgumentException("home shard " + home + " is not one of " + byId.keySet());
         }
+        if (!byId.containsKey(auth)) {
+            throw new IllegalArgumentException("auth shard " + auth + " is not one of " + byId.keySet());
+        }
         this.shards = byId;
         this.members = List.copyOf(members);
         this.instanceShards = members.stream()
                 .filter(m -> m.instances() && m.state() != ShardState.RETIRED).map(Member::id).toList();
         if (instanceShards.isEmpty()) throw new IllegalArgumentException("no shard holds instances");
         this.home = home;
+        this.auth = auth;
     }
 
     /** The shards, in the order fan-out visits them. */
@@ -140,10 +151,12 @@ public final class ShardedStorage implements Storage {
 
     @Override public <R> R inTx(Function<Tx, R> work) {
         throw new IllegalStateException("unrouted transaction on a sharded store: open it with inTxFor, "
-                + "inShard, inHome, readFor or readShard");
+                + "inShard, inHome, inAuth, readFor or readShard");
     }
 
     @Override public int home() { return home; }
+
+    @Override public int auth() { return auth; }
 
     @Override public List<Integer> instanceShards() { return instanceShards; }
 

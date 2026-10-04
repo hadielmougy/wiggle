@@ -211,6 +211,32 @@ public final class Rows {
      */
     public record EventCursor(String consumer, long ackedSeq, long lastSeen, long createdAt) { }
 
+    /**
+     * A portal account on the auth shard. {@code hash} is a PBKDF2-HMAC-SHA256 key derived from the
+     * password over {@code salt} with {@code iterations} rounds, both Base64; a disabled account
+     * cannot sign in.
+     */
+    public record AuthUser(String name, String hash, String salt, int iterations, boolean disabled,
+                           long createdAt, long updatedAt) { }
+
+    /** A named set of permissions. A built-in role exists on every deployment and cannot be deleted. */
+    public record AuthRole(String name, java.util.Set<String> permissions, boolean builtin,
+                           long createdAt, long updatedAt) {
+        public AuthRole {
+            permissions = java.util.Set.copyOf(permissions);
+        }
+    }
+
+    /** A signed-in session. Only a hash of its token is stored, so a read of the table signs no one in. */
+    public record AuthSession(String idHash, String user, long expiresAt, long createdAt) { }
+
+    /**
+     * One change to accounts, roles or sessions: who made it, what it was, and what it named.
+     * {@code seq} is assigned by the store on append (0 before). Every node reads the entries after
+     * the last it saw to drop what it has cached about {@code target}.
+     */
+    public record AuthAudit(long seq, long at, String actor, String action, String target, String detail) { }
+
     /** One settled, timed step: how long it ran, and how long it waited to be claimed (zero for a
      *  step reported after the fact, which was never queued). What the statistics are computed from. */
     public record StepDuration(String nodeId, long millis, long waitMillis) { }

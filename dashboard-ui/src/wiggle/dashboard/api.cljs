@@ -58,6 +58,12 @@
 (defn delete-user     [name] (DELETE (str "/api/users/" (enc name))))
 (defn reset-password  [name password] (POST (str "/api/users/" (enc name) "/password") {:password password}))
 (defn change-password [current password] (POST "/api/password" {:current current :password password}))
+(defn set-roles       [name roles] (POST (str "/api/users/" (enc name) "/roles") {:roles roles}))
+(defn set-disabled    [name disabled] (POST (str "/api/users/" (enc name) "/disabled") {:disabled disabled}))
+(defn roles           [] (GET "/api/roles"))
+(defn put-role        [body] (POST "/api/roles" body))
+(defn delete-role     [name] (DELETE (str "/api/roles/" (enc name))))
+(defn audit           [] (GET "/api/audit?limit=1000"))
 
 (defn cancel-instance [id reason]
   (POST (str "/api/instances/" (enc id) "/cancel"

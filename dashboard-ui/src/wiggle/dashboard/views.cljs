@@ -213,7 +213,7 @@
            [badge (:status i)]
            [:span.muted (:workflow i) " v" (:version i)]
            [:div.spacer {:style {:margin-left "auto"}}]
-           (when (and (st/can-write?) (= (:status i) "RUNNING"))
+           (when (and (st/can? "instance.cancel" (:workflow i)) (= (:status i) "RUNNING"))
              [:button.danger {:on-click #(act/cancel! (:id i) "cancelled from dashboard")} "cancel"])]
 
           [:dl.facts.summary
@@ -233,7 +233,7 @@
             [:div {:style {:borderTop "1px solid var(--line)"}}
              [:div {:style {:padding "10px 14px 0" :color "var(--warn)"}}
               "waiting for signal " [:strong (:activity t)]]
-             (when (st/can-write?)
+             (when (st/can? "instance.signal" (:workflow i))
                [signal-form (:activity t) #(act/signal! (:id i) (:activity t) %)])])
 
           [:h2.sub "Steps"]
@@ -430,12 +430,12 @@
           [:td (:workflow s)]
           [:td (if (:cron s) [:code (:cron s)] (u/every-str (:everyMillis s)))]
           [:td.muted (u/ts (:nextFireAt s)) " " [:span.muted "(" (u/in-secs (:nextFireAt s)) ")"]]
-          [:td.actions (when (st/can-write?)
+          [:td.actions (when (st/can? "schedule.write" (:workflow s))
                          [:button.danger {:on-click #(act/delete-schedule! (:id s))} "delete"])]])]])])
 
 (defn schedules-tab []
   [:div.cols
-   (when (st/can-write?) [schedule-form])
+   (when (st/can? "schedule.write") [schedule-form])
    [schedules-list]])
 
 ;; ---------------------------------------------------------------- signals tab
@@ -448,7 +448,7 @@
         [:td [:strong (:signal t)]] [:td (:workflow t)]
         [:td [:code (:instanceId t)]]
         [:td.muted (if (pos? (:deadline t)) (u/in-secs (:deadline t)) "—")]
-        [:td.actions (when (st/can-write?)
+        [:td.actions (when (st/can? "instance.signal" (:workflow t))
                        [:button.primary {:on-click #(swap! open not)} (if @open "close" "deliver")])]]
        (when @open
          [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
@@ -580,6 +580,8 @@
 
 ;; ---------------------------------------------------------------- users tab
 
+(defn- role-names [] (map :name (:roles @db)))
+
 (defn user-form []
   (let [s (r/atom {:user "" :password "" :role "viewer"})]
     (fn []
@@ -596,55 +598,128 @@
                     :on-change #(swap! s assoc :password (.. % -target -value))}]]
           [:div.field [:span "role"]
            [:select {:value role :on-change #(swap! s assoc :role (.. % -target -value))}
-            [:option {:value "viewer"} "viewer — read-only"]
-            [:option {:value "admin"} "admin — full access, manages users"]]]
+            (for [r (role-names)] ^{:key r} [:option {:value r} r])]]
           [:div.row
            [:button.primary
-            {:on-click #(do (act/create-user! {:user user :password password :role role})
+            {:on-click #(do (act/create-user! {:user user :password password :roles [role]})
                             (reset! s {:user "" :password "" :role "viewer"}))}
             "create user"]]
           [:p.muted {:style {:margin "10px 0 0"}}
-           "The account is stored on this console, hashed. Tell the person their password out of band;"
-           " they can change it from here once they sign in."]]]))))
+           "The account is stored on the auth shard, hashed, and every portal node knows it. Tell the"
+           " person their password out of band; they can change it once they sign in."]]]))))
+
+(defn roles-field
+  "A space-separated list of role names and a button. on-submit is (fn [roles])."
+  [initial on-submit]
+  (let [v (r/atom (str/join " " initial))]
+    (fn [_ on-submit]
+      [:div.row {:style {:padding "10px 14px"}}
+       [:input {:style {:flex 1} :value @v :placeholder (str "roles, e.g. " (str/join " " (role-names)))
+                :on-change #(reset! v (.. % -target -value))}]
+       [:button.primary {:on-click #(on-submit (vec (remove str/blank? (str/split @v #"[\s,]+"))))}
+        "set roles"]])))
 
 (defn users-list []
-  (let [resetting (r/atom nil)]
+  (let [open (r/atom nil)]
     (fn []
       [:section.panel
        [:h2 "Users" [:span.count (count (:users @db))]]
        [:p.muted
-        "Who can sign in to this console. A built-in account comes from the environment where the"
-        " console runs, so its password and role are set there, not here."]
+        "Who can sign in to the portal. A built-in account comes from the environment of the server,"
+        " so its password and role are set there, not here."]
        (if-not (seq (:users @db))
          [:div.empty "no accounts yet"]
          [:table
-          [:thead [:tr [:th "user"] [:th "role"] [:th "source"] [:th "created"] [:th ""]]]
+          [:thead [:tr [:th "user"] [:th "roles"] [:th "source"] [:th "created"] [:th ""]]]
           [:tbody
            (for [u (:users @db)]
              ^{:key (:name u)}
              [:<>
               [:tr
-               [:td [:strong (:name u)]]
-               [:td [:span.badge {:class (when (= (:role u) "admin") "RUNNING")} (:role u)]]
-               [:td.muted (if (:builtin u) "environment" "this console")]
+               [:td [:strong (:name u)] (when (:disabled u) [:span.badge {:style {:margin-left 6}} "disabled"])]
+               [:td (for [r (:roles u)]
+                      ^{:key r} [:span.badge {:class (when (= r "admin") "RUNNING") :style {:margin-right 4}} r])]
+               [:td.muted (if (:builtin u) "environment" "auth shard")]
                [:td.muted (if (:builtin u) "—" (str (u/ago (:createdAt u)) " ago"))]
                [:td.actions
                 (when-not (:builtin u)
                   [:<>
-                   [:button.ghost {:on-click #(swap! resetting (fn [c] (when-not (= c (:name u)) (:name u))))}
-                    (if (= @resetting (:name u)) "close" "set password")]
+                   [:button.ghost {:on-click #(swap! open (fn [c] (when-not (= c [:password (:name u)]) [:password (:name u)])))}
+                    "password"]
+                   [:button.ghost {:on-click #(swap! open (fn [c] (when-not (= c [:roles (:name u)]) [:roles (:name u)])))}
+                    "roles"]
+                   [:button.ghost {:on-click #(act/set-disabled! (:name u) (not (:disabled u)))}
+                    (if (:disabled u) "enable" "disable")]
                    [:button.danger {:on-click #(act/delete-user! (:name u))} "delete"]])]]
-              (when (= @resetting (:name u))
+              (when (= @open [:password (:name u)])
                 [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
                       [password-field "new password"
-                       (fn [p] (act/reset-password! (:name u) p) (reset! resetting nil))
-                       "set password"]]])])]])])))
+                       (fn [p] (act/reset-password! (:name u) p) (reset! open nil))
+                       "set password"]]])
+              (when (= @open [:roles (:name u)])
+                [:tr [:td {:col-span 5 :style {:overflow "visible" :max-width "none"}}
+                      [roles-field (:roles u)
+                       (fn [rs] (act/set-roles! (:name u) rs) (reset! open nil))]]])])]])])))
+
+(defn role-form []
+  (let [s (r/atom {:name "" :permissions ""})]
+    (fn []
+      (let [{:keys [name permissions]} @s]
+        [:div {:style {:padding 14}}
+         [:div.field [:span "name"]
+          [:input {:value name :placeholder "e.g. orders-ops"
+                   :on-change #(swap! s assoc :name (.. % -target -value))}]]
+         [:div.field [:span "permissions"]
+          [:input {:value permissions :placeholder "e.g. portal.read instance.cancel:orders"
+                   :on-change #(swap! s assoc :permissions (.. % -target -value))}]]
+         [:div.row
+          [:button.primary {:on-click #(do (act/put-role! {:name name :permissions permissions})
+                                           (reset! s {:name "" :permissions ""}))}
+           "save role"]]
+         [:p.muted {:style {:margin "10px 0 0"}}
+          "A permission is an action, optionally scoped to one workflow as action:workflow. Actions: "
+          (str/join ", " (:actions @db)) ", or * for all."]]))))
+
+(defn roles-list []
+  [:section.panel
+   [:h2 "Roles" [:span.count (count (:roles @db))]]
+   [:table
+    [:thead [:tr [:th "role"] [:th "permissions"] [:th ""]]]
+    [:tbody
+     (for [r (:roles @db)]
+       ^{:key (:name r)}
+       [:tr
+        [:td [:strong (:name r)] (when (:builtin r) [:span.muted " built-in"])]
+        [:td [:code (str/join " " (:permissions r))]]
+        [:td.actions (when-not (:builtin r)
+                       [:button.danger {:on-click #(act/delete-role! (:name r))} "delete"])]])]]
+   [role-form]])
+
+(defn audit-list []
+  [:section.panel
+   [:h2 "Audit" [:span.count (count (:audit @db))]]
+   (if-not (seq (:audit @db))
+     [:div.empty "no changes yet"]
+     [:table
+      [:thead [:tr [:th "when"] [:th "who"] [:th "what"] [:th "on"]]]
+      [:tbody
+       (for [e (take 50 (reverse (:audit @db)))]
+         ^{:key (:seq e)}
+         [:tr
+          [:td.muted (u/ts (:at e))]
+          [:td (or (:actor e) [:span.muted "system"])]
+          [:td [:code (:action e)]]
+          [:td (:target e)]])]])])
 
 (defn users-tab []
-  ;; The form is narrow and the table is not: give the table the full width rather than half of it.
-  [:div.cols.wide-left
-   [user-form]
-   [users-list]])
+  ;; The forms are narrow and the tables are not: give the tables the full width rather than half of it.
+  [:<>
+   [:div.cols.wide-left
+    [user-form]
+    [users-list]]
+   [:div.cols.wide-left
+    [roles-list]
+    [audit-list]]])
 
 ;; ---------------------------------------------------------------- root
 

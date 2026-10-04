@@ -1,5 +1,6 @@
 package com.wiggle.server;
 
+import com.wiggle.server.auth.Accounts;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
@@ -31,6 +32,7 @@ public final class WiggleServer implements AutoCloseable {
     private final Storage storage;
     private final ClusterManager cluster;
     private final ServerBundle bundle;
+    private final Accounts accounts;
 
     /** In-memory only. To run on a database, use {@link #WiggleServer(ServerConfig, StorageFactory)}. */
     public WiggleServer(ServerConfig config) throws IOException {
@@ -41,6 +43,8 @@ public final class WiggleServer implements AutoCloseable {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
+        this.accounts = new Accounts(storage, System::currentTimeMillis);
+        this.accounts.bootstrap();
         Topology topology = config.topology();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead(),
@@ -75,6 +79,9 @@ public final class WiggleServer implements AutoCloseable {
     public WorkflowEngine engine() { return bundle.engine(); }
 
     public ClusterManager cluster() { return cluster; }
+
+    /** Portal accounts, roles and sessions on the auth shard. Not reachable over gRPC. */
+    public Accounts accounts() { return accounts; }
 
     @Override public void close() {
         LOG.log(System.Logger.Level.INFO, () -> "node '" + config.nodeName() + "' stopping");
