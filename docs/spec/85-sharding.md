@@ -284,8 +284,10 @@ shards, instead of silently writing to the wrong database.
 caused by a failed connect, `StorageUnreachableException`) MUST NOT be replayed in place, and MUST be
 marked down on that node: every route to it then fails at once as a transient failure (UNAVAILABLE)
 without opening a connection, except a replica-allowed read on a shard with replicas. A background
-probe, backing off from 1 s to 30 s, MUST bring the shard back once its primary answers. A claim MUST
-pass over a down shard, and fail only when it reaches no shard. A start minted onto a down shard thus
+probe, backing off from 1 s to 30 s, MUST bring the shard back once its primary answers. A claim, and
+each of the leader's sweeps (timers, retries, signal deadlines, lease reclaims, purge, event trim),
+MUST pass over an unreachable shard and fail only when it reaches no shard, so one down shard does not
+stall the others. Console reads still fail, rather than answer from some shards silently. A start minted onto a down shard thus
 fails in milliseconds, and the client's UNAVAILABLE retry mints again; only the call that first finds
 the shard unreachable waits out the pool's connection timeout.
 
