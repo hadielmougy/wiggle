@@ -139,14 +139,6 @@ public final class WiggleClient implements AutoCloseable {
                 .setConsumer(consumer).setAckedSeq(ackedSeq).build()));
     }
 
-    /** Departures of observed runs from their topology, newest first; either filter may be null. */
-    public java.util.List<com.wiggle.core.AnomalyView> anomalies(String workflow, String instanceId, int limit) {
-        com.wiggle.proto.ListAnomaliesRequest.Builder req = com.wiggle.proto.ListAnomaliesRequest.newBuilder().setLimit(limit);
-        if (workflow != null) req.setWorkflow(workflow);
-        if (instanceId != null) req.setInstanceId(instanceId);
-        return Wire.anomalies(call(() -> stub.listAnomalies(req.build())));
-    }
-
     /**
      * The registered graph for {@code name} -- the server's source of truth for a workflow's step
      * names, kinds, and queues. Throws {@link WiggleApiException} with status 404 if the workflow was

@@ -32,10 +32,9 @@ public final class InMemoryStorage implements Storage {
             Comparator.comparingLong((Token t) -> t.instCreatedAt).thenComparingLong(t -> t.availableAt)
                     .thenComparing(t -> t.id));
 
-    /** A worker-run step's queue wait: ready to claimed. An observed step (reported, with a seq)
-     *  was never queued, so it waited for nothing. */
+    /** A step's queue wait: ready to claimed. */
     private static long waitOf(Token t) {
-        return t.seq != null ? 0 : Math.max(0, t.startedAt - t.availableAt);
+        return Math.max(0, t.startedAt - t.availableAt);
     }
 
     private static boolean claimable(Token t) {
@@ -99,8 +98,6 @@ public final class InMemoryStorage implements Storage {
 
     /** instanceId -> compensation log entries (seq-ordered append). */
     private final Map<String, List<Rows.CompLog>> compLogs = new ConcurrentHashMap<>();
-    /** Insertion-ordered, so newest-first is a reverse walk. Guarded by the global lock. */
-    private final List<Rows.Anomaly> anomalies = new ArrayList<>();
     /** The event log in seq order; seq is assigned on append. Guarded by the global lock. */
     private final List<Rows.Event> events = new ArrayList<>();
     private long eventSeq;
@@ -174,10 +171,6 @@ public final class InMemoryStorage implements Storage {
 
         @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }
 
-        @Override public boolean insertInstanceIfAbsent(Instance i) {
-            return instances.putIfAbsent(i.id, i.clone()) == null;
-        }
-
         @Override public Optional<Instance> lockInstance(String id) { return findInstance(id); }
 
         @Override public Optional<Instance> findInstance(String id) {
@@ -201,7 +194,6 @@ public final class InMemoryStorage implements Storage {
                 next.terminationReason = i.terminationReason;
                 next.error = i.error;
                 next.context = i.context;
-                next.settleAt = i.settleAt;
                 next.updatedAt = i.updatedAt;
                 next.revision = stored.revision + 1;
                 instances.put(i.id, next);
@@ -408,15 +400,6 @@ public final class InMemoryStorage implements Storage {
             return true;
         }
 
-        @Override public List<Instance> dueSettle(long now, int max) {
-            return instances.values().stream()
-                    .filter(i -> i.status == InstanceStatus.RUNNING && i.settleAt != null && i.settleAt <= now)
-                    .sorted(Comparator.comparingLong((Instance i) -> i.settleAt))
-                    .limit(max)
-                    .map(Instance::clone)
-                    .toList();
-        }
-
         @Override public List<Token> expiredLeases(long now, int max) {
             return tokens.values().stream()
                     .filter(t -> t.hasExpiredLeaseAt(now))
@@ -543,21 +526,6 @@ public final class InMemoryStorage implements Storage {
             List<Rows.CompLog> out = new ArrayList<>(log.size());
             for (Rows.CompLog e : log) out.add(e.clone());
             out.sort(java.util.Comparator.comparingLong(e -> e.seq));
-            return out;
-        }
-
-        @Override public void insertAnomaly(Rows.Anomaly anomaly) {
-            anomalies.add(anomaly);
-        }
-
-        @Override public List<Rows.Anomaly> anomalies(String workflow, String instanceId, int limit) {
-            List<Rows.Anomaly> out = new ArrayList<>();
-            for (int k = anomalies.size() - 1; k >= 0 && out.size() < limit; k--) {
-                Rows.Anomaly a = anomalies.get(k);
-                if (workflow != null && !workflow.equals(a.workflow())) continue;
-                if (instanceId != null && !instanceId.equals(a.instanceId())) continue;
-                out.add(a);
-            }
             return out;
         }
 

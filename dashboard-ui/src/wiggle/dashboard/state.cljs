@@ -16,7 +16,6 @@
     :schedules []
     :users     []                  ; console accounts, built-ins first (admins only)
     :stats     nil                 ; {:workflow .. :nodes [..]} per-step durations, slowest p95 first
-    :anomalies []                  ; observed runs that departed from their topology, newest first
     :perf      {:workflow "" :window "1h"}   ; what the performance tab shows
     :filter    {:workflow "" :status "" :limit 100
                 :search "" :search-by :correlation}   ; free-text lookup by :correlation | :id

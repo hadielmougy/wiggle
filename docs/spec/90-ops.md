@@ -50,8 +50,6 @@ conventions, not the library's.
 | `WIGGLE_RETENTION_MILLIS` | `wiggle.retention.millis` | `86400000` | how long finished instances are kept |
 | `WIGGLE_EVENTS_RETENTION_MILLIS` | `wiggle.events.retentionMillis` | `604800000` | how long an acknowledged event is kept |
 | `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed |
-| `WIGGLE_OBSERVE_STALL_MILLIS` | `wiggle.observe.stallMillis` | `600000` | quiet period after which an observed run is judged |
-| `WIGGLE_OBSERVE_SETTLE_MILLIS` | `wiggle.observe.settleMillis` | `5000` | grace after `END` or a `final` report |
 | `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | backlog check cadence |
 | `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN when the backlog will not drain within this budget |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `wiggle.allowGraphReplace` | `false` | development only: honour a forced re-registration |
@@ -161,8 +159,8 @@ returning 200 `ok`, enabled by `WIGGLE_DASHBOARD_PORT`.
 correlation id, a live trace overlaying token status on the workflow diagram, cancel, inline signal
 delivery), **Workflows** (render any compiled graph), **Schedules** (create and delete interval and cron
 schedules), **Signals** (waits pending delivery), **Backlog** (dispatchable work no live poller covers),
-**Performance** (per-step p50/p95 by the handler's own clock plus queue wait, the slowest step ringed on
-the diagram, and observed-run anomalies), and **Users** (admins only).
+**Performance** (per-step p50/p95 by the handler's own clock plus queue wait, slowest first), and
+**Users** (admins only).
 
 **WGL-OPS-042a** (MUST) The **Signals** view MUST be empty against a gRPC backend today: the control
 plane has no RPC that enumerates parked signal waits (the engine can answer it internally, and a
@@ -210,7 +208,7 @@ certificate on a client or worker. Unset means plaintext.
 
 **WGL-OPS-061** (MUST) Stores MUST be PKCS12 by default, with a `.jks` path loaded as JKS.
 
-**WGL-OPS-062** (MUST) Clients, workers and observers MUST read the same variables.
+**WGL-OPS-062** (MUST) Clients and workers MUST read the same variables.
 
 **WGL-OPS-063** (MUST) TLS MUST NOT be mistaken for authorization: it secures the channel and, with mTLS,
 authenticates the peer, but any trusted peer may call any RPC. Role separation exists only in the

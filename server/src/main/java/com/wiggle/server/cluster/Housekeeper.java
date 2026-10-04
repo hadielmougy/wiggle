@@ -98,13 +98,12 @@ public final class Housekeeper implements AutoCloseable {
                 int r = engine.reclaimExpiredLeases(batchSize, spareClaimedBefore);
                 int e = engine.fireDueSignalDeadlines(batchSize);
                 int s = engine.fireDueSchedules(batchSize);
-                int o = engine.settleObservedRuns(batchSize);
                 fired += f; retried += p; reclaimed += r; escalated += e; scheduled += s; rounds++;
                 // Drain mode: a full batch means more work is (almost certainly) still due -- go
                 // again now rather than parking it for a whole tick. Bounded by real work: every
                 // extra round fired a full batch, so an idle system never loops.
-                anyFull = adaptive && (f >= batchSize || p >= batchSize || r >= batchSize || e >= batchSize || s >= batchSize
-                        || o >= batchSize);
+                anyFull = adaptive && (f >= batchSize || p >= batchSize || r >= batchSize || e >= batchSize
+                        || s >= batchSize);
             } while (anyFull && cluster.isLeader() && !Thread.currentThread().isInterrupted());
             int fFired = fired, fRetried = retried, fReclaimed = reclaimed, fEscalated = escalated,
                     fScheduled = scheduled, fRounds = rounds;

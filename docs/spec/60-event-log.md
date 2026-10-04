@@ -6,8 +6,7 @@ An append-only, durable outbound feed: one entry per instance lifecycle transiti
 handler chooses to put on it, each written in the transaction that made the change. Consumers pull and
 acknowledge; nothing is pushed and nothing is reconstructed after the fact.
 
-It is the outbound direction only. Reports of steps an application ran itself are
-[observed execution](40-execution-modes.md#4-observed).
+It is the outbound direction only.
 
 ## 1. What is written
 
@@ -19,7 +18,7 @@ disagree.
 
 | Type | When |
 |---|---|
-| `wf.started` | an instance is created, including an observed run's first report |
+| `wf.started` | an instance is created |
 | `wf.completed` | it ran out of flow at an `END` with nothing left |
 | `wf.failed` | it failed with nothing to undo |
 | `wf.cancelled` | someone cancelled it |

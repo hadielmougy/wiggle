@@ -138,7 +138,7 @@ class DynamicConstructsTest {
     @Test @DisplayName("doWhile iterates until the condition fails, in every execution mode")
     void loopIterates() throws Exception {
         for (ExecutionMode mode : ExecutionMode.values()) {
-            if (mode == ExecutionMode.DEFAULT || mode == ExecutionMode.OBSERVED) continue;   // no worker serves OBSERVED
+            if (mode == ExecutionMode.DEFAULT) continue;
             AtomicInteger bodyRuns = new AtomicInteger();
             InstanceView v = run(counterLoop(mode), new LoopH(bodyRuns), Map.of(), null);
             assertEquals("COMPLETED", v.status(), mode + " status");

@@ -48,7 +48,6 @@ public final class DashboardServlet extends HttpServlet {
             if (path.equals("/api/signals")) { signals(req, res); return; }
             if (path.equals("/api/backlog")) { backlog(req, res); return; }
             if (path.equals("/api/stats")) { stats(req, res); return; }
-            if (path.equals("/api/anomalies")) { anomalies(req, res); return; }
             if (path.equals("/api/password")) { changeOwnPassword(req, res); return; }
             if (path.startsWith("/api/users")) { users(req, res, sub(path, "/api/users")); return; }
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
@@ -285,17 +284,6 @@ public final class DashboardServlet extends HttpServlet {
         out.put("since", since);
         out.put("nodes", nodes);
         json(res, 200, out);
-    }
-
-    /** Where observed runs departed from their topology; see DashboardData#anomalies. */
-    private void anomalies(HttpServletRequest req, HttpServletResponse res) throws IOException {
-        int limit = parseInt(req.getParameter("limit"), 200);
-        List<Object> list = new ArrayList<>();
-        for (com.wiggle.core.AnomalyView a : data.anomalies(trimToNull(req.getParameter("workflow")),
-                trimToNull(req.getParameter("instance")), limit)) {
-            list.add(a.toJson());
-        }
-        json(res, 200, Map.of("anomalies", list));
     }
 
     private void signals(HttpServletRequest req, HttpServletResponse res) throws IOException {

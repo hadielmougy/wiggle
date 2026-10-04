@@ -70,9 +70,6 @@ public final class DefinitionRegistry {
      * as a change to the graph.
      */
     public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
-        if (ExecutionModes.resolve(def.executionMode()) == ExecutionMode.OBSERVED) {
-            ObservedRuns.requireObservable(def);
-        }
         Registration registration = new Registration(def, force);
         Set<Integer> shards = new LinkedHashSet<>(storage.instanceShards());
         shards.add(storage.home());

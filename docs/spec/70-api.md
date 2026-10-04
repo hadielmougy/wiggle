@@ -3,7 +3,7 @@
 ← [Event log](60-event-log.md) · [Index](00-index.md) · Next: [Storage](80-storage.md)
 
 One gRPC service, `com.wiggle.proto.WiggleControlPlane`, is the whole contract between a server and
-everything else: submitters, workers, observers, the console, and the clients in other languages.
+everything else: submitters, workers, the console, and the clients in other languages.
 Nothing is ever pushed to a worker, so workers need no inbound connectivity.
 
 The definition of record is `proto/src/main/proto/wiggle.proto`. This chapter specifies each RPC's
@@ -69,9 +69,8 @@ count, leader flag and liveness.
 **WGL-API-021** (MUST) `force` MUST be refused with `FAILED_PRECONDITION` unless the server is configured
 to allow graph replacement, and the refusal MUST name the variable that would permit it.
 
-**WGL-API-022** (MUST) An `OBSERVED` definition MUST be validated against
-[WGL-OBS-002](40-execution-modes.md) at registration and refused with `INVALID_ARGUMENT` when it holds a
-node kind no observer can report.
+**WGL-API-022** (MUST) A definition naming the removed `OBSERVED` mode MUST be refused with
+`INVALID_ARGUMENT`.
 
 **WGL-API-023** (MUST) `GetWorkflow` without a version MUST return the latest; with one, that exact
 version, or `NOT_FOUND`.
@@ -169,22 +168,21 @@ be this node's count.
 
 *Verified by:* `tests/BacklogCoverageTest`, `server/engine/AdvanceManyTest`, `tests/MemoryPollTest`.
 
-## 7. Observed execution
+## 7. Step statistics
+
+`ObserveRun`, `ObserveMany` and `ListAnomalies` went with OBSERVED execution; their messages are gone
+and `StepResult.error` (field 4) is reserved.
 
 | RPC | Request → Response |
 |---|---|
-| `ObserveRun` | `ObserveRunRequest{workflow, version, instanceId, correlationId, reporter, steps[], final}` → `ObserveRunResult{instanceId, instanceStatus, anomalies}` |
-| `ObserveMany` | `ObserveManyRequest{runs[]}` → `ObserveManyResult{results[]}` |
 | `GetStepStats` | `StepStatsRequest{workflow, version, since, sample}` → `StepStats{workflow, version, nodes[]}` |
-| `ListAnomalies` | `ListAnomaliesRequest{workflow?, instanceId?, limit}` → `AnomalyList` |
 
-**WGL-API-070** (MUST) Version 0 MUST mean the latest registered version, and `sample` or `limit` of 0 a
-server default.
+**WGL-API-070** (MUST) Version 0 MUST mean the latest registered version, and `sample` of 0 a server
+default.
 
-**WGL-API-071** (MUST) `ObserveMany` MUST apply each run on its own and answer in submission order, with
-the same `errorStatus` convention as `ReportSteps`.
+**WGL-API-071** *Withdrawn with OBSERVED execution.*
 
-**WGL-API-072** (MUST) `ObserveRunResult.anomalies` MUST count the anomalies recorded **by that report**.
+**WGL-API-072** *Withdrawn with OBSERVED execution.*
 
 **WGL-API-073** (MUST) `NodeStats` MUST carry node id, name, count, mean, p50, p95, max, and queue-wait
 p50/p95 (0 for steps that were never queued).
@@ -211,7 +209,7 @@ a flag requiring TLS, and MUST strip a `scheme://` prefix from the target.
 name, with optional version and correlation id), `instance`, `instanceDetail`, `listInstances`,
 `findByCorrelation`, `awaitCompletion(id, timeout)`, `cancel`, `signal`, `workflowNames`, `getWorkflow`,
 `createSchedule`, `createCronSchedule`, `schedules`, `deleteSchedule`, `poll`, `reportSteps`, `fail`,
-`heartbeat`, `backlogCoverage`, `stepStats`, `anomalies`, `pollEvents`, `ackEvents`, `cluster`.
+`heartbeat`, `backlogCoverage`, `stepStats`, `pollEvents`, `ackEvents`, `cluster`.
 
 **WGL-API-092** (MUST) `WiggleApiException` MUST carry the engine status code and MUST distinguish client
 errors (4xx) from others.
@@ -247,7 +245,6 @@ node's ([WGL-OPS-040](90-ops.md)).
 | `GET` | `/api/signals` | signal waits pending delivery |
 | `GET` | `/api/backlog` | backlog coverage, with uncovered slices and stranded task counts |
 | `GET` | `/api/stats` | per-step duration statistics |
-| `GET` | `/api/anomalies` | observed-run anomalies |
 | `GET`/`POST`/`DELETE` | `/api/schedules[/{id}]` | list, create (interval or cron), delete |
 | `GET`/`POST`/`DELETE` | `/api/users[/{name}[/password]]` | managed accounts (admin only) |
 | `POST` | `/api/password` | change one's own password |
