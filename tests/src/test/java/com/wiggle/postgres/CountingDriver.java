@@ -63,8 +63,25 @@ final class CountingDriver implements Driver {
         return flat.length() <= 110 ? flat : flat.substring(0, 70) + " ... " + flat.substring(flat.length() - 35);
     }
 
+    /** Every statement and commit in the order issued, while {@link #trace} is on. */
+    private static final java.util.List<String> TRACE = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    private static volatile boolean tracing;
+
     private static void count(String key) {
         COUNTS.computeIfAbsent(key, k -> new LongAdder()).increment();
+        if (tracing) TRACE.add(key);
+    }
+
+    /** Starts recording statements in order, dropping any recorded before. */
+    static void trace() {
+        TRACE.clear();
+        tracing = true;
+    }
+
+    /** Stops recording and returns what was recorded, in order. */
+    static java.util.List<String> traced() {
+        tracing = false;
+        return java.util.List.copyOf(TRACE);
     }
 
     @Override public Connection connect(String url, Properties info) throws SQLException {

@@ -173,6 +173,11 @@ public final class InMemoryStorage implements Storage {
             return Optional.ofNullable(graphStart.get(workflow + ":" + version));
         }
 
+        @Override public int graphNodeCount(String workflow, int version) {
+            Map<String, Node> ns = graphNodes.get(workflow + ":" + version);
+            return ns == null ? 0 : ns.size();
+        }
+
         @Override public Optional<Integer> latestVersion(String name) {
             NavigableSet<Integer> vs = versions.get(name);
             return vs == null || vs.isEmpty() ? Optional.empty() : Optional.of(vs.last());

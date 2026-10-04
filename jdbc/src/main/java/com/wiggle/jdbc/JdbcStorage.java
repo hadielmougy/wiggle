@@ -1306,6 +1306,14 @@ public final class JdbcStorage implements Storage {
                     .findFirst();
         }
 
+        @Override public int graphNodeCount(String workflow, int version) {
+            return h.createQuery("SELECT COUNT(*) FROM wf_graph_node WHERE workflow=:workflow AND version=:version")
+                    .bind("workflow", workflow)
+                    .bind("version", version)
+                    .mapTo(Integer.class)
+                    .one();
+        }
+
         @Override public Optional<String> definition(String name, int version) {
             return h.createQuery("SELECT body FROM wf_definition WHERE name=:name AND version=:version")
                     .bind("name", name)
