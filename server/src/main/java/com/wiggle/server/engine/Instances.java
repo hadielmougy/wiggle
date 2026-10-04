@@ -63,7 +63,8 @@ final class Instances {
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         LazyGraph def = definitions.graph(tx, workflow, v);
         long now = System.currentTimeMillis();
-        Instance inst = Instances.create(tx, idMinter.next(), def.name(), def.version(),
+        String id = parentTokenId == null ? idMinter.next() : idMinter.childOf(parentTokenId);
+        Instance inst = Instances.create(tx, id, def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
         Token t = Tokens.create(inst, def.startNode(), "", null, now);
         tx.insertToken(t);
@@ -77,14 +78,16 @@ final class Instances {
      * The observed run {@code key} names, locked: found when any reporter has reported it before,
      * created otherwise. The id is derived from the workflow and the key -- a key names one run of
      * a workflow, across its versions -- so two reporters creating it at once collide on the primary
-     * key and the loser reads the winner's row. The definition must be {@link ExecutionMode#OBSERVED}.
+     * key and the loser reads the winner's row. A run first reported before ids carried a shard is
+     * found under its old id. The definition must be {@link ExecutionMode#OBSERVED}.
      */
     Instance observedRun(Tx tx, String workflow, Integer version, String key) {
         int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         ObservedRuns.requireObserved(definitions.executionMode(tx, workflow, v), workflow + ":" + v);
         String id = idMinter.forKey(workflow, key);
-        Instance found = tx.lockInstance(id).orElse(null);
+        Instance found = tx.lockInstance(id)
+                .or(() -> tx.lockInstance(idMinter.legacyForKey(workflow, key))).orElse(null);
         if (found != null) return found;
         long now = System.currentTimeMillis();
         Instance inst = new Instance();

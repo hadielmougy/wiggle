@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "format": [
+    {
+      "name": "an instance id on shard 3",
+      "prefix": "wfi",
+      "shard": 3,
+      "rest": "01k6abc",
+      "expect": "wfi.s3.01k6abc"
+    },
+    {
+      "name": "shard 0 is written without padding",
+      "prefix": "tok",
+      "shard": 0,
+      "rest": "01k6abc",
+      "expect": "tok.s0.01k6abc"
+    },
+    {
+      "name": "a large shard",
+      "prefix": "wfi",
+      "shard": 4096,
+      "rest": "01k6abc",
+      "expect": "wfi.s4096.01k6abc"
+    },
+    {
+      "name": "an observed run's digest is the last segment",
+      "prefix": "wfo",
+      "shard": 1,
+      "rest": "9zq4mw0t2r8c7k5h3b1n6d",
+      "expect": "wfo.s1.9zq4mw0t2r8c7k5h3b1n6d"
+    },
+    {
+      "name": "an id of exactly 128 characters is allowed",
+      "prefix": "wfi",
+      "shard": 0,
+      "rest": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expect": "wfi.s0.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "a negative shard is refused",
+      "prefix": "wfi",
+      "shard": -1,
+      "rest": "01k6abc",
+      "error": "negative"
+    },
+    {
+      "name": "an uppercase prefix is refused",
+      "prefix": "WFI",
+      "shard": 0,
+      "rest": "01k6abc",
+      "error": "prefix",
+      "why": "prefixes are lowercase so an id has one spelling"
+    },
+    {
+      "name": "a prefix with a dot is refused",
+      "prefix": "wf.i",
+      "shard": 0,
+      "rest": "01k6abc",
+      "error": "prefix"
+    },
+    {
+      "name": "a dotted last segment is refused",
+      "prefix": "wfi",
+      "shard": 0,
+      "rest": "01k6.abc",
+      "error": "'.'",
+      "why": "the last segment would be ambiguous with a longer id"
+    },
+    {
+      "name": "an empty last segment is refused",
+      "prefix": "wfi",
+      "shard": 0,
+      "rest": "",
+      "error": "non-empty"
+    },
+    {
+      "name": "an id over 128 characters is refused",
+      "prefix": "wfi",
+      "shard": 0,
+      "rest": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "error": "128"
+    }
+  ],
+  "parse": [
+    {
+      "name": "a sharded instance id",
+      "id": "wfi.s3.01k6abc",
+      "shard": 3
+    },
+    {
+      "name": "a sharded token id",
+      "id": "tok.s12.01k6abc",
+      "shard": 12
+    },
+    {
+      "name": "shard 0",
+      "id": "wfo.s0.9zq4mw0t2r8c7k5h3b1n6d",
+      "shard": 0
+    },
+    {
+      "name": "a bare id carries no shard",
+      "id": "wfi_01k6abc",
+      "shard": null,
+      "why": "ids minted before shards existed belong to the home shard"
+    },
+    {
+      "name": "a bare token carries no shard",
+      "id": "tok_01k6abc",
+      "shard": null
+    },
+    {
+      "name": "a namespaced coordinator id carries no shard",
+      "id": "orders.e0.s0.01k6abc",
+      "shard": null,
+      "why": "its .s segment was a ring position, not a database; such ids belong to the home shard"
+    },
+    {
+      "name": "a cell-labelled coordinator id carries no shard",
+      "id": "orders.ccellA.e2.s1.01k6abc",
+      "shard": null
+    },
+    {
+      "name": "a coordinator id whose cell is named like a shard carries no shard",
+      "id": "orders.cs1.e0.s0.01k6abc",
+      "shard": null
+    },
+    {
+      "name": "a zero-padded shard is not a shard",
+      "id": "wfi.s03.01k6abc",
+      "shard": null,
+      "why": "one spelling per shard, so ids compare as strings"
+    },
+    {
+      "name": "an uppercase prefix is not a shard id",
+      "id": "WFI.s3.01k6abc",
+      "shard": null
+    },
+    {
+      "name": "a dotted last segment is not a shard id",
+      "id": "wfi.s3.01k6.abc",
+      "shard": null
+    },
+    {
+      "name": "a missing last segment is not a shard id",
+      "id": "wfi.s3.",
+      "shard": null
+    },
+    {
+      "name": "a shard too large for an int is not a shard id",
+      "id": "wfi.s9999999999.01k6abc",
+      "shard": null
+    }
+  ],
+  "inherit": [
+    {
+      "name": "a token takes its instance's shard",
+      "prefix": "tok",
+      "owner": "wfi.s3.01k6abc",
+      "shard": 3,
+      "bare": false
+    },
+    {
+      "name": "a child takes its parent token's shard",
+      "prefix": "wfi",
+      "owner": "tok.s7.01k6abc",
+      "shard": 7,
+      "bare": false
+    },
+    {
+      "name": "a token of a bare instance is bare",
+      "prefix": "tok",
+      "owner": "wfi_01k6abc",
+      "shard": null,
+      "bare": true,
+      "why": "both then belong to the home shard, without the minter knowing which shard that is"
+    },
+    {
+      "name": "a token of a coordinator-era instance is bare",
+      "prefix": "tok",
+      "owner": "orders.ccellA.e0.s0.01k6abc",
+      "shard": null,
+      "bare": true
+    }
+  ]
+}

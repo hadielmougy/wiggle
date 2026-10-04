@@ -69,7 +69,7 @@ public final class WorkflowEngine {
     private final ObservedRuns observedRuns;
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis) {
-        this(storage, definitions, defaultLeaseMillis, () -> Ids.next("wfi"));
+        this(storage, definitions, defaultLeaseMillis, InstanceIds.onShard(0));
     }
 
     public WorkflowEngine(Storage storage, DefinitionRegistry definitions, long defaultLeaseMillis, InstanceIds idMinter) {
