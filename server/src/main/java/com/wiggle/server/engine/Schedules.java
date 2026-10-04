@@ -56,7 +56,7 @@ final class Schedules {
      * row's cadence/context in place instead of piling up duplicate firers.
      */
     private String put(String workflow, Object context, Rows.Schedule s, String cadence) {
-        return transactions.read(tx -> {
+        return transactions.readHome(tx -> {
             tx.latestVersion(workflow).orElseThrow(
                     () -> EngineException.notFound("workflow '" + workflow + "'"));
             Optional<Rows.Schedule> existing = tx.scheduleByWorkflow(workflow);
@@ -73,11 +73,11 @@ final class Schedules {
     }
 
     void delete(String id) {
-        transactions.readVoid(tx -> tx.deleteSchedule(id));
+        transactions.readHomeVoid(tx -> tx.deleteSchedule(id));
     }
 
     List<Rows.Schedule> all() {
-        return transactions.read(tx -> tx.schedules());
+        return transactions.readHome(tx -> tx.schedules());
     }
 
     /**
@@ -87,12 +87,12 @@ final class Schedules {
      */
     int fireDue(int max) {
         long now = System.currentTimeMillis();
-        List<Rows.Schedule> due = transactions.read(tx -> tx.dueSchedules(now, max));
+        List<Rows.Schedule> due = transactions.readHome(tx -> tx.dueSchedules(now, max));
         return sweeper.run(due, sched -> "schedule " + sched.id + " firing", sched -> fire(sched, now));
     }
 
     private boolean fire(Rows.Schedule sched, long now) {
-        return transactions.inTx(tx -> {
+        return transactions.inHome(tx -> {
             if (!tx.claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
             String id = instances.start(tx, sched.workflow, null, sched.context.raw(),
                     "schedule:" + sched.id, null);

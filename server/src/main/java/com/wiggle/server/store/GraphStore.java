@@ -1,9 +1,7 @@
 package com.wiggle.server.store;
 
-import com.wiggle.core.Node;
 import com.wiggle.core.WorkflowDefinition;
 
-import java.util.List;
 import java.util.Optional;
 
 /**
@@ -27,7 +25,7 @@ import java.util.Optional;
  * but a consumer that only walks the graph (e.g. the lazy graph view, the definition registry)
  * should depend on this narrower type -- it states, in the type, that it cannot touch runtime state.
  */
-public interface GraphStore {
+public interface GraphStore extends GraphReads {
 
     // -- definition blob: source of truth for audit / describe --
 
@@ -40,8 +38,6 @@ public interface GraphStore {
      *  row lock {@link #definitionFingerprint} took. */
     void replaceDefinition(String name, int version, String json, String fingerprint, String fingerprintAlgo);
 
-    Optional<String> definition(String name, int version);
-
     /** The stored fingerprint and the algorithm that produced it, or empty if this version is new. */
     Optional<StoredFingerprint> definitionFingerprint(String name, int version);
 
@@ -49,13 +45,7 @@ public interface GraphStore {
      *  is a row written before fingerprints existed: unknown, not mismatched. */
     record StoredFingerprint(String value, String algo) {}
 
-    /** Highest registered version for a name. Versions are author-declared and ordered, so the
-     *  newest is the largest -- not the most recently written. */
-    Optional<Integer> latestVersion(String name);
-
-    List<String> definitionNames();
-
-    // -- normalised graph rows: the execution read path --
+    // -- normalised graph rows, which the runtime reads one node at a time --
 
     /**
      * Normalises a definition's graph into per-node and per-edge rows so the runtime can
@@ -66,10 +56,4 @@ public interface GraphStore {
 
     /** Drops a version's normalised rows, for the forced replacement of a registered graph. */
     void deleteGraph(String workflow, int version);
-
-    /** One node plus its outgoing edges, reconstructed from the normalised rows. */
-    Optional<Node> graphNode(String workflow, int version, String nodeId);
-
-    /** The graph's entry node, without loading any other node. */
-    Optional<String> graphStartNode(String workflow, int version);
 }
