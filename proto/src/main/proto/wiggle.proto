@@ -48,6 +48,42 @@ service WiggleControlPlane {
 
     // Per-node duration statistics over recently settled steps of one workflow version.
     rpc GetStepStats(StepStatsRequest) returns (StepStats);
+
+    // Full-text search over instances, across every search shard; FAILED_PRECONDITION when search is
+    // not enabled. Hits are limited to the workflows the caller may read.
+    rpc SearchInstances(SearchRequest) returns (SearchResult);
+}
+
+message SearchRequest {
+    // Every word must occur in the instance's correlation id, context, termination reason or error;
+    // empty matches every instance the filters allow.
+    string text = 1;
+    optional string workflow = 2;
+    optional string status = 3;
+    // Bounds on when the instance last changed (epoch millis); 0 = open.
+    int64 updated_from = 4;
+    int64 updated_to = 5;
+    int32 limit = 6;
+    // Answer from the search shards that respond when one does not, and say so in `partial`.
+    bool partial_ok = 7;
+}
+
+message SearchHit {
+    string instance_id = 1;
+    string workflow = 2;
+    int32 version = 3;
+    string status = 4;
+    string correlation_id = 5;
+    int64 created_at = 6;
+    int64 updated_at = 7;
+    double score = 8;
+    // The instance itself has been purged; its document outlives it until its own retention.
+    bool purged = 9;
+}
+
+message SearchResult {
+    repeated SearchHit hits = 1;
+    bool partial = 2;
 }
 
 message Empty {}

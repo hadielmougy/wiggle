@@ -562,7 +562,28 @@ public final class JdbcStorage implements Storage {
             new Migration(28, "auth-credential-lookup", """
             CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_credential_key ON wf_auth_credential (key_hash);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_auth_credential_subject ON wf_auth_credential (subject);
-            """));
+            """),
+            // Search documents, on the search shards: one per instance, derived from its instance shard.
+            new Migration(29, "search-doc", """
+            CREATE TABLE IF NOT EXISTS wf_search_doc (
+              instance_id    VARCHAR(128) PRIMARY KEY,
+              workflow       VARCHAR(200) NOT NULL,
+              version        INT          NOT NULL,
+              status         VARCHAR(32)  NOT NULL,
+              correlation_id VARCHAR(200),
+              text           TEXT         NOT NULL,
+              created_at     BIGINT       NOT NULL,
+              updated_at     BIGINT       NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_search_doc_updated ON wf_search_doc (updated_at);
+            CREATE INDEX IF NOT EXISTS ix_search_doc_workflow ON wf_search_doc (workflow, updated_at);
+            """),
+            // Full-text matching where the database has it: a word vector kept by the database itself.
+            new Migration(30, "search-doc-fulltext", """
+            ALTER TABLE wf_search_doc ADD COLUMN IF NOT EXISTS tsv tsvector
+              GENERATED ALWAYS AS (to_tsvector('simple', text)) STORED;
+            CREATE INDEX IF NOT EXISTS ix_search_doc_tsv ON wf_search_doc USING GIN (tsv);
+            """, Dialect::supportsFullText));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
@@ -1455,6 +1476,99 @@ public final class JdbcStorage implements Storage {
                     .mapTo(Long.class)
                     .findOne()
                     .orElseThrow(() -> new StorageException("wf_auth_audit insert returned no seq", null));
+        }
+
+        @Override public boolean upsertSearchDoc(Rows.SearchDoc d) {
+            String update = "UPDATE wf_search_doc SET workflow=:workflow,version=:version,status=:status,"
+                    + "correlation_id=:correlationId,text=:text,created_at=:created,updated_at=:updated "
+                    + "WHERE instance_id=:id AND updated_at<=:updated";
+            if (bindSearchDoc(h.createUpdate(update), d).execute() > 0) return true;
+            if (bindSearchDoc(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
+                    + "(instance_id,workflow,version,status,correlation_id,text,created_at,updated_at) VALUES "
+                    + "(:id,:workflow,:version,:status,:correlationId,:text,:created,:updated)")), d).execute() > 0) {
+                return true;
+            }
+            return bindSearchDoc(h.createUpdate(update), d).execute() > 0;   // another writer inserted it first
+        }
+
+        private static Update bindSearchDoc(Update u, Rows.SearchDoc d) {
+            return u.bind("id", d.instanceId())
+                    .bind("workflow", d.workflow())
+                    .bind("version", d.version())
+                    .bind("status", d.status())
+                    .bind("correlationId", d.correlationId())
+                    .bind("text", d.text())
+                    .bind("created", d.createdAt())
+                    .bind("updated", d.updatedAt());
+        }
+
+        @Override public void deleteSearchDoc(String instanceId) {
+            h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
+        }
+
+        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
+            List<String> ids = h.createQuery("SELECT instance_id FROM wf_search_doc WHERE updated_at<:before "
+                            + "ORDER BY updated_at LIMIT :max")
+                    .bind("before", updatedBefore)
+                    .bind("max", max)
+                    .mapTo(String.class)
+                    .list();
+            if (ids.isEmpty()) return 0;
+            return h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
+        }
+
+        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
+            return h.createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc WHERE instance_id>:after "
+                            + "ORDER BY instance_id LIMIT :max")
+                    .bind("after", afterId == null ? "" : afterId)
+                    .bind("max", max)
+                    .map((rs, ctx) -> searchDoc(rs))
+                    .list();
+        }
+
+        private static final String SEARCH_COLUMNS =
+                "instance_id,workflow,version,status,correlation_id,text,created_at,updated_at";
+
+        private static Rows.SearchDoc searchDoc(ResultSet rs) throws SQLException {
+            return new Rows.SearchDoc(rs.getString("instance_id"), rs.getString("workflow"), rs.getInt("version"),
+                    rs.getString("status"), rs.getString("correlation_id"), rs.getString("text"),
+                    rs.getLong("created_at"), rs.getLong("updated_at"));
+        }
+
+        /**
+         * With full-text support, the database matches and ranks ({@code ts_rank} over the
+         * {@code simple} configuration: words as written, no stemming). Without it, the filtered
+         * documents are matched word by word here, as the in-memory store does.
+         */
+        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
+            boolean text = q.text() != null && !q.text().isBlank();
+            StringBuilder where = new StringBuilder(" WHERE 1=1");
+            if (q.workflows() != null) where.append(q.workflows().isEmpty() ? " AND 1=0" : " AND workflow IN (<workflows>)");
+            if (q.status() != null) where.append(" AND status=:status");
+            if (q.from() != null) where.append(" AND updated_at>=:from");
+            if (q.to() != null) where.append(" AND updated_at<=:to");
+            Query query;
+            if (dialect.supportsFullText()) {
+                String sql = text
+                        ? "SELECT " + SEARCH_COLUMNS + ", ts_rank(tsv, plainto_tsquery('simple', :text)) AS score "
+                          + "FROM wf_search_doc" + where + " AND tsv @@ plainto_tsquery('simple', :text) "
+                          + "ORDER BY score DESC, updated_at DESC, instance_id LIMIT :limit"
+                        : "SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
+                          + " ORDER BY updated_at DESC, instance_id LIMIT :limit";
+                query = h.createQuery(sql).bind("limit", q.limit());
+                if (text) query.bind("text", q.text());
+            } else {
+                query = h.createQuery("SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
+                        + " ORDER BY updated_at DESC, instance_id");
+            }
+            if (q.workflows() != null && !q.workflows().isEmpty()) query.bindList("workflows", List.copyOf(q.workflows()));
+            if (q.status() != null) query.bind("status", q.status());
+            if (q.from() != null) query.bind("from", q.from());
+            if (q.to() != null) query.bind("to", q.to());
+            if (dialect.supportsFullText()) {
+                return query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list();
+            }
+            return com.wiggle.server.store.SearchText.match(query.map((rs, ctx) -> searchDoc(rs)).list(), q.text(), q.limit());
         }
 
         @Override public void insertInstance(Instance i) {

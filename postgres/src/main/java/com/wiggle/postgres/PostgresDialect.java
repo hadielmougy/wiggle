@@ -22,6 +22,8 @@ public final class PostgresDialect implements Dialect {
 
     @Override public boolean supportsPartialIndexes() { return true; }
 
+    @Override public boolean supportsFullText() { return true; }
+
     @Override public boolean supportsJoinedLock() { return true; }
 
     @Override public void acquireMigrationLock(Connection c) throws SQLException {

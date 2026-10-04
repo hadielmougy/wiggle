@@ -130,6 +130,12 @@ public final class Authorizer implements ServerInterceptor {
         refuse(c, action);
     }
 
+    /** The workflows the current caller may read, or null for every one (and whenever checks are off). */
+    java.util.Set<String> readableWorkflows() {
+        if (mode != GrpcAuth.ENFORCE) return null;
+        return Permissions.readableWorkflows(caller().permissions());
+    }
+
     private static Caller caller() {
         Caller c = CALLER.get();
         return c == null ? Caller.NONE : c;

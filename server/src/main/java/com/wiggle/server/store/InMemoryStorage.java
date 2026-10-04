@@ -112,6 +112,8 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, Rows.AuthRole> authRoles = new TreeMap<>();
     private final Map<String, Rows.AuthSession> authSessions = new HashMap<>();
     private final Map<String, Rows.AuthCredential> authCredentials = new TreeMap<>();
+    /** The search documents, by instance id. Guarded by the global lock. */
+    private final TreeMap<String, Rows.SearchDoc> searchDocs = new TreeMap<>();
     private final List<Rows.AuthAudit> authAudit = new ArrayList<>();
 
     private final class MemTx implements Tx {
@@ -284,6 +286,38 @@ public final class InMemoryStorage implements Storage {
             long seq = authAuditHead() + 1;
             authAudit.add(new Rows.AuthAudit(seq, e.at(), e.actor(), e.action(), e.target(), e.detail()));
             return seq;
+        }
+
+        @Override public boolean upsertSearchDoc(Rows.SearchDoc doc) {
+            Rows.SearchDoc held = searchDocs.get(doc.instanceId());
+            if (held != null && held.updatedAt() > doc.updatedAt()) return false;
+            searchDocs.put(doc.instanceId(), doc);
+            return true;
+        }
+
+        @Override public void deleteSearchDoc(String instanceId) {
+            searchDocs.remove(instanceId);
+        }
+
+        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
+            List<String> old = searchDocs.values().stream().filter(d -> d.updatedAt() < updatedBefore)
+                    .limit(max).map(Rows.SearchDoc::instanceId).toList();
+            old.forEach(searchDocs::remove);
+            return old.size();
+        }
+
+        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
+            return searchDocs.tailMap(afterId == null ? "" : afterId, false).values().stream().limit(max).toList();
+        }
+
+        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
+            List<Rows.SearchDoc> filtered = searchDocs.values().stream()
+                    .filter(d -> q.workflows() == null || q.workflows().contains(d.workflow()))
+                    .filter(d -> q.status() == null || q.status().equals(d.status()))
+                    .filter(d -> q.from() == null || d.updatedAt() >= q.from())
+                    .filter(d -> q.to() == null || d.updatedAt() <= q.to())
+                    .toList();
+            return SearchText.match(filtered, q.text(), q.limit());
         }
 
         @Override public void insertInstance(Instance i) { instances.put(i.id, i.clone()); }

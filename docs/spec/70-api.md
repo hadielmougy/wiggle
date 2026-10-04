@@ -250,6 +250,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 | `POST` | `/api/users/{name}/password` · `/roles` · `/disabled` | reset a password, replace roles, disable or enable |
 | `GET`/`POST`/`DELETE` | `/api/roles[/{name}]` | roles: list with the known actions, create or replace, delete |
 | `GET` | `/api/audit?after=&limit=` | changes to accounts, roles and sessions, oldest first |
+| `GET` | `/api/search?q=&workflow=&status=&limit=&partial=` | full-text search over instances ([§12](#12-search)); 404 when search is off |
 | `POST` | `/api/password` | change one's own password |
 
 **WGL-API-101** (MUST) An unknown `/api/*` path MUST be 404; a mutating call on a GET-only endpoint MUST
@@ -307,6 +308,7 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 | `PollTasks` | `task.poll:<queue>` for each queue it names; `task.poll` when it names none (every queue) |
 | `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll` on any scope (the lease already ties the call to its task) |
 | `PollEvents`, `AckEvents` | `event.read` |
+| `SearchInstances` | `read` on any scope; the hits are narrowed to the workflows it may read |
 
 **WGL-API-114** (MUST) A credential MUST be resolved through the node's cache
 ([WGL-SHARD-184](85-sharding.md#13-users-and-authorization)), so a call reads the auth shard only on
@@ -319,3 +321,26 @@ every call when one is set, and MUST report `UNAUTHENTICATED` as 401 and `PERMIS
 
 *Verified by:* `server/grpc/GrpcAuthTest` (every RPC of the service is checked, so one added without
 a permission fails it), `tests/TlsTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.
+
+## 12. Search
+
+Full-text search over instances, served by the search shards
+([chapter 85 §14](85-sharding.md#14-search-shards)).
+
+**WGL-API-120** (MUST) `SearchInstances` MUST return the instances whose correlation id, context,
+termination reason or error contain every word of `text` (an empty `text` matches all), filtered by
+`workflow`, `status` and the bounds on when the instance last changed, best first, at most `limit`
+(default 20, at most 1000). With search off it MUST fail `FAILED_PRECONDITION`.
+
+**WGL-API-121** (MUST) A hit MUST carry the instance's identity and status as last indexed, its
+score, and `purged` when the instance itself is gone.
+
+**WGL-API-122** (MUST) The hits MUST be limited, inside each shard's query, to the workflows the
+caller may read ([§11](#11-per-rpc-authorization)); asking for a workflow it may not read finds
+nothing rather than failing.
+
+**WGL-API-123** (MUST) A search shard that does not answer MUST fail the search `UNAVAILABLE`, unless
+`partial_ok` asks for the hits of the shards that did, with `partial` set.
+
+*Verified by:* `server/search/SearchEndToEndTest`, `server/search/SearchIndexTest`,
+`server/store/StorageContract` (search chapter, on every backend), `postgres/PostgresTopologyTest`.

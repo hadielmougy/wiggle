@@ -57,6 +57,21 @@ public interface DashboardData {
 
     ClusterView cluster();
 
+    /**
+     * Full-text search over instances, or empty when search is not enabled. {@code readable} is the
+     * set of workflows the caller may read, null for every one.
+     */
+    /** Whether {@link #search} answers. */
+    boolean searchEnabled();
+
+    Optional<SearchView> search(String text, String workflow, String status, int limit, boolean partialOk,
+                                java.util.Set<String> readable);
+
+    record SearchView(List<SearchHitView> hits, boolean partial) {}
+
+    record SearchHitView(String instanceId, String workflow, int version, String status, String correlationId,
+                         long updatedAt, double score, boolean purged) {}
+
     record InstanceDetail(InstanceView instance, List<TokenView> tokens) {}
 
     record TokenView(String id, String nodeId, String kind, String status, String activity,

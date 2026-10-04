@@ -19,7 +19,34 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            Duration retention, int housekeepingBatch, int dashboardPort,
                            Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                            String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory,
-                           Topology topology, Auth auth) {
+                           Topology topology, Auth auth, Search search) {
+
+    /**
+     * Full-text search over instances. On a topology, search runs when a shard carries the search role;
+     * on one database (or in memory), when {@code enabled}, on that database. {@code workflows} limits
+     * which workflows are indexed (empty: all); {@code retention} is how long a document outlives its
+     * instance's last change.
+     */
+    public record Search(boolean enabled, Duration retention, java.util.Set<String> workflows) {
+
+        public static final Search DISABLED = new Search(false, Duration.ofDays(30), java.util.Set.of());
+
+        public Search {
+            if (retention == null || retention.isNegative() || retention.isZero()) retention = Duration.ofDays(30);
+            workflows = workflows == null ? java.util.Set.of() : java.util.Set.copyOf(workflows);
+        }
+
+        public static Search fromEnvironment() {
+            java.util.Set<String> workflows = new java.util.LinkedHashSet<>();
+            for (String w : strProp("wiggle.search.workflows", "WIGGLE_SEARCH_WORKFLOWS", "").split(",")) {
+                if (!w.isBlank()) workflows.add(w.trim());
+            }
+            return new Search(boolProp("wiggle.search.enabled", "WIGGLE_SEARCH_ENABLED", false),
+                    Duration.ofMillis(Long.parseLong(strProp("wiggle.search.retentionMillis",
+                            "WIGGLE_SEARCH_RETENTION_MILLIS", String.valueOf(Duration.ofDays(30).toMillis())).trim())),
+                    workflows);
+        }
+    }
 
     /** How the gRPC API treats a call's credential ({@code WIGGLE_GRPC_AUTH}). */
     public enum GrpcAuth {
@@ -122,7 +149,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                         String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
                 missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory, null, null);
+                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory, null, null, null);
     }
 
     /** Back-compat constructor: TLS but default (disabled) memory shedding. */
@@ -141,6 +168,20 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         if (tls == null) tls = Tls.Options.DISABLED;
         if (memory == null) memory = Memory.DISABLED;
         if (auth == null) auth = Auth.DISABLED;
+        if (search == null) search = Search.DISABLED;
+    }
+
+    /** A copy of this config searching as {@code search} says. */
+    public ServerConfig withSearch(Search search) {
+        return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
+                heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
+                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
+                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
+    }
+
+    /** Whether search runs: a search shard in the topology, or search enabled on the one database. */
+    public boolean searchEnabled() {
+        return topology != null ? !topology.searchShards().isEmpty() : search.enabled();
     }
 
     /** A copy of this config checking calls as {@code auth} says. */
@@ -148,7 +189,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** A copy of this config on the given storage topology (null ⇒ the JDBC url, or in-memory). */
@@ -156,7 +197,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** A copy of this config on the given storage (null/blank url ⇒ in-memory). */
@@ -164,7 +205,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** A copy of this config bound to a different gRPC port. */
@@ -172,7 +213,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
                 housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth);
+                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     public static ServerConfig fromEnvironment() {
@@ -206,7 +247,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 // Several databases (WIGGLE_STORAGE_TOPOLOGY); unset for one database or none.
                 TopologyParser.fromEnvironment(System.getenv()).orElse(null),
                 // Per-RPC authorization; off unless WIGGLE_GRPC_AUTH is log or enforce.
-                Auth.fromEnvironment());
+                Auth.fromEnvironment(),
+                // Full-text search; on one database, off unless WIGGLE_SEARCH_ENABLED=true.
+                Search.fromEnvironment());
     }
 
     public boolean isInMemory() {

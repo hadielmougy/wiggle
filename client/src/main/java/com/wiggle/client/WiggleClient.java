@@ -119,6 +119,38 @@ public final class WiggleClient implements AutoCloseable {
                 com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build())));
     }
 
+    /**
+     * Full-text search over instances: every word of {@code text} must occur in an instance's
+     * correlation id, context, termination reason or error. {@code workflow}, {@code status} and the
+     * {@code updatedFrom}/{@code updatedTo} bounds (epoch millis) filter, null for none. With
+     * {@code partialOk}, a search shard that does not answer leaves the result partial instead of
+     * failing it.
+     */
+    public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
+                               int limit, boolean partialOk) {
+        com.wiggle.proto.SearchRequest.Builder req = com.wiggle.proto.SearchRequest.newBuilder()
+                .setText(text == null ? "" : text).setLimit(limit).setPartialOk(partialOk);
+        if (workflow != null) req.setWorkflow(workflow);
+        if (status != null) req.setStatus(status);
+        if (updatedFrom != null) req.setUpdatedFrom(updatedFrom);
+        if (updatedTo != null) req.setUpdatedTo(updatedTo);
+        com.wiggle.proto.SearchResult r = call(() -> stub.searchInstances(req.build()));
+        List<SearchHit> hits = new ArrayList<>();
+        for (com.wiggle.proto.SearchHit h : r.getHitsList()) {
+            hits.add(new SearchHit(h.getInstanceId(), h.getWorkflow(), h.getVersion(), h.getStatus(),
+                    h.getCorrelationId().isEmpty() ? null : h.getCorrelationId(), h.getCreatedAt(), h.getUpdatedAt(),
+                    h.getScore(), h.getPurged()));
+        }
+        return new SearchResult(hits, r.getPartial());
+    }
+
+    /** One search hit; {@code purged} when the instance is gone and only its document remains. */
+    public record SearchHit(String instanceId, String workflow, int version, String status, String correlationId,
+                            long createdAt, long updatedAt, double score, boolean purged) {}
+
+    /** Search hits, best first; {@code partial} when a search shard did not answer. */
+    public record SearchResult(List<SearchHit> hits, boolean partial) {}
+
     /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
     public record BacklogSlice(String workflow, int version, String queue, int readyCount,
                                long oldestAvailableAt, boolean covered, int livePollers) {}

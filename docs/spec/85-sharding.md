@@ -642,6 +642,27 @@ input and output, errors) go to dedicated search shards.
 
 ### 14.2 Requirements
 
+**Status: implemented for full-text search**, the first half of step 14 of [§16](#16-delivery-plan).
+Not yet:
+- WGL-SHARD-192 (the `Embedder` SPI and vector search) is the next step.
+- WGL-SHARD-190's rebuild covers what the event log still retains, from which a new consumer starts.
+  A rebuild that walks the instance tables is not built.
+- WGL-SHARD-196's delete on request applies once instances can be deleted on request; today only
+  retention purges them.
+
+Search runs when a topology shard carries the `search` role, or on the one database with
+`WIGGLE_SEARCH_ENABLED=true` (WGL-SHARD-197, which warns at startup).
+- **Indexer.** `SearchIndexer` runs on the leader as the `wiggle.search` consumer of the event log. It
+  reads each instance from a replica when the replica has caught up to the event, else from the primary.
+- **Document text.** The text is the correlation id, the context JSON, the termination reason and the
+  error, capped at 64 KB. It is matched with Postgres `tsvector` over the `simple` configuration (words
+  as written, no stemming) and ranked by `ts_rank`. Other databases, and the in-memory store, match
+  word for word in Java with the same semantics.
+- **Shards and upkeep.** `SearchIndex` places, queries, retains (`WIGGLE_SEARCH_RETENTION_MILLIS`,
+  default 30 days) and rebalances. `WIGGLE_SEARCH_WORKFLOWS` limits which workflows are indexed.
+- **API.** Search is the `SearchInstances` RPC ([chapter 70 §12](70-api.md#12-search)) and the
+  portal's `/api/search`.
+
 **WGL-SHARD-190** (MUST) A search document MUST be derived data: built from an instance shard, never
 the source of truth, and always rebuildable from the instance shards while the instances are
 retained.
@@ -764,8 +785,9 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
 weight.
 - **Home shard load.** Schedules, node heartbeats, event cursors and the leader's beat writes all
   land on the home shard. They are small, but should be measured at high shard counts.
-- **Which instance fields are searchable.** Context and step I/O may hold personal data. Whether
-  indexing is opt-in per workflow (a topology flag) or per field is undecided.
+- **Which instance fields are searchable.** *Settled for now:* search is opt-in per deployment (a
+  search shard, or `WIGGLE_SEARCH_ENABLED`), `WIGGLE_SEARCH_WORKFLOWS` limits it to named workflows,
+  and step input and output are not indexed. Per-field selection stays open.
 - **A search engine other than Postgres.** WGL-SHARD-190 to 198 do not depend on pgvector. A
   `SearchStore` SPI would let OpenSearch or a dedicated vector database stand in for search shards;
   pgvector first keeps one operational stack.

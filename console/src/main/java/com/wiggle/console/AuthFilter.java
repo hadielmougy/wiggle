@@ -81,7 +81,9 @@ public final class AuthFilter implements Filter {
             boolean allowed = switch (action) {
                 case Permissions.ALL -> principal.permissions().contains(Permissions.ALL);
                 // The portal lists across workflows, so a read scoped to some of them is not enough.
-                case Permissions.READ -> principal.allows(Permissions.READ, null);
+                // Search narrows its hits to what the caller may read, so a scoped read is enough there.
+                case Permissions.READ -> path.equals("/api/search")
+                        ? principal.allowsAny(Permissions.READ) : principal.allows(Permissions.READ, null);
                 default -> principal.allowsAny(action);
             };
             if (!allowed) {

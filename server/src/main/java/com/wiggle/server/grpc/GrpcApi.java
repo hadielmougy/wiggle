@@ -47,17 +47,21 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private final long maxLongPollMillis;
     private final MemoryGuard memory;
     private final Authorizer authz;
+    private final com.wiggle.server.search.Search search;
     /** Versions already announced at INFO, so N workers registering the same graph log it once. */
     private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis)
             throws IOException {
-        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED, ServerConfig.Memory.DISABLED, Authorizer.OFF);
+        this(engine, cluster, port, maxLongPollMillis, Tls.Options.DISABLED, ServerConfig.Memory.DISABLED, Authorizer.OFF,
+                null);
     }
 
     public GrpcApi(WorkflowEngine engine, ClusterManager cluster, int port, long maxLongPollMillis, Tls.Options tls,
-                   ServerConfig.Memory memoryConfig, Authorizer authz) throws IOException {
+                   ServerConfig.Memory memoryConfig, Authorizer authz, com.wiggle.server.search.Search search)
+            throws IOException {
         this.authz = authz;
+        this.search = search;
         this.engine = engine;
         this.cluster = cluster;
         this.maxLongPollMillis = maxLongPollMillis;
@@ -475,6 +479,32 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                         .setCount(n.count()).setMeanMillis(n.meanMillis())
                         .setP50Millis(n.p50Millis()).setP95Millis(n.p95Millis()).setMaxMillis(n.maxMillis())
                         .setWaitP50Millis(n.waitP50Millis()).setWaitP95Millis(n.waitP95Millis()));
+            }
+            return out.build();
+        });
+    }
+
+    @Override
+    public void searchInstances(SearchRequest req, StreamObserver<SearchResult> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SearchInstances text=" + req.getText());
+        run(resp, () -> {
+            authz.requireAny(Permissions.READ);
+            if (search == null) {
+                throw EngineException.conflict("search is not enabled: give a shard the search role, "
+                        + "or set WIGGLE_SEARCH_ENABLED=true on a single database");
+            }
+            com.wiggle.server.search.Search.Result r = search.search(req.getText(),
+                    req.hasWorkflow() ? req.getWorkflow() : null, req.hasStatus() ? req.getStatus() : null,
+                    req.getUpdatedFrom() > 0 ? req.getUpdatedFrom() : null,
+                    req.getUpdatedTo() > 0 ? req.getUpdatedTo() : null,
+                    req.getLimit() > 0 ? req.getLimit() : 20, req.getPartialOk(), authz.readableWorkflows());
+            SearchResult.Builder out = SearchResult.newBuilder().setPartial(r.partial());
+            for (com.wiggle.server.search.Search.Hit h : r.hits()) {
+                out.addHits(SearchHit.newBuilder().setInstanceId(h.instanceId()).setWorkflow(h.workflow())
+                        .setVersion(h.version()).setStatus(h.status())
+                        .setCorrelationId(h.correlationId() == null ? "" : h.correlationId())
+                        .setCreatedAt(h.createdAt()).setUpdatedAt(h.updatedAt()).setScore(h.score())
+                        .setPurged(h.purged()));
             }
             return out.build();
         });

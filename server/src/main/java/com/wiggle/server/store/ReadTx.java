@@ -69,6 +69,12 @@ public interface ReadTx extends GraphReads {
     /** Whether any audit entry records {@code action}. Held on the auth shard. */
     boolean authAuditHas(String action);
 
+    /** The best {@code query.limit()} matches on this shard, filters applied, best first. Held on a search shard. */
+    List<Rows.SearchHit> searchDocs(Rows.SearchQuery query);
+
+    /** Up to {@code max} documents with an instance id after {@code afterId}, in id order. Held on a search shard. */
+    List<Rows.SearchDoc> searchDocsAfter(String afterId, int max);
+
     Optional<Instance> findInstance(String id);
 
     List<Instance> listInstances(String workflow, InstanceStatus status, int limit);

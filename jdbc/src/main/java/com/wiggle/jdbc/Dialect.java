@@ -34,6 +34,9 @@ public interface Dialect {
      *  is recorded but not run elsewhere, leaving that database on the full indexes it replaces. */
     default boolean supportsPartialIndexes() { return false; }
 
+    /** Whether the database has its own full-text search ({@code tsvector}); without it, matching runs in Java. */
+    default boolean supportsFullText() { return false; }
+
     /**
      * Wraps an {@code INSERT} so that a primary-key collision is silently ignored (idempotent
      * re-registration). Both dialects take PostgreSQL's {@code ON CONFLICT DO NOTHING}, so this is

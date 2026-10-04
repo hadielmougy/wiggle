@@ -82,6 +82,11 @@ public final class WiggleServer implements AutoCloseable {
     /** This node's gRPC address on the loopback interface, for in-process clients and local runs. */
     public String baseUrl() { return "127.0.0.1:" + port(); }
 
+    /** Full-text search over instances, when it is enabled. */
+    public java.util.Optional<com.wiggle.server.search.Search> search() {
+        return java.util.Optional.ofNullable(bundle.search());
+    }
+
     /** The workflow engine. */
     public WorkflowEngine engine() { return bundle.engine(); }
 

@@ -6,6 +6,7 @@ import com.wiggle.core.NodeStats;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.server.search.Search;
 import com.wiggle.server.store.Rows;
 
 import java.time.Duration;
@@ -13,16 +14,38 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /** {@link DashboardData} over the engine and cluster of the server process the portal runs in. */
 public final class EngineDashboardData implements DashboardData {
 
     private final WorkflowEngine engine;
     private final ClusterManager cluster;
+    private final Search search;
 
     public EngineDashboardData(WorkflowEngine engine, ClusterManager cluster) {
+        this(engine, cluster, null);
+    }
+
+    /** @param search full-text search, or null when it is not enabled */
+    public EngineDashboardData(WorkflowEngine engine, ClusterManager cluster, Search search) {
         this.engine = engine;
         this.cluster = cluster;
+        this.search = search;
+    }
+
+    @Override public boolean searchEnabled() {
+        return search != null;
+    }
+
+    @Override public Optional<SearchView> search(String text, String workflow, String status, int limit,
+                                                 boolean partialOk, Set<String> readable) {
+        if (search == null) return Optional.empty();
+        Search.Result r = search.search(text, workflow, status, null, null, limit, partialOk, readable);
+        return Optional.of(new SearchView(r.hits().stream()
+                .map(h -> new SearchHitView(h.instanceId(), h.workflow(), h.version(), h.status(), h.correlationId(),
+                        h.updatedAt(), h.score(), h.purged()))
+                .toList(), r.partial()));
     }
 
     @Override public List<String> workflowNames() {
