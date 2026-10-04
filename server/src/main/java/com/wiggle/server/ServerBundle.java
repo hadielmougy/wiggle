@@ -9,6 +9,7 @@ import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.grpc.GrpcApi;
 import com.wiggle.server.http.HealthServer;
 import com.wiggle.server.store.Storage;
+import com.wiggle.server.topology.Placement;
 
 import java.io.IOException;
 
@@ -29,7 +30,8 @@ final class ServerBundle {
     ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster) throws IOException {
         super();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
-                InstanceIds.across(storage.instanceShards()));
+                config.topology() == null ? InstanceIds.across(storage.instanceShards())
+                        : new Placement(config.topology(), System::currentTimeMillis));
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch(), Housekeeper.adaptiveByDefault(),
                 config.defaultLease());

@@ -27,6 +27,13 @@ public interface Tx extends ReadTx, GraphStore {
      */
     default boolean transactional() { return true; }
 
+    /** Claims this database for {@code shardId} when nothing has claimed it; leaves an existing claim
+     *  alone, so the caller compares {@link #shardIdentity} afterwards. */
+    void claimShardIdentity(int shardId);
+
+    /** Writes a shard's registry row, replacing any it had. */
+    void putShardRecord(Rows.ShardRecord record);
+
     void insertInstance(Instance instance);
 
     /**

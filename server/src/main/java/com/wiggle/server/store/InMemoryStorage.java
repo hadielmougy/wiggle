@@ -10,6 +10,7 @@ import com.wiggle.server.store.Rows.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
@@ -77,6 +78,9 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, String> graphStart = new ConcurrentHashMap<>();
     private final Map<String, ServerNode> nodes = new ConcurrentHashMap<>();
     private final Map<String, Rows.Schedule> schedules = new ConcurrentHashMap<>();
+    /** The shard this store was claimed for, or null. */
+    private volatile Integer shardIdentity;
+    private final Map<Integer, Rows.ShardRecord> shardRegistry = new ConcurrentSkipListMap<>();
     private final ReentrantLock lock = new ReentrantLock();
 
     @Override public void migrate() { /* nothing to do */ }
@@ -475,6 +479,25 @@ public final class InMemoryStorage implements Storage {
         @Override public void setLeader(String nodeId, boolean leader) {
             ServerNode n = nodes.get(nodeId);
             if (n != null) n.leader = leader;
+        }
+
+        @Override public OptionalInt shardIdentity() {
+            Integer id = shardIdentity;
+            return id == null ? OptionalInt.empty() : OptionalInt.of(id);
+        }
+
+        @Override public void claimShardIdentity(int shardId) {
+            synchronized (InMemoryStorage.this) {
+                if (shardIdentity == null) shardIdentity = shardId;
+            }
+        }
+
+        @Override public List<Rows.ShardRecord> shardRegistry() {
+            return List.copyOf(shardRegistry.values());
+        }
+
+        @Override public void putShardRecord(Rows.ShardRecord record) {
+            shardRegistry.put(record.shardId(), record);
         }
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {

@@ -9,6 +9,9 @@ import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.server.store.Storage;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 
 /**
  * Cell membership and leader election over the engine's node table.
@@ -21,13 +24,31 @@ import java.util.List;
  */
 public final class ClusterManager implements AutoCloseable {
 
+    private static final System.Logger LOG = System.getLogger(ClusterManager.class.getName());
+
     private final Storage storage;
     private final ServerNode self = new ServerNode();
     private final LeaderElection election;
+    private final LongSupplier generationInForce;
+    /** "node id:generation" pairs already warned about, so each lagging node is named once. */
+    private final Set<String> warned = ConcurrentHashMap.newKeySet();
 
     public ClusterManager(Storage storage, String name, int workers,
                           long heartbeatIntervalMillis, int missedHeartbeatsBeforeDead) {
+        this(storage, name, workers, heartbeatIntervalMillis, missedHeartbeatsBeforeDead, 0, () -> 0);
+    }
+
+    /**
+     * @param loadedGeneration  the newest storage-topology generation this node has loaded, published in
+     *                          its node row
+     * @param generationInForce the generation in force now; while leader, this node warns about every
+     *                          live node that has not loaded it
+     */
+    public ClusterManager(Storage storage, String name, int workers, long heartbeatIntervalMillis,
+                          int missedHeartbeatsBeforeDead, long loadedGeneration, LongSupplier generationInForce) {
         this.storage = storage;
+        this.generationInForce = generationInForce;
+        self.topologyGeneration = loadedGeneration;
         long now = System.currentTimeMillis();
         self.id = Ids.next("node");
         self.name = name;
@@ -63,11 +84,24 @@ public final class ClusterManager implements AutoCloseable {
             return storage.inHome(tx -> {
                 tx.upsertNode(self);
                 tx.deleteNodesOlderThan(pruneBefore);
-                List<Member> roster = tx.nodes().stream().map(ClusterManager::member).toList();
+                List<ServerNode> nodes = tx.nodes();
+                List<Member> roster = nodes.stream().map(ClusterManager::member).toList();
                 String leaderId = elect.leaderOf(roster);
                 tx.setLeader(self.id, self.id.equals(leaderId));
+                if (self.id.equals(leaderId)) warnLagging(nodes);
                 return roster;
             });
+        }
+
+        /** Names, once each, the live nodes that have not loaded the topology generation in force. */
+        private void warnLagging(List<ServerNode> nodes) {
+            long required = generationInForce.getAsLong();
+            for (ServerNode n : nodes) {
+                if (n.topologyGeneration >= required || !warned.add(n.id + ":" + required)) continue;
+                LOG.log(System.Logger.Level.WARNING, () -> "node '" + n.name + "' (" + n.id + ") runs storage "
+                        + "topology generation " + n.topologyGeneration + ", but generation " + required
+                        + " is in force; it may mint on the old placement and cannot route to new shards");
+            }
         }
 
         @Override public void standDown(Member me) {

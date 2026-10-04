@@ -119,6 +119,19 @@ tokens of such an instance were always minted bare, so no label could route a re
 
 ## 3. Topology and configuration
 
+**Status: implemented**, with these limits until later steps:
+
+- **Replicas.** A document that lists replicas, or a set `WIGGLE_JDBC_REPLICA_*` variable, is refused
+  until [§8](#8-read-replicas).
+- **Shards that only carry auth or search** are parsed and validated but not opened; nothing reads
+  them yet.
+- **Schemas.** Every opened shard gets the whole `wf_*` schema; [WGL-SHARD-007](#1-model)'s per-role
+  schemas arrive with the first table that belongs to one role only.
+
+`TopologyParser` reads the document, `PostgresStorageFactory` opens a `ShardedStorage` from it, and
+`Placement` mints by generation. Verified by `server/topology/TopologyParserTest`, `PlacementTest`
+and `TopologyServerTest`, `server/store/ShardedStorageTest`, and the storage contract.
+
 ### 3.1 The topology document
 
 **WGL-SHARD-040** (MUST) A sharded deployment MUST be configured by a JSON document named by
@@ -180,8 +193,8 @@ overridable again per primary or per replica.
 `NAME`, and a reference to an unset variable MUST fail startup. Nothing else is interpolated. This
 lets the document be a ConfigMap while credentials stay in Secrets.
 
-**WGL-SHARD-043** (MUST) When `WIGGLE_STORAGE_TOPOLOGY` is unset, the server MUST build a one-shard
-topology, carrying all four roles, from `WIGGLE_JDBC_URL`, `WIGGLE_JDBC_USER`, `WIGGLE_JDBC_PASSWORD` and
+**WGL-SHARD-043** (MUST) When `WIGGLE_STORAGE_TOPOLOGY` is unset, the server MUST run as one shard
+carrying all four roles, configured from `WIGGLE_JDBC_URL`, `WIGGLE_JDBC_USER`, `WIGGLE_JDBC_PASSWORD` and
 `WIGGLE_JDBC_POOL_SIZE`, with replicas taken from:
 
 | Variable | Default | Meaning |
@@ -208,8 +221,8 @@ startup.
 **WGL-SHARD-051** (MUST) `migrate()` MUST migrate every shard's primary and MUST write the shard's id
 into that database's `wf_shard` row the first time; a later run MUST only verify it.
 
-**WGL-SHARD-052** (MUST) `Storage.fingerprint()` MUST become a hash over the ordered list of
-`(shard id, wf_shard identity)`, so two clusters built on overlapping databases are told apart.
+**WGL-SHARD-052** (MUST) `Storage.fingerprint()` on a sharded store MUST name every shard with its own
+database's fingerprint, in order, so two clusters built on overlapping databases are told apart.
 
 ### 3.3 The shard registry
 
@@ -455,8 +468,8 @@ generation with an `activeFrom` in the future. A node MUST keep minting under th
 generation until `activeFrom`, then switch.
 
 **WGL-SHARD-141** (MUST) Every node MUST publish the newest generation it has loaded in its node
-row. At `activeFrom`, the leader MUST raise an anomaly naming every live node that has not loaded
-that generation.
+row. Once a generation is in force, the leader MUST log a warning, once per node, naming every live
+node that has not loaded it. (Anomalies are per instance, so a log line is where this belongs.)
 
 **WGL-SHARD-142** (MUST) *Implemented in `ShardedStorage` (a `TRANSIENT` storage failure).* A node
 asked to route an id to a shard it does not know MUST answer

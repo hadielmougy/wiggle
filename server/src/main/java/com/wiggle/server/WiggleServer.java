@@ -5,6 +5,7 @@ import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
+import com.wiggle.server.topology.Topology;
 
 import java.io.IOException;
 
@@ -40,8 +41,11 @@ public final class WiggleServer implements AutoCloseable {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
+        Topology topology = config.topology();
         this.cluster = new ClusterManager(storage, config.nodeName(), Runtime.getRuntime().availableProcessors(),
-                config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead());
+                config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead(),
+                topology == null ? 0 : topology.newestGeneration().id(),
+                topology == null ? () -> 0 : () -> topology.generationAt(System.currentTimeMillis()).id());
         this.bundle = new ServerBundle(config, storage, cluster);
     }
 

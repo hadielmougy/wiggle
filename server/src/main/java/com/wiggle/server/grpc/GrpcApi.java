@@ -12,6 +12,7 @@ import io.grpc.Grpc;
 import io.grpc.InsecureServerCredentials;
 import io.grpc.Server;
 import io.grpc.ServerCredentials;
+import com.wiggle.server.store.ShardRetiredException;
 import com.wiggle.server.store.StorageException;
 import io.grpc.Status;
 import io.grpc.TlsServerCredentials;
@@ -621,6 +622,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         } catch (IllegalArgumentException e) {
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc failed with bad request: " + e.getMessage());
             resp.onError(Status.INVALID_ARGUMENT.withDescription(String.valueOf(e.getMessage())).asRuntimeException());
+        } catch (ShardRetiredException e) {
+            resp.onError(Status.NOT_FOUND.withDescription(e.getMessage()).asRuntimeException());
         } catch (StorageException e) {
             // A store failure that applied nothing is UNAVAILABLE, which is both the honest status and
             // the useful one: it promises the call did not take effect, which is exactly the client's

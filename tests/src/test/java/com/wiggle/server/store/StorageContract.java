@@ -1357,7 +1357,46 @@ abstract class StorageContract {
         assertTrue(storage.inTx(tx -> tx.stepDurations(i.workflow, 2, 0, 10)).isEmpty(), "one version at a time");
     }
 
+    // -- shards --
+
+    @Test
+    @DisplayName("a database is claimed for one shard, and a later claim leaves the first standing")
+    void aShardIdentityIsClaimedOnce() {
+        storage.inTxVoid(tx -> tx.claimShardIdentity(7));
+        int claimed = storage.inTx(tx -> tx.shardIdentity()).orElseThrow();   // 7, or an earlier run's
+        storage.inTxVoid(tx -> tx.claimShardIdentity(claimed + 1));
+        assertEquals(claimed, storage.inTx(tx -> tx.shardIdentity()).orElseThrow());
+    }
+
+    @Test
+    @DisplayName("the shard registry keeps one row per shard, replaced in place")
+    void theShardRegistryKeepsOneRowPerShard() {
+        int shard = (int) (System.nanoTime() & 0x3fffffff);
+        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
+        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9)));
+        List<Rows.ShardRecord> rows = storage.inTx(tx -> tx.shardRegistry()).stream()
+                .filter(r -> r.shardId() == shard).toList();
+        assertEquals(List.of(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9L)), rows);
+        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
+        assertEquals(List.of(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)),
+                storage.inTx(tx -> tx.shardRegistry()).stream().filter(r -> r.shardId() == shard).toList(),
+                "a null retiredAt reads back null, not zero");
+    }
+
     // -- cluster membership --
+
+    @Test
+    @DisplayName("a node row carries the topology generation the node runs, updated with each heartbeat")
+    void aNodeCarriesItsTopologyGeneration() {
+        ServerNode n = serverNode(ANCIENT);
+        n.topologyGeneration = 3;
+        storage.inTxVoid(tx -> tx.upsertNode(n));
+        assertEquals(3, node(n.id).orElseThrow().topologyGeneration);
+        n.topologyGeneration = 4;
+        storage.inTxVoid(tx -> tx.upsertNode(n));
+        assertEquals(4, node(n.id).orElseThrow().topologyGeneration);
+        storage.inTxVoid(tx -> tx.deleteNodesOlderThan(ANCIENT + 1));
+    }
 
     @Test
     @DisplayName("a node keeps the heartbeat it first registered with, and the leader flag is set apart")
