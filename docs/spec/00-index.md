@@ -18,17 +18,17 @@ here first, and the requirement names the test that holds it.
 | 40 | [Execution modes](40-execution-modes.md) | `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC`, step timing statistics; the withdrawn `OBSERVED` | `WGL-MODE`, `WGL-OBS` |
 | 50 | [Sagas](50-sagas.md) | compensable steps, the comp-log, the reverse pass, terminal states | `WGL-SAGA` |
 | 60 | [Event log](60-event-log.md) | lifecycle entries, handler-emitted events, the pull-and-ack feed | `WGL-EVT` |
-| 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the console's HTTP surface | `WGL-API` |
+| 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the portal's HTTP surface | `WGL-API` |
 | 80 | [Storage](80-storage.md) | the schema, migrations, dialects, claim mechanics, retention | `WGL-STOR` |
 | 85 | [Sharding](85-sharding.md) *(proposed)* | shard-carrying ids, the topology and shard roles, read replicas, adding shards, the portal in the server, the auth shard, search shards, dropping the coordinator | `WGL-SHARD` |
-| 90 | [Operations](90-ops.md) | configuration, cluster and leadership, console, TLS, deployment; the withdrawn coordinator | `WGL-OPS`, `WGL-COORD` (withdrawn) |
+| 90 | [Operations](90-ops.md) | configuration, cluster and leadership, portal, TLS, deployment; the withdrawn coordinator | `WGL-OPS`, `WGL-COORD` (withdrawn) |
 
 ## 1. Scope
 
 **In scope.** The durable workflow engine (the `server` module), the authoring and worker library
 (`client`), the wire contract (`proto`), storage
-(`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the ops
-console (`console`).
+(`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the
+portal the server serves (`console`).
 
 **Out of scope.** The Go and Python client libraries (separate repositories; they implement the same
 wire contract), the example and benchmark
@@ -130,7 +130,7 @@ Stated so a reader does not look for them.
 - **No workflow-code determinism model.** The workflow is data the server walks, not code replayed
   to rebuild state, so there is no replay discipline, no history API, and no side-effect wrappers.
 - **No per-RPC authorization.** TLS (optionally mTLS) authenticates the channel; any trusted peer
-  may call any control-plane RPC. Role separation exists only in the console.
+  may call any control-plane RPC. Role separation exists only in the portal.
 - **No rollback by default.** A failed instance stops where it is unless the topology declares
   compensators.
 - **No context schema management.** The context is opaque JSON; evolving it is the handler's job via

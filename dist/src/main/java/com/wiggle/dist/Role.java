@@ -3,7 +3,8 @@ package com.wiggle.dist;
 import java.util.Locale;
 
 /**
- * Which of the two processes this image should run, from {@code WIGGLE_ROLE}.
+ * Which process this image should run, from {@code WIGGLE_ROLE}. There is one: the server, which
+ * also serves the portal when {@code WIGGLE_PORTAL_PORT} is set.
  *
  * <p>{@code cell} is the old name for {@link #SERVER} and is still accepted, so existing
  * deployments and manifests keep working unchanged.
@@ -13,7 +14,7 @@ import java.util.Locale;
  * misspelt role started a server and looked fine.
  */
 enum Role {
-    SERVER, CONSOLE;
+    SERVER;
 
     static final String ENV = "WIGGLE_ROLE";
 
@@ -22,12 +23,14 @@ enum Role {
         if (raw == null || raw.isBlank()) return SERVER;
         return switch (raw.trim().toLowerCase(Locale.ROOT)) {
             case "server", "cell" -> SERVER;
-            case "console" -> CONSOLE;
+            case "console" -> throw new IllegalArgumentException(
+                    ENV + "=console: the standalone console was removed; set WIGGLE_PORTAL_PORT on a "
+                    + "server node to serve the portal from it");
             case "coordinator" -> throw new IllegalArgumentException(
                     ENV + "=coordinator: the cell coordinator was removed; run server nodes that share "
                     + "a database instead");
             default -> throw new IllegalArgumentException(
-                    ENV + "='" + raw.trim() + "' is not a role; expected one of: server, console "
+                    ENV + "='" + raw.trim() + "' is not a role; expected: server "
                     + "('cell' is the old name for server)");
         };
     }

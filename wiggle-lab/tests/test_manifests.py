@@ -1,5 +1,4 @@
-"""What the lab wires into each pod: a server is plain JDBC config, and a console talks straight to
-its server."""
+"""What the lab wires into each pod: a server is plain JDBC config, and serves the portal."""
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -21,14 +20,15 @@ def test_a_server_is_its_nodes_over_its_own_database():
                    for k in e), "no removed coordinator setting may reach the pod: the server refuses them"
 
 
-def test_console_talks_straight_to_its_server():
-    e = env_of(manifests.console_manifests("srv1"))
-    assert e["WIGGLE_ROLE"] == "console"
-    assert e["WIGGLE_URL"] == "cell-srv1:8080"
+def test_every_server_node_serves_the_portal():
+    docs = manifests.cell_manifests("srv1", 2)
+    assert env_of(docs)["WIGGLE_PORTAL_PORT"] == "8070"
+    svc = next(d for d in docs if d["kind"] == "Service")
+    assert {"name": "portal", "port": 8070, "targetPort": 8070} in svc["spec"]["ports"]
+    assert "WIGGLE_ROLE" not in env_of(docs)
 
 
-def test_console_carries_the_target_label_it_is_removed_by():
-    docs = manifests.console_manifests("Srv1")
-    labels = docs[0]["metadata"]["labels"]
-    assert labels["wiggle-lab/console"] == "srv1"      # what remove_console selects on
-    assert labels["wiggle-lab/cell"] == "Srv1"
+def test_portal_passwords_reach_the_pod_only_when_set():
+    assert "WIGGLE_DASHBOARD_PASSWORD" not in env_of(manifests.cell_manifests("srv1", 1))
+    e = env_of(manifests.cell_manifests("srv1", 1, {"WIGGLE_DASHBOARD_PASSWORD": "s3cret"}))
+    assert e["WIGGLE_DASHBOARD_PASSWORD"] == "s3cret"

@@ -15,3 +15,8 @@ spec:
     - name: health
       port: {{ .Values.service.healthPort }}
       targetPort: health
+    {{- if gt (int .Values.service.portalPort) 0 }}
+    - name: portal
+      port: {{ .Values.service.portalPort }}
+      targetPort: portal
+    {{- end }}

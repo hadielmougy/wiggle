@@ -5,19 +5,21 @@ import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Worker;
+import com.wiggle.console.Portal;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * A single-JVM playground for the ops console: starts a server on :8080, registers workflows
- * that exercise every node kind, seeds a completed run, two runs parked on a signal, and a
- * couple of schedules, then idles so you can explore them in the console.
+ * A single-JVM playground for the portal: starts a server on :8080 with the portal on :8070
+ * ({@code WIGGLE_PORTAL_PORT} overrides it), registers workflows that exercise every node kind,
+ * seeds a completed run, two runs parked on a signal, and a couple of schedules, then idles so you
+ * can explore them in the portal.
  *
- * <pre>./gradlew :example:seedDashboard                                       # terminal 1
- * WIGGLE_URL=localhost:8080 ./gradlew :console:run   ->   http://localhost:8090   # terminal 2</pre>
+ * <pre>./gradlew :example:seedDashboard   ->   http://localhost:8070</pre>
  *
  * Every tab has something to see: Instances (each run's steps, with input, output, retries and
  * timing), Workflows (their steps),
@@ -70,7 +72,10 @@ public final class DashboardSeed {
                 .thenApply(s::gather)
                 .thenApply(s::render));
 
+        Map<String, String> env = new HashMap<>(System.getenv());
+        env.putIfAbsent(Portal.PORT_ENV, "8070");
         try (WiggleServer server = new WiggleServer(config).start();
+             Portal portal = Portal.fromEnvironment(server, config.tls(), env).orElseThrow();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "seed-worker")
                      .registerHandler(new OnboardingHandlers())
@@ -91,8 +96,7 @@ public final class DashboardSeed {
             client.createSchedule("kyc-checks", Duration.ofHours(6), Map.of("source", "timer"));
 
             System.out.println("\nData seeded on the server at " + server.baseUrl() + ".");
-            System.out.println("Explore it in the ops console (a separate process):");
-            System.out.println("    WIGGLE_URL=" + server.baseUrl() + " ./gradlew :console:run   ->   http://localhost:8090");
+            System.out.println("Explore it in the portal: http://localhost:" + portal.port());
             System.out.println("Two 'onboarding' instances are parked on the 'manager-approval' signal.");
             System.out.println("Press Ctrl-C to stop.\n");
             Thread.currentThread().join();

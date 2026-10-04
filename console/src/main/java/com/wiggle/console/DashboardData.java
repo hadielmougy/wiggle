@@ -8,10 +8,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The read/ops surface the {@link HttpDashboard} needs, decoupled from any particular source. The
- * embedded dashboard is backed by the in-process engine ({@code EngineDashboardData}); the standalone
- * ops console backs the same dashboard with a gRPC client. Everything here is neutral (no engine or storage types), so
- * both backends produce identical JSON to the SPA.
+ * The read/ops surface the portal serves, in neutral types so the SPA's JSON does not follow engine
+ * or storage changes. {@link EngineDashboardData} backs it with the server process it runs in.
  */
 public interface DashboardData {
 
@@ -31,7 +29,7 @@ public interface DashboardData {
 
     void signal(String id, String name, Object payload);
 
-    /** Signal waits pending external delivery; may be empty where the backend can't enumerate them. */
+    /** Signal waits pending external delivery, oldest first. */
     List<SignalView> pendingSignals(int limit);
 
     /**

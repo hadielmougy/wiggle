@@ -533,6 +533,13 @@ becomes an RPC that the server then fans out, and the gRPC surface lacks reads t
 (pending signals, [WGL-OPS-042a](90-ops.md)). The server already connects to every shard and its
 replicas, and the `DashboardData` seam already has an in-process adapter (`EngineDashboardData`).
 
+**Status: implemented**, with these limits until [§13](#13-users-and-authorization) lands:
+sessions are held by the node that signed the user in, so WGL-SHARD-172 needs sticky sessions at a
+load balancer; and the permission check of WGL-SHARD-173 is the admin/viewer role. The portal is the
+`console` module, started by `dist` when `WIGGLE_PORTAL_PORT` is set, reading through
+`EngineDashboardData`. WGL-SHARD-174 needs no code: a portal-only node is a server node workers
+are not pointed at.
+
 **WGL-SHARD-170** (MUST) The portal MUST be served by the server process, on its own HTTP port
 (`WIGGLE_PORTAL_PORT`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
 existing `WIGGLE_DASHBOARD_PORT` contract until that variable is retired.

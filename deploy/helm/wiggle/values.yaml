@@ -26,9 +26,10 @@ storage:
 service:
   type: ClusterIP
   grpcPort: 8080     # the gRPC control plane
-  healthPort: 8090   # serves the always-open /healthz probe (and the console, if enabled)
+  healthPort: 8090   # serves the always-open /healthz probe
+  portalPort: 0      # the web portal; 0 = off. Set e.g. 8070, with WIGGLE_DASHBOARD_PASSWORD in env
 
-# Extra environment: any WIGGLE_* tunable, TLS, the console password, etc.
+# Extra environment: any WIGGLE_* tunable, TLS, the portal password, etc.
 env: {}
   # WIGGLE_POLL_INTERVAL_MILLIS: "200"
   # WIGGLE_HOUSEKEEPING_BATCH: "500"

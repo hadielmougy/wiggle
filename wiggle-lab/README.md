@@ -7,7 +7,7 @@ of tedious.
 
 It talks to the cluster two ways:
 - **kind / kubectl** (subprocess) for infrastructure: cluster, servers (each with its own Postgres),
-  consoles, scaling, killing pods.
+  scaling, killing pods.
 - **gRPC** (Python stubs generated from `proto/`) for the control plane: register workflows, start
   instances, observe state.
 
@@ -40,8 +40,8 @@ streamlit run app.py           # opens http://localhost:8501
 2. **Build image** (compiles the Java dist + dashboard — several minutes; or build `wiggle:local`
    yourself first with `docker build -t wiggle:local ..`), then **Load image → kind**.
 3. **Servers tab →** deploy `srv1` (1 node). You get a Postgres and a wiggle node.
-4. **Forwards tab →** deploy the **ops console** against `srv1` and open the link. It talks straight
-   to the server (`WIGGLE_URL`).
+4. **Forwards tab →** forward the **portal** of `srv1` and open the link. Every server node serves
+   it.
 5. **Client tests tab →** pick `srv1` and the `sleep` workflow → **Register workflow → Start
    instances → Observe**.
 6. **Scale/kill/remove** the server from the Servers tab; **Tear down cluster** from the sidebar when
@@ -99,7 +99,7 @@ wiggle-lab/
     config.py            names, ports, labels
     shell.py             subprocess helpers
     kind.py              cluster lifecycle + image build/load
-    manifests.py         server (+DB) and console Kubernetes manifests
+    manifests.py         server (+DB) Kubernetes manifests
     k8s.py               kubectl apply/scale/delete/list
     portforward.py       managed kubectl port-forwards
     cell_client.py       WiggleControlPlane gRPC (StartInstance, ListInstances, …)

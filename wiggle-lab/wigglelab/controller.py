@@ -325,45 +325,22 @@ class Lab:
         return {p["name"]: self.pf.target(f"pod:{p['name']}")
                 for p in self.pods(role="cell", cell=cell)}
 
-    # ---- ops console (per-server pod: a gRPC client of the server + the web UI) ----
-    @record
-    def deploy_console(self, target: str, password: str | None = None,
-                       viewer_password: str | None = None):
-        """A console for the server ``target``."""
-        self.ensure_namespace()
-        docs = manifests.console_manifests(target, password or None, viewer_password or None)
-        k8s.apply(manifests.to_yaml(docs)).check()
+    # ---- the portal every cell node serves (the Service balances over the nodes) ----
+    def _portal_local_port(self, cell: str) -> int:
+        ids = [c["cell"] for c in self.cells()]
+        idx = ids.index(cell) if cell in ids else len(ids)
+        return C.PORTAL_LOCAL_PORT_BASE + idx
 
-    @record
-    def remove_console(self, target: str):
-        self.pf.stop(f"console:{target}")
-        k8s.delete_by_label(f"wiggle-lab/role=console,wiggle-lab/console={C.dns_safe(target)}")
+    def forward_portal(self, cell: str) -> str:
+        self.pf.ensure(f"portal:{cell}", C.dns_name("cell", cell), C.CELL_PORTAL_PORT,
+                       self._portal_local_port(cell))
+        return self.pf.target(f"portal:{cell}") or ""
 
-    def consoles(self) -> list[dict]:
-        out = []
-        for d in k8s.deployments(selector="wiggle-lab/role=console"):
-            lb = d["labels"]
-            server = lb.get("wiggle-lab/cell", "")
-            out.append({"target": lb.get("wiggle-lab/console", server), "server": server,
-                        "deployment": d["name"], "desired": d["desired"], "ready": d["ready"]})
-        return sorted(out, key=lambda c: c["target"])
+    def stop_forward_portal(self, cell: str):
+        self.pf.stop(f"portal:{cell}")
 
-    def _console_local_port(self, target: str) -> int:
-        keys = [c["target"] for c in self.consoles()]
-        key = C.dns_safe(target)
-        idx = keys.index(key) if key in keys else len(keys)
-        return C.CONSOLE_LOCAL_PORT_BASE + idx
-
-    def forward_console(self, target: str) -> str:
-        self.pf.ensure(f"console:{target}", C.dns_name("console", target),
-                       C.CONSOLE_HTTP_PORT, self._console_local_port(target))
-        return self.pf.target(f"console:{target}") or ""
-
-    def stop_forward_console(self, target: str):
-        self.pf.stop(f"console:{target}")
-
-    def console_target(self, target: str) -> str | None:
-        return self.pf.target(f"console:{target}")
+    def portal_target(self, cell: str) -> str | None:
+        return self.pf.target(f"portal:{cell}")
 
     def forward_status(self) -> dict[str, str | None]:
         """Live local address of each cell forward (None if not forwarded)."""
