@@ -19,6 +19,7 @@ import com.wiggle.server.store.ShardState;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
+import com.wiggle.server.store.StorageUnreachableException;
 import com.wiggle.server.store.Tx;
 
 import java.nio.charset.StandardCharsets;
@@ -102,8 +103,21 @@ public final class JdbcStorage implements Storage {
         try {
             return ds.getConnection();
         } catch (SQLException e) {
-            throw new StorageException("cannot obtain connection", e, classify(e));
+            throw connectionFailure(e);
         }
+    }
+
+    /**
+     * A failure to hand out a connection. A pool timeout whose cause is a failed connect means the
+     * database is unreachable, not merely busy: {@link StorageUnreachableException}.
+     */
+    private StorageException connectionFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLTransientConnectionException timeout && timeout.getCause() != null) {
+                return new StorageUnreachableException("cannot reach the database: " + timeout.getCause().getMessage(), e);
+            }
+        }
+        return new StorageException("cannot obtain connection", e, classify(e));
     }
 
     /** {@link Classification#TRANSIENT} if the dialect recognises a momentary failure anywhere in the
@@ -849,7 +863,8 @@ public final class JdbcStorage implements Storage {
      * out of a statement, the transaction rolled back, and the dialect calls that failure transient
      * (connection loss, a pool timeout, a deadlock victim, a serialization failure). Those replays
      * are what make a database blip invisible to a caller instead of a failed workflow step. A failed
-     * <em>commit</em> is never replayed -- the work may be durable -- and nothing else is either.
+     * <em>commit</em> is never replayed -- the work may be durable -- and nothing else is either. An
+     * unreachable database is not replayed either: the attempt already waited out the pool timeout.
      *
      * <p>{@code work} must therefore be re-runnable against a fresh {@link Tx}: it may read, write
      * and throw, but it must not depend on in-process state it mutated on the previous attempt. Every
@@ -862,7 +877,7 @@ public final class JdbcStorage implements Storage {
             try {
                 return attemptTx(work);
             } catch (StorageException e) {
-                if (!e.repeatable() || attempt >= txAttempts) throw e;
+                if (!e.repeatable() || e instanceof StorageUnreachableException || attempt >= txAttempts) throw e;
                 int a = attempt;
                 LOG.log(System.Logger.Level.DEBUG, () -> "transaction rolled back on a transient failure ("
                         + e.getMessage() + "); replaying, attempt " + (a + 1) + " of " + txAttempts);
@@ -900,7 +915,7 @@ public final class JdbcStorage implements Storage {
         try {
             return jdbi.open();
         } catch (RuntimeException e) {
-            throw new StorageException("cannot obtain connection", e, classify(e));
+            throw connectionFailure(e);
         }
     }
 

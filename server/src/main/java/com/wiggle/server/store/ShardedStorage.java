@@ -10,6 +10,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -18,10 +20,18 @@ import java.util.function.Function;
  *
  * <p>An unrouted {@link #inTx} is refused, so a call site that never chose a shard fails instead of
  * writing to an arbitrary database.
+ *
+ * <p>A shard found unreachable is marked down: routes to it then fail at once with {@link
+ * StorageUnreachableException} instead of each waiting out the connection timeout, while a probe in
+ * the background, its backoff doubling from {@link #MIN_PROBE_BACKOFF_MILLIS} to {@link
+ * #MAX_PROBE_BACKOFF_MILLIS}, brings it back once it answers.
  */
 public final class ShardedStorage implements Storage {
 
     private static final System.Logger LOG = System.getLogger(ShardedStorage.class.getName());
+
+    static final long MIN_PROBE_BACKOFF_MILLIS = 1_000;
+    static final long MAX_PROBE_BACKOFF_MILLIS = 30_000;
 
     /**
      * One shard this store routes to.
@@ -37,6 +47,15 @@ public final class ShardedStorage implements Storage {
     private final int auth;
     /** Shards the registry records as retired, filled by {@link #migrate}. */
     private volatile Set<Integer> retired = Set.of();
+    /** Shards this node found unreachable, until a probe reaches them again. */
+    private final Map<Integer, Outage> down = new ConcurrentHashMap<>();
+
+    /** One shard's outage: when it may next be probed, and whether a probe is in flight. */
+    private static final class Outage {
+        volatile long nextProbeAt;
+        volatile long backoff;
+        final AtomicBoolean probing = new AtomicBoolean();
+    }
 
     /** Every shard ACTIVE and holding instances, by its permanent id, in the order fan-out visits them. */
     public ShardedStorage(Map<Integer, Storage> shards, int home) {
@@ -197,11 +216,61 @@ public final class ShardedStorage implements Storage {
     @Override public List<Integer> instanceShards() { return instanceShards; }
 
     @Override public <R> R inShard(int shard, Function<Tx, R> work) {
-        return shard(shard).inTx(work);
+        Storage s = reachable(shard);
+        try {
+            return s.inTx(work);
+        } catch (StorageUnreachableException e) {
+            markDown(shard);
+            throw e;
+        }
     }
 
+    /** A replica-allowed read on a shard with replicas is not refused while its primary is down. */
     @Override public <R> R readShard(int shard, Freshness freshness, Function<ReadTx, R> work) {
-        return shard(shard).readShard(shard, freshness, work);
+        Storage s = freshness == Freshness.REPLICA_OK && shard(shard).hasReplicas() ? shard(shard) : reachable(shard);
+        try {
+            return s.readShard(shard, freshness, work);
+        } catch (StorageUnreachableException e) {
+            markDown(shard);
+            throw e;
+        }
+    }
+
+    /** Whether this node currently holds {@code shard} as unreachable. */
+    public boolean isDown(int shard) {
+        return down.containsKey(shard);
+    }
+
+    /** The store for {@code shard}, refused at once while the shard is down; a due probe is started. */
+    private Storage reachable(int shard) {
+        Storage s = shard(shard);
+        Outage o = down.get(shard);
+        if (o == null) return s;
+        if (System.currentTimeMillis() >= o.nextProbeAt && o.probing.compareAndSet(false, true)) {
+            Thread.ofPlatform().daemon().name("wiggle-shard-probe-" + shard).start(() -> probe(shard, s, o));
+        }
+        throw new StorageUnreachableException("shard " + shard + " is unreachable", null);
+    }
+
+    private void markDown(int shard) {
+        if (down.putIfAbsent(shard, new Outage()) == null) {
+            LOG.log(System.Logger.Level.WARNING, () -> "shard " + shard + " is unreachable; failing its "
+                    + "routes at once until a probe reaches it");
+        }
+    }
+
+    /** Reaches {@code shard} once: up, it is routed to again; still down, its next probe backs off. */
+    private void probe(int shard, Storage s, Outage o) {
+        try {
+            s.inTx(ReadTx::shardIdentity);
+            down.remove(shard, o);
+            LOG.log(System.Logger.Level.INFO, () -> "shard " + shard + " is reachable again");
+        } catch (RuntimeException e) {
+            o.backoff = o.backoff == 0 ? MIN_PROBE_BACKOFF_MILLIS : Math.min(o.backoff * 2, MAX_PROBE_BACKOFF_MILLIS);
+            o.nextProbeAt = System.currentTimeMillis() + o.backoff;
+        } finally {
+            o.probing.set(false);
+        }
     }
 
     /**

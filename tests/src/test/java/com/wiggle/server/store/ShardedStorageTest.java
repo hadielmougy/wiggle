@@ -4,6 +4,8 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.engine.DefinitionRegistry;
+import com.wiggle.server.engine.InstanceIds;
+import com.wiggle.server.engine.WorkflowEngine;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,7 +28,7 @@ class ShardedStorageTest {
 
     /** An in-memory store that records how many transactions reached it, and whether it was migrated
      *  and closed. */
-    private static final class Probe implements Storage {
+    private static class Probe implements Storage {
         final AtomicInteger txs = new AtomicInteger();
         final InMemoryStorage mem = new InMemoryStorage();
         boolean migrated, closed;
@@ -37,6 +40,29 @@ class ShardedStorageTest {
         @Override public <R> R inTx(Function<Tx, R> work) { txs.incrementAndGet(); return mem.inTx(work); }
         @Override public String fingerprint() { return fingerprint; }
         @Override public void close() { closed = true; }
+    }
+
+    /** A {@link Probe} whose database can be taken out of reach. */
+    private static final class Outageable extends Probe {
+        volatile boolean unreachable;
+
+        Outageable(String fingerprint) { super(fingerprint); }
+
+        @Override public <R> R inTx(Function<Tx, R> work) {
+            if (unreachable) {
+                txs.incrementAndGet();
+                throw new StorageUnreachableException("connection refused", null);
+            }
+            return super.inTx(work);
+        }
+    }
+
+    private static void await(BooleanSupplier condition, String what) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) throw new AssertionError("timed out waiting until " + what);
+            Thread.sleep(10);
+        }
     }
 
     private static Map<Integer, Storage> shards(Storage seven, Storage two) {
@@ -227,5 +253,59 @@ class ShardedStorageTest {
         after.migrate();
         new DefinitionRegistry(after).register(v1);
         assertFalse(added.inTx(tx -> tx.definitionVersions("grow")).isEmpty(), "a second migrate and a re-registration change nothing");
+    }
+
+    @Test @DisplayName("a shard found unreachable fails its routes at once until a probe reaches it again")
+    void unreachableShardFailsFast() throws InterruptedException {
+        Outageable seven = new Outageable("a");
+        Probe two = new Probe("b");
+        ShardedStorage s = new ShardedStorage(shards(seven, two), 2);
+        seven.unreachable = true;
+
+        assertThrows(StorageUnreachableException.class, () -> s.inShard(7, tx -> null));
+        assertTrue(s.isDown(7));
+        assertEquals(1, seven.txs.get());
+
+        StorageException refused = assertThrows(StorageUnreachableException.class,
+                () -> s.readFor("wfi.s7.01k6abc", Freshness.PRIMARY, tx -> null));
+        assertTrue(refused.repeatable(), "refused as transient, so a client sees UNAVAILABLE");
+        await(() -> seven.txs.get() == 2, "the background probe has tried shard 7");
+        await(() -> !isProbing(s), "the probe has backed off");
+        assertThrows(StorageUnreachableException.class, () -> s.inShard(7, tx -> null));
+        assertEquals(2, seven.txs.get(), "within the backoff, neither a route nor a probe reaches the shard");
+
+        s.inHome(tx -> null);
+        assertEquals(1, two.txs.get(), "the other shard is routed to as before");
+
+        seven.unreachable = false;
+        Thread.sleep(ShardedStorage.MIN_PROBE_BACKOFF_MILLIS);
+        assertThrows(StorageUnreachableException.class, () -> s.inShard(7, tx -> null));
+        await(() -> !s.isDown(7), "a probe finds shard 7 reachable");
+        s.inShard(7, tx -> null);
+    }
+
+    private static boolean isProbing(ShardedStorage s) {
+        return Thread.getAllStackTraces().keySet().stream().anyMatch(t -> t.getName().startsWith("wiggle-shard-probe-"));
+    }
+
+    @Test @DisplayName("a poll claims from the shards it reaches, and fails only when it reaches none")
+    void claimPassesOverAnUnreachableShard() {
+        WorkflowDefinition def = FlowSpec.define("reach", 1, Map.class, ForkSteps.class, (f, s) ->
+                Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b)).combine(s::pick)).definition();
+        Outageable seven = new Outageable("a");
+        Outageable two = new Outageable("b");
+        ShardedStorage s = new ShardedStorage(shards(seven, two), 2);
+        s.migrate();
+        WorkflowEngine engine = new WorkflowEngine(s, new DefinitionRegistry(s), 30_000, InstanceIds.onShard(2));
+        new DefinitionRegistry(s).register(def);
+        engine.start("reach", 1, Map.of(), null);
+        seven.unreachable = true;
+
+        int claimed = 0;
+        for (int i = 0; i < 4; i++) claimed += engine.poll("w1", def.queues(), 1, null).size();
+        assertEquals(2, claimed, "both tasks on shard 2 are claimed, whichever shard each poll tries first");
+
+        two.unreachable = true;
+        assertThrows(StorageUnreachableException.class, () -> engine.poll("w1", def.queues(), 1, null));
     }
 }

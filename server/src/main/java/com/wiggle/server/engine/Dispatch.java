@@ -2,6 +2,7 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.server.store.StorageUnreachableException;
 
 import java.util.List;
 import java.util.Map;
@@ -107,17 +108,28 @@ final class Dispatch {
     /**
      * One claim attempt, with a lease that starts now (not at the poll's arrival): one shard at a
      * time, from a rotating start, taking the first shard that has work. Each shard's claim is atomic.
+     * An unreachable shard is passed over; only when every shard is unreachable does the claim fail.
      */
     private List<TaskActivation> claimNow(String workerId, Set<String> queues,
                                           Set<WorkflowVersion> versions, int max, long lease) {
         List<Integer> shards = transactions.instanceShards();
         int start = Math.floorMod(nextShard.getAndIncrement(), shards.size());
+        StorageUnreachableException unreachable = null;
+        int reached = 0;
         for (int i = 0; i < shards.size(); i++) {
             long now = System.currentTimeMillis();
-            List<TaskActivation> got = transactions.readShard(shards.get((start + i) % shards.size()),
-                    tx -> tokens.claim(tx, workerId, queues, versions, max, now, now + lease));
+            List<TaskActivation> got;
+            try {
+                got = transactions.readShard(shards.get((start + i) % shards.size()),
+                        tx -> tokens.claim(tx, workerId, queues, versions, max, now, now + lease));
+            } catch (StorageUnreachableException e) {
+                unreachable = e;
+                continue;
+            }
+            reached++;
             if (!got.isEmpty()) return got;
         }
+        if (reached == 0 && unreachable != null) throw unreachable;
         return List.of();
     }
 
