@@ -132,6 +132,49 @@ class ConsoleUsersTest {
         }
     }
 
+    interface OneStep {
+        Map<String, Object> work(Map<String, Object> ctx);
+    }
+
+    @Test @DisplayName("triggers are listed, created and deleted in the portal, needing trigger.write on the target and read on the source")
+    void triggers() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             ConsoleServer console = portal(server, "root-pass")) {
+            HttpClient http = HttpClient.newHttpClient();
+            String base = "http://localhost:" + console.port();
+            for (String name : new String[] {"payment", "refund", "billing"}) {
+                server.engine().register(com.wiggle.client.flow.FlowSpec.define(name, 1, Map.class, OneStep.class,
+                        (f, st) -> f.thenApply(st::work)).definition());
+            }
+            assertEquals(200, send(http, "POST", base + "/api/roles", "admin:root-pass",
+                    "{\"name\":\"refunds\",\"permissions\":[\"read:payment\",\"read:refund\",\"trigger.write:refund\"]}").statusCode());
+            assertEquals(200, send(http, "POST", base + "/api/users", "admin:root-pass",
+                    "{\"user\":\"ria\",\"password\":\"ria-password\",\"roles\":[\"refunds\"]}").statusCode());
+
+            String body = "{\"workflow\":\"refund\",\"source\":\"payment\",\"eventTypes\":[\"wf.failed\"],\"includeContext\":true}";
+            assertEquals(403, send(http, "POST", base + "/api/triggers", "ria:ria-password",
+                    body.replace("\"refund\"", "\"billing\"")).statusCode(), "another target is out of scope");
+            assertEquals(403, send(http, "POST", base + "/api/triggers", "ria:ria-password",
+                    body.replace("\"payment\"", "\"billing\"")).statusCode(), "a source it may not read is refused");
+            assertEquals(403, send(http, "POST", base + "/api/triggers", "ria:ria-password",
+                    body.replace("\"payment\"", "\"*\"")).statusCode(), "'*' needs read on every workflow");
+            HttpResponse<String> created = send(http, "POST", base + "/api/triggers", "ria:ria-password", body);
+            assertEquals(200, created.statusCode(), created.body());
+            assertEquals(400, send(http, "POST", base + "/api/triggers", "ria:ria-password",
+                    body.replace("wf.failed", "wf.nope")).statusCode(), "the engine's refusal is a 400");
+
+            assertEquals(403, send(http, "GET", base + "/api/triggers", "ria:ria-password", null).statusCode(),
+                    "the list spans workflows, so it needs read on all of them, as schedules do");
+            String list = send(http, "GET", base + "/api/triggers", "admin:root-pass", null).body();
+            assertTrue(list.contains("\"source\":\"payment\"") && list.contains("\"eventTypes\":[\"wf.failed\"]")
+                    && list.contains("\"includeContext\":true"), list);
+            String id = list.replaceAll("(?s).*\"id\":\"([^\"]+)\".*", "$1");
+            assertEquals(404, send(http, "DELETE", base + "/api/triggers/nope", "ria:ria-password", null).statusCode());
+            assertEquals(200, send(http, "DELETE", base + "/api/triggers/" + id, "ria:ria-password", null).statusCode());
+            assertTrue(send(http, "GET", base + "/api/triggers", "admin:root-pass", null).body().contains("\"triggers\":[]"));
+        }
+    }
+
     @Test @DisplayName("a role grants named permissions, scoped to a workflow where it says so")
     void scopedRoles() throws Exception {
         withPortal("root-pass", (base, http) -> {

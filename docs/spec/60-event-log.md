@@ -6,7 +6,9 @@ An append-only, durable outbound feed: one entry per instance lifecycle transiti
 handler chooses to put on it, each written in the transaction that made the change. Consumers pull and
 acknowledge; nothing is pushed and nothing is reconstructed after the fact.
 
-It is the outbound direction only.
+It is the outbound direction only. Inside the engine, triggers read the same log to start workflows
+on these events ([WGL-ENG-130](30-engine.md#9-schedules-and-triggers)), behind a position of their own
+that is not a consumer cursor.
 
 ## 1. What is written
 

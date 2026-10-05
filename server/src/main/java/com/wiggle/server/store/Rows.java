@@ -155,6 +155,25 @@ public final class Rows {
         }
     }
 
+    /**
+     * A start on another instance's event: when an event of one of {@code eventTypes} is appended for
+     * an instance of {@code source} ({@code "*"} for any workflow but {@code workflow} itself), the
+     * leader starts {@code workflow}. Unique on (workflow, source). Held on the home shard.
+     */
+    public static final class Trigger implements Cloneable {
+        public String id;
+        public String workflow;
+        public String source;
+        public java.util.List<String> eventTypes = java.util.List.of();
+        /** Whether the started instance's context begins as the source instance's context. */
+        public boolean includeContext;
+        public long createdAt;
+
+        @Override public Trigger clone() {
+            try { return (Trigger) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); }
+        }
+    }
+
     /** One compensable step's completion record: the reverse pass runs these newest-first.
      *  {@code input}/{@code result} are the step's snapshots (as received / as left), captured
      *  atomically with the completion — see docs/saga-compensation.md §4. */

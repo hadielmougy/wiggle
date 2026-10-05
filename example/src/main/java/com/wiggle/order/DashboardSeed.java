@@ -15,14 +15,14 @@ import java.util.Map;
 /**
  * A single-JVM playground for the portal: starts a server on :8080 with the portal on :8070
  * ({@code WIGGLE_PORTAL_PORT} overrides it), registers workflows that exercise every node kind,
- * seeds a completed run, two runs parked on a signal, and a couple of schedules, then idles so you
+ * seeds a completed run, two runs parked on a signal, a couple of schedules and a trigger, then idles so you
  * can explore them in the portal.
  *
  * <pre>./gradlew :example:seedDashboard   ->   http://localhost:8070</pre>
  *
  * Every tab has something to see: Instances (each run's steps, with input, output, retries and
  * timing), Workflows (their steps),
- * Signals (two pending approvals), Schedules (one cron, one interval).
+ * Signals (two pending approvals), Schedules (one cron, one interval), Triggers (one on completion).
  *
  * <p>Config comes from the environment ({@link ServerConfig#fromEnvironment()}), so the same
  * playground can run in-memory (the default) or against a database ({@code WIGGLE_JDBC_URL}).
@@ -83,6 +83,8 @@ public final class DashboardSeed {
             client.register(onboarding);
             client.register(report);
             worker.start();
+            // A finished nightly report reruns the checks on what it gathered.
+            client.createTrigger("kyc-checks", "nightly-report", java.util.List.of("wf.completed"), true);
 
             client.start(report, Map.of("source", "seed"));           // completes
             client.start(onboarding, Map.of("email", "a@example.com")); // parks on the signal

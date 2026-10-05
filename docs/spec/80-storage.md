@@ -94,6 +94,8 @@ store does with the answer is [section 9](#9-failure-classification-and-replay).
 | `wf_schedule` | one row per workflow: interval or cron, context, next fire time |
 | `wf_event` | the event log, keyed by a store-generated `seq`, with payload envelope version and node id |
 | `wf_event_cursor` | one row per consumer: acknowledged seq, last poll, creation |
+| `wf_trigger` | one row per (workflow, source): event types, whether to copy the context, creation; on the home shard |
+| `wf_trigger_cursor` | on each instance shard, the seq of its event log triggers have been dispatched through |
 | `wf_node` | cluster membership: node id, name, first/last heartbeat, worker count, leader flag |
 | `wf_auth_user` · `wf_auth_role` · `wf_auth_user_role` | portal accounts (name, PBKDF2 hash, salt, rounds, disabled), roles as permission sets, and grants; on the auth shard ([WGL-SHARD-181](85-sharding.md#13-users-and-authorization)) |
 | `wf_auth_session` · `wf_auth_audit` | sessions by token hash with their account and expiry, and every change to accounts, roles and sessions by a store-generated `seq` |

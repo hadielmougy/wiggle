@@ -228,6 +228,25 @@ public interface Tx extends ReadTx, GraphStore {
      */
     boolean claimSchedule(String id, long expectedFireAt, long nextFireAt);
 
+    /** Writes a trigger, replacing any with its id. */
+    void putTrigger(Rows.Trigger trigger);
+
+    /** Deletes a trigger; false when there was none. */
+    boolean deleteTrigger(String id);
+
+    /** Creates this shard's trigger dispatch position at {@code seq} when it has none. */
+    void createTriggerCursorIfAbsent(long seq, long now);
+
+    /**
+     * Moves this shard's trigger dispatch position to {@code nextSeq} iff it still reads
+     * {@code expectedSeq} -- the compare-and-set that keeps overlapping leaders from firing an event
+     * twice.
+     */
+    boolean moveTriggerCursor(long expectedSeq, long nextSeq, long now);
+
+    /** Deletes this shard's trigger dispatch position. */
+    void deleteTriggerCursor();
+
     /** RUNNING tokens whose lease has expired (worker died or partitioned away). */
     List<Token> expiredLeases(long now, int max);
 

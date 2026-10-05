@@ -172,4 +172,36 @@ class ShardedEngineTest {
         assertEquals(OptionalInt.of(0), ShardIds.shardOf(fired.getFirst().id()));
         assertTrue(f.zero().inTx(tx -> tx.findInstance(fired.getFirst().id())).isPresent());
     }
+    @Test @DisplayName("a trigger reads each shard's log behind its own position and starts beside its source")
+    void triggersDispatchPerShard() throws Exception {
+        Fixture fx = Fixture.open();
+        FlowSpec audit = FlowSpec.define("sharded-audit", 1, Map.class, TwoSteps.class,
+                (f, s) -> f.thenApply(s::x));
+        fx.engine().register(audit.definition());
+        fx.engine().createTrigger("sharded-audit", FLOW.name(), List.of("wf.cancelled"), false);
+        assertTrue(fx.one().inTx(tx -> tx.triggerCursor()) != null && fx.zero().inTx(tx -> tx.triggerCursor()) != null,
+                "every instance shard has a position before the trigger exists");
+
+        List<String> sources = fx.startFour();
+        Set<Integer> sourceShards = new HashSet<>();
+        for (String id : sources) {
+            sourceShards.add(ShardIds.shardOf(id).getAsInt());
+            fx.engine().cancel(id, "test");
+        }
+        assertEquals(Set.of(0, 1), sourceShards, "the sources span both shards");
+        Thread.sleep(80);
+        assertEquals(8, fx.engine().dispatchTriggers(100), "a start and a cancel on each, read shard by shard");
+        Thread.sleep(80);
+        fx.engine().dispatchTriggers(100);
+
+        List<InstanceView> audits = fx.engine().list("sharded-audit", null, 10);
+        assertEquals(4, audits.size(), "one start per cancelled source, none twice");
+        for (InstanceView a : audits) {
+            @SuppressWarnings("unchecked")
+            String source = (String) ((Map<String, Object>) com.wiggle.core.Json.asObject(a.context()).get("trigger"))
+                    .get("instanceId");
+            assertEquals(ShardIds.shardOf(source).getAsInt(), ShardIds.shardOf(a.id()).getAsInt(),
+                    "the started instance lives on its source's shard");
+        }
+    }
 }

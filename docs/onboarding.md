@@ -529,9 +529,9 @@ Accounts and sessions live on the auth shard, so any portal node serves any sign
 load balancer in front of several needs no sticky sessions.
 
 The SPA (ClojureScript + Reagent, source in `dashboard-ui/`, compiled into the **console** jar)
-has seven tabs: **Instances** (filter, search by **instance id or correlation id**, each instance's
+has eight tabs: **Instances** (filter, search by **instance id or correlation id**, each instance's
 steps as a table — click one to expand its input, output, retries and timing — cancel, inline signal
-delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry policies), **Schedules** (create/delete interval and cron schedules), **Signals**,
+delivery), **Workflows** (each compiled graph's steps, kinds, queues and retry policies), **Schedules** (create/delete interval and cron schedules), **Triggers** (start a workflow when another completes, fails, is cancelled, … — §7.3), **Signals**,
 **Backlog** (dispatchable work no running worker can claim — [§7.5](#75-backlog-coverage-work-nothing-can-claim)),
 **Performance** (per-step p50/p95 by the handler's own clock and queue wait for every
 execution mode, slowest first), and **Users** (§7.1a, for accounts holding `user.manage`). `./gradlew :console:build` compiles the bundle automatically (needs Node;
@@ -542,9 +542,9 @@ npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a portal on 
 
 **Auth.** A role is a named set of permissions. Two are built in: **admin** (`*`, everything) and
 **viewer** (`read`, sees everything and is refused every write). The actions are
-`read`, `instance.cancel`, `instance.signal`, `schedule.write` and `user.manage` (plus
-`instance.start` and `task.poll`, reserved for gRPC authorization); the instance and schedule
-ones take a workflow scope, so `instance.cancel:orders` cancels only `orders` instances. Browsers get a
+`read`, `instance.cancel`, `instance.signal`, `schedule.write`, `trigger.write` and `user.manage`
+(plus `instance.start` and `task.poll`, reserved for gRPC authorization); the instance, schedule and
+trigger ones take a workflow scope, so `instance.cancel:orders` cancels only `orders` instances. Browsers get a
 `/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
 auth. Credentials travel cleartext over plain HTTP, so serve over TLS for anything exposed.
 
@@ -727,7 +727,7 @@ idempotent and re-entrant: a brief overlap during failover duplicates work but c
 and leader-guarded writes are compare-and-set, so a stale ex-leader's write matches zero rows and
 loses.
 
-### 7.3 Signals, sub-workflows and schedules
+### 7.3 Signals, sub-workflows, schedules and triggers
 
 `thenAwait(name)` parks an instance until the named signal arrives; no worker is held. Deliver
 via `client.signal(instanceId, name, payload)` (gRPC), the portal's Signals tab, or
@@ -746,6 +746,19 @@ Duration, context)` / `createCronSchedule(workflow, "0 3 * * *", context)` / `sc
 "context"?}`, `GET /api/schedules`, `DELETE /api/schedules/{id}`. Creation is an **upsert keyed
 on workflow name** -- a workflow has at most one schedule, so calling create again from any
 number of client instances updates it in place rather than creating duplicates.
+
+Triggers start a workflow on another instance's event: `client.createTrigger("refund", "payment",
+List.of("wf.failed"), true)` starts `refund` whenever a `payment` instance fails. The types are the
+lifecycle ones (`wf.started`, `wf.completed`, `wf.failed`, `wf.cancelled`, `wf.compensating`,
+`wf.compensated`, `wf.compensation_failed`) or anything a handler emits with `Step.emit`; the source
+may be `*` for every workflow but the target. With `includeContext` the new instance begins with the
+source's context; either way it carries a `trigger` object naming the event, its payload (the reason
+or error) and the source instance, and is correlated `trigger:<triggerId>:<sourceInstanceId>`. The
+leader reads each shard's event log and starts the target on the source's shard, exactly once per
+event, about one housekeeping tick after the event. A trigger fires only on events after it was
+created, and a chain of triggered starts stops at 16 deep, so a cycle ends. Over HTTP:
+`POST /api/triggers {"workflow", "source", "eventTypes", "includeContext"}`, `GET /api/triggers`,
+`DELETE /api/triggers/{id}`; creation is an upsert keyed on (workflow, source).
 
 ### 7.4 Schema migrations
 

@@ -401,6 +401,32 @@ public final class WiggleClient implements AutoCloseable {
     public record ScheduleInfo(String id, String workflow, long everyMillis, String cron,
                                long nextFireAt, long createdAt) {}
 
+    /**
+     * Starts {@code workflow} whenever an instance of {@code source} ({@code "*"} for any other
+     * workflow) appends one of {@code eventTypes}, e.g. {@code "wf.completed"} or {@code "wf.failed"};
+     * with {@code includeContext}, the new instance begins with the source instance's context. A
+     * second call for the same (workflow, source) replaces the first. Returns the trigger id.
+     */
+    public String createTrigger(String workflow, String source, List<String> eventTypes, boolean includeContext) {
+        return call(() -> stub.createTrigger(CreateTriggerRequest.newBuilder()
+                .setWorkflow(workflow).setSource(source).addAllEventTypes(eventTypes)
+                .setIncludeContext(includeContext).build())).getId();
+    }
+
+    /** All triggers on the server. */
+    public List<TriggerInfo> triggers() {
+        return call(() -> stub.listTriggers(Empty.getDefaultInstance())).getTriggersList().stream()
+                .map(Wire::triggerInfo)
+                .toList();
+    }
+
+    public void deleteTrigger(String id) {
+        call(() -> stub.deleteTrigger(TriggerIdRequest.newBuilder().setId(id).build()));
+    }
+
+    public record TriggerInfo(String id, String workflow, String source, List<String> eventTypes,
+                              boolean includeContext, long createdAt) {}
+
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {
         call(() -> stub.heartbeatTask(HeartbeatRequest.newBuilder()
                 .setTaskId(taskId)

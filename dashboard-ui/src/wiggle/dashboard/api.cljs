@@ -35,6 +35,7 @@
 (defn signals       [] (GET "/api/signals"))
 (defn backlog       [] (GET "/api/backlog"))
 (defn schedules     [] (GET "/api/schedules"))
+(defn triggers      [] (GET "/api/triggers"))
 
 (defn instances [{:keys [workflow status limit search search-by]}]
   ;; A non-empty search is an exact lookup by instance id or correlation key and takes over the query
@@ -84,3 +85,6 @@
 
 (defn create-schedule [body] (POST "/api/schedules" body))
 (defn delete-schedule [id]   (DELETE (str "/api/schedules/" (enc id))))
+
+(defn create-trigger [body] (POST "/api/triggers" body))
+(defn delete-trigger [id]   (DELETE (str "/api/triggers/" (enc id))))

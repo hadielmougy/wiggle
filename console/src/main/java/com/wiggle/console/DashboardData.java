@@ -55,6 +55,13 @@ public interface DashboardData {
 
     void deleteSchedule(String id);
 
+    List<TriggerView> triggers();
+
+    /** Upserts on (workflow, source); returns the trigger id. */
+    String createTrigger(String workflow, String source, List<String> eventTypes, boolean includeContext);
+
+    void deleteTrigger(String id);
+
     ClusterView cluster();
 
     /**
@@ -90,6 +97,9 @@ public interface DashboardData {
 
     record ScheduleView(String id, String workflow, long everyMillis, String cron,
                         long nextFireAt, long createdAt) {}
+
+    record TriggerView(String id, String workflow, String source, List<String> eventTypes,
+                       boolean includeContext, long createdAt) {}
 
     record ClusterView(String nodeId, boolean leader, List<MemberView> members) {}
 

@@ -55,6 +55,7 @@ Owned by `Instances`.
 | `(none)` | `START` | `RUNNING` | the workflow version resolves | `start` |
 | `(none)` | `START_SUB_WORKFLOW` | `RUNNING` | a SUB_WORKFLOW token spawned it; parentTokenId links them | *internal* |
 | `(none)` | `SCHEDULE_DUE` | `RUNNING` | the fire-time compare-and-set won | `fireDueSchedules` |
+| `(none)` | `TRIGGER_FIRED` | `RUNNING` | the dispatch-position compare-and-set won | `dispatchTriggers` |
 | `RUNNING` | `TOKEN_REACHED_SUCCESSFUL_END` | `COMPLETED` | no token of the instance is still active | *internal* |
 | `RUNNING` | `UNRECOVERABLE_FAILURE` | `FAILED` | the comp-log holds no uncompensated entry | *internal* |
 | `RUNNING` | `UNRECOVERABLE_FAILURE` | `COMPENSATING` | the comp-log holds an uncompensated entry | *internal* |

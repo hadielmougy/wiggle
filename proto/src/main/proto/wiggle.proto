@@ -31,6 +31,12 @@ service WiggleControlPlane {
     rpc ListSchedules(Empty) returns (ScheduleList);
     rpc DeleteSchedule(ScheduleIdRequest) returns (Ack);
 
+    // Starts on other instances' events: when an instance of the source workflow appends one of the
+    // event types, the leader starts the trigger's workflow. Upserted on (workflow, source).
+    rpc CreateTrigger(CreateTriggerRequest) returns (TriggerView);
+    rpc ListTriggers(Empty) returns (TriggerList);
+    rpc DeleteTrigger(TriggerIdRequest) returns (Ack);
+
     rpc PollTasks(PollRequest) returns (TaskList);
     // The one way a worker reports finished work: one run of steps, or several independent runs
     // applied in a single commit. The server resolves each workflow's execution mode and decides
@@ -275,6 +281,30 @@ message ScheduleList {
 }
 
 message ScheduleIdRequest {
+    string id = 1;
+}
+
+message CreateTriggerRequest {
+    string workflow = 1;              // the workflow to start
+    string source = 2;                // the workflow whose events fire it, or "*" for any other
+    repeated string event_types = 3;  // lifecycle types (wf.completed, wf.failed, ...) or emitted types
+    bool include_context = 4;         // start with the source instance's context
+}
+
+message TriggerView {
+    string id = 1;
+    string workflow = 2;
+    string source = 3;
+    repeated string event_types = 4;
+    bool include_context = 5;
+    int64 created_at = 6;
+}
+
+message TriggerList {
+    repeated TriggerView triggers = 1;
+}
+
+message TriggerIdRequest {
     string id = 1;
 }
 
