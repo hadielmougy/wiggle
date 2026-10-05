@@ -160,6 +160,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             for (com.wiggle.core.Node n : def.nodes().values()) {
                 if (n.kind() == com.wiggle.core.NodeKind.SUB_WORKFLOW) authz.require(Permissions.INSTANCE_START, n.activity());
             }
+            for (String queue : def.workerQueues()) authz.require(Permissions.WORKFLOW_REGISTER, queue);
             if (req.getForce() && !ServerConfig.allowGraphReplace()) {
                 throw EngineException.conflict("replacing the graph of '" + def.key()
                         + "' was requested but this server does not allow it; set "

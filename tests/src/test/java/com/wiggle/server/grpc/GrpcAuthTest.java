@@ -184,6 +184,10 @@ class GrpcAuthTest {
                         "a child workflow the key may not start");
                 assertFalse(admin.workflowNames().contains("acme.parent"), "a refused definition is not stored");
                 acme.register(parentOf("acme.parent2", "acme.orders"));
+                assertEquals(403, status(() -> acme.register(FlowSpec.define("acme.hijack", 1, Map.class, Steps.class,
+                        (f, s) -> f.apply(s::work, "globex.orders")))), "a step on another tenant's queue");
+                assertFalse(admin.workflowNames().contains("acme.hijack"));
+                acme.register(FlowSpec.define("acme.gpu", 1, Map.class, Steps.class, (f, s) -> f.apply(s::work, "acme.gpu-q")));
 
                 com.wiggle.core.TaskActivation task = globex.poll("g1", List.of("globex.orders"), 1, 60_000, 5_000)
                         .tasks().getFirst();

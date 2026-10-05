@@ -303,7 +303,7 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 | `GetWorkflow`, `GetStepStats` | `read:<workflow>` |
 | `ListInstances` | `read:<workflow>` when it names a workflow; `read` on any scope by correlation id, listing only the workflows it may read; else `read` |
 | `GetInstance` | `read:<the instance's workflow>` |
-| `RegisterWorkflow` | `workflow.register:<workflow>`, and `instance.start:<child>` for each sub-workflow node |
+| `RegisterWorkflow` | `workflow.register:<workflow>`, `workflow.register:<queue>` for each queue its steps run on, and `instance.start:<child>` for each sub-workflow node |
 | `StartInstance` | `instance.start:<workflow>` |
 | `CancelInstance`, `SignalInstance` | `instance.cancel` / `instance.signal` `:<the instance's workflow>` |
 | `CreateSchedule`, `DeleteSchedule` | `schedule.write:<workflow>` |
