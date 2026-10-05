@@ -1,5 +1,6 @@
 package com.wiggle.server.search;
 
+import com.wiggle.server.auth.Scope;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -72,7 +73,7 @@ class SemanticSearchTest {
         assertEquals("hashing-256", r.model());
         assertEquals(List.of("wfi.s0.a", "wfi.s0.b"), r.hits().stream().map(Search.Hit::instanceId).toList());
         assertTrue(r.hits().get(0).score() > r.hits().get(1).score());
-        assertEquals(List.of(), search(e).semantic("refund", null, null, null, null, 10, false, Set.of()).hits(),
+        assertEquals(List.of(), search(e).semantic("refund", null, null, null, null, 10, false, Scope.NONE).hits(),
                 "a caller who may read no workflow finds nothing");
     }
 

@@ -1,5 +1,6 @@
 package com.wiggle.server.auth;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -8,7 +9,9 @@ import java.util.regex.Pattern;
 
 /**
  * What a role may do. A permission is an action, optionally scoped to one workflow or queue as
- * {@code action:scope}; {@value #ALL} grants every action. An unscoped action covers every scope.
+ * {@code action:scope}; {@value #ALL} grants every action. An unscoped action covers every scope. A
+ * scope ending in {@code .*} is a prefix: {@code read:acme.*} covers {@code acme.orders} and every
+ * other name starting {@code acme.}, but not {@code acme} itself.
  */
 public final class Permissions {
 
@@ -44,15 +47,27 @@ public final class Permissions {
     /** Whether {@code granted} allows {@code action}, on {@code scope} when it is non-null. */
     public static boolean allows(Set<String> granted, String action, String scope) {
         if (granted.contains(ALL) || granted.contains(action)) return true;
-        return scope != null && granted.contains(action + ":" + scope);
+        if (scope == null) return false;
+        String prefix = action + ":";
+        if (granted.contains(prefix + scope)) return true;
+        for (int dot = scope.indexOf('.', 1); dot >= 0; dot = scope.indexOf('.', dot + 1)) {
+            if (granted.contains(prefix + scope.substring(0, dot) + ".*")) return true;
+        }
+        return false;
     }
 
-    /** The workflows {@code granted} may read, or null when it may read every one. */
-    public static Set<String> readableWorkflows(Set<String> granted) {
-        if (granted.contains(ALL) || granted.contains(READ)) return null;
-        Set<String> out = new LinkedHashSet<>();
-        for (String p : granted) if (p.startsWith(READ + ":")) out.add(p.substring(READ.length() + 1));
-        return out;
+    /** The names {@code granted} allows {@code action} on. */
+    public static Scope scope(Set<String> granted, String action) {
+        if (granted.contains(ALL) || granted.contains(action)) return Scope.ALL;
+        String prefix = action + ":";
+        List<String> scopes = new ArrayList<>();
+        for (String p : granted) if (p.startsWith(prefix)) scopes.add(p.substring(prefix.length()));
+        return Scope.parse(scopes);
+    }
+
+    /** The workflows {@code granted} may read. */
+    public static Scope readable(Set<String> granted) {
+        return scope(granted, READ);
     }
 
     /** {@code permissions} with each one checked; throws naming the first that is not a permission. */
@@ -71,7 +86,9 @@ public final class Permissions {
                 if (!SCOPED.contains(action)) {
                     throw new IllegalArgumentException("'" + action + "' takes no scope: '" + p + "'");
                 }
-                if (!SCOPE.matcher(p.substring(colon + 1)).matches()) {
+                String scope = p.substring(colon + 1);
+                if (scope.endsWith(".*")) scope = scope.substring(0, scope.length() - 2);
+                if (!SCOPE.matcher(scope).matches()) {
                     throw new IllegalArgumentException("'" + p + "' has an empty or malformed scope");
                 }
             }

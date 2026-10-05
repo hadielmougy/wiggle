@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * The state machine. Everything an instance does is expressed as tokens moving over
@@ -200,7 +201,12 @@ public final class WorkflowEngine {
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
-        long until = transactions.read(taskId, tx -> Tokens.extendLease(tx, taskId, leaseOwner, extraMillis));
+        return extendLease(taskId, leaseOwner, extraMillis, null);
+    }
+
+    /** The same, for a caller that serves only the queues {@code queues} accepts (null: every queue). */
+    public long extendLease(String taskId, String leaseOwner, long extraMillis, Predicate<String> queues) {
+        long until = transactions.read(taskId, tx -> Tokens.extendLease(tx, taskId, leaseOwner, extraMillis, queues));
         LOG.log(System.Logger.Level.DEBUG, () ->
                 "extendLease: task " + taskId + " owner=" + leaseOwner + " now expires at " + until);
         return until;
@@ -277,9 +283,15 @@ public final class WorkflowEngine {
      * never chains applies every reported step in order and then hands the continuation back.
      */
     public ReportOutcome report(Run run) {
+        return report(run, null);
+    }
+
+    /** The same, for a caller that serves only the queues {@code queues} accepts (null: every queue). */
+    public ReportOutcome report(Run run, Predicate<String> queues) {
         if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
         return transactions.inTx(run.startTaskId, raw -> buffered(raw, tx -> {
             LockedTask task = Tokens.lock(tx, run.startTaskId);
+            Tokens.requireQueue(task.token(), queues);
             ExecutionMode mode = definitions.executionMode(tx, task.inst().workflow, task.inst().version);
             if (compensated(tx, task, run)) {
                 return new ReportOutcome(task.inst().status.name(), 0, null);
@@ -295,26 +307,31 @@ public final class WorkflowEngine {
      * and a refused one wrote nothing and may be reported again in a call of its own.
      */
     public Map<String, RunResult> report(List<Run> runs) {
+        return report(runs, null);
+    }
+
+    /** The same, for a caller that serves only the queues {@code queues} accepts (null: every queue). */
+    public Map<String, RunResult> report(List<Run> runs, Predicate<String> queues) {
         requireWellFormed(runs);
-        if (runs.size() == 1) return replaySingly(runs);
+        if (runs.size() == 1) return replaySingly(runs, queues);
         Map<Integer, List<Run>> byShard = new LinkedHashMap<>();
         for (Run run : runs) {
             byShard.computeIfAbsent(transactions.shardOf(run.startTaskId()), s -> new ArrayList<>()).add(run);
         }
         if (byShard.size() > 1) {
             Map<String, RunResult> merged = new HashMap<>();
-            byShard.values().forEach(group -> merged.putAll(report(group)));
+            byShard.values().forEach(group -> merged.putAll(report(group, queues)));
             Map<String, RunResult> results = new LinkedHashMap<>();
             for (Run run : runs) results.put(run.startTaskId(), merged.get(run.startTaskId()));
             return results;
         }
         int shard = byShard.keySet().iterator().next();
         try {
-            return transactions.inShard(shard, tx -> localAsyncBatch.apply(tx, runs));
+            return transactions.inShard(shard, tx -> localAsyncBatch.apply(tx, runs, queues));
         } catch (RuntimeException e) {
             LOG.log(System.Logger.Level.WARNING, () -> "reportSteps: batch of " + runs.size()
                     + " rolled back (" + e + "); replaying each run in its own transaction");
-            return replaySingly(runs);
+            return replaySingly(runs, queues);
         }
     }
 
@@ -334,11 +351,11 @@ public final class WorkflowEngine {
      * gets a result whatever happens -- earlier replays have already committed, so throwing out
      * of this loop would tell the caller nothing happened when some of it durably did.
      */
-    private Map<String, RunResult> replaySingly(List<Run> runs) {
+    private Map<String, RunResult> replaySingly(List<Run> runs, Predicate<String> queues) {
         Map<String, RunResult> results = new LinkedHashMap<>();
         for (Run run : runs) {
             try {
-                results.put(run.startTaskId(), RunResult.of(report(run)));
+                results.put(run.startTaskId(), RunResult.of(report(run, queues)));
             } catch (EngineException e) {
                 results.put(run.startTaskId(), RunResult.reject(e));
             } catch (RuntimeException e) {
@@ -737,10 +754,16 @@ public final class WorkflowEngine {
 
     /** Fails a task. Retries per the node's policy; when exhausted the whole instance fails. */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
+        fail(taskId, leaseOwner, message, retryable, null);
+    }
+
+    /** The same, for a caller that serves only the queues {@code queues} accepts (null: every queue). */
+    public void fail(String taskId, String leaseOwner, String message, boolean retryable, Predicate<String> queues) {
         transactions.inTxVoid(taskId, raw -> bufferedVoid(raw, tx -> {
             LockedTask locked = Tokens.lock(tx, taskId);
             Instance inst = locked.inst();
             Token t = locked.token();
+            Tokens.requireQueue(t, queues);
             Tokens.requireLease(t, leaseOwner);
             if (!inst.status.live()) return;
             Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);

@@ -136,6 +136,75 @@ class GrpcAuthTest {
         }
     }
 
+    private static final FlowSpec ACME = FlowSpec.define("acme.orders", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+    private static final FlowSpec GLOBEX = FlowSpec.define("globex.orders", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
+
+    private static FlowSpec parentOf(String name, String child) {
+        return FlowSpec.define(name, 1, Map.class, Steps.class,
+                (f, s) -> f.thenSubFlow("child", child, Map.class).thenApply(s::work));
+    }
+
+    private static WiggleClient.TokenInfo token(WiggleClient c, String instanceId, String taskId) {
+        return c.instanceDetail(instanceId).tokens().stream().filter(t -> t.id().equals(taskId)).findFirst().orElseThrow();
+    }
+
+    /** A tenant's key, everything scoped to its prefix as the portal grants it. */
+    private static String tenantKey(Accounts accounts, String slug) {
+        String p = slug + ".*";
+        accounts.putRole("ops", "wc-" + slug, List.of("read:" + p, "task.poll:" + p, "workflow.register:" + p,
+                "instance.start:" + p, "schedule.write:" + p), true);
+        return accounts.createApiKey("ops", slug, "wc-" + slug, null);
+    }
+
+    @Test @DisplayName("two tenants on prefix scopes: listings are filtered, and neither can touch the other's work")
+    void prefixTenants() throws Exception {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+            Accounts accounts = server.accounts();
+            String adminKey = accounts.createApiKey("ops", "root", "admin", null);
+            try (WiggleClient admin = client(server, adminKey);
+                 WiggleClient acme = client(server, tenantKey(accounts, "acme"));
+                 WiggleClient globex = client(server, tenantKey(accounts, "globex"))) {
+                acme.register(ACME);
+                globex.register(GLOBEX);
+                assertEquals(403, status(() -> acme.register(GLOBEX)));
+                String mine = acme.start("acme.orders", Map.of(), null, "shared");
+                String theirs = globex.start("globex.orders", Map.of(), null, "shared");
+                acme.createSchedule("acme.orders", Duration.ofHours(1), Map.of());
+                globex.createSchedule("globex.orders", Duration.ofHours(1), Map.of());
+
+                assertEquals(List.of("acme.orders"), acme.workflowNames());
+                assertEquals(List.of("acme.orders"), acme.schedules().stream().map(WiggleClient.ScheduleInfo::workflow).toList());
+                assertEquals(List.of(mine), acme.findByCorrelation("shared").stream()
+                        .map(com.wiggle.core.InstanceView::id).toList(), "a correlation id two tenants share");
+                assertEquals(List.of("acme.orders"), acme.backlogCoverage(100).stream()
+                        .map(WiggleClient.BacklogSlice::workflow).distinct().toList());
+                assertEquals(2, admin.findByCorrelation("shared").size(), "unscoped read sees both");
+
+                assertEquals(403, status(() -> acme.register(parentOf("acme.parent", "globex.orders"))),
+                        "a child workflow the key may not start");
+                assertFalse(admin.workflowNames().contains("acme.parent"), "a refused definition is not stored");
+                acme.register(parentOf("acme.parent2", "acme.orders"));
+
+                com.wiggle.core.TaskActivation task = globex.poll("g1", List.of("globex.orders"), 1, 60_000, 5_000)
+                        .tasks().getFirst();
+                assertEquals(theirs, task.instanceId());
+                String owner = task.leaseOwner();
+                WiggleClient.TokenInfo before = token(admin, theirs, task.taskId());
+                assertEquals(404, status(() -> acme.heartbeat(task.taskId(), owner, 60_000)));
+                assertEquals(404, status(() -> acme.fail(task.taskId(), owner, "no", false)));
+                WiggleClient.RunOutcome reported = acme.reportSteps(List.of(new WiggleClient.RunSubmission(task.taskId(),
+                        owner, List.of(new WiggleClient.StepReport(task.nodeId(), Map.of("x", 1), null)), false)))
+                        .get(task.taskId());
+                assertEquals(404, reported.errorStatus());
+                assertEquals("RUNNING", admin.instance(theirs).status(), "the other tenant's instance is untouched");
+                WiggleClient.TokenInfo after = token(admin, theirs, task.taskId());
+                assertEquals(List.of(before.status(), before.attempt(), before.leaseOwner()),
+                        List.of(after.status(), after.attempt(), after.leaseOwner()), "and so is its task");
+                globex.heartbeat(task.taskId(), owner, 60_000);
+            }
+        }
+    }
+
     @Test @DisplayName("a worker with a key runs its steps, and stops being let in once the key is deleted")
     void workerAndRevocation() throws Exception {
         try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {

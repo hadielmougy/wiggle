@@ -4,6 +4,7 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.NodeStats;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.server.auth.Scope;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.search.Search;
@@ -43,7 +44,7 @@ public final class EngineDashboardData implements DashboardData {
     }
 
     @Override public Optional<SearchView> search(String text, String workflow, String status, int limit,
-                                                 boolean partialOk, boolean semantic, Set<String> readable) {
+                                                 boolean partialOk, boolean semantic, Scope readable) {
         if (search == null) return Optional.empty();
         List<Search.Hit> hits;
         boolean partial;
