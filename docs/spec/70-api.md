@@ -309,7 +309,8 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 | RPC | Permission |
 |---|---|
 | `HealthCheck` | none |
-| `GetCluster`, `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules`, `ListTriggers` | `read` |
+| `GetCluster`, `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules` | `read` |
+| `ListTriggers` | `read` on any scope; only the triggers of workflows it may read are listed |
 | `GetWorkflow`, `GetStepStats` | `read:<workflow>` |
 | `ListInstances` | `read:<workflow>` when it names a workflow, else `read` |
 | `GetInstance` | `read:<the instance's workflow>` |

@@ -314,9 +314,12 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void listTriggers(Empty req, StreamObserver<TriggerList> resp) {
         run(resp, () -> {
-            authz.require(Permissions.READ, null);
+            authz.requireAny(Permissions.READ);
+            Set<String> readable = authz.readableWorkflows();
             TriggerList.Builder out = TriggerList.newBuilder();
-            engine.triggers().forEach(t -> out.addTriggers(triggerView(t)));
+            engine.triggers().forEach(t -> {
+                if (readable == null || readable.contains(t.workflow)) out.addTriggers(triggerView(t));
+            });
             return out.build();
         });
     }
