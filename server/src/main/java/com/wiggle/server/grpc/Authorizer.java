@@ -4,6 +4,7 @@ import com.wiggle.server.ServerConfig.GrpcAuth;
 import com.wiggle.server.auth.Accounts;
 import com.wiggle.server.auth.AuthCache;
 import com.wiggle.server.auth.Permissions;
+import com.wiggle.server.auth.Scope;
 import io.grpc.Context;
 import io.grpc.Contexts;
 import io.grpc.Grpc;
@@ -130,10 +131,10 @@ public final class Authorizer implements ServerInterceptor {
         refuse(c, action);
     }
 
-    /** The workflows the current caller may read, or null for every one (and whenever checks are off). */
-    java.util.Set<String> readableWorkflows() {
-        if (mode != GrpcAuth.ENFORCE) return null;
-        return Permissions.readableWorkflows(caller().permissions());
+    /** The names the current caller may do {@code action} on; every name unless checks are enforced. */
+    Scope scope(String action) {
+        if (mode != GrpcAuth.ENFORCE) return Scope.ALL;
+        return Permissions.scope(caller().permissions(), action);
     }
 
     private static Caller caller() {

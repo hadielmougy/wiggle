@@ -441,7 +441,7 @@ public final class DashboardServlet extends HttpServlet {
         DashboardData.SearchView found = data.search(trimToNull(req.getParameter("q")),
                 trimToNull(req.getParameter("workflow")), trimToNull(req.getParameter("status")),
                 parseInt(req.getParameter("limit"), 50), "true".equals(req.getParameter("partial")),
-                "semantic".equals(req.getParameter("mode")), Permissions.readableWorkflows(principal(req).permissions())).orElse(null);
+                "semantic".equals(req.getParameter("mode")), Permissions.readable(principal(req).permissions())).orElse(null);
         if (found == null) { error(res, 404, "search is not enabled on this deployment"); return; }
         List<Object> hits = new ArrayList<>();
         for (DashboardData.SearchHitView h : found.hits()) {

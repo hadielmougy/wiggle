@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
 
 /**
@@ -202,12 +203,21 @@ final class Tokens {
                 ? EngineException.notFound("instance") : EngineException.notFound("task"));
     }
 
+    /** Refuses, as if there were no such task, a caller whose {@code queues} (null: every queue) miss the task's. */
+    static void requireQueue(Token t, Predicate<String> queues) {
+        if (queues != null && !queues.test(t.queue)) throw EngineException.notFound("task");
+    }
+
     static void requireLease(Token t, String leaseOwner) {
         TokenState.of(t.status).requireLeasedBy(t, leaseOwner);
     }
 
-    /** Renews in one write; only a refused renewal reads the token, to say why it was refused. */
-    static long extendLease(Tx tx, String taskId, String leaseOwner, long extraMillis) {
+    /**
+     * Renews in one write; only a refused renewal reads the token, to say why it was refused. A
+     * caller limited to some {@code queues} reads it first, to check the task is on one of them.
+     */
+    static long extendLease(Tx tx, String taskId, String leaseOwner, long extraMillis, Predicate<String> queues) {
+        if (queues != null) requireQueue(tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task")), queues);
         long now = System.currentTimeMillis();
         long until = now + extraMillis;
         if (tx.renewLease(taskId, leaseOwner, until, now)) return until;

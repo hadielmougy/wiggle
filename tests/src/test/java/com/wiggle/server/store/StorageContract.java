@@ -8,6 +8,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.server.auth.Scope;
 import com.wiggle.server.store.Rows.CompLog;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Schedule;
@@ -1627,6 +1628,30 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("a search scoped to prefixes finds only the workflows under them, wildcards in a prefix taken literally")
+    void searchDocPrefixScope() {
+        String word = "p" + run;
+        String acmeOrders = id("wfi"), acmeBilling = id("wfi"), acme = id("wfi"), acmex = id("wfi"),
+                globex = id("wfi"), underscore = id("wfi");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(searchDoc(acmeOrders, "acme.orders", "RUNNING", word, ANCIENT + 1));
+            tx.upsertSearchDoc(searchDoc(acmeBilling, "acme.billing", "RUNNING", word, ANCIENT + 2));
+            tx.upsertSearchDoc(searchDoc(acme, "acme", "RUNNING", word, ANCIENT + 3));
+            tx.upsertSearchDoc(searchDoc(acmex, "acmex.orders", "RUNNING", word, ANCIENT + 4));
+            tx.upsertSearchDoc(searchDoc(globex, "globex.orders", "RUNNING", word, ANCIENT + 5));
+            tx.upsertSearchDoc(searchDoc(underscore, "ac_e.orders", "RUNNING", word, ANCIENT + 6));
+            return null;
+        });
+        assertEquals(Set.of(acmeOrders, acmeBilling),
+                Set.copyOf(ids(new Rows.SearchQuery(word, Scope.parse(List.of("acme.*")), null, null, null, 10))));
+        assertEquals(Set.of(acmeOrders, acmeBilling, globex),
+                Set.copyOf(ids(new Rows.SearchQuery(word, Scope.parse(List.of("acme.*", "globex.orders")), null, null, null, 10))),
+                "prefixes and exact names together");
+        assertEquals(List.of(underscore), ids(new Rows.SearchQuery(word, Scope.parse(List.of("ac_e.*")), null, null, null, 10)),
+                "an underscore in a prefix is not a wildcard");
+    }
+
+    @Test
     @DisplayName("a search needs every word, ranks by how often they occur, and filters inside the query")
     void searchDocMatching() {
         String a = "a" + run, b = "b" + run;
@@ -1643,9 +1668,9 @@ abstract class StorageContract {
         assertEquals(List.of(many, other, one), both, "both words needed; more occurrences first, then newest");
         assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).contains(onlyA),
                 "a word inside JSON text is found");
-        assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, Set.of("orders"), "FAILED", null, null, 10)));
-        assertEquals(List.of(other), ids(new Rows.SearchQuery(a + " " + b, Set.of("billing"), null, null, null, 10)));
-        assertEquals(List.of(), ids(new Rows.SearchQuery(a + " " + b, Set.of(), null, null, null, 10)), "no workflow allowed");
+        assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, Scope.of("orders"), "FAILED", null, null, 10)));
+        assertEquals(List.of(other), ids(new Rows.SearchQuery(a + " " + b, Scope.of("billing"), null, null, null, 10)));
+        assertEquals(List.of(), ids(new Rows.SearchQuery(a + " " + b, Scope.NONE, null, null, null, 10)), "no workflow allowed");
         assertEquals(List.of(other, one), ids(new Rows.SearchQuery(a + " " + b, null, "RUNNING", null, null, 10)));
         assertEquals(List.of(many), ids(new Rows.SearchQuery(a + " " + b, null, null, ANCIENT + 2, ANCIENT + 2, 10)),
                 "the time bounds are inclusive");
@@ -1701,7 +1726,7 @@ abstract class StorageContract {
             return null;
         });
         List<Rows.SearchHit> hits = storage.inTx(tx -> tx.searchVectors(
-                new Rows.VectorQuery(model, vec(1, 0, 0), java.util.Set.of("orders"), null, null, null, 10)));
+                new Rows.VectorQuery(model, vec(1, 0, 0), Scope.of("orders"), null, null, null, 10)));
         assertEquals(List.of(near, far), hits.stream().map(h -> h.doc().instanceId()).toList(),
                 "closest first; another workflow, and a document with no vector, are left out");
         assertTrue(hits.get(0).score() > 0.99 && Math.abs(hits.get(1).score()) < 0.01, hits.toString());
@@ -1714,7 +1739,7 @@ abstract class StorageContract {
             return null;
         });
         assertEquals(near, storage.inTx(tx -> tx.searchVectors(new Rows.VectorQuery(model, vec(1, 0.1f, 0),
-                java.util.Set.of("orders"), null, null, null, 1))).getFirst().doc().instanceId(),
+                Scope.of("orders"), null, null, null, 1))).getFirst().doc().instanceId(),
                 "an older vector delivered late does not replace the newer one");
 
         List<Rows.SearchVector> held = storage.inTx(tx -> tx.searchVectorsOf(List.of(near)));

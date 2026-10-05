@@ -298,18 +298,25 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 | RPC | Permission |
 |---|---|
 | `HealthCheck` | none |
-| `GetCluster`, `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules` | `read` |
+| `GetCluster` | `read` |
+| `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules` | `read` on any scope; only the workflows it may read are listed |
 | `GetWorkflow`, `GetStepStats` | `read:<workflow>` |
-| `ListInstances` | `read:<workflow>` when it names a workflow, else `read` |
+| `ListInstances` | `read:<workflow>` when it names a workflow; `read` on any scope by correlation id, listing only the workflows it may read; else `read` |
 | `GetInstance` | `read:<the instance's workflow>` |
-| `RegisterWorkflow` | `workflow.register:<workflow>` |
+| `RegisterWorkflow` | `workflow.register:<workflow>`, `workflow.register:<queue>` for each queue its steps run on, and `instance.start:<child>` for each sub-workflow node |
 | `StartInstance` | `instance.start:<workflow>` |
 | `CancelInstance`, `SignalInstance` | `instance.cancel` / `instance.signal` `:<the instance's workflow>` |
 | `CreateSchedule`, `DeleteSchedule` | `schedule.write:<workflow>` |
 | `PollTasks` | `task.poll:<queue>` for each queue it names; `task.poll` when it names none (every queue) |
-| `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll` on any scope (the lease already ties the call to its task) |
+| `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll:<the task's queue>`; a task on a queue the caller may not poll is answered as not found (a run in `ReportSteps` gets 404) |
 | `PollEvents`, `AckEvents` | `event.read` |
 | `SearchInstances` | `read` on any scope; the hits are narrowed to the workflows it may read |
+
+**WGL-API-116** (MUST) A scope ending in `.*` MUST cover every name that starts with what precedes
+the `*`, dot included: `read:acme.*` covers `acme.orders` and `acme.eu.orders`, but not `acme` or
+`acmex.orders`. A scope MUST hold no other `*`, and `.*` alone is not a scope. A tenant whose
+workflows and queues all start with its slug is isolated by its credentials' prefix scopes; the
+engine has no tenant of its own. `event.read` takes no scope, so a tenant's role should not hold it.
 
 **WGL-API-114** (MUST) A credential MUST be resolved through the node's cache
 ([WGL-SHARD-184](85-sharding.md#13-users-and-authorization)), so a call reads the auth shard only on
@@ -321,7 +328,8 @@ second after the change. A call already running, such as an open long poll, fini
 every call when one is set, and MUST report `UNAUTHENTICATED` as 401 and `PERMISSION_DENIED` as 403.
 
 *Verified by:* `server/grpc/GrpcAuthTest` (every RPC of the service is checked, so one added without
-a permission fails it), `tests/TlsTest`, `server/auth/AccountsTest`, `server/auth/AuthCacheTest`.
+a permission fails it; two tenants on prefix scopes), `tests/TlsTest`, `server/auth/AccountsTest`,
+`server/auth/AuthCacheTest`, `server/auth/PermissionsTest`.
 
 ## 12. Search
 

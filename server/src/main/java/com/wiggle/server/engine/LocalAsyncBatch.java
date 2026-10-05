@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Predicate;
 
 /**
  * A cross-instance batch of LOCAL_ASYNC runs, applied under one transaction and one commit. Each
@@ -34,7 +35,8 @@ final class LocalAsyncBatch {
         this.definitions = definitions;
     }
 
-    Map<String, RunResult> apply(Tx tx, List<Run> runs) {
+    /** @param queues the queues the caller serves, null for every one; a run on another is refused as not found */
+    Map<String, RunResult> apply(Tx tx, List<Run> runs, Predicate<String> queues) {
         Map<String, RunResult> results = new LinkedHashMap<>();
 
         Map<String, Token> probes = byId(tx.findTokens(
@@ -68,7 +70,7 @@ final class LocalAsyncBatch {
         for (Run run : probed) {
             Instance inst = locked.get(instanceOf.get(run.startTaskId()));
             Token t = inst == null ? null : tokens.get(run.startTaskId());
-            RunResult refusal = validate(tx, inst, t, run);
+            RunResult refusal = validate(tx, inst, t, run, queues);
             if (refusal != null) {
                 results.put(run.startTaskId(), refusal);
             } else {
@@ -91,12 +93,12 @@ final class LocalAsyncBatch {
         return out;
     }
 
-    private RunResult validate(Tx tx, Instance inst, Token t, Run run) {
+    private RunResult validate(Tx tx, Instance inst, Token t, Run run, Predicate<String> queues) {
         if (inst == null) {
             return RunResult.reject(EngineException.conflict("instance of task " + run.startTaskId()
                     + " is held by a concurrent operation or gone -- report this run singly"));
         }
-        if (t == null) {
+        if (t == null || (queues != null && !queues.test(t.queue))) {
             return RunResult.reject(EngineException.notFound("task"));
         }
         if (!inst.status.running()) {

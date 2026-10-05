@@ -817,5 +817,6 @@ weight.
 - **A search engine other than Postgres.** WGL-SHARD-190 to 198 do not depend on pgvector. A
   `SearchStore` SPI would let OpenSearch or a dedicated vector database stand in for search shards;
   pgvector first keeps one operational stack.
-- **Multi-tenancy.** If tenants arrive, the auth shard's permission scopes and the search filters
-  are where tenant isolation would attach.
+- **Multi-tenancy.** *Settled:* tenants share an engine by naming (`<slug>.<name>` for workflows
+  and queues) and prefix-scoped credentials ([WGL-API-116](70-api.md#11-per-rpc-authorization));
+  the engine keeps no tenant of its own.

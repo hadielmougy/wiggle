@@ -69,7 +69,7 @@ public interface DashboardData {
 
     /** {@code semantic} ranks by closeness in meaning instead of by the words. */
     Optional<SearchView> search(String text, String workflow, String status, int limit, boolean partialOk,
-                                boolean semantic, java.util.Set<String> readable);
+                                boolean semantic, com.wiggle.server.auth.Scope readable);
 
     record SearchView(List<SearchHitView> hits, boolean partial) {}
 

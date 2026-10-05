@@ -1,6 +1,7 @@
 package com.wiggle.server.grpc;
 
 import com.wiggle.server.auth.Permissions;
+import com.wiggle.server.auth.Scope;
 import com.wiggle.core.Tls;
 import com.wiggle.proto.*;
 import com.wiggle.server.ServerConfig;
@@ -137,8 +138,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     public void listWorkflows(Empty req, StreamObserver<WorkflowNames> resp) {
         LOG.log(System.Logger.Level.DEBUG, "rpc ListWorkflows");
         run(resp, () -> {
-            authz.require(Permissions.READ, null);
-            return WorkflowNames.newBuilder().addAllWorkflows(engine.workflowNames()).build();
+            authz.requireAny(Permissions.READ);
+            Scope readable = authz.scope(Permissions.READ);
+            return WorkflowNames.newBuilder()
+                    .addAllWorkflows(engine.workflowNames().stream().filter(readable::matches).toList()).build();
         });
     }
 
@@ -154,6 +157,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             }
             com.wiggle.core.WorkflowDefinition def = com.wiggle.core.WorkflowDefinition.fromJson(raw);
             authz.require(Permissions.WORKFLOW_REGISTER, def.name());
+            for (com.wiggle.core.Node n : def.nodes().values()) {
+                if (n.kind() == com.wiggle.core.NodeKind.SUB_WORKFLOW) authz.require(Permissions.INSTANCE_START, n.activity());
+            }
+            for (String queue : def.workerQueues()) authz.require(Permissions.WORKFLOW_REGISTER, queue);
             if (req.getForce() && !ServerConfig.allowGraphReplace()) {
                 throw EngineException.conflict("replacing the graph of '" + def.key()
                         + "' was requested but this server does not allow it; set "
@@ -208,13 +215,20 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         run(resp, () -> {
             String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
             String status = req.hasStatus() ? req.getStatus() : null;
-            authz.require(Permissions.READ, req.hasCorrelationId() ? null : workflow);
+            Scope readable;
+            if (req.hasCorrelationId()) {
+                authz.requireAny(Permissions.READ);
+                readable = authz.scope(Permissions.READ);
+            } else {
+                authz.require(Permissions.READ, workflow);
+                readable = Scope.ALL;
+            }
             int limit = req.getLimit() > 0 ? req.getLimit() : 50;
             List<com.wiggle.core.InstanceView> views = req.hasCorrelationId()
                     ? engine.findByCorrelation(req.getCorrelationId(), limit)
                     : engine.list(workflow, status, limit);
             InstanceList.Builder out = InstanceList.newBuilder();
-            for (com.wiggle.core.InstanceView v : views) out.addInstances(viewProto(v));
+            for (com.wiggle.core.InstanceView v : views) if (readable.matches(v.workflow())) out.addInstances(viewProto(v));
             return out.build();
         });
     }
@@ -277,9 +291,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void listSchedules(Empty req, StreamObserver<ScheduleList> resp) {
         run(resp, () -> {
-            authz.require(Permissions.READ, null);
+            authz.requireAny(Permissions.READ);
+            Scope readable = authz.scope(Permissions.READ);
             ScheduleList.Builder out = ScheduleList.newBuilder();
-            engine.schedules().forEach(s -> out.addSchedules(scheduleView(s)));
+            engine.schedules().forEach(s -> { if (readable.matches(s.workflow)) out.addSchedules(scheduleView(s)); });
             return out.build();
         });
     }
@@ -295,6 +310,12 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             engine.deleteSchedule(req.getId());
             return Ack.newBuilder().setOk(true).build();
         });
+    }
+
+    /** The queues the current caller may serve tasks of, or null for every one. */
+    private java.util.function.Predicate<String> servedQueues() {
+        Scope queues = authz.scope(Permissions.TASK_POLL);
+        return queues.all() ? null : queues::matches;
     }
 
     /** The workflow of instance {@code id}, which scopes what may be done to it; 404 when there is none. */
@@ -325,11 +346,13 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     @Override
     public void getBacklogCoverage(BacklogCoverageRequest req, StreamObserver<BacklogCoverage> resp) {
         run(resp, () -> {
-            authz.require(Permissions.READ, null);
+            authz.requireAny(Permissions.READ);
+            Scope readable = authz.scope(Permissions.READ);
             int max = req.getMax() > 0 ? Math.min(req.getMax(), 500) : 100;
             BacklogCoverage.Builder out = BacklogCoverage.newBuilder()
                     .setLivePollers(engine.livePollers().size());
             for (com.wiggle.server.store.Rows.BacklogSlice s : engine.backlog(max)) {
+                if (!readable.matches(s.workflow())) continue;
                 out.addSlices(BacklogSlice.newBuilder()
                         .setWorkflow(s.workflow())
                         .setVersion(s.version())
@@ -386,7 +409,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 + " message=" + req.getMessage());
         run(resp, () -> {
             authz.requireAny(Permissions.TASK_POLL);
-            engine.fail(req.getTaskId(), req.getLeaseOwner(), req.getMessage(), req.getRetryable());
+            engine.fail(req.getTaskId(), req.getLeaseOwner(), req.getMessage(), req.getRetryable(), servedQueues());
             return Ack.newBuilder().setOk(true).build();
         });
     }
@@ -397,7 +420,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 + " leaseOwner=" + req.getLeaseOwner() + " extendMillis=" + req.getExtendMillis());
         run(resp, () -> {
             authz.requireAny(Permissions.TASK_POLL);
-            long until = engine.extendLease(req.getTaskId(), req.getLeaseOwner(), req.getExtendMillis());
+            long until = engine.extendLease(req.getTaskId(), req.getLeaseOwner(), req.getExtendMillis(), servedQueues());
             return HeartbeatResult.newBuilder().setLeaseExpiresAt(until).build();
         });
     }
@@ -411,7 +434,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             for (ReportedRun r : req.getRunsList()) {
                 runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), stepInputs(r), r.getFinal()));
             }
-            Map<String, WorkflowEngine.RunResult> results = engine.report(runs);
+            Map<String, WorkflowEngine.RunResult> results = engine.report(runs, servedQueues());
             ReportStepsResult.Builder out = ReportStepsResult.newBuilder();
             for (WorkflowEngine.Run submitted : runs) {
                 WorkflowEngine.RunResult r = results.get(submitted.startTaskId());
@@ -502,12 +525,12 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             List<com.wiggle.server.search.Search.Hit> hits;
             if (req.getSemantic()) {
                 com.wiggle.server.search.Search.SemanticResult r = search.semantic(req.getText(), workflow, status,
-                        from, to, limit, req.getPartialOk(), authz.readableWorkflows());
+                        from, to, limit, req.getPartialOk(), authz.scope(Permissions.READ));
                 out.setPartial(r.partial()).setModel(r.model());
                 hits = r.hits();
             } else {
                 com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
-                        limit, req.getPartialOk(), authz.readableWorkflows());
+                        limit, req.getPartialOk(), authz.scope(Permissions.READ));
                 out.setPartial(r.partial());
                 hits = r.hits();
             }

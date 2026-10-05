@@ -1,5 +1,6 @@
 package com.wiggle.server.search;
 
+import com.wiggle.server.auth.Scope;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows;
@@ -9,7 +10,6 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Full-text search over instances, as callers use it: limited to the workflows the caller may read,
@@ -55,7 +55,7 @@ public final class Search {
      * no model's index is complete yet, or when this node has no embedder for the one that is.
      */
     public SemanticResult semantic(String text, String workflow, String status, Long from, Long to, int limit,
-                                   boolean partialOk, Set<String> readable) {
+                                   boolean partialOk, Scope readable) {
         if (embedders.isEmpty()) {
             throw EngineException.conflict("semantic search needs an embedder: set WIGGLE_EMBEDDER");
         }
@@ -69,18 +69,12 @@ public final class Search {
             throw EngineException.conflict("queries are served by model " + serving.model() + ", which this node "
                     + "has no embedder for; configure it (WIGGLE_EMBEDDER_PREVIOUS_MODEL) until the new index is built");
         }
-        Set<String> workflows = scope(workflow, readable);
-        if (workflows != null && workflows.isEmpty()) return new SemanticResult(List.of(), false, serving.model());
+        Scope workflows = (readable == null ? Scope.ALL : readable).narrow(workflow);
+        if (workflows.isEmpty()) return new SemanticResult(List.of(), false, serving.model());
         float[] vector = embedder.embed(List.of(text == null ? "" : text)).getFirst();
         SearchIndex.Result r = index.searchVectors(new Rows.VectorQuery(serving.model(), vector, workflows, status,
                 from, to, Math.max(1, Math.min(limit, 1000))), partialOk);
         return new SemanticResult(hits(r), r.partial(), serving.model());
-    }
-
-    private static Set<String> scope(String workflow, Set<String> readable) {
-        if (workflow == null) return readable;
-        if (readable == null || readable.contains(workflow)) return Set.of(workflow);
-        return Set.of();
     }
 
     private List<Hit> hits(SearchIndex.Result r) {
@@ -101,9 +95,9 @@ public final class Search {
      * @param partialOk answer from the shards that respond when one does not, marking the result partial
      */
     public Result search(String text, String workflow, String status, Long from, Long to, int limit,
-                         boolean partialOk, Set<String> readable) {
-        Set<String> workflows = scope(workflow, readable);
-        if (workflows != null && workflows.isEmpty()) return new Result(List.of(), false);
+                         boolean partialOk, Scope readable) {
+        Scope workflows = (readable == null ? Scope.ALL : readable).narrow(workflow);
+        if (workflows.isEmpty()) return new Result(List.of(), false);
         SearchIndex.Result r = index.search(new Rows.SearchQuery(text, workflows, status, from, to,
                 Math.max(1, Math.min(limit, 1000))), partialOk);
         return new Result(hits(r), r.partial());

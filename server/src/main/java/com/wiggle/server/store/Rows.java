@@ -4,6 +4,7 @@ import com.wiggle.core.Doc;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
+import com.wiggle.server.auth.Scope;
 
 /** Mutable storage rows. Deliberately dumb structs -- all invariants live in the engine. */
 public final class Rows {
@@ -247,14 +248,14 @@ public final class Rows {
 
     /**
      * A search: the words {@code text} must all contain (blank: any document), and filters applied
-     * inside each shard's query. {@code workflows} null means every workflow; {@code from}/{@code to}
+     * inside each shard's query. {@code workflows} null means every workflow ({@link Scope#ALL}); {@code from}/{@code to}
      * bound {@code updatedAt}, null for open.
      */
-    public record SearchQuery(String text, java.util.Set<String> workflows, String status, Long from, Long to,
+    public record SearchQuery(String text, Scope workflows, String status, Long from, Long to,
                               int limit) {
         public SearchQuery {
             if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
-            if (workflows != null) workflows = java.util.Set.copyOf(workflows);
+            if (workflows == null) workflows = Scope.ALL;
         }
     }
 
@@ -268,11 +269,11 @@ public final class Rows {
      * A nearest-neighbour search: the documents whose {@code model} vector is closest to
      * {@code vector} by cosine, under the same filters as {@link SearchQuery}.
      */
-    public record VectorQuery(String model, float[] vector, java.util.Set<String> workflows, String status,
+    public record VectorQuery(String model, float[] vector, Scope workflows, String status,
                               Long from, Long to, int limit) {
         public VectorQuery {
             if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
-            if (workflows != null) workflows = java.util.Set.copyOf(workflows);
+            if (workflows == null) workflows = Scope.ALL;
         }
 
         public SearchQuery filters() {

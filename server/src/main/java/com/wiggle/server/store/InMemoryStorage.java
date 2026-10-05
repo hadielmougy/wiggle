@@ -341,7 +341,7 @@ public final class InMemoryStorage implements Storage {
         @Override public List<Rows.SearchHit> searchVectors(Rows.VectorQuery q) {
             Rows.SearchQuery f = q.filters();
             List<Rows.SearchDoc> filtered = searchDocs.values().stream()
-                    .filter(d -> f.workflows() == null || f.workflows().contains(d.workflow()))
+                    .filter(d -> f.workflows().matches(d.workflow()))
                     .filter(d -> f.status() == null || f.status().equals(d.status()))
                     .filter(d -> f.from() == null || d.updatedAt() >= f.from())
                     .filter(d -> f.to() == null || d.updatedAt() <= f.to())
@@ -386,7 +386,7 @@ public final class InMemoryStorage implements Storage {
 
         @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
             List<Rows.SearchDoc> filtered = searchDocs.values().stream()
-                    .filter(d -> q.workflows() == null || q.workflows().contains(d.workflow()))
+                    .filter(d -> q.workflows().matches(d.workflow()))
                     .filter(d -> q.status() == null || q.status().equals(d.status()))
                     .filter(d -> q.from() == null || d.updatedAt() >= q.from())
                     .filter(d -> q.to() == null || d.updatedAt() <= q.to())

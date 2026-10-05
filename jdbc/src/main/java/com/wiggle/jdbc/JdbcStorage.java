@@ -1665,15 +1665,42 @@ public final class JdbcStorage implements Storage {
         /** The filters of {@code f} on {@code wf_search_doc} aliased {@code d}, for a WHERE that already has a condition. */
         private static String docFilters(Rows.SearchQuery f) {
             StringBuilder w = new StringBuilder();
-            if (f.workflows() != null) w.append(f.workflows().isEmpty() ? " AND 1=0" : " AND d.workflow IN (<workflows>)");
+            w.append(workflowFilter(f.workflows(), "d.workflow"));
             if (f.status() != null) w.append(" AND d.status=:status");
             if (f.from() != null) w.append(" AND d.updated_at>=:from");
             if (f.to() != null) w.append(" AND d.updated_at<=:to");
             return w.toString();
         }
 
+        /** {@code scope} on column {@code column}, for a WHERE that already has a condition; bound by {@link #bindWorkflows}. */
+        private static String workflowFilter(com.wiggle.server.auth.Scope scope, String column) {
+            if (scope.all()) return "";
+            if (scope.isEmpty()) return " AND 1=0";
+            List<String> terms = new ArrayList<>();
+            if (!scope.names().isEmpty()) terms.add(column + " IN (<workflows>)");
+            for (int i = 0; i < scope.prefixes().size(); i++) terms.add(column + " LIKE :wfp" + i + " ESCAPE '!'");
+            return " AND (" + String.join(" OR ", terms) + ")";
+        }
+
+        private static void bindWorkflows(Query q, com.wiggle.server.auth.Scope scope) {
+            if (scope.all()) return;
+            if (!scope.names().isEmpty()) q.bindList("workflows", List.copyOf(scope.names()));
+            int i = 0;
+            for (String prefix : scope.prefixes()) q.bind("wfp" + i++, likePrefix(prefix));
+        }
+
+        /** A LIKE pattern matching what starts with {@code prefix}, escaped with {@code !}. */
+        static String likePrefix(String prefix) {
+            StringBuilder out = new StringBuilder(prefix.length() + 1);
+            for (char c : prefix.toCharArray()) {
+                if (c == '!' || c == '%' || c == '_' || c == '[') out.append('!');
+                out.append(c);
+            }
+            return out.append('%').toString();
+        }
+
         private static void bindFilters(Query q, Rows.SearchQuery f) {
-            if (f.workflows() != null && !f.workflows().isEmpty()) q.bindList("workflows", List.copyOf(f.workflows()));
+            bindWorkflows(q, f.workflows());
             if (f.status() != null) q.bind("status", f.status());
             if (f.from() != null) q.bind("from", f.from());
             if (f.to() != null) q.bind("to", f.to());
@@ -1813,7 +1840,7 @@ public final class JdbcStorage implements Storage {
         @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
             boolean text = q.text() != null && !q.text().isBlank();
             StringBuilder where = new StringBuilder(" WHERE 1=1");
-            if (q.workflows() != null) where.append(q.workflows().isEmpty() ? " AND 1=0" : " AND workflow IN (<workflows>)");
+            where.append(workflowFilter(q.workflows(), "workflow"));
             if (q.status() != null) where.append(" AND status=:status");
             if (q.from() != null) where.append(" AND updated_at>=:from");
             if (q.to() != null) where.append(" AND updated_at<=:to");
@@ -1831,7 +1858,7 @@ public final class JdbcStorage implements Storage {
                 query = h.createQuery("SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
                         + " ORDER BY updated_at DESC, instance_id");
             }
-            if (q.workflows() != null && !q.workflows().isEmpty()) query.bindList("workflows", List.copyOf(q.workflows()));
+            bindWorkflows(query, q.workflows());
             if (q.status() != null) query.bind("status", q.status());
             if (q.from() != null) query.bind("from", q.from());
             if (q.to() != null) query.bind("to", q.to());
