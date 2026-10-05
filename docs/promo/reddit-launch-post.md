@@ -6,13 +6,13 @@ r/ExperiencedDevs (only in a relevant discussion, never as a bare plug).
 
 **Title:**
 
-> Wiggle — an open-source durable workflow engine where the workflow is data, not replayed code (looking for contributors)
+> Wiggle — a source-available durable workflow engine where the workflow is data, not replayed code (looking for contributors)
 
 **Body:**
 
 ---
 
-I've been building **[Wiggle](https://wiggle.sh)** — an Apache-2.0 durable workflow engine — and
+I've been building **[Wiggle](https://wiggle.sh)** — a source-available (Elastic License 2.0) durable workflow engine — and
 it's at the point where it needs more eyes and hands than mine.
 
 **The one-paragraph pitch:** you define a business process as a graph with a small Java DSL

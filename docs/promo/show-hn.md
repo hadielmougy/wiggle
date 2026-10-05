@@ -42,7 +42,7 @@ kind cluster with PostgreSQL-backed cells; SIGKILL-ing the coordinator under loa
 window on *new* starts only — running work doesn't notice, and state recovers exactly.
 
 It's one JAR plus a database (or in-memory for tests — the server embeds in a JVM for integration
-tests, which is how the engine's own suite works). Apache-2.0. I'd genuinely value skeptical
+tests, which is how the engine's own suite works). ELv2. I'd genuinely value skeptical
 questions about the model's limits — and if you try it and something is confusing in the first
 ten minutes, that's a bug in the docs I want to hear about.
 

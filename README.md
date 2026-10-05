@@ -14,7 +14,7 @@ the language you already use.**
 [![Maven Central](https://img.shields.io/maven-central/v/sh.wiggle/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/sh.wiggle/wiggle-client)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-hadielmougy%2Fwiggle-2496ed)](https://hub.docker.com/r/hadielmougy/wiggle)
 [![GHCR](https://img.shields.io/badge/ghcr-hadielmougy%2Fwiggle-24292f)](https://github.com/hadielmougy/wiggle/pkgs/container/wiggle)
-[![License](https://img.shields.io/badge/license-Apache--2.0-2f9e63)](LICENSE)
+[![License](https://img.shields.io/badge/license-Elastic--2.0-2f9e63)](LICENSE)
 ![Java](https://img.shields.io/badge/java-21%2B-e0a63a)
 [![Go client](https://img.shields.io/badge/client-go-00add8)](https://github.com/hadielmougy/wiggle-go)
 [![Python client](https://img.shields.io/badge/client-python-3776ab)](https://github.com/hadielmougy/wiggle-python)
@@ -606,5 +606,5 @@ implementation("sh.wiggle:wiggle-client-all:0.0.9")  // author flows + run worke
 ```
 
 <div align="center">
-<sub>Apache-2.0 · built with care for processes that must not lose their place.</sub>
+<sub>ELv2 · built with care for processes that must not lose their place.</sub>
 </div>
