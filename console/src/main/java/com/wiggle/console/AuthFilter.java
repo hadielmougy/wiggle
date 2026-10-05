@@ -47,6 +47,7 @@ public final class AuthFilter implements Filter {
         if (path.startsWith("/api/instances/") && path.endsWith("/cancel")) return Permissions.INSTANCE_CANCEL;
         if (path.startsWith("/api/instances/") && path.contains("/signal/")) return Permissions.INSTANCE_SIGNAL;
         if (path.startsWith("/api/schedules")) return Permissions.SCHEDULE_WRITE;
+        if (path.startsWith("/api/triggers")) return Permissions.TRIGGER_WRITE;
         return Permissions.ALL;
     }
 

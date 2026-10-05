@@ -297,6 +297,54 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         });
     }
 
+    @Override
+    public void createTrigger(CreateTriggerRequest req, StreamObserver<TriggerView> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CreateTrigger workflow=" + req.getWorkflow()
+                + " source=" + req.getSource());
+        run(resp, () -> {
+            authz.require(Permissions.TRIGGER_WRITE, req.getWorkflow());
+            authz.require(Permissions.READ, "*".equals(req.getSource()) ? null : req.getSource());
+            String id = engine.createTrigger(req.getWorkflow(), req.getSource(), req.getEventTypesList(),
+                    req.getIncludeContext());
+            return engine.triggers().stream().filter(t -> t.id.equals(id)).findFirst()
+                    .map(GrpcApi::triggerView).orElseThrow();
+        });
+    }
+
+    @Override
+    public void listTriggers(Empty req, StreamObserver<TriggerList> resp) {
+        run(resp, () -> {
+            authz.requireAny(Permissions.READ);
+            Set<String> readable = authz.readableWorkflows();
+            TriggerList.Builder out = TriggerList.newBuilder();
+            engine.triggers().forEach(t -> {
+                if (readable == null || readable.contains(t.workflow)) out.addTriggers(triggerView(t));
+            });
+            return out.build();
+        });
+    }
+
+    @Override
+    public void deleteTrigger(TriggerIdRequest req, StreamObserver<Ack> resp) {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc DeleteTrigger id=" + req.getId());
+        run(resp, () -> {
+            authz.requireAny(Permissions.TRIGGER_WRITE);
+            String workflow = engine.triggers().stream().filter(t -> t.id.equals(req.getId()))
+                    .map(t -> t.workflow).findFirst().orElse(null);
+            if (workflow != null) authz.require(Permissions.TRIGGER_WRITE, workflow);
+            engine.deleteTrigger(req.getId());
+            return Ack.newBuilder().setOk(true).build();
+        });
+    }
+
+    private static TriggerView triggerView(com.wiggle.server.store.Rows.Trigger t) {
+        return TriggerView.newBuilder()
+                .setId(t.id).setWorkflow(t.workflow).setSource(t.source)
+                .addAllEventTypes(t.eventTypes).setIncludeContext(t.includeContext)
+                .setCreatedAt(t.createdAt)
+                .build();
+    }
+
     /** The workflow of instance {@code id}, which scopes what may be done to it; 404 when there is none. */
     private String workflowOf(String id) {
         return engine.instance(id).map(com.wiggle.core.InstanceView::workflow)

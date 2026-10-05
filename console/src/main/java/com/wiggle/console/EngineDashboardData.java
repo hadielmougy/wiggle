@@ -135,6 +135,21 @@ public final class EngineDashboardData implements DashboardData {
         engine.deleteSchedule(id);
     }
 
+    @Override public List<TriggerView> triggers() {
+        return engine.triggers().stream()
+                .map(t -> new TriggerView(t.id, t.workflow, t.source, t.eventTypes, t.includeContext, t.createdAt))
+                .toList();
+    }
+
+    @Override public String createTrigger(String workflow, String source, List<String> eventTypes,
+                                          boolean includeContext) {
+        return engine.createTrigger(workflow, source, eventTypes, includeContext);
+    }
+
+    @Override public void deleteTrigger(String id) {
+        engine.deleteTrigger(id);
+    }
+
     @Override public ClusterView cluster() {
         long now = System.currentTimeMillis();
         long deadAfter = cluster.deadAfterMillis();

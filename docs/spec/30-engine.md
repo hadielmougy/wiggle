@@ -59,6 +59,7 @@ claim must be atomic with the select that finds the token.
 | — | `START` | `RUNNING` | the workflow version resolves |
 | — | `START_SUB_WORKFLOW` | `RUNNING` | a `SUB_WORKFLOW` token spawned it; `parentTokenId` links them |
 | — | `SCHEDULE_DUE` | `RUNNING` | the fire-time compare-and-set won |
+| — | `TRIGGER_FIRED` | `RUNNING` | the dispatch-position compare-and-set won |
 | `RUNNING` | `TOKEN_REACHED_SUCCESSFUL_END` | `COMPLETED` | no token of the instance is still active |
 | `RUNNING` | `UNRECOVERABLE_FAILURE` | `FAILED` | the comp-log holds no uncompensated entry |
 | `RUNNING` | `UNRECOVERABLE_FAILURE` | `COMPENSATING` | the comp-log holds an uncompensated entry |
@@ -276,7 +277,7 @@ flow MUST continue down the signal node's `next` edge.
 
 *Verified by:* `tests/SignalTest`.
 
-## 9. Schedules
+## 9. Schedules and triggers
 
 **WGL-ENG-080** (MUST) A schedule fires a workflow either on a fixed interval or on a five-field cron
 expression.
@@ -300,6 +301,44 @@ compare-and-set on the next fire time, so a failover cannot double-fire.
 **WGL-ENG-086** (MUST) A fired schedule MUST start an ordinary instance, correlated to its schedule.
 
 *Verified by:* `tests/ScheduleTest`, `tests/CronTest`, `tests/ScheduleClientTest`.
+
+A trigger starts a workflow on another instance's event: when an instance of the trigger's source
+appends one of its event types to the [event log](60-event-log.md), the target workflow starts.
+
+**WGL-ENG-130** (MUST) A trigger MUST name a target workflow, a source workflow or `*`, at least one
+event type, and whether the new instance begins with the source's context. Creation MUST be an
+**upsert keyed on (workflow, source)**. An unregistered target MUST be refused with 404. A `wf.` type
+that is not one of the lifecycle types ([WGL-EVT-002](60-event-log.md#1-what-is-written)), an empty
+list, a type holding `,` or longer than 32 characters, and a source equal to the target MUST be
+refused with 400. Any other type names a handler-emitted event.
+
+**WGL-ENG-131** (MUST) A trigger MUST fire only on events appended after it was first created. `*`
+MUST match every workflow except the trigger's own target.
+
+**WGL-ENG-132** (MUST) Dispatch MUST be leader-driven and read each instance shard's event log behind
+that shard's own dispatch position, held on that shard, honouring the feed's visibility window
+([WGL-EVT-026](60-event-log.md#3-reading-pull-and-ack)). The position MUST exist on every instance
+shard before the trigger row is written, and MUST be dropped when the last trigger is deleted.
+
+**WGL-ENG-133** (MUST) Moving a shard's position and starting the instances its events owe MUST
+share one transaction on that shard, guarded by a compare-and-set on the position, so each event
+fires each matching trigger exactly once, even across a two-leader overlap.
+
+**WGL-ENG-134** (MUST) A triggered instance MUST start on its source's shard, correlated
+`"trigger:<triggerId>:<sourceInstanceId>"`. Its context MUST be the source's context as it stands at
+dispatch when the trigger asks for it, else empty, with a `trigger` object added naming the trigger,
+the event type, its seq and payload, the source instance, workflow, version and correlation id, and
+the chain depth.
+
+**WGL-ENG-135** (MUST) The chain depth is the number of triggered starts leading to an instance,
+followed back through the correlation ids. A start that would exceed 16 MUST be skipped and logged,
+so a cycle of triggers ends.
+
+**WGL-ENG-136** (MUST) An event whose start throws, or whose target is no longer registered, MUST be
+logged and skipped; it MUST NOT hold back the shard's other events.
+
+*Verified by:* `tests/TriggerTest`, `tests/TriggerJdbcTest`, `tests/TriggerClientTest`,
+`server/engine/ShardedEngineTest`.
 
 ## 10. Cancellation
 
@@ -366,7 +405,7 @@ reports through the same entry point and a run of steps walks the same transitio
 
 **WGL-ENG-120** (MUST) Exactly one node per cell MUST run the clock-driven duties, each bounded by a
 batch size per tick: fire due timers, reclaim expired leases, fire due signal deadlines, fire due
-schedules.
+schedules, dispatch triggers.
 
 **WGL-ENG-121** (MUST) A separate, slower sweep MUST purge terminal instances older than the retention
 window and trim the event log.

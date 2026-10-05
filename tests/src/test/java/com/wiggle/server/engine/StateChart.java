@@ -72,6 +72,8 @@ final class StateChart {
                         "a SUB_WORKFLOW token spawned it; parentTokenId links them", null),
                 new Transition("(none)", "SCHEDULE_DUE", "RUNNING",
                         "the fire-time compare-and-set won", "fireDueSchedules"),
+                new Transition("(none)", "TRIGGER_FIRED", "RUNNING",
+                        "the dispatch-position compare-and-set won", "dispatchTriggers"),
                 new Transition("RUNNING", "TOKEN_REACHED_SUCCESSFUL_END", "COMPLETED",
                         "no token of the instance is still active", null),
                 new Transition("RUNNING", "UNRECOVERABLE_FAILURE", "FAILED",

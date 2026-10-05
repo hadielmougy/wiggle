@@ -30,7 +30,7 @@
      [:h1 "🌀 WIGGLE"]
      [:div.tabs
       (for [[k label] (cond-> [[:instances "Instances"] [:workflows "Workflows"]
-                               [:schedules "Schedules"] [:signals "Signals"]
+                               [:schedules "Schedules"] [:triggers "Triggers"] [:signals "Signals"]
                                [:backlog "Backlog"] [:performance "Performance"]]
                         (st/can-manage-users?) (conj [:users "Users"]))]
         ^{:key k}
@@ -446,6 +446,83 @@
    (when (st/can? "schedule.write") [schedule-form])
    [schedules-list]])
 
+;; ---------------------------------------------------------------- triggers tab
+
+(def lifecycle-events
+  [["wf.completed" "completed"] ["wf.failed" "failed"] ["wf.cancelled" "cancelled"]
+   ["wf.started" "started"] ["wf.compensating" "compensating"] ["wf.compensated" "compensated"]
+   ["wf.compensation_failed" "compensation failed"]])
+
+(defn trigger-form []
+  (let [s (r/atom {:workflow "" :source "" :types #{"wf.completed"} :custom "" :context? true})]
+    (fn []
+      (let [{:keys [workflow source types custom context?]} @s
+            wfs (:workflows @db)
+            custom-types (->> (str/split custom #",") (map str/trim) (remove str/blank?))
+            all-types (vec (concat (filter types (map first lifecycle-events)) custom-types))]
+        [:section.panel
+         [:h2 "New trigger"]
+         [:div {:style {:padding 14}}
+          [:div.field [:span "when an instance of"]
+           [:select {:value source :on-change #(swap! s assoc :source (.. % -target -value))}
+            [:option {:value ""} "choose a workflow…"]
+            [:option {:value "*"} "any other workflow (*)"]
+            (for [w wfs] ^{:key w} [:option {:value w} w])]]
+          [:div.field [:span "appends"]
+           [:div.row {:style {:flex-wrap "wrap"}}
+            (for [[t label] lifecycle-events]
+              ^{:key t}
+              [:label.inline
+               [:input {:type "checkbox" :checked (contains? types t)
+                        :on-change #(swap! s update :types (if (.. % -target -checked) conj disj) t)}]
+               label])]]
+          [:div.field [:span "emitted event types (comma-separated, optional)"]
+           [:input {:value custom :placeholder "payment.flagged, order.shipped"
+                    :on-change #(swap! s assoc :custom (.. % -target -value))}]]
+          [:div.field [:span "start"]
+           [:select {:value workflow :on-change #(swap! s assoc :workflow (.. % -target -value))}
+            [:option {:value ""} "choose a workflow…"]
+            (for [w wfs] ^{:key w} [:option {:value w} w])]]
+          [:div.field
+           [:label.inline [:input {:type "checkbox" :checked context?
+                                   :on-change #(swap! s assoc :context? (.. % -target -checked))}]
+            "begin with the source instance's context"]]
+          [:div.row
+           [:button.primary
+            {:on-click
+             (fn []
+               (cond
+                 (empty? source)    (st/toast! :err "choose the source workflow")
+                 (empty? workflow)  (st/toast! :err "choose the workflow to start")
+                 (empty? all-types) (st/toast! :err "choose at least one event")
+                 :else (act/create-trigger! {:workflow workflow :source source
+                                             :eventTypes all-types :includeContext context?})))}
+            "create trigger"]]]]))))
+
+(defn triggers-list []
+  [:section.panel
+   [:h2 "Triggers" [:span.count (count (:triggers @db))]]
+   (if-not (seq (:triggers @db))
+     [:div.empty "no triggers"]
+     [:table
+      [:thead [:tr [:th "when"] [:th "on"] [:th "starts"] [:th "context"] [:th "since"] [:th ""]]]
+      [:tbody
+       (for [t (:triggers @db)]
+         ^{:key (:id t)}
+         [:tr
+          [:td (if (= "*" (:source t)) [:span.muted "any workflow"] (:source t))]
+          [:td (for [e (:eventTypes t)] ^{:key e} [:code {:style {:margin-right 4}} e])]
+          [:td (:workflow t)]
+          [:td.muted (if (:includeContext t) "copied" "—")]
+          [:td.muted (u/ts (:createdAt t))]
+          [:td.actions (when (st/can? "trigger.write" (:workflow t))
+                         [:button.danger {:on-click #(act/delete-trigger! (:id t))} "delete"])]])]])])
+
+(defn triggers-tab []
+  [:div.cols
+   (when (st/can? "trigger.write") [trigger-form])
+   [triggers-list]])
+
 ;; ---------------------------------------------------------------- signals tab
 
 (defn signal-row []
@@ -819,6 +896,7 @@
       :instances [instances-tab]
       :workflows [workflows-tab]
       :schedules [schedules-tab]
+      :triggers  [triggers-tab]
       :signals   [signals-tab]
       :backlog   [backlog-tab]
       :performance [performance-tab]

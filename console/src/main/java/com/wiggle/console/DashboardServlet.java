@@ -67,6 +67,7 @@ public final class DashboardServlet extends HttpServlet {
             if (path.startsWith("/api/workflows")) { workflows(res, sub(path, "/api/workflows")); return; }
             if (path.startsWith("/api/instances")) { instances(req, res, sub(path, "/api/instances")); return; }
             if (path.startsWith("/api/schedules")) { schedules(req, res, sub(path, "/api/schedules")); return; }
+            if (path.startsWith("/api/triggers")) { triggers(req, res, sub(path, "/api/triggers")); return; }
             if (path.startsWith("/api/")) { error(res, 404, "unknown endpoint"); return; }
             staticFile(res, path);
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -550,6 +551,36 @@ public final class DashboardServlet extends HttpServlet {
         }
     }
 
+    private void triggers(HttpServletRequest req, HttpServletResponse res, String[] parts) throws IOException {
+        switch (req.getMethod()) {
+            case "GET" -> {
+                List<Object> list = new ArrayList<>();
+                for (DashboardData.TriggerView t : data.triggers()) list.add(DashboardJson.trigger(t));
+                json(res, 200, Map.of("triggers", list));
+            }
+            case "POST" -> {
+                Map<String, Object> body = Json.asObject(readBody(req));
+                String workflow = String.valueOf(body.get("workflow"));
+                String source = String.valueOf(body.get("source"));
+                if (!permitted(req, res, Permissions.TRIGGER_WRITE, workflow)) return;
+                if (!permitted(req, res, Permissions.READ, "*".equals(source) ? null : source)) return;
+                List<String> types = new ArrayList<>();
+                if (body.get("eventTypes") instanceof List<?> l) for (Object o : l) types.add(String.valueOf(o));
+                String id = data.createTrigger(workflow, source, types, Boolean.TRUE.equals(body.get("includeContext")));
+                json(res, 200, Map.of("id", id));
+            }
+            case "DELETE" -> {
+                if (parts.length != 1) { error(res, 404, "not found"); return; }
+                String workflow = data.triggers().stream().filter(x -> x.id().equals(parts[0]))
+                        .map(DashboardData.TriggerView::workflow).findFirst().orElse(null);
+                if (workflow == null) { error(res, 404, "no such trigger"); return; }
+                if (!permitted(req, res, Permissions.TRIGGER_WRITE, workflow)) return;
+                data.deleteTrigger(parts[0]);
+                json(res, 200, Map.of("ok", true));
+            }
+            default -> error(res, 405, "GET, POST or DELETE");
+        }
+    }
 
     private void staticFile(HttpServletResponse res, String path) throws IOException {
         byte[] index = resource("dashboard/index.html");

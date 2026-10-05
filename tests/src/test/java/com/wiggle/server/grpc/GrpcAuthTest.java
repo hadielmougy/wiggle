@@ -132,6 +132,11 @@ class GrpcAuthTest {
                 assertEquals(403, status(() -> worker.poll("w", List.of("billing-q"), 1, 1_000, 0)));
                 assertEquals(403, status(() -> worker.poll("w", List.of(), 1, 1_000, 0)), "every queue is not one queue");
                 assertEquals(403, status(() -> worker.pollEvents("feed", 10, 0, -1)));
+
+                admin.createTrigger("orders", "billing", List.of("wf.completed"), false);
+                admin.createTrigger("billing", "orders", List.of("wf.completed"), false);
+                assertEquals(List.of("orders"), app.triggers().stream().map(WiggleClient.TriggerInfo::workflow).toList(),
+                        "only the triggers of workflows it may read");
             }
         }
     }

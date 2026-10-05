@@ -66,6 +66,7 @@ public final class WorkflowEngine {
     private final Tokens tokens;
     private final Dispatch dispatch;
     private final Schedules schedules;
+    private final Triggers triggers;
     private final long defaultLeaseMillis;
     private final NodeBehaviourFactory nodeBehaviourFactory;
     private final StepChain stepChain;
@@ -85,6 +86,7 @@ public final class WorkflowEngine {
         this.instances              = new Instances(definitions, tokens, idMinter, this::drive);
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules              = new Schedules(transactions, instances, sweeper);
+        this.triggers               = new Triggers(transactions, instances, eventVisibilityMillis);
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
         this.stepChain              = new StepChain(instances, nodeBehaviourFactory, definitions, loopMaxIterations, defaultLeaseMillis);
         this.localAsyncBatch        = new LocalAsyncBatch(stepChain, definitions);
@@ -790,6 +792,28 @@ public final class WorkflowEngine {
     /** Leader duty: start instances for schedules whose fire time has passed. */
     public int fireDueSchedules(int max) {
         return schedules.fireDue(max);
+    }
+
+    /**
+     * Upserts a trigger keyed by (workflow, source): {@code workflow} starts whenever an instance of
+     * {@code source} ({@code "*"} for any other workflow) appends one of {@code eventTypes}.
+     */
+    public String createTrigger(String workflow, String source, List<String> eventTypes, boolean includeContext) {
+        return triggers.put(workflow, source, eventTypes, includeContext);
+    }
+
+    /** Deletes a trigger; false when there was none. */
+    public boolean deleteTrigger(String id) {
+        return triggers.delete(id);
+    }
+
+    public List<Rows.Trigger> triggers() {
+        return triggers.all();
+    }
+
+    /** Leader duty: start the instances triggers owe for up to {@code max} events per instance shard. */
+    public int dispatchTriggers(int max) {
+        return triggers.dispatch(max);
     }
 
     public int purgeTerminalInstancesOlderThan(long retentionMillis, int max) {

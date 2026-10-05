@@ -43,6 +43,11 @@
       (.then #(swap! db assoc :schedules (:schedules %)))
       (.catch st/on-error)))
 
+(defn load-triggers! []
+  (-> (api/triggers)
+      (.then #(swap! db assoc :triggers (:triggers %)))
+      (.catch st/on-error)))
+
 (def ^:private window-millis
   {"15m" (* 15 60000) "1h" 3600000 "24h" 86400000 "7d" (* 7 86400000) "all" nil})
 
@@ -168,4 +173,14 @@
 (defn delete-schedule! [id]
   (-> (api/delete-schedule id)
       (.then (fn [_] (st/toast! :ok "schedule deleted") (load-schedules!)))
+      (.catch st/on-error)))
+
+(defn create-trigger! [body]
+  (-> (api/create-trigger body)
+      (.then (fn [_] (st/toast! :ok "trigger created") (load-triggers!)))
+      (.catch st/on-error)))
+
+(defn delete-trigger! [id]
+  (-> (api/delete-trigger id)
+      (.then (fn [_] (st/toast! :ok "trigger deleted") (load-triggers!)))
       (.catch st/on-error)))

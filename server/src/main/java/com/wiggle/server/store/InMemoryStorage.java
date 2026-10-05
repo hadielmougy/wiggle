@@ -77,6 +77,9 @@ public final class InMemoryStorage implements Storage {
     private final Map<String, String> graphStart = new ConcurrentHashMap<>();
     private final Map<String, ServerNode> nodes = new ConcurrentHashMap<>();
     private final Map<String, Rows.Schedule> schedules = new ConcurrentHashMap<>();
+    private final Map<String, Rows.Trigger> triggers = new ConcurrentHashMap<>();
+    /** The seq triggers have been dispatched through, or null. Guarded by the global lock. */
+    private Long triggerCursor;
     /** The shard this store was claimed for, or null. */
     private volatile Integer shardIdentity;
     private volatile Long shardBeat;
@@ -623,6 +626,41 @@ public final class InMemoryStorage implements Storage {
             if (live == null || live.nextFireAt != expectedFireAt) return false;
             live.nextFireAt = nextFireAt;
             return true;
+        }
+
+        @Override public void putTrigger(Rows.Trigger trigger) {
+            Rows.Trigger copy = trigger.clone();
+            copy.eventTypes = List.copyOf(trigger.eventTypes);
+            triggers.put(copy.id, copy);
+        }
+
+        @Override public boolean deleteTrigger(String id) {
+            return triggers.remove(id) != null;
+        }
+
+        @Override public List<Rows.Trigger> triggers() {
+            return triggers.values().stream()
+                    .sorted(Comparator.comparing(t -> t.id))
+                    .map(Rows.Trigger::clone)
+                    .toList();
+        }
+
+        @Override public Long triggerCursor() {
+            return triggerCursor;
+        }
+
+        @Override public void createTriggerCursorIfAbsent(long seq, long now) {
+            if (triggerCursor == null) triggerCursor = seq;
+        }
+
+        @Override public boolean moveTriggerCursor(long expectedSeq, long nextSeq, long now) {
+            if (triggerCursor == null || triggerCursor != expectedSeq) return false;
+            triggerCursor = nextSeq;
+            return true;
+        }
+
+        @Override public void deleteTriggerCursor() {
+            triggerCursor = null;
         }
 
         @Override public List<Token> expiredLeases(long now, int max) {

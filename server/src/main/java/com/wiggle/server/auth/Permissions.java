@@ -19,6 +19,7 @@ public final class Permissions {
     public static final String INSTANCE_SIGNAL = "instance.signal";
     public static final String INSTANCE_START = "instance.start";
     public static final String SCHEDULE_WRITE = "schedule.write";
+    public static final String TRIGGER_WRITE = "trigger.write";
     public static final String USER_MANAGE = "user.manage";
     public static final String TASK_POLL = "task.poll";
     public static final String WORKFLOW_REGISTER = "workflow.register";
@@ -27,10 +28,10 @@ public final class Permissions {
 
     /** Every action a permission may name. */
     public static final List<String> ACTIONS = List.of(READ, INSTANCE_START, INSTANCE_CANCEL, INSTANCE_SIGNAL,
-            SCHEDULE_WRITE, WORKFLOW_REGISTER, TASK_POLL, EVENT_READ, USER_MANAGE);
+            SCHEDULE_WRITE, TRIGGER_WRITE, WORKFLOW_REGISTER, TASK_POLL, EVENT_READ, USER_MANAGE);
     /** The actions that take a scope: a workflow name, or a queue for {@code task.poll}. */
     private static final Set<String> SCOPED = Set.of(READ, INSTANCE_START, INSTANCE_CANCEL, INSTANCE_SIGNAL,
-            SCHEDULE_WRITE, WORKFLOW_REGISTER, TASK_POLL);
+            SCHEDULE_WRITE, TRIGGER_WRITE, WORKFLOW_REGISTER, TASK_POLL);
     private static final Pattern SCOPE = Pattern.compile("[A-Za-z0-9._:/-]{1,200}");
 
     public static final String ADMIN = "admin";

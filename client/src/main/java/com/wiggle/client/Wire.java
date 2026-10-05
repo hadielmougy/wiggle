@@ -120,6 +120,11 @@ final class Wire {
                 s.getCron().isEmpty() ? null : s.getCron(), s.getNextFireAt(), s.getCreatedAt());
     }
 
+    static WiggleClient.TriggerInfo triggerInfo(TriggerView t) {
+        return new WiggleClient.TriggerInfo(t.getId(), t.getWorkflow(), t.getSource(),
+                List.copyOf(t.getEventTypesList()), t.getIncludeContext(), t.getCreatedAt());
+    }
+
     /** One reported step on the wire: exactly one of merge (task) or predicateValue (predicate). */
     static StepResult stepResult(WiggleClient.StepReport s) {
         StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId());

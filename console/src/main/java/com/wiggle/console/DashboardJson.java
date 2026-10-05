@@ -3,6 +3,7 @@ package com.wiggle.console;
 import com.wiggle.console.DashboardData.ClusterView;
 import com.wiggle.console.DashboardData.MemberView;
 import com.wiggle.console.DashboardData.ScheduleView;
+import com.wiggle.console.DashboardData.TriggerView;
 import com.wiggle.console.DashboardData.SignalView;
 import com.wiggle.console.DashboardData.TokenView;
 import com.wiggle.core.InstanceView;
@@ -80,6 +81,17 @@ final class DashboardJson {
         if (s.cron() != null) m.put("cron", s.cron());
         m.put("nextFireAt", s.nextFireAt());
         m.put("createdAt", s.createdAt());
+        return m;
+    }
+
+    static Map<String, Object> trigger(TriggerView t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", t.id());
+        m.put("workflow", t.workflow());
+        m.put("source", t.source());
+        m.put("eventTypes", t.eventTypes());
+        m.put("includeContext", t.includeContext());
+        m.put("createdAt", t.createdAt());
         return m;
     }
 

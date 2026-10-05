@@ -96,6 +96,7 @@ public final class JdbcStorage implements Storage {
                 .registerRowMapper(Rows.Event.class, (rs, ctx) -> readEvent(rs))
                 .registerRowMapper(Rows.EventCursor.class, (rs, ctx) -> readCursor(rs))
                 .registerRowMapper(Rows.Schedule.class, (rs, ctx) -> readSchedule(rs))
+                .registerRowMapper(Rows.Trigger.class, (rs, ctx) -> readTrigger(rs))
                 .registerRowMapper(ServerNode.class, (rs, ctx) -> readNode(rs));
     }
 
@@ -629,7 +630,25 @@ public final class JdbcStorage implements Storage {
             DROP INDEX IF EXISTS ix_token_barrier;
             DROP INDEX IF EXISTS ix_token_done;
             DROP INDEX IF EXISTS ix_token_done_timed;
-            """, Dialect::supportsPartialIndexes));
+            """, Dialect::supportsPartialIndexes),
+            // Starts on another instance's events: the triggers, on the home shard, and on each
+            // instance shard the seq of its event log they have been dispatched through.
+            new Migration(33, "event-triggers", """
+            CREATE TABLE IF NOT EXISTS wf_trigger (
+              id              VARCHAR(64)  PRIMARY KEY,
+              workflow        VARCHAR(200) NOT NULL,
+              source          VARCHAR(200) NOT NULL,
+              event_types     TEXT         NOT NULL,
+              include_context INT          NOT NULL,
+              created_at      BIGINT       NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_trigger_route ON wf_trigger (workflow, source);
+            CREATE TABLE IF NOT EXISTS wf_trigger_cursor (
+              name            VARCHAR(32)  PRIMARY KEY,
+              acked_seq       BIGINT       NOT NULL,
+              updated_at      BIGINT       NOT NULL
+            );
+            """));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
@@ -1036,6 +1055,17 @@ public final class JdbcStorage implements Storage {
         s.nextFireAt = rs.getLong("next_fire_at");
         s.createdAt = rs.getLong("created_at");
         return s;
+    }
+
+    static Rows.Trigger readTrigger(ResultSet rs) throws SQLException {
+        Rows.Trigger t = new Rows.Trigger();
+        t.id = rs.getString("id");
+        t.workflow = rs.getString("workflow");
+        t.source = rs.getString("source");
+        t.eventTypes = List.of(rs.getString("event_types").split(","));
+        t.includeContext = rs.getInt("include_context") != 0;
+        t.createdAt = rs.getLong("created_at");
+        return t;
     }
 
     static Rows.Event readEvent(ResultSet rs) throws SQLException {
@@ -2380,6 +2410,54 @@ public final class JdbcStorage implements Storage {
                     .execute() == 1;
         }
 
+
+        @Override public void putTrigger(Rows.Trigger t) {
+            String types = String.join(",", t.eventTypes);
+            int updated = h.createUpdate("UPDATE wf_trigger SET workflow=:workflow, source=:source, "
+                            + "event_types=:types, include_context=:ctx WHERE id=:id")
+                    .bind("workflow", t.workflow).bind("source", t.source).bind("types", types)
+                    .bind("ctx", t.includeContext ? 1 : 0).bind("id", t.id)
+                    .execute();
+            if (updated > 0) return;
+            h.createUpdate("INSERT INTO wf_trigger (id,workflow,source,event_types,include_context,created_at) "
+                            + "VALUES (:id,:workflow,:source,:types,:ctx,:createdAt)")
+                    .bind("id", t.id).bind("workflow", t.workflow).bind("source", t.source)
+                    .bind("types", types).bind("ctx", t.includeContext ? 1 : 0).bind("createdAt", t.createdAt)
+                    .execute();
+        }
+
+        @Override public boolean deleteTrigger(String id) {
+            return h.createUpdate("DELETE FROM wf_trigger WHERE id=:id").bind("id", id).execute() > 0;
+        }
+
+        @Override public List<Rows.Trigger> triggers() {
+            return h.createQuery("SELECT * FROM wf_trigger ORDER BY id").mapTo(Rows.Trigger.class).list();
+        }
+
+        @Override public Long triggerCursor() {
+            return h.createQuery("SELECT acked_seq FROM wf_trigger_cursor WHERE name='triggers'")
+                    .mapTo(Long.class)
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        @Override public void createTriggerCursorIfAbsent(long seq, long now) {
+            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_trigger_cursor (name,acked_seq,updated_at) "
+                            + "VALUES ('triggers',:seq,:now)"))
+                    .bind("seq", seq).bind("now", now)
+                    .execute();
+        }
+
+        @Override public boolean moveTriggerCursor(long expectedSeq, long nextSeq, long now) {
+            return h.createUpdate("UPDATE wf_trigger_cursor SET acked_seq=:next, updated_at=:now "
+                            + "WHERE name='triggers' AND acked_seq=:expected")
+                    .bind("next", nextSeq).bind("now", now).bind("expected", expectedSeq)
+                    .execute() == 1;
+        }
+
+        @Override public void deleteTriggerCursor() {
+            h.createUpdate("DELETE FROM wf_trigger_cursor WHERE name='triggers'").execute();
+        }
 
         @Override public Rows.QueueDepth queueDepth(long now) {
             return h.createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "

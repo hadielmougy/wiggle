@@ -1177,6 +1177,57 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("a trigger round-trips with its event types, and putTrigger replaces by id")
+    void triggerRoundTrip() {
+        Rows.Trigger t = new Rows.Trigger();
+        t.id = id("trg");
+        t.workflow = id("wf");
+        t.source = "*";
+        t.eventTypes = List.of("wf.failed", "payment.flagged");
+        t.includeContext = true;
+        t.createdAt = now;
+        storage.inTxVoid(tx -> tx.putTrigger(t));
+
+        Rows.Trigger back = storage.inTx(tx -> tx.triggers()).stream()
+                .filter(x -> x.id.equals(t.id)).findFirst().orElseThrow();
+        assertEquals(t.workflow, back.workflow);
+        assertEquals("*", back.source);
+        assertEquals(List.of("wf.failed", "payment.flagged"), back.eventTypes, "types keep their order");
+        assertTrue(back.includeContext);
+        assertEquals(now, back.createdAt);
+
+        t.eventTypes = List.of("wf.completed");
+        t.includeContext = false;
+        storage.inTxVoid(tx -> tx.putTrigger(t));
+        Rows.Trigger replaced = storage.inTx(tx -> tx.triggers()).stream()
+                .filter(x -> x.id.equals(t.id)).findFirst().orElseThrow();
+        assertEquals(List.of("wf.completed"), replaced.eventTypes);
+        assertFalse(replaced.includeContext);
+
+        assertTrue(inTxBoolean(tx -> tx.deleteTrigger(t.id)));
+        assertFalse(inTxBoolean(tx -> tx.deleteTrigger(t.id)), "a second delete finds nothing");
+    }
+
+    @Test
+    @DisplayName("the trigger dispatch position is created once and moves only by compare-and-set")
+    void triggerCursorIsACompareAndSet() {
+        storage.inTxVoid(Tx::deleteTriggerCursor);
+        assertNull(storage.inTx(Tx::triggerCursor));
+        storage.inTxVoid(tx -> tx.createTriggerCursorIfAbsent(40, now));
+        storage.inTxVoid(tx -> tx.createTriggerCursorIfAbsent(99, now));
+        assertEquals(40L, storage.inTx(Tx::triggerCursor), "an existing position is left alone");
+
+        assertTrue(inTxBoolean(tx -> tx.moveTriggerCursor(40, 45, now)), "the leader that read 40 moves it");
+        assertFalse(inTxBoolean(tx -> tx.moveTriggerCursor(40, 45, now)),
+                "an overlapping leader holding the same stale position cannot dispatch it twice");
+        assertEquals(45L, storage.inTx(Tx::triggerCursor));
+
+        storage.inTxVoid(Tx::deleteTriggerCursor);
+        assertNull(storage.inTx(Tx::triggerCursor));
+        assertFalse(inTxBoolean(tx -> tx.moveTriggerCursor(45, 50, now)), "a missing position does not move");
+    }
+
+    @Test
     @DisplayName("dueSchedules are soonest first, and claimSchedule is a compare-and-set")
     void claimScheduleIsACompareAndSet() {
         Schedule soon = schedule(ANCIENT);

@@ -105,13 +105,16 @@ be waiting on that name, and an early delivery is a `FAILED_PRECONDITION` the se
 
 *Verified by:* `tests/FindByCorrelationTest`, `tests/SignalTest`.
 
-## 5. Schedules
+## 5. Schedules and triggers
 
 | RPC | Request → Response |
 |---|---|
 | `CreateSchedule` | `CreateScheduleRequest{workflow, everyMillis \| cron, context}` → `ScheduleView` |
 | `ListSchedules` | `Empty` → `ScheduleList` |
 | `DeleteSchedule` | `ScheduleIdRequest` → `Ack` |
+| `CreateTrigger` | `CreateTriggerRequest{workflow, source, event_types[], include_context}` → `TriggerView` |
+| `ListTriggers` | `Empty` → `TriggerList` |
+| `DeleteTrigger` | `TriggerIdRequest` → `Ack` |
 
 **WGL-API-040** (MUST) The cadence MUST be a `oneof`: a fixed interval in millis, or a five-field cron
 expression evaluated in UTC.
@@ -121,6 +124,12 @@ expression evaluated in UTC.
 
 **WGL-API-042** (MUST) `ScheduleView` MUST carry id, workflow, `everyMillis` (0 when cron-based), `cron`
 (empty when interval-based), next fire time and creation time.
+
+**WGL-API-043** (MUST) `CreateTrigger` MUST be an upsert keyed on (workflow, source)
+([WGL-ENG-130](30-engine.md#9-schedules-and-triggers)), and `TriggerView` MUST carry id, workflow,
+source, event types in the order given, `include_context` and creation time.
+
+*Verified by:* `tests/TriggerClientTest`, `console/ConsoleUsersTest`.
 
 ## 6. Work distribution
 
@@ -247,6 +256,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 | `GET` | `/api/backlog` | backlog coverage, with uncovered slices and stranded task counts |
 | `GET` | `/api/stats` | per-step duration statistics |
 | `GET`/`POST`/`DELETE` | `/api/schedules[/{id}]` | list, create (interval or cron), delete |
+| `GET`/`POST`/`DELETE` | `/api/triggers[/{id}]` | list, create or replace, delete ([WGL-ENG-130](30-engine.md#9-schedules-and-triggers)) |
 | `GET`/`POST`/`DELETE` | `/api/users[/{name}]` | managed accounts: list, create with roles, delete |
 | `POST` | `/api/users/{name}/password` · `/roles` · `/disabled` | reset a password, replace roles, disable or enable |
 | `GET`/`POST`/`DELETE` | `/api/roles[/{name}]` | roles: list with the known actions, create or replace, delete |
@@ -259,7 +269,8 @@ be 405.
 
 **WGL-API-102** (MUST) Every `/api/*` call except `/api/password` MUST need a permission: `read`
 for a read, `user.manage` for users, roles and the audit, `instance.cancel`, `instance.signal` or
-`schedule.write` for those writes, scoped to the workflow they touch, and `*` for any other write.
+`schedule.write` or `trigger.write` for those writes, scoped to the workflow they touch, and `*` for
+any other write. Creating a trigger also needs `read` on its source, unscoped for `*`.
 A call without it is 403. A viewer is therefore refused every write.
 
 **WGL-API-103** (MUST) The backend MUST sit behind one neutral seam (`DashboardData`) carrying no engine
@@ -299,6 +310,7 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 |---|---|
 | `HealthCheck` | none |
 | `GetCluster`, `ListWorkflows`, `GetBacklogCoverage`, `ListSchedules` | `read` |
+| `ListTriggers` | `read` on any scope; only the triggers of workflows it may read are listed |
 | `GetWorkflow`, `GetStepStats` | `read:<workflow>` |
 | `ListInstances` | `read:<workflow>` when it names a workflow, else `read` |
 | `GetInstance` | `read:<the instance's workflow>` |
@@ -306,6 +318,8 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 | `StartInstance` | `instance.start:<workflow>` |
 | `CancelInstance`, `SignalInstance` | `instance.cancel` / `instance.signal` `:<the instance's workflow>` |
 | `CreateSchedule`, `DeleteSchedule` | `schedule.write:<workflow>` |
+| `CreateTrigger` | `trigger.write:<workflow>`, and `read:<source>` (`read` for `*`) |
+| `DeleteTrigger` | `trigger.write:<the trigger's workflow>` |
 | `PollTasks` | `task.poll:<queue>` for each queue it names; `task.poll` when it names none (every queue) |
 | `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll` on any scope (the lease already ties the call to its task) |
 | `PollEvents`, `AckEvents` | `event.read` |

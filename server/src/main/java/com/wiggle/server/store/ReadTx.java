@@ -122,6 +122,13 @@ public interface ReadTx extends GraphReads {
     /** The schedule for a workflow, if one exists -- workflow is a unique key for schedules. */
     java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow);
 
+    /** Every trigger, by id. Held on the home shard. */
+    List<Rows.Trigger> triggers();
+
+    /** The seq of this shard's event log that triggers have been dispatched through, or null when
+     *  no dispatch position exists. Held on each instance shard, beside the log it reads. */
+    Long triggerCursor();
+
     /** Snapshot of the dispatchable backlog, for lag monitoring. */
     Rows.QueueDepth queueDepth(long now);
 

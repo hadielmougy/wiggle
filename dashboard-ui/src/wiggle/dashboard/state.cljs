@@ -7,7 +7,7 @@
 
 (defonce db
   (r/atom
-   {:tab       :instances          ; :instances | :workflows | :schedules | :signals | :backlog | :performance | :users
+   {:tab       :instances          ; :instances | :workflows | :schedules | :triggers | :signals | :backlog | :performance | :users
     :auth      nil                 ; {:required bool :user ".."} — drives the logout button
     :cluster   nil
     :workflows []
@@ -15,6 +15,7 @@
     :signals   []
     :backlog   nil                 ; {:slices .. :uncoveredSlices .. :strandedTasks ..}
     :schedules []
+    :triggers  []                  ; starts on other instances' events
     :users     []                  ; console accounts, built-ins first (admins only)
     :stats     nil                 ; {:workflow .. :nodes [..]} per-step durations, slowest p95 first
     :perf      {:workflow "" :window "1h"}   ; what the performance tab shows

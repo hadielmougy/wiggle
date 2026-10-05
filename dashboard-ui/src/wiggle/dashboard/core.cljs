@@ -15,6 +15,7 @@
     :signals   (act/load-signals!)
     :backlog   (act/load-backlog!)
     :schedules (act/load-schedules!)
+    :triggers  (act/load-triggers!)
     :performance (act/load-perf!)
     :users     (act/load-users!)
     :workflows nil)) ; a graph is static once loaded
@@ -42,6 +43,7 @@
   (act/load-signals!)
   (act/load-backlog!)
   (act/load-schedules!)
+  (act/load-triggers!)
   ;; when the tab changes, load its data immediately rather than waiting for the timer
   (add-watch db ::tab-change
              (fn [_ _ old new]
