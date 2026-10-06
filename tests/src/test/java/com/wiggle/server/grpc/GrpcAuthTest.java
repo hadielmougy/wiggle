@@ -42,6 +42,11 @@ class GrpcAuthTest {
 
     interface Steps { Map<String, Object> work(Map<String, Object> ctx); }
 
+    interface SpawnSteps {
+        Map<String, Object> work(Map<String, Object> ctx);
+        Map<String, Object> merge(java.util.List<Map<String, Object>> results);
+    }
+
     @ForFlow("orders")
     public static final class OrderSteps {
         public Map<String, Object> work(Map<String, Object> ctx) { return ctx; }
@@ -205,6 +210,36 @@ class GrpcAuthTest {
                 assertEquals(List.of(before.status(), before.attempt(), before.leaseOwner()),
                         List.of(after.status(), after.attempt(), after.leaseOwner()), "and so is its task");
                 globex.heartbeat(task.taskId(), owner, 60_000);
+            }
+        }
+    }
+
+    @Test @DisplayName("a branch's sub-flow needs the start permission on its workflow, as a direct start does")
+    void createdSubFlowsAreScoped() throws Exception {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+            Accounts accounts = server.accounts();
+            try (WiggleClient acme = client(server, tenantKey(accounts, "acme"));
+                 WiggleClient globex = client(server, tenantKey(accounts, "globex"))) {
+                FlowSpec spawning = FlowSpec.define("acme.spawn", 1, Map.class, SpawnSteps.class,
+                        (f, s) -> f.thenApply(s::work).combine(s::merge));
+                acme.register(spawning);
+                acme.register(ACME);
+                globex.register(GLOBEX);
+                String id = acme.start("acme.spawn", Map.of(), null, null);
+                com.wiggle.core.TaskActivation task = acme.poll("a1", List.of("acme.spawn"), 1, 60_000, 5_000)
+                        .tasks().getFirst();
+                java.util.function.Function<String, List<WiggleClient.RunSubmission>> creating = child -> List.of(
+                        new WiggleClient.RunSubmission(task.taskId(), task.leaseOwner(), List.of(
+                                new WiggleClient.StepReport(task.nodeId(), Map.of(), null, null, null, List.of(),
+                                        List.of(new com.wiggle.core.CreatedBranch(Map.of(), null, List.of(
+                                                com.wiggle.core.CreatedBranch.BranchStep.subFlow("child", child)))))),
+                                true));
+
+                assertEquals(403, status(() -> acme.reportSteps(creating.apply("globex.orders"))),
+                        "another tenant's workflow, started through a created branch");
+                assertEquals("RUNNING", acme.instance(id).status());
+                WiggleClient.RunOutcome ok = acme.reportSteps(creating.apply("acme.orders")).get(task.taskId());
+                assertTrue(ok.ok(), String.valueOf(ok.error()));
             }
         }
     }

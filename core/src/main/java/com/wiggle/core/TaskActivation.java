@@ -1,6 +1,7 @@
 package com.wiggle.core;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,10 +14,21 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                              String nodeId, String stepName, String activity, NodeKind kind,
                              int attempt, long leaseExpiresAt, String leaseOwner, Object context,
                              Object baseContext, long itemIndex, String itemMapKey,
-                             ExecutionMode executionMode, String collectKey) {
+                             ExecutionMode executionMode, String collectKey, List<String> armNames) {
 
     public TaskActivation {
         executionMode = executionMode == null ? ExecutionMode.SERVER : executionMode;
+        armNames = armNames == null ? List.of() : List.copyOf(armNames);
+    }
+
+    public TaskActivation(String taskId, String instanceId, String workflow, int version,
+                          String nodeId, String stepName, String activity, NodeKind kind,
+                          int attempt, long leaseExpiresAt, String leaseOwner, Object context,
+                          Object baseContext, long itemIndex, String itemMapKey,
+                          ExecutionMode executionMode, String collectKey) {
+        this(taskId, instanceId, workflow, version, nodeId, stepName, activity, kind, attempt,
+                leaseExpiresAt, leaseOwner, context, baseContext, itemIndex, itemMapKey, executionMode,
+                collectKey, List.of());
     }
 
     /** An activation of a step that is not a forEach's or created branches' combine. */
@@ -26,7 +38,8 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                           Object baseContext, long itemIndex, String itemMapKey,
                           ExecutionMode executionMode) {
         this(taskId, instanceId, workflow, version, nodeId, stepName, activity, kind, attempt,
-                leaseExpiresAt, leaseOwner, context, baseContext, itemIndex, itemMapKey, executionMode, null);
+                leaseExpiresAt, leaseOwner, context, baseContext, itemIndex, itemMapKey, executionMode, null,
+                List.of());
     }
 
     public Map<String, Object> toJson() {
@@ -50,6 +63,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
         }
         m.put("executionMode", executionMode.name());
         if (collectKey != null) m.put("collectKey", collectKey);
+        if (!armNames.isEmpty()) m.put("armNames", armNames);
         return m;
     }
 
@@ -63,6 +77,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                 Json.str(m, "leaseOwner", null), m.get("context"),
                 m.get("baseContext"), Json.num(m, "itemIndex", 0), Json.str(m, "itemMapKey", null),
                 ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.SERVER.name())),
-                Json.str(m, "collectKey", null));
+                Json.str(m, "collectKey", null),
+                Json.asArray(m.get("armNames")).stream().map(String::valueOf).toList());
     }
 }

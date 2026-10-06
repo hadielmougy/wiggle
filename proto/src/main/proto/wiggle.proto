@@ -315,6 +315,8 @@ message TaskActivation {
     // Set only for the combine of a forEach or of created branches: where its results are staged. A
     // worker binds a created combine by it, since no graph it holds has the node.
     string collect_key = 17;
+    // Set only for a fork's combine: the arms, in fork order, that it merges.
+    repeated string arm_names = 18;
 }
 
 message TaskList {
@@ -358,13 +360,20 @@ message CreatedBranch {
 }
 
 message BranchStep {
-    string name = 1;                       // the step name; blank for a sleep
-    string kind = 2;                       // TASK | PREDICATE | SLEEP
+    string name = 1;                       // the step name, signal name or sub-flow node name; blank for a sleep or fork
+    string kind = 2;                       // TASK | PREDICATE | SLEEP | SIGNAL | SUB_WORKFLOW | FORK
     bool compensable = 3;
     string queue = 4;                      // blank = the creating step's queue
     google.protobuf.Value retry = 5;       // a retry policy as JSON; absent = the creating step's
     int64 sleep_millis = 6;
-    string combine = 7;                    // set: this task creates branches of its own, collected by this combine
+    string combine = 7;                    // a TASK: creates branches, collected by this combine; a FORK: merges its arms
+    string workflow = 8;                   // SUB_WORKFLOW: the child workflow
+    repeated BranchStep escalation = 9;    // SIGNAL: run when the deadline in sleep_millis passes
+    repeated BranchArm arms = 10;          // FORK: each arm runs on its own copy of the context
+}
+
+message BranchArm {
+    repeated BranchStep steps = 1;
 }
 
 // One instance's worth of a report: the ordered steps one worker ran from one leased token.

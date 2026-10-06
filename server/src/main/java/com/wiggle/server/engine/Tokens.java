@@ -264,7 +264,8 @@ final class Tokens {
         }
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
                 node.activity(), node.kind(), t.nextAttempt(), until, workerId, Scopes.dispatchContext(inst, t).raw(),
-                base == null ? null : base.raw(), itemIndex, itemMapKey, mode, node.collectKey()));
+                base == null ? null : base.raw(), itemIndex, itemMapKey, mode, node.collectKey(),
+                node.armNames()));
     }
 
 

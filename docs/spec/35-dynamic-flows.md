@@ -103,6 +103,29 @@ through `Step.base()` ([WGL-WRK-061](20-worker.md)).
 its combine. A worker that does not hold the task's node — an unbound version, or a created node —
 MUST leave the check to the server ([WGL-DYN-051](#6-validation-and-limits)).
 
+**WGL-DYN-017** (MUST) `Branch` MUST also offer the workflow's server-side operators, with the same
+meaning they have in a definition:
+
+- `thenAwait(signal)`, `thenAwait(signal, timeout)` and `thenAwait(signal, timeout, escalation)`, where
+  `escalation` chains steps run when the deadline passes, after which the branch goes on as after the
+  signal; a deadline with no escalation fails the instance ([WGL-ENG-047](30-engine.md));
+- `thenSubFlow(node, workflow, Class<R>)`, which runs `workflow` as a child on the branch's context
+  and merges its result back ([WGL-ENG-048](30-engine.md));
+- `thenAllOf(arms...)` followed by `combine(ref)`, which runs each arm on its own copy of the branch's
+  context and merges them by type ([§8](#8-parameters-by-type)). An arm is named after its last step,
+  which must be a task or a gate, and names must differ.
+
+```java
+Step.create(item).thenAwait("approve-" + item.id(), Duration.ofHours(1), e -> e.thenApply(this::escalate));
+Step.create(item).thenSubFlow("ship", "shipping", Shipment.class);
+Step.create(item).thenAllOf(a -> a.thenApply(this::pay), b -> b.thenApply(this::reserve)).combine(this::settle);
+```
+
+**WGL-DYN-018** (MUST) A report whose branches run a sub-flow starts that workflow, so with per-RPC
+authorization ([chapter 70](70-api.md)) the reporter MUST hold `instance.start` on each such workflow,
+or the whole report is refused as a start would be: a worker serving one tenant's queues must not start
+another tenant's workflows through the branches it creates.
+
 ## 3. Worker contract
 
 **WGL-DYN-020** (MUST) A worker MUST bind a branch step by its activity and step name, never by node
@@ -149,8 +172,14 @@ Definitions are unchanged on the wire, so a topology registers with the same fin
 client library that does not know dynamic flows ([WGL-GEN-006](00-index.md)).
 
 **WGL-DYN-032** (MUST) `TaskActivation` MUST gain `string collect_key = 17`, set for the combine of a
-forEach or of created branches. A worker binds a created combine by it
-([WGL-DYN-021](#3-worker-contract)): no graph it holds has the node.
+forEach or of created branches, and `repeated string arm_names = 18`, set for a fork's combine. A
+worker binds a created combine by them ([WGL-DYN-021](#3-worker-contract)): no graph it holds has the
+node.
+
+**WGL-DYN-033** (MUST) `BranchStep` MUST gain `string workflow = 8` (a sub-flow's child),
+`repeated BranchStep escalation = 9` (a wait's escalation) and `repeated BranchArm arms = 10` (a
+fork's arms, each `repeated BranchStep steps = 1`), with `kind` naming `SIGNAL`, `SUB_WORKFLOW` or
+`FORK` and `combine` naming a fork's combine.
 
 ## 5. Engine
 
@@ -174,7 +203,13 @@ kind, name, activity, queue, retry and `compensable` flag, with:
 - `next` = the branch's following fragment node, or the round's `JOIN` for the last step;
 - for a gate, `altNext` = the round's `JOIN` (a false gate short-circuits the branch, as in
   [WGL-AUTH-087](10-authoring.md));
-- for a sleep, kind `SLEEP` with the given `sleepMillis`.
+- for a sleep, kind `SLEEP` with the given `sleepMillis`;
+- for a wait, kind `SIGNAL` with the deadline in `sleepMillis` and `altNext` = the entry of its compiled
+  escalation, which goes on to the same `next`;
+- for a sub-flow, kind `SUB_WORKFLOW` with the child's name in `activity`;
+- for a fork, a `FORK` whose branches are the arms' compiled entries, a static `JOIN` of the arms'
+  width, and a combine carrying the arms' names, going on to `next`. A false gate in an arm goes to
+  the fork's `JOIN`, as in a definition.
 
 **WGL-DYN-043** (MUST) A branch step with a combine MUST compile as a spawning step does in a
 definition ([WGL-DYN-001](#1-model)): a fragment `TASK`, a fragment dynamic `JOIN`, and a fragment
@@ -235,7 +270,13 @@ with a reason naming the offending branch and step, when:
 - the instance's created nodes would exceed `WIGGLE_DYN_MAX_NODES` (default 100 000);
 - one report creates more than `WIGGLE_DYN_MAX_BRANCHES` branches (default 10 000);
 - a branch exceeds `WIGGLE_DYN_MAX_STEPS` steps (default 100);
-- a step kind is unknown, or is not `TASK`, `PREDICATE` or `SLEEP`.
+- a wait or a sub-flow has no name, a sub-flow no workflow, or a wait a negative timeout or an
+  escalation without a timeout;
+- a fork has fewer than two arms or no combine, an arm is empty or does not end in a task or a gate,
+  or two arms end in the same step;
+- a step kind is unknown, or is not `TASK`, `PREDICATE`, `SLEEP`, `SIGNAL`, `SUB_WORKFLOW` or `FORK`.
+
+Arms and escalations are chains like a branch, held to the same rules.
 
 **WGL-DYN-052** (MUST) The server MUST NOT refuse a branch step for its queue. Which queues have
 workers is a deployment fact, not part of the report ([WGL-DYN-022](#3-worker-contract)).
@@ -362,10 +403,11 @@ linear chains, while a forEach body may hold forks, nested fan-outs, signals and
 
 **WGL-DYN-072** (SHOULD) Phase 3 SHOULD steer fan-outs whose body is a plain chain of steps to
 spawning steps: the `thenForEach` javadoc, the README and the cookbook (recipe 9) recommend them, and
-keep `thenForEach` for a body that holds a fork, a signal or a sub-flow.
+keep `thenForEach` for a body that holds a `oneOf` or a `repeatWhile`.
 `thenForEach` MUST NOT carry `@Deprecated` while created branches cannot express every body it can;
-the annotation MAY follow once forks, signals and sub-flows can run in a created branch, as nesting
-([WGL-DYN-013](#2-creating-branches-in-a-handler)) now can. The engine keeps serving `DYN_FORK` either way.
+the annotation MAY follow once a branch can choose on a step's result and loop, as it can now nest
+([WGL-DYN-013](#2-creating-branches-in-a-handler)), wait for signals, run sub-flows and fork
+([WGL-DYN-017](#2-creating-branches-in-a-handler)). The engine keeps serving `DYN_FORK` either way.
 
 *Verified by:* `tests/DynamicConstructsTest`, `tests/NestedScopesTest`, `tests/DynamicFlowTest`.
 
@@ -376,9 +418,9 @@ the annotation MAY follow once forks, signals and sub-flows can run in a created
   declaration could restore the view without being enforced.
 - **Helpers become steps.** Any `@ForFlow` method can now be a branch step, including one meant as a
   helper. An opt-out annotation may be needed.
-- **Signals, sub-flows and `oneOf` on a branch.** Should `Branch` offer `thenAwait`, `thenSubFlow` and
-  `oneOf`? They are left out of the first cut: Java conditionals in the handler cover choice, and the
-  others would widen the fragment format.
+- **`oneOf` and `repeatWhile` on a branch.** Java conditionals in the handler choose at creation time,
+  and a combine that creates branches again loops by rounds; neither chooses on a step's result
+  mid-branch. Offering them would let `thenForEach` be deprecated ([WGL-DYN-072](#9-retiring-dyn_fork)).
 - **Local chaining through fragments.** Returning the fragment in `RunApplied` would let a `LOCAL_*`
   worker chain through a branch. It is worth doing only if dynamic flows turn out to be hot.
 - **Empty-round semantics.** [WGL-DYN-048](#53-fan-out-and-join) diverges from `thenForEach`. If the
