@@ -491,7 +491,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                         st.getCompensable(),
                         st.getQueue().isEmpty() ? null : st.getQueue(),
                         st.hasRetry() ? com.wiggle.core.RetryPolicy.fromJson(ProtoJson.fromValue(st.getRetry())) : null,
-                        st.getSleepMillis()));
+                        st.getSleepMillis(),
+                        st.getCombine().isEmpty() ? null : st.getCombine()));
             }
             out.add(new com.wiggle.core.CreatedBranch(b.hasInput() ? ProtoJson.fromValue(b.getInput()) : null,
                     b.getKey().isEmpty() ? null : b.getKey(), steps));
@@ -689,6 +690,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             m.setItemIndex(t.itemIndex());
             if (t.itemMapKey() != null) m.setItemMapKey(t.itemMapKey());
         }
+        if (t.collectKey() != null) m.setCollectKey(t.collectKey());
         return m.build();
     }
 

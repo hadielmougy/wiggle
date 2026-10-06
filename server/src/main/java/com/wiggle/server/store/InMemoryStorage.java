@@ -758,6 +758,11 @@ public final class InMemoryStorage implements Storage {
             return Optional.ofNullable(dynNodes.get(nodeId));
         }
 
+        @Override public long dynNodeCount(String instanceId) {
+            List<String> owned = dynNodesByInstance.get(instanceId);
+            return owned == null ? 0 : owned.size();
+        }
+
         @Override public void appendCompensation(Rows.CompLog entry) {
             compLogs.computeIfAbsent(entry.instanceId, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
                     .add(entry.clone());

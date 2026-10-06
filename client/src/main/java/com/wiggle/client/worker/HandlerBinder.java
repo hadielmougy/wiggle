@@ -220,14 +220,16 @@ final class HandlerBinder {
     /**
      * Binds one step a handler created at run time ({@code Step.create}), the first time it is
      * dispatched: it is in no graph, so it is matched by name alone and its signature checked against
-     * {@code kind} here rather than at startup. Null when the set has no method of that name.
+     * {@code kind} here rather than at startup. A non-null {@code collectKey} makes it a combine of
+     * branches. Null when the set has no method of that name.
      */
-    static Binding bindCreated(HandlerSet set, String activity, String step, NodeKind kind) {
+    static Binding bindCreated(HandlerSet set, String activity, String step, NodeKind kind, String collectKey) {
         Candidate c = set.byName().get(canonicalName(step));
         if (c == null) return null;
         Node node = kind == NodeKind.PREDICATE
                 ? Node.predicate(activity, step, activity, set.workflow(), null)
                 : Node.task(activity, step, activity, set.workflow(), null);
+        if (collectKey != null) node = node.withCollectKey(collectKey);
         return new Binding(activity, step, set.workflow(), buildHandler(set, node, c), compensatorHandler(set, c));
     }
 

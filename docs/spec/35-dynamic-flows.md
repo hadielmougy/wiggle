@@ -80,7 +80,15 @@ without its own retry policy MUST use the creating step's policy — the spawnin
 combine's in a later round. Its activity MUST be `<workflow>#<name>` ([WGL-AUTH-084](10-authoring.md)).
 
 **WGL-DYN-013** (MUST) `Branch` MUST also offer `combine(ref)` directly after a task, making that
-branch step a spawning step of its own. This is how dynamic flows nest.
+branch step a spawning step of its own: its handler calls `Step.create`, and the combine receives
+those branches' results, by type ([§8](#8-parameters-by-type)), and continues the outer branch with
+its return. The combine runs on the step's queue under its retry policy. This is how dynamic flows
+nest, to any depth within [WGL-DYN-051](#6-validation-and-limits)'s bounds.
+
+```java
+Step.create(line).thenApply(this::pick).combine(this::packed).thenApply(this::ship);
+// pick(line) itself calls Step.create(unit).thenApply(this::scan) once per unit
+```
 
 **WGL-DYN-014** (MUST) Branches MUST be buffered on the worker for the current attempt, in creation
 order, and ride its report. An attempt that throws after creating branches MUST leave nothing behind,
@@ -92,8 +100,8 @@ injected into the combine by type ([§8](#8-parameters-by-type)) and reachable f
 through `Step.base()` ([WGL-WRK-061](20-worker.md)).
 
 **WGL-DYN-016** (MUST) `Step.create` MUST throw when the running step is neither a spawning step nor
-its combine. A worker that does not hold the task's graph MUST leave the check to the server
-([WGL-DYN-051](#6-validation-and-limits)).
+its combine. A worker that does not hold the task's node — an unbound version, or a created node —
+MUST leave the check to the server ([WGL-DYN-051](#6-validation-and-limits)).
 
 ## 3. Worker contract
 
@@ -131,6 +139,7 @@ message BranchStep {
     string queue = 4;                  // blank = the creating step's queue
     google.protobuf.Value retry = 5;   // a retry policy as JSON; absent = the creating step's
     int64 sleep_millis = 6;
+    string combine = 7;                // set: this task creates branches, collected by this combine
 }
 ```
 
@@ -138,6 +147,10 @@ message BranchStep {
 refused there ([WGL-DYN-051](#6-validation-and-limits)), failing the step rather than the report.
 Definitions are unchanged on the wire, so a topology registers with the same fingerprint from a
 client library that does not know dynamic flows ([WGL-GEN-006](00-index.md)).
+
+**WGL-DYN-032** (MUST) `TaskActivation` MUST gain `string collect_key = 17`, set for the combine of a
+forEach or of created branches. A worker binds a created combine by it
+([WGL-DYN-021](#3-worker-contract)): no graph it holds has the node.
 
 ## 5. Engine
 
@@ -163,9 +176,10 @@ kind, name, activity, queue, retry and `compensable` flag, with:
   [WGL-AUTH-087](10-authoring.md));
 - for a sleep, kind `SLEEP` with the given `sleepMillis`.
 
-**WGL-DYN-043** (MUST) A spawning branch step MUST compile to a fragment `TASK` with `spawning` set,
-followed by its own fragment `JOIN` and combine; that combine continues at the branch's following
-fragment node. The inner step's branches are written when it reports, under its own token id.
+**WGL-DYN-043** (MUST) A branch step with a combine MUST compile as a spawning step does in a
+definition ([WGL-DYN-001](#1-model)): a fragment `TASK`, a fragment dynamic `JOIN`, and a fragment
+combine collecting under `__spawn__<step name>`, which continues at the branch's following fragment
+node. The step's own branches are written when it reports, from its own token.
 
 **WGL-DYN-044** (MUST) Fragment nodes MUST be stored in a new table `wf_dyn_node` (migration 33),
 keyed by node id with the owning instance id beside it, on the instance's shard
@@ -215,6 +229,10 @@ with a reason naming the offending branch and step, when:
 - a branch has no steps, a blank step name, a negative sleep, or a malformed retry policy
   ([WGL-AUTH-030](10-authoring.md));
 - some but not all branches carry a key, or two share one;
+- a step that is not a task carries a combine, or a combine has no name;
+- the branches would sit more than `WIGGLE_DYN_MAX_DEPTH` scopes deep (default 16), counting every
+  enclosing fork, forEach and created branch;
+- the instance's created nodes would exceed `WIGGLE_DYN_MAX_NODES` (default 100 000);
 - one report creates more than `WIGGLE_DYN_MAX_BRANCHES` branches (default 10 000);
 - a branch exceeds `WIGGLE_DYN_MAX_STEPS` steps (default 100);
 - a step kind is unknown, or is not `TASK`, `PREDICATE` or `SLEEP`.
@@ -327,12 +345,10 @@ per element of a collection, a spawning step builds each branch in its handler. 
 that — the tokens, their frames, the join and the staged results — is one path.
 
 **WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged. It leaves
-out nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler), [043](#52-fragments)), the
-`BRANCHES_CREATED` lifecycle entry ([WGL-DYN-065](#7-interaction-with-other-features)) and the
-portal's grouping ([WGL-DYN-066](#7-interaction-with-other-features)), which follow it. Parameters
-by type ([§8](#8-parameters-by-type)) ship with it. Until nesting lands, a per-instance cap on created
-nodes and a nesting depth limit are not needed: a round is bounded by its branches and steps, and
-rounds by their budget.
+out the `BRANCHES_CREATED` lifecycle entry ([WGL-DYN-065](#7-interaction-with-other-features)) and
+the portal's grouping ([WGL-DYN-066](#7-interaction-with-other-features)), which follow it.
+Parameters by type ([§8](#8-parameters-by-type)) and nesting
+([WGL-DYN-013](#2-creating-branches-in-a-handler)) follow it in their own changes.
 
 **WGL-DYN-071** (MUST) Phase 2 MUST give `DYN_FORK` and created branches one fan-out path: the same
 minting (`FanOut.items`), the same `ITEM` frames, join and staging. A forEach keeps its static body —
@@ -346,10 +362,10 @@ linear chains, while a forEach body may hold forks, nested fan-outs, signals and
 
 **WGL-DYN-072** (SHOULD) Phase 3 SHOULD steer fan-outs whose body is a plain chain of steps to
 spawning steps: the `thenForEach` javadoc, the README and the cookbook (recipe 9) recommend them, and
-keep `thenForEach` for a body that holds a fork, a nested fan-out, a signal or a sub-flow.
+keep `thenForEach` for a body that holds a fork, a signal or a sub-flow.
 `thenForEach` MUST NOT carry `@Deprecated` while created branches cannot express every body it can;
-the annotation MAY follow once nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler)) and the
-other server nodes land. The engine keeps serving `DYN_FORK` either way.
+the annotation MAY follow once forks, signals and sub-flows can run in a created branch, as nesting
+([WGL-DYN-013](#2-creating-branches-in-a-handler)) now can. The engine keeps serving `DYN_FORK` either way.
 
 *Verified by:* `tests/DynamicConstructsTest`, `tests/NestedScopesTest`, `tests/DynamicFlowTest`.
 

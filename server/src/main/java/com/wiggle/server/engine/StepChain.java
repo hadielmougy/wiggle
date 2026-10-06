@@ -89,7 +89,7 @@ final class StepChain {
             if (spawnCombine.isPresent() || newRound || !step.branches().isEmpty()) {
                 // The spawning step's own branches are round 1; a combine counts the rounds it starts.
                 long round = newRound ? current.payload.loopCount(node.id()) + 2 : 1;
-                String refused = refusal(step.branches(), spawnCombine.isPresent() || newRound, round);
+                String refused = refusal(tx, inst, current, step.branches(), spawnCombine.isPresent() || newRound, round);
                 if (refused != null) {
                     Tokens.settle(tx, current, now);
                     instances.fail(tx, inst, node.name() + ": " + refused, now);
@@ -121,7 +121,8 @@ final class StepChain {
     }
 
     /** Why a step's created branches cannot be accepted, or null. */
-    private String refusal(List<CreatedBranch> branches, boolean mayCreate, long round) {
+    private String refusal(Tx tx, Instance inst, Token current, List<CreatedBranch> branches,
+                           boolean mayCreate, long round) {
         if (!mayCreate) {
             return "created " + branches.size() + " branch(es), but only a step followed directly by a "
                     + "combine, or that combine, may create branches";
@@ -130,7 +131,19 @@ final class StepChain {
             return "created branches for round " + round + ", more than the " + spawnLimits.maxRounds()
                     + " allowed (WIGGLE_DYN_MAX_ROUNDS)";
         }
-        return Spawns.refusal(branches, spawnLimits);
+        String refused = Spawns.refusal(branches, spawnLimits);
+        if (refused != null || branches.isEmpty()) return refused;
+        int depth = current.payload.scopes().size() + 1;
+        if (depth > spawnLimits.maxDepth()) {
+            return "created branches " + depth + " scopes deep, more than the " + spawnLimits.maxDepth()
+                    + " allowed (WIGGLE_DYN_MAX_DEPTH)";
+        }
+        long nodes = tx.dynNodeCount(inst.id) + Spawns.nodeCount(branches) + (round > 1 ? 1 : 0);
+        if (nodes > spawnLimits.maxNodes()) {
+            return "would bring the instance to " + nodes + " created nodes, more than the "
+                    + spawnLimits.maxNodes() + " allowed (WIGGLE_DYN_MAX_NODES)";
+        }
+        return null;
     }
 
     /**
