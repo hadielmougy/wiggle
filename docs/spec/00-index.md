@@ -15,6 +15,7 @@ here first, and the requirement names the test that holds it.
 | 10 | [Authoring](10-authoring.md) | `FlowSpec`/`WiggleFlow`, the node model, compilation, validation, versioning | `WGL-AUTH` |
 | 20 | [Worker contract](20-worker.md) | `@ForFlow` binding, handler signatures, polling, leases, heartbeats, reporting | `WGL-WRK` |
 | 30 | [Engine semantics](30-engine.md) | tokens over the graph, both state machines, per-node behaviour, failure paths | `WGL-ENG` |
+| 35 | [Dynamic flows](35-dynamic-flows.md) *(proposed)* | branches a step creates at run time with `Step.create(...).thenApply(...)`: spawning steps, fragments, rounds, combine parameters by type (drops `@Context`), retiring `DYN_FORK` | `WGL-DYN` |
 | 40 | [Execution modes](40-execution-modes.md) | `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC`, step timing statistics; the withdrawn `OBSERVED` | `WGL-MODE`, `WGL-OBS` |
 | 50 | [Sagas](50-sagas.md) | compensable steps, the comp-log, the reverse pass, terminal states | `WGL-SAGA` |
 | 60 | [Event log](60-event-log.md) | lifecycle entries, handler-emitted events, the pull-and-ack feed | `WGL-EVT` |
