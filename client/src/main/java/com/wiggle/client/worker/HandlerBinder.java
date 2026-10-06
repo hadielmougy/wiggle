@@ -216,6 +216,20 @@ final class HandlerBinder {
         return new Result(List.copyOf(bindings), List.copyOf(unserved));
     }
 
+    /**
+     * Binds one step a handler created at run time ({@code Step.create}), the first time it is
+     * dispatched: it is in no graph, so it is matched by name alone and its signature checked against
+     * {@code kind} here rather than at startup. Null when the set has no method of that name.
+     */
+    static Binding bindCreated(HandlerSet set, String activity, String step, NodeKind kind) {
+        Candidate c = set.byName().get(canonicalName(step));
+        if (c == null) return null;
+        Node node = kind == NodeKind.PREDICATE
+                ? Node.predicate(activity, step, activity, set.workflow(), null)
+                : Node.task(activity, step, activity, set.workflow(), null);
+        return new Binding(activity, step, set.workflow(), buildHandler(set, node, c), compensatorHandler(set, c));
+    }
+
     /** The compensator wrapper for a step, when its typed activity implements {@link Compensable}:
      *  decodes the post-step snapshot into the method's parameter type and invokes it (an effect —
      *  no return). Null when the step has no compensator. */

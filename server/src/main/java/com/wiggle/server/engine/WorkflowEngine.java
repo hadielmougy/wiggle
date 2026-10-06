@@ -87,7 +87,8 @@ public final class WorkflowEngine {
         this.dispatch               = new Dispatch(transactions, tokens, notifier, pollers, defaultLeaseMillis);
         this.schedules              = new Schedules(transactions, instances, sweeper);
         this.nodeBehaviourFactory   = new NodeBehaviourFactory(instances, tokens);
-        this.stepChain              = new StepChain(instances, nodeBehaviourFactory, definitions, loopMaxIterations, defaultLeaseMillis);
+        this.stepChain              = new StepChain(instances, nodeBehaviourFactory, definitions, loopMaxIterations, defaultLeaseMillis,
+                Spawns.Limits.fromEnv());
         this.localAsyncBatch        = new LocalAsyncBatch(stepChain, definitions);
     }
 
@@ -238,10 +239,17 @@ public final class WorkflowEngine {
      * reporter did not time it.
      */
     public record StepInput(String nodeId, Object merge, Boolean predicateValue,
-                            Long startedAt, Long finishedAt, List<EmittedEvent> events) {
+                            Long startedAt, Long finishedAt, List<EmittedEvent> events,
+                            List<CreatedBranch> branches) {
 
         public StepInput {
             events = events == null ? List.of() : List.copyOf(events);
+            branches = branches == null ? List.of() : List.copyOf(branches);
+        }
+
+        public StepInput(String nodeId, Object merge, Boolean predicateValue,
+                         Long startedAt, Long finishedAt, List<EmittedEvent> events) {
+            this(nodeId, merge, predicateValue, startedAt, finishedAt, events, List.of());
         }
 
         public StepInput(String nodeId, Object merge, Boolean predicateValue) {

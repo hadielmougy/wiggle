@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.Doc;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
@@ -12,6 +13,7 @@ import com.wiggle.server.store.Tx;
 
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Applies a worker-reported run, step by step under the instance's one lock. The same procedure
@@ -28,14 +30,16 @@ final class StepChain {
     private final Instances instances;
     private final long loopMaxIterations;
     private final long leaseMillis;
+    private final Spawns.Limits spawnLimits;
 
     StepChain(Instances instances, NodeBehaviourFactory nodeBehaviourFactory, DefinitionRegistry definitions,
-              long loopMaxIterations, long leaseMillis) {
+              long loopMaxIterations, long leaseMillis, Spawns.Limits spawnLimits) {
         this.instances = instances;
         this.nodeBehaviourFactory = nodeBehaviourFactory;
         this.definitions = definitions;
         this.loopMaxIterations = loopMaxIterations;
         this.leaseMillis = leaseMillis;
+        this.spawnLimits = spawnLimits;
     }
 
     /**
@@ -79,6 +83,21 @@ final class StepChain {
                 instances.fail(tx, inst, overrun.message(), now);
                 return new ReportOutcome(inst.status.name(), 0, null);
             }
+            Optional<Node> spawnCombine = Spawns.combineOf(def, node);
+            boolean newRound = !step.branches().isEmpty() && Spawns.isRoundCombine(node);
+            if (spawnCombine.isPresent() || newRound || !step.branches().isEmpty()) {
+                // The spawning step's own branches are round 1; a combine counts the rounds it starts.
+                long round = newRound ? current.payload.loopCount(node.id()) + 2 : 1;
+                String refused = refusal(step.branches(), spawnCombine.isPresent() || newRound, round);
+                if (refused != null) {
+                    Tokens.settle(tx, current, now);
+                    instances.fail(tx, inst, node.name() + ": " + refused, now);
+                    return new ReportOutcome(inst.status.name(), 0, null);
+                }
+                Instances.touch(tx, inst, now);
+                spawn(tx, def, inst, current, node, spawnCombine.orElse(node), step.branches(), round, now);
+                return new ReportOutcome(inst.status.name(), leaseExpiry, null);
+            }
             Tokens.settle(tx, current, now);
             Token cont = Tokens.create(inst, next, current.joinStack,
                     Scopes.stripCombineScratch(node, current.payload), now);
@@ -98,6 +117,43 @@ final class StepChain {
         }
         Instances.touch(tx, inst, now);
         return new ReportOutcome(inst.status.name(), leaseExpiry, nextTaskId);
+    }
+
+    /** Why a step's created branches cannot be accepted, or null. */
+    private String refusal(List<CreatedBranch> branches, boolean mayCreate, long round) {
+        if (!mayCreate) {
+            return "created " + branches.size() + " branch(es), but only a step followed directly by a "
+                    + "combine, or that combine, may create branches";
+        }
+        if (round > spawnLimits.maxRounds()) {
+            return "created branches for round " + round + ", more than the " + spawnLimits.maxRounds()
+                    + " allowed (WIGGLE_DYN_MAX_ROUNDS)";
+        }
+        return Spawns.refusal(branches, spawnLimits);
+    }
+
+    /**
+     * Fans a step's created branches out from {@code fork}, which the join restores as their base.
+     * A spawning step's branches meet at its own join; a later round's meet at a join created for
+     * it, leading back to the same combine. A spawning step that created none goes straight to its
+     * combine with an empty collection.
+     */
+    private void spawn(Tx tx, LazyGraph def, Instance inst, Token fork, Node node, Node combine,
+                       List<CreatedBranch> branches, long round, long now) {
+        boolean newRound = round > 1;
+        if (newRound) fork.payload = fork.payload.withoutStaged().withLoopCount(node.id(), round - 1);
+        Tokens.settle(tx, fork, now);
+        if (branches.isEmpty()) {
+            Token cont = Tokens.create(inst, combine.id(), fork.joinStack, Spawns.emptyRound(fork, combine), now);
+            handBack(tx, def, inst, cont, combine, now);
+            return;
+        }
+        Node roundJoin = newRound ? Spawns.roundJoin(combine) : null;
+        List<Token> children = Spawns.fanOut(tx, inst, fork, node, newRound ? roundJoin.id() : node.next(),
+                branches, newRound ? List.of(roundJoin) : List.of(), now);
+        LOG.log(System.Logger.Level.DEBUG, () -> "reportSteps: instance " + inst.id + " step " + node.name()
+                + " created " + branches.size() + " branch(es)");
+        Drive.pump(nodeBehaviourFactory, tx, def, inst, new ArrayDeque<>(children), now);
     }
 
     /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */

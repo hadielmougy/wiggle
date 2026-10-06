@@ -473,9 +473,38 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate,
                     s.getStartedAt() == 0 ? null : s.getStartedAt(),
                     s.getFinishedAt() == 0 ? null : s.getFinishedAt(),
-                    emitted(s.getEventsList())));
+                    emitted(s.getEventsList()), branches(s.getBranchesList())));
         }
         return steps;
+    }
+
+    /** Created branches as reported. A step kind this build does not know arrives as null, and the
+     *  engine refuses the branch by failing the step, not the whole report. */
+    private static List<com.wiggle.core.CreatedBranch> branches(List<CreatedBranch> reported) {
+        List<com.wiggle.core.CreatedBranch> out = new ArrayList<>(reported.size());
+        for (CreatedBranch b : reported) {
+            List<com.wiggle.core.CreatedBranch.BranchStep> steps = new ArrayList<>(b.getStepsCount());
+            for (BranchStep st : b.getStepsList()) {
+                steps.add(new com.wiggle.core.CreatedBranch.BranchStep(
+                        st.getName().isEmpty() ? null : st.getName(),
+                        nodeKind(st.getKind()),
+                        st.getCompensable(),
+                        st.getQueue().isEmpty() ? null : st.getQueue(),
+                        st.hasRetry() ? com.wiggle.core.RetryPolicy.fromJson(ProtoJson.fromValue(st.getRetry())) : null,
+                        st.getSleepMillis()));
+            }
+            out.add(new com.wiggle.core.CreatedBranch(b.hasInput() ? ProtoJson.fromValue(b.getInput()) : null,
+                    b.getKey().isEmpty() ? null : b.getKey(), steps));
+        }
+        return out;
+    }
+
+    private static com.wiggle.core.NodeKind nodeKind(String name) {
+        try {
+            return com.wiggle.core.NodeKind.valueOf(name);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** The wire's emitted events, validated by {@link com.wiggle.core.EmittedEvent}'s own contract. */

@@ -27,6 +27,8 @@ package com.wiggle.core;
  */
 public final class ScratchKeys {
 
+    private static final String SPAWN_PREFIX = "__spawn__";
+
     private ScratchKeys() {}
 
     /** Where a fork arm's final view is staged for the combine that takes it. */
@@ -37,5 +39,15 @@ public final class ScratchKeys {
     /** Where a forEach's collected item results are staged for its mandatory combine. */
     public static String forEach(String forEachNodeName) {
         return "__forEach__" + forEachNodeName;
+    }
+
+    /** Where the results of the branches a step created are staged for the combine after it. */
+    public static String spawn(String spawningStepName) {
+        return SPAWN_PREFIX + spawningStepName;
+    }
+
+    /** Whether {@code collectKey} stages the branches of a spawning step. */
+    public static boolean isSpawn(String collectKey) {
+        return collectKey != null && collectKey.startsWith(SPAWN_PREFIX);
     }
 }

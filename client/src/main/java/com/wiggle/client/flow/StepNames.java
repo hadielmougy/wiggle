@@ -33,9 +33,22 @@ import java.util.List;
  * renamed for the graph is renamed on
  * both sides at once.
  */
-final class StepNames {
+public final class StepNames {
 
     private StepNames() {}
+
+    /**
+     * The step name a reference inside a running handler stands for, for a branch it creates
+     * ({@code Step.create(input).thenApply(this::reserve)}). Unlike {@link #of} it accepts a method
+     * on a class: the handler object is the code that runs, so referencing it promises nothing a
+     * spec could not keep.
+     */
+    public static String ofBranchStep(Serializable methodRef) {
+        SerializedLambda lambda = serializedForm(methodRef);
+        requireMethodReference(lambda.getImplMethodName());
+        requireNoCapture(lambda);
+        return handlesOverride(methodRef, lambda, lambda.getImplMethodName());
+    }
 
     /** The node name a method reference stands for. */
     static String of(Serializable methodRef) {
@@ -45,22 +58,30 @@ final class StepNames {
 
     private static String of(Serializable methodRef, SerializedLambda lambda) {
         String impl = lambda.getImplMethodName();
+        requireMethodReference(impl);
+        requireContract(lambda, impl);
+        requireNoCapture(lambda);
+        return handlesOverride(methodRef, lambda, impl);
+    }
 
+    private static void requireMethodReference(String impl) {
         if (impl.startsWith("lambda$")) {
             throw new IllegalArgumentException(
                     "a flow step must be a direct method reference (account::withdraw), not a lambda: "
                     + "a lambda body has no handler method for a worker to bind. If the step needs a "
                     + "different node name, annotate the handler method with @Handles(\"...\").");
         }
-        requireContract(lambda, impl);
+    }
+
+    private static void requireNoCapture(SerializedLambda lambda) {
         if (lambda.getCapturedArgCount() > 1) {
             throw new IllegalArgumentException(
-                    "the method reference for '" + impl + "' captures " + (lambda.getCapturedArgCount() - 1)
+                    "the method reference for '" + lambda.getImplMethodName() + "' captures "
+                    + (lambda.getCapturedArgCount() - 1)
                     + " value(s) from the enclosing scope. A step's input is the workflow context, "
                     + "decoded into its parameter -- captured values are not part of the topology and "
                     + "would not survive registration or replay.");
         }
-        return handlesOverride(methodRef, lambda, impl);
     }
 
     /**

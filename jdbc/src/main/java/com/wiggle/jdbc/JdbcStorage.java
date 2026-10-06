@@ -629,7 +629,18 @@ public final class JdbcStorage implements Storage {
             DROP INDEX IF EXISTS ix_token_barrier;
             DROP INDEX IF EXISTS ix_token_done;
             DROP INDEX IF EXISTS ix_token_done_timed;
-            """, Dialect::supportsPartialIndexes));
+            """, Dialect::supportsPartialIndexes),
+            // Nodes a step creates at run time (Step.create): one instance's own graph fragment,
+            // written once and read by id like a graph node. Keyed by node id alone -- a created
+            // node's id is minted unique -- with the instance id for the purge.
+            new Migration(33, "dyn-nodes", """
+            CREATE TABLE IF NOT EXISTS wf_dyn_node (
+              node_id      VARCHAR(64)  PRIMARY KEY,
+              instance_id  VARCHAR(128) NOT NULL,
+              body         TEXT         NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_dyn_node_instance ON wf_dyn_node (instance_id);
+            """));
 
     /** How {@link #migrate()} treats pending schema changes. */
     public enum MigrationMode {
@@ -2553,13 +2564,32 @@ public final class JdbcStorage implements Storage {
                     .list());
             if (ids.isEmpty()) return 0;
             // Children before parents: a token or comp-log row outliving its instance is a leak.
-            for (String table : List.of("wf_token", "wf_comp_log")) {
+            for (String table : List.of("wf_token", "wf_comp_log", "wf_dyn_node")) {
                 h.createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
                         .bindList("ids", ids)
                         .execute();
             }
             h.createUpdate("DELETE FROM wf_instance WHERE id IN (<ids>)").bindList("ids", ids).execute();
             return ids.size();
+        }
+
+        @Override public void insertDynNodes(String instanceId, java.util.List<Node> nodes) {
+            if (nodes.isEmpty()) return;
+            PreparedBatch batch = h.prepareBatch(
+                    "INSERT INTO wf_dyn_node (node_id,instance_id,body) VALUES (:nodeId,:instanceId,:body)");
+            for (Node n : nodes) {
+                batch.bind("nodeId", n.id()).bind("instanceId", instanceId)
+                        .bind("body", Json.write(n.toJson())).add();
+            }
+            batch.execute();
+        }
+
+        @Override public Optional<Node> dynNode(String nodeId) {
+            return h.createQuery("SELECT body FROM wf_dyn_node WHERE node_id=:id")
+                    .bind("id", nodeId)
+                    .mapTo(String.class)
+                    .findOne()
+                    .map(body -> Node.fromJson(Json.parse(body)));
         }
 
         @Override public void appendCompensation(Rows.CompLog e) {

@@ -234,11 +234,22 @@ public final class Worker implements AutoCloseable {
         WorkflowDefinition def = registrations.graphFor(task.workflow() + ":" + task.version());
         // Local execution needs the graph to traverse; without it (unregistered version) fall back
         // to server-driven, one step at a time.
-        if (task.executionMode() != ExecutionMode.SERVER && def != null) {
+        if (task.executionMode() != ExecutionMode.SERVER && def != null && def.nodes().containsKey(task.nodeId())) {
             new LocalRun(this, task, def).run();
         } else {
             new ServerRun(this, task).run();
         }
+    }
+
+    /**
+     * Whether the task's step may create branches. Without the task's graph the server, which holds
+     * it, is the one to refuse.
+     */
+    boolean createsBranches(TaskActivation task) {
+        WorkflowDefinition def = registrations.graphFor(task.workflow() + ":" + task.version());
+        if (def == null) return true;
+        Node node = def.nodes().get(task.nodeId());
+        return node != null && GraphTraversal.mayCreateBranches(node, id -> Optional.ofNullable(def.nodes().get(id)));
     }
 
     Heartbeat newHeartbeat(String taskId, String leaseOwner) {

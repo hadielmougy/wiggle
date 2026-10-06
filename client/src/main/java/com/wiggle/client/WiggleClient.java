@@ -427,12 +427,22 @@ public final class WiggleClient implements AutoCloseable {
         return only.outcome();
     }
 
-    /** One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate). */
+    /**
+     * One reported step: exactly one of {@code merge} (task) or {@code predicateValue} (predicate),
+     * plus what it emitted and the branches it created.
+     */
     public record StepReport(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt,
-                             java.util.List<com.wiggle.core.EmittedEvent> events) {
+                             java.util.List<com.wiggle.core.EmittedEvent> events,
+                             java.util.List<com.wiggle.core.CreatedBranch> branches) {
 
         public StepReport {
             events = events == null ? java.util.List.of() : java.util.List.copyOf(events);
+            branches = branches == null ? java.util.List.of() : java.util.List.copyOf(branches);
+        }
+
+        public StepReport(String nodeId, Object merge, Boolean predicateValue, Long startedAt, Long finishedAt,
+                          java.util.List<com.wiggle.core.EmittedEvent> events) {
+            this(nodeId, merge, predicateValue, startedAt, finishedAt, events, java.util.List.of());
         }
 
         public StepReport(String nodeId, Object merge, Boolean predicateValue) {

@@ -1,6 +1,7 @@
 package com.wiggle.server.store;
 
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows.ServerNode;
@@ -240,6 +241,13 @@ public interface Tx extends ReadTx, GraphStore {
     int deleteTerminalInstancesBefore(long updatedBefore, int limit);
 
     void appendCompensation(Rows.CompLog entry);
+
+    /** Writes the nodes an instance's created branches compiled to. They never change once written
+     *  and are purged with the instance. */
+    void insertDynNodes(String instanceId, List<Node> nodes);
+
+    /** A node an instance created at run time, by its id; empty for any other id. */
+    Optional<Node> dynNode(String nodeId);
 
     void markCompensated(String instanceId, long seq);
 

@@ -98,6 +98,9 @@ public final class InMemoryStorage implements Storage {
 
     /** instanceId -> compensation log entries (seq-ordered append). */
     private final Map<String, List<Rows.CompLog>> compLogs = new ConcurrentHashMap<>();
+    /** Nodes created at run time, by node id, and the ids each instance owns (for the purge). */
+    private final Map<String, Node> dynNodes = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> dynNodesByInstance = new ConcurrentHashMap<>();
     /** The event log in seq order; seq is assigned on append. Guarded by the global lock. */
     private final List<Rows.Event> events = new ArrayList<>();
     private long eventSeq;
@@ -729,6 +732,8 @@ public final class InMemoryStorage implements Storage {
             victims.forEach(id -> {
                 instances.remove(id);
                 compLogs.remove(id);
+                List<String> created = dynNodesByInstance.remove(id);
+                if (created != null) created.forEach(dynNodes::remove);
                 NavigableMap<String, Token> byId = tokensByInstance.remove(id);
                 if (byId != null) {
                     for (Token t : byId.values()) {
@@ -738,6 +743,19 @@ public final class InMemoryStorage implements Storage {
                 }
             });
             return victims.size();
+        }
+
+        @Override public void insertDynNodes(String instanceId, List<Node> nodes) {
+            List<String> owned = dynNodesByInstance.computeIfAbsent(instanceId,
+                    k -> new java.util.concurrent.CopyOnWriteArrayList<>());
+            for (Node n : nodes) {
+                dynNodes.put(n.id(), n);
+                owned.add(n.id());
+            }
+        }
+
+        @Override public Optional<Node> dynNode(String nodeId) {
+            return Optional.ofNullable(dynNodes.get(nodeId));
         }
 
         @Override public void appendCompensation(Rows.CompLog entry) {
