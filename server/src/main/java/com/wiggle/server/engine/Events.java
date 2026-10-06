@@ -26,6 +26,7 @@ final class Events {
     static final String COMPENSATING = "wf.compensating";
     static final String COMPENSATED = "wf.compensated";
     static final String COMPENSATION_FAILED = "wf.compensation_failed";
+    static final String BRANCHES_CREATED = "wf.branches_created";
     static final int PAYLOAD_VERSION = 1;
 
     private Events() {}
@@ -47,6 +48,15 @@ final class Events {
             }
             append(tx, inst, e.type(), nodeId, payload, now);
         }
+    }
+
+    /** A step at {@code nodeId} created {@code width} branches, starting round {@code round} of its fan-out. */
+    static void branchesCreated(Tx tx, Instance inst, String nodeId, String step, long round, int width, long now) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("step", step);
+        payload.put("round", round);
+        payload.put("width", (long) width);
+        append(tx, inst, BRANCHES_CREATED, nodeId, payload, now);
     }
 
     /** The entry for the status {@code inst} has just been moved to, from the fields that explain it. */

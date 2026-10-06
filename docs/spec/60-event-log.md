@@ -25,6 +25,7 @@ disagree.
 | `wf.compensating` | it failed with compensations recorded and the reverse pass took over |
 | `wf.compensated` | the reverse pass undid everything |
 | `wf.compensation_failed` | the reverse pass could not finish |
+| `wf.branches_created` | a step created branches at run time: `{step, round, width}`, on the creating node ([WGL-DYN-065](35-dynamic-flows.md#7-interaction-with-other-features)) |
 
 **WGL-EVT-003** (MUST) The `wf.` prefix MUST be reserved for the engine.
 

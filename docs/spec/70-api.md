@@ -240,7 +240,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 | `GET` | `/api/cluster` | cluster view |
 | `GET` | `/api/workflows` · `/api/workflows/{name}` | names, and one compiled graph as JSON |
 | `GET` | `/api/instances` | list, filtered by workflow/status/limit or searched by instance or correlation id |
-| `GET` | `/api/instances/{id}` | instance with its tokens |
+| `GET` | `/api/instances/{id}` | instance with its tokens; a token inside a fork, forEach or created branches also carries `scope` (the token that fanned it out), `scopeKind` (`arm` or `item`), `scopeIndex` and, when keyed, `scopeKey` |
 | `POST` | `/api/instances/{id}/cancel` | cancel |
 | `POST` | `/api/instances/{id}/signal/{name}` | deliver a signal; the JSON body merges into the context |
 | `GET` | `/api/signals` | signal waits pending delivery |

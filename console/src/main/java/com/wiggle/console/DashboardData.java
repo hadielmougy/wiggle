@@ -78,10 +78,16 @@ public interface DashboardData {
 
     record InstanceDetail(InstanceView instance, List<TokenView> tokens) {}
 
+    /**
+     * One token. {@code scope} is the token whose fork, forEach or created branches it runs in (null
+     * outside any), {@code scopeKind} {@code arm} or {@code item}, and {@code scopeIndex} /
+     * {@code scopeKey} its position and key there, so a step table can nest it under that token.
+     */
     record TokenView(String id, String nodeId, String kind, String status, String activity,
                      String queue, int attempt, long availableAt, String leaseOwner,
                      long leaseExpiresAt, String lastError, long updatedAt,
-                     Long startedAt, Long finishedAt, long createdAt, Object input, Object output) {}
+                     Long startedAt, Long finishedAt, long createdAt, Object input, Object output,
+                     String scope, String scopeKind, Long scopeIndex, String scopeKey) {}
 
     record SignalView(String instanceId, String workflow, String signal, long deadline, long createdAt) {}
 
