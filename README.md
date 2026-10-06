@@ -332,6 +332,10 @@ Priced price(LineItem line) {                       // the parameter IS the elem
 Order collect(List<Priced> priced, Order base) { /* any order; you decide what lands */ }
 ```
 
+When each element needs a chain of its own, let a step build the branches at run time instead —
+`thenApply(s::plan).combine(s::collect)`, with `Step.create(item).thenApply(this::price)` in the
+handler ([cookbook recipe 9](docs/cookbook.md#9-stepcreate--combine)).
+
 Run it from any process — different teams can serve different steps of the *same* flow, each
 with its own `@ForFlow` class and its own deploy, matched by name:
 

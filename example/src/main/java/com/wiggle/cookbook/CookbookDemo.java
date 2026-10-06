@@ -36,6 +36,7 @@ public final class CookbookDemo {
         Cookbook.ChildCheckThenFork parentChild = new Cookbook.ChildCheckThenFork();
         Cookbook.BatchedLoopWithCheckpoint batchedLoop = new Cookbook.BatchedLoopWithCheckpoint();
         Cookbook.KitchenSink kitchenSink = new Cookbook.KitchenSink();
+        Cookbook.DynamicBranches dynamicBranches = new Cookbook.DynamicBranches();
 
         // tcb-linear-gate is also the child workflow of tcb-parent, so it must be registered before
         // that instance starts.
@@ -47,7 +48,7 @@ public final class CookbookDemo {
             // The author publishes every topology; each recipe object then only implements its steps.
             for (FlowSpec spec : List.of(linearGateSpec, chooseFork.spec(), forEachQueues.spec(),
                     pollLoop.spec(), approval.spec(), parentChild.spec(), batchedLoop.spec(),
-                    kitchenSink.spec())) {
+                    kitchenSink.spec(), dynamicBranches.spec())) {
                 client.register(spec);
             }
 
@@ -59,7 +60,8 @@ public final class CookbookDemo {
                     .registerHandler(approval)
                     .registerHandler(parentChild)
                     .registerHandler(batchedLoop)
-                    .registerHandler(kitchenSink)) {
+                    .registerHandler(kitchenSink)
+                    .registerHandler(dynamicBranches)) {
                 worker.start();
 
                 run(client, "1. step + effect + gate (and a context type change)", linearGate.spec(),
@@ -87,6 +89,11 @@ public final class CookbookDemo {
                         kitchenSink.spec(),
                         Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "B"),
                                 Map.of("sku", "C"))));
+
+                run(client, "9. Step.create + combine -- branches built at run time",
+                        dynamicBranches.spec(),
+                        Map.of("items", List.of(Map.of("sku", "A"), Map.of("sku", "gift-BB"),
+                                Map.of("sku", "CCC"))));
             }
         }
     }

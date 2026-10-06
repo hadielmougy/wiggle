@@ -344,8 +344,12 @@ combine ([WGL-ENG-043](30-engine.md)).
 It writes one copy of the body per element where a static body writes none, and created branches are
 linear chains, while a forEach body may hold forks, nested fan-outs, signals and sub-flows.
 
-**WGL-DYN-072** (MAY) Phase 3 MAY deprecate `thenForEach` in the DSL in favour of spawning steps, for
-fan-outs whose branches are linear chains. The engine keeps serving `DYN_FORK` either way.
+**WGL-DYN-072** (SHOULD) Phase 3 SHOULD steer fan-outs whose body is a plain chain of steps to
+spawning steps: the `thenForEach` javadoc, the README and the cookbook (recipe 9) recommend them, and
+keep `thenForEach` for a body that holds a fork, a nested fan-out, a signal or a sub-flow.
+`thenForEach` MUST NOT carry `@Deprecated` while created branches cannot express every body it can;
+the annotation MAY follow once nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler)) and the
+other server nodes land. The engine keeps serving `DYN_FORK` either way.
 
 *Verified by:* `tests/DynamicConstructsTest`, `tests/NestedScopesTest`, `tests/DynamicFlowTest`.
 
