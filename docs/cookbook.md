@@ -136,9 +136,9 @@ to reference, so name the key: `thenForEach("items", Item.class, body)`.
 The combine's collection parameter decides how results arrive: a `List` keeps order, a `Set`
 deduplicates, a `Map` is keyed like the input.
 
-When the body is a plain chain of steps, prefer [recipe 9](#9-stepcreate--combine): the same fan-out
-built by a step at run time, where each item can run a different chain. Keep `thenForEach` for a body
-that holds a `oneOf` or a `repeatWhile`.
+When items need different chains, prefer [recipe 9](#9-stepcreate--combine): the same fan-out built
+by a step at run time. Keep `thenForEach` when every item runs the same body and you want that body in
+the definition, where the portal shows it, and the fan-out made by the server with no step of its own.
 
 ## 4. `repeatWhile` + a gate inside the body
 
@@ -307,9 +307,10 @@ step returns an `Item`, `List<Gift>` the ones that end in `wrap`, and `Basket`, 
 collection, is the base. A step without its own queue or retry policy takes the creating step's.
 
 A created branch chains tasks, effects, gates and sleeps, and also waits for signals
-(`thenAwait`), runs sub-flows (`thenSubFlow`), forks (`thenAllOf(...).combine(...)`) and creates
-branches of its own (`Step.create(line).thenApply(this::pick).combine(this::packed)`). For a body that
-chooses with `oneOf` on a step's result, or loops with `repeatWhile`, use `thenForEach` (recipe 3).
+(`thenAwait`), runs sub-flows (`thenSubFlow`), forks (`thenAllOf(...).combine(...)`), chooses
+(`thenOneOf` with `when`/`otherwise`), loops (`repeatWhile`) and creates branches of its own
+(`Step.create(line).thenApply(this::pick).combine(this::packed)`). Use `thenForEach` (recipe 3) when
+every item runs the same body and you want it in the definition.
 
 ## Reference: what's covered where
 

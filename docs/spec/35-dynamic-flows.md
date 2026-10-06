@@ -113,12 +113,20 @@ meaning they have in a definition:
   and merges its result back ([WGL-ENG-048](30-engine.md));
 - `thenAllOf(arms...)` followed by `combine(ref)`, which runs each arm on its own copy of the branch's
   context and merges them by type ([§8](#8-parameters-by-type)). An arm is named after its last step,
-  which must be a task or a gate, and names must differ.
+  which must be a task or a gate, and names must differ;
+- `thenOneOf(arms...)`, each arm opened by `when(guard)` or, last, `otherwise()`, which runs the first
+  arm whose guard holds on the branch's context, or goes on past the choice when none does and there
+  is no `otherwise` ([WGL-AUTH-066](10-authoring.md));
+- `repeatWhile(condition[, maxIterations], body)`, a do-while: the body runs, then again while the
+  condition holds, failing the instance past its budget ([WGL-ENG-102](30-engine.md)).
 
 ```java
 Step.create(item).thenAwait("approve-" + item.id(), Duration.ofHours(1), e -> e.thenApply(this::escalate));
 Step.create(item).thenSubFlow("ship", "shipping", Shipment.class);
 Step.create(item).thenAllOf(a -> a.thenApply(this::pay), b -> b.thenApply(this::reserve)).combine(this::settle);
+Step.create(item).thenApply(this::score)
+        .thenOneOf(b -> b.when(this::isBulk).thenApply(this::bulk), b -> b.otherwise().thenApply(this::single))
+        .repeatWhile(this::moreToPack, b -> b.thenApply(this::packOne));
 ```
 
 **WGL-DYN-018** (MUST) A report whose branches run a sub-flow starts that workflow, so with per-RPC
@@ -179,7 +187,10 @@ node.
 **WGL-DYN-033** (MUST) `BranchStep` MUST gain `string workflow = 8` (a sub-flow's child),
 `repeated BranchStep escalation = 9` (a wait's escalation) and `repeated BranchArm arms = 10` (a
 fork's arms, each `repeated BranchStep steps = 1`), with `kind` naming `SIGNAL`, `SUB_WORKFLOW` or
-`FORK` and `combine` naming a fork's combine.
+`FORK` and `combine` naming a fork's combine. It MUST also gain `repeated BranchStep body = 11` and
+`int32 loop_budget = 12` (0 = the engine's default), which make a `PREDICATE` a loop over that body,
+and `repeated BranchCase cases = 13`, each `string guard = 1` (blank for the otherwise) and
+`repeated BranchStep steps = 2`, which make a `PREDICATE` a choice.
 
 ## 5. Engine
 
@@ -209,7 +220,12 @@ kind, name, activity, queue, retry and `compensable` flag, with:
 - for a sub-flow, kind `SUB_WORKFLOW` with the child's name in `activity`;
 - for a fork, a `FORK` whose branches are the arms' compiled entries, a static `JOIN` of the arms'
   width, and a combine carrying the arms' names, going on to `next`. A false gate in an arm goes to
-  the fork's `JOIN`, as in a definition.
+  the fork's `JOIN`, as in a definition;
+- for a loop, the body's compiled chain going on to a `PREDICATE` with the loop's budget, whose
+  `next` is the body's entry and whose `altNext` is `next`; the loop's entry is the body's;
+- for a choice, one `PREDICATE` per guard, `next` into its case's compiled chain (or `next` for an
+  empty case) and `altNext` into the following guard; the last guard's `altNext` is the otherwise's
+  chain, or `next`.
 
 **WGL-DYN-043** (MUST) A branch step with a combine MUST compile as a spawning step does in a
 definition ([WGL-DYN-001](#1-model)): a fragment `TASK`, a fragment dynamic `JOIN`, and a fragment
@@ -274,9 +290,12 @@ with a reason naming the offending branch and step, when:
   escalation without a timeout;
 - a fork has fewer than two arms or no combine, an arm is empty or does not end in a task or a gate,
   or two arms end in the same step;
+- a loop has no condition, a negative budget or an empty body;
+- a choice's otherwise is not last, a guard has no name, or no case is guarded;
 - a step kind is unknown, or is not `TASK`, `PREDICATE`, `SLEEP`, `SIGNAL`, `SUB_WORKFLOW` or `FORK`.
 
-Arms and escalations are chains like a branch, held to the same rules.
+Arms, escalations, loop bodies and cases are chains like a branch, held to the same rules; a case
+may be empty.
 
 **WGL-DYN-052** (MUST) The server MUST NOT refuse a branch step for its queue. Which queues have
 workers is a deployment fact, not part of the report ([WGL-DYN-022](#3-worker-contract)).
@@ -401,13 +420,12 @@ combine ([WGL-ENG-043](30-engine.md)).
 It writes one copy of the body per element where a static body writes none, and created branches are
 linear chains, while a forEach body may hold forks, nested fan-outs, signals and sub-flows.
 
-**WGL-DYN-072** (SHOULD) Phase 3 SHOULD steer fan-outs whose body is a plain chain of steps to
-spawning steps: the `thenForEach` javadoc, the README and the cookbook (recipe 9) recommend them, and
-keep `thenForEach` for a body that holds a `oneOf` or a `repeatWhile`.
-`thenForEach` MUST NOT carry `@Deprecated` while created branches cannot express every body it can;
-the annotation MAY follow once a branch can choose on a step's result and loop, as it can now nest
-([WGL-DYN-013](#2-creating-branches-in-a-handler)), wait for signals, run sub-flows and fork
-([WGL-DYN-017](#2-creating-branches-in-a-handler)). The engine keeps serving `DYN_FORK` either way.
+**WGL-DYN-072** (SHOULD) Phase 3 SHOULD steer fan-outs whose items need different chains to spawning
+steps: the `thenForEach` javadoc, the README and the cookbook (recipe 9) recommend them. A created
+branch can now express every body a forEach can ([WGL-DYN-013](#2-creating-branches-in-a-handler),
+[017](#2-creating-branches-in-a-handler)); what a forEach still offers is a body that is part of the
+definition, visible in the portal and fingerprinted, and a fan-out the server makes without a worker
+step. `thenForEach` MAY therefore carry `@Deprecated`, as a decision about those, not a gap. The engine keeps serving `DYN_FORK` either way.
 
 *Verified by:* `tests/DynamicConstructsTest`, `tests/NestedScopesTest`, `tests/DynamicFlowTest`.
 
@@ -418,9 +436,6 @@ the annotation MAY follow once a branch can choose on a step's result and loop, 
   declaration could restore the view without being enforced.
 - **Helpers become steps.** Any `@ForFlow` method can now be a branch step, including one meant as a
   helper. An opt-out annotation may be needed.
-- **`oneOf` and `repeatWhile` on a branch.** Java conditionals in the handler choose at creation time,
-  and a combine that creates branches again loops by rounds; neither chooses on a step's result
-  mid-branch. Offering them would let `thenForEach` be deprecated ([WGL-DYN-072](#9-retiring-dyn_fork)).
 - **Local chaining through fragments.** Returning the fragment in `RunApplied` would let a `LOCAL_*`
   worker chain through a branch. It is worth doing only if dynamic flows turn out to be hot.
 - **Empty-round semantics.** [WGL-DYN-048](#53-fan-out-and-join) diverges from `thenForEach`. If the

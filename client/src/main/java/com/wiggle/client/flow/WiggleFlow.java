@@ -357,10 +357,10 @@ public final class WiggleFlow<T> {
      * {@link Wiggle#allOf} there is no implicit merge -- {@link Items#combine} receives every item's
      * final value and returns the complete post-join context.
      *
-     * <p>When the body is a plain chain of steps, prefer a step that creates the branches itself:
+     * <p>When items need different chains, prefer a step that creates the branches itself:
      * {@code thenApply(s::plan).combine(s::collect)}, with {@code Step.create(item).thenApply(...)} in
-     * the handler, where each item can run a different chain. Keep {@code thenForEach} for a body
-     * that holds a {@code oneOf} or a {@code repeatWhile}, which created branches cannot.
+     * the handler. Keep {@code thenForEach} when every item runs the same body and you want it in the
+     * definition, where the portal shows it, and the fan-out made by the server with no step of its own.
      */
     public <E> Items thenForEach(String itemsKey, Class<E> itemType,
                                  Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
@@ -395,8 +395,8 @@ public final class WiggleFlow<T> {
      * <p>Use the string form when the context is a {@code Map<String, Object>}: raw JSON has no
      * accessor to reference.
      *
-     * <p>For a body that is a plain chain of steps, prefer {@link #combine(FlowFn)} after a step that
-     * creates branches with {@code Step.create} -- see {@link #thenForEach(String, Class, Function)}.
+     * <p>When items need different chains, prefer {@link #combine(FlowFn)} after a step that creates
+     * branches with {@code Step.create} -- see {@link #thenForEach(String, Class, Function)}.
      */
     public <E> Items thenForEach(FlowItems<T, E> items, Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
         String key = StepNames.ofKey(items);

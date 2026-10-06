@@ -101,7 +101,10 @@ final class Spawns {
             return "only a task can create branches, and its combine needs a name";
         }
         return switch (step.kind()) {
-            case TASK, PREDICATE -> blank(step.name()) ? "a step needs a name" : null;
+            case PREDICATE -> step.isChoice() ? choiceRefusal(step, limits)
+                    : step.isLoop() ? loopRefusal(step, limits)
+                    : blank(step.name()) ? "a step needs a name" : null;
+            case TASK -> blank(step.name()) ? "a step needs a name" : null;
             case SLEEP -> step.sleepMillis() < 0 ? "a negative sleep" : null;
             case SIGNAL -> signalRefusal(step, limits);
             case SUB_WORKFLOW -> blank(step.name()) || blank(step.workflow())
@@ -118,6 +121,26 @@ final class Spawns {
         if (step.sleepMillis() == 0) return "an escalation needs a timeout";
         String why = chainRefusal(step.escalation(), limits);
         return why == null ? null : "its escalation" + why;
+    }
+
+    private static String loopRefusal(BranchStep step, Limits limits) {
+        if (blank(step.name())) return "a loop needs its condition's name";
+        if (step.loopBudget() < 0) return "a loop's iteration budget cannot be negative";
+        String why = chainRefusal(step.body(), limits);
+        return why == null ? null : "its loop body" + why;
+    }
+
+    private static String choiceRefusal(BranchStep step, Limits limits) {
+        List<BranchStep.Case> cases = step.cases();
+        for (int c = 0; c < cases.size(); c++) {
+            BranchStep.Case one = cases.get(c);
+            if (one.guard() == null && c != cases.size() - 1) return "case " + c + ": the otherwise must come last";
+            if (one.guard() != null && one.guard().isBlank()) return "case " + c + " needs its guard's name";
+            if (one.steps().isEmpty()) continue;
+            String why = chainRefusal(one.steps(), limits);
+            if (why != null) return "case " + c + why;
+        }
+        return cases.getFirst().guard() == null ? "a choice needs a guarded case before its otherwise" : null;
     }
 
     /** A fork's arms are named by their last step, as in a definition, so each must end in a named step. */
@@ -183,6 +206,10 @@ final class Spawns {
         for (BranchStep step : steps) {
             n += switch (step.kind()) {
                 case TASK -> step.combine() == null ? 1 : 3;
+                case PREDICATE -> step.isLoop() ? 1 + chainNodeCount(step.body())
+                        : step.isChoice() ? step.cases().stream()
+                                .mapToLong(c -> (c.guard() == null ? 0 : 1) + chainNodeCount(c.steps())).sum()
+                        : 1;
                 case SIGNAL -> 1 + chainNodeCount(step.escalation());
                 case FORK -> 3 + step.arms().stream().mapToLong(Spawns::chainNodeCount).sum();
                 default -> 1;
@@ -213,8 +240,12 @@ final class Spawns {
         com.wiggle.core.RetryPolicy retry = retry(creator, step);
         switch (step.kind()) {
             case SLEEP -> nodes.add(Node.sleep(id, "sleep-" + step.sleepMillis() + "ms", step.sleepMillis()).withNext(next));
-            case PREDICATE -> nodes.add(worker(Node.predicate(id, step.name(), activity(inst, step.name()), queue, retry),
-                    step).withNext(next).withAltNext(gateExit));
+            case PREDICATE -> {
+                if (step.isLoop()) return compileLoop(inst, creator, step, id, next, gateExit, nodes);
+                if (step.isChoice()) return compileChoice(inst, creator, step, next, gateExit, nodes);
+                nodes.add(worker(Node.predicate(id, step.name(), activity(inst, step.name()), queue, retry),
+                        step).withNext(next).withAltNext(gateExit));
+            }
             case SIGNAL -> {
                 Node wait = Node.signal(id, step.name(), step.sleepMillis()).withNext(next);
                 if (!step.escalation().isEmpty()) {
@@ -252,6 +283,47 @@ final class Spawns {
             }
         }
         return id;
+    }
+
+    /** A do-while, as in a definition: the body first, then the condition, true back to the body. */
+    private static String compileLoop(Instance inst, Node creator, BranchStep step, String id, String next,
+                                      String gateExit, List<Node> nodes) {
+        String bodyEntry = compileChain(inst, creator, step.body(), id, gateExit, nodes);
+        nodes.add(Node.predicate(id, step.name(), activity(inst, step.name()), queue(creator, step), retry(creator, step))
+                .withLoopBudget(step.loopBudget() == 0 ? -1 : step.loopBudget())
+                .withNext(bodyEntry)
+                .withAltNext(next));
+        return bodyEntry;
+    }
+
+    /**
+     * A choice, as in a definition: a chain of guards, each true into its case and false into the
+     * next guard; the last falls through to the otherwise, or past the choice.
+     */
+    private static String compileChoice(Instance inst, Node creator, BranchStep step, String next, String gateExit,
+                                        List<Node> nodes) {
+        List<BranchStep.Case> cases = step.cases();
+        String fallthrough = next;
+        int guarded = cases.size();
+        if (cases.getLast().guard() == null) {
+            fallthrough = caseEntry(inst, creator, cases.getLast(), next, gateExit, nodes);
+            guarded--;
+        }
+        for (int c = guarded - 1; c >= 0; c--) {
+            BranchStep.Case one = cases.get(c);
+            String guardId = newId();
+            nodes.add(Node.predicate(guardId, one.guard(), activity(inst, one.guard()), queue(creator, step),
+                            retry(creator, step))
+                    .withNext(caseEntry(inst, creator, one, next, gateExit, nodes))
+                    .withAltNext(fallthrough));
+            fallthrough = guardId;
+        }
+        return fallthrough;
+    }
+
+    private static String caseEntry(Instance inst, Node creator, BranchStep.Case one, String next, String gateExit,
+                                    List<Node> nodes) {
+        return one.steps().isEmpty() ? next : compileChain(inst, creator, one.steps(), next, gateExit, nodes);
     }
 
     private static String newId() {

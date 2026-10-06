@@ -103,6 +103,14 @@ final class Wire {
             for (com.wiggle.core.CreatedBranch.BranchStep a : arm) ab.addSteps(branchStep(a));
             sb.addArms(ab);
         }
+        for (com.wiggle.core.CreatedBranch.BranchStep b : st.body()) sb.addBody(branchStep(b));
+        sb.setLoopBudget(st.loopBudget());
+        for (com.wiggle.core.CreatedBranch.BranchStep.Case c : st.cases()) {
+            com.wiggle.proto.BranchCase.Builder cb = com.wiggle.proto.BranchCase.newBuilder();
+            if (c.guard() != null) cb.setGuard(c.guard());
+            for (com.wiggle.core.CreatedBranch.BranchStep cs : c.steps()) cb.addSteps(branchStep(cs));
+            sb.addCases(cb);
+        }
         return sb.build();
     }
 
