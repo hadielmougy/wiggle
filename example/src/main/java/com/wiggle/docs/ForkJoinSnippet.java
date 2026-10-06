@@ -2,7 +2,6 @@ package com.wiggle.docs;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.core.RetryPolicy;
 
@@ -32,7 +31,7 @@ public final class ForkJoinSnippet {
         Order   capture(Order o);
         Order   reserveStock(Order o);
         Order   printLabel(Order o);
-        Order   merge(@Context Order base, Order payment, Order shipping);
+        Order   merge(Order base, Order payment, Order shipping);
         Order   notify(Order o);
     }
     // docs:end contract
@@ -50,7 +49,7 @@ public final class ForkJoinSnippet {
                                   .thenApply(s::printLabel);
 
             return Wiggle.allOf(payment, shipping)
-                    .combineWithContext(s::merge)    // mandatory — there is no implicit join
+                    .combine(s::merge)    // mandatory — there is no implicit join
                     .thenApply(s::notify);
         });
         // docs:end topology

@@ -1,6 +1,5 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 
 import java.util.LinkedHashMap;
@@ -26,7 +25,7 @@ public final class OnboardingHandlers {
         return put(ctx, "provisioned", true);
     }
 
-    public Map<String, Object> merge(@Context Map<String, Object> base,
+    public Map<String, Object> merge(Map<String, Object> base,
                                      Map<String, Object> welcome,
                                      Map<String, Object> provision) {
         Map<String, Object> out = new LinkedHashMap<>(base);

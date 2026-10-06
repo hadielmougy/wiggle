@@ -76,14 +76,14 @@ public class WorkerMain {
         boolean inStock(Order o);
         Line priceLine(Line line);
         Line applyDiscount(Line line);
-        Order collectLines(@Context Order base, List<Line> priced);
+        Order collectLines(Order base, List<Line> priced);
         Order riskCheck(Order o);
         Order authorise(Order o);
-        Order mergePayment(@Context Order base, Order risk, Order auth);
+        Order mergePayment(Order base, Order risk, Order auth);
         Order capture(Order o);
         CompensableActivity<Order, Order> reserveStock();
         Order printLabel(Order o);
-        Order merge(@Context Order base, Order payment, Order shipping);
+        Order merge(Order base, Order payment, Order shipping);
         CompensableActivity<Order, Order> notify0();
     }
 
@@ -192,14 +192,14 @@ public class WorkerMain {
             var payment = Wiggle.allOf(
                             priced.thenApply(s::riskCheck, RetryPolicy.exponential(5, Duration.ofMillis(100)), "riskCheck"),
                             priced.thenApply(s::authorise, RetryPolicy.exponential(5, Duration.ofMillis(100)), "authorise"))
-                    .combineWithContext(s::mergePayment, "mergePayment")
+                    .combine(s::mergePayment, "mergePayment")
                     .thenApply(s::capture, "capture");
 
             var shipping = priced.thenApplyCompensable(s::reserveStock, "reserveStock")
                     .thenApply(s::printLabel, "printLabel");
 
             return Wiggle.allOf(payment, shipping)
-                    .combineWithContext(s::merge, "merge")
+                    .combine(s::merge, "merge")
                     .thenApplyCompensable(s::notify0, "notify0");
         });
         client.register(spec);
@@ -291,7 +291,7 @@ public class WorkerMain {
         }
 
         @Override
-        public Order collectLines(@Context Order base, List<Line> priced) {
+        public Order collectLines(Order base, List<Line> priced) {
             assigned("collectLines");
             base = OrderValidator.requireValid(base, "collectLines.base@" + serves);
             if (priced.size() != base.lines().size()) {
@@ -327,7 +327,7 @@ public class WorkerMain {
         }
 
         @Override
-        public Order mergePayment(@Context Order base, Order risk, Order auth) {
+        public Order mergePayment(Order base, Order risk, Order auth) {
             assigned("mergePayment");
             base = OrderValidator.requireValid(base, "mergePayment.base@" + serves);
             OrderValidator.requireValid(risk, "mergePayment.risk@" + serves);
@@ -376,7 +376,7 @@ public class WorkerMain {
         }
 
         @Override
-        public Order merge(@Context Order base, Order payment, Order shipping) {
+        public Order merge(Order base, Order payment, Order shipping) {
             assigned("merge");
             base = OrderValidator.requireValid(base, "merge.base@" + serves);
             OrderValidator.requireValid(payment, "merge.payment@" + serves);

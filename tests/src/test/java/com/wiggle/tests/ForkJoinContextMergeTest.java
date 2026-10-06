@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -57,7 +56,7 @@ class ForkJoinContextMergeTest {
         public Map<String, Object> validate(Map<String, Object> ctx) { return put(ctx, "validated", true); }
         public Map<String, Object> authorise(Map<String, Object> ctx) { return put(ctx, "payment", "auth"); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "tracking", "DHL"); }
-        /** Ambient style: the pre-fork base from Step.base() instead of a @Context parameter. */
+        /** Ambient style: the pre-fork base from Step.base() instead of a parameter for it. */
         public Map<String, Object> merge(Map<String, Object> payment,
                                          Map<String, Object> shipping) {
             Map<String, Object> out = new LinkedHashMap<>(com.wiggle.client.worker.Step.base());
@@ -129,7 +128,7 @@ class ForkJoinContextMergeTest {
             var validated = f.thenApply(s::validate);
             var payment = validated.thenApply(s::authorise);
             var shipping = validated.thenSleep("await", Duration.ofMillis(50)).thenApply(s::label);
-            return Wiggle.allOf(payment, shipping).combineWithContext(s::merge).thenApply(s::notify);
+            return Wiggle.allOf(payment, shipping).combine(s::merge).thenApply(s::notify);
         });
     }
 
@@ -137,7 +136,7 @@ class ForkJoinContextMergeTest {
         Parcel validate(Parcel p);
         Parcel authorise(Parcel p);
         Parcel label(Parcel p);
-        Parcel merge(@Context Parcel base, Parcel payment, Parcel shipping);
+        Parcel merge(Parcel base, Parcel payment, Parcel shipping);
         Parcel notify(Parcel p);
     }
 
@@ -146,7 +145,7 @@ class ForkJoinContextMergeTest {
         public Parcel validate(Parcel p) { return p; }
         public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
         public Parcel label(Parcel p) { return p.withTracking("DHL"); }
-        public Parcel merge(@Context Parcel base, Parcel payment, Parcel shipping) {
+        public Parcel merge(Parcel base, Parcel payment, Parcel shipping) {
             return base.withPayment(payment.payment()).withTracking(shipping.tracking());
         }
         public Parcel notify(Parcel p) { return p; }

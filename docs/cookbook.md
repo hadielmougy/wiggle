@@ -83,7 +83,7 @@ FlowSpec spec = FlowSpec.define("tcb-choose-fork", 1, Purchase.class, ChooseFork
     var fraud = large.thenApply(s::fraudCheck,
             RetryPolicy.exponential(3, Duration.ofMillis(50)));
     var notice = large.thenAccept(s::managerNotice);
-    var largeArm = Wiggle.allOf(fraud, notice).combineWithContext(s::largeMerge);
+    var largeArm = Wiggle.allOf(fraud, notice).combine(s::largeMerge);
 
     var standard = f.otherwise().thenApply(s::fastPath);
 
@@ -97,9 +97,11 @@ context, so a combine is the only way their results reach the flow; the arms of 
 alternatives on the one context, so control simply continues from whichever ran. That is also why a
 choice's arms must agree on the type they end at — which one ran is not knowable until run time.
 
-`combineWithContext` is the form for a merge that also wants the pre-fork context; declare it
-`(@Context X base, …one parameter per arm)`. Arms bind **by position**, in the order given to
-`allOf`.
+A combine's parameters are found **by type**, in any order: each takes the arm whose last step
+produces its type, a `List`/`Set` takes every arm of its element type, and a parameter no arm
+matches receives the pre-fork context. Arms of the same type go to the parameters of that type in
+the order given to `allOf`, matched from the last parameter back — so with every arm a `Map`, a
+leading extra `Map` parameter is the base. A combine need not take every arm.
 
 A single guarded arm is legal here — `oneOf(f.when(g).thenApply(step))` reads as "run this if the
 guard holds, otherwise skip past it". A single-armed `allOf` is not: there is nothing to fan out.
@@ -195,7 +197,7 @@ FlowSpec spec = FlowSpec.define("tcb-parent", 1, Signup.class, ParentSteps.class
     var provision = checked.thenApply(s::provision);
     var audit = checked.thenAccept(s::audit);
 
-    return Wiggle.allOf(provision, audit).combineWithContext(s::merge);
+    return Wiggle.allOf(provision, audit).combine(s::merge);
 });
 ```
 
@@ -240,7 +242,7 @@ FlowSpec spec = FlowSpec.define("tcb-kitchen-sink", 1, Basket.class, KitchenSink
     var packed = vip.thenApply(s::pack,
             RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing");
     var held = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept(s::notice);
-    var vipArm = Wiggle.allOf(packed, held).combineWithContext(s::priorityMerge);
+    var vipArm = Wiggle.allOf(packed, held).combine(s::priorityMerge);
 
     var standard = ready.otherwise()
             .thenForEach("pack-items", Basket::items, item -> item.thenApply(s::packItem))
@@ -265,7 +267,7 @@ thing.
 | `thenAccept` (effect, `void`) | 1, 2, 5, 8 |
 | `thenFilter` (gate, `boolean`) | 1, 4, 6, 8 |
 | `Wiggle.oneOf` + `when` / `otherwise` | 2, 5, 8 |
-| `Wiggle.allOf` + `combine` / `combineWithContext` | 2, 6, 8 |
+| `Wiggle.allOf` + `combine` | 2, 6, 8 |
 | `thenForEach` + `combine` | 3, 8 |
 | `repeatWhile` | 4, 7, 8 |
 | `thenAwait` (+ timeout, + escalation) | 5, 8 |

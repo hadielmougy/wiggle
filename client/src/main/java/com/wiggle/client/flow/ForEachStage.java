@@ -11,9 +11,9 @@ import java.util.function.UnaryOperator;
  * the only way item results reach the flow is through the {@link #combine}.
  *
  * <p>{@code combine} is topology only: it declares the combine node (by name). The merge itself is a
- * handler bound on the worker — a method named the same as the combine taking an optional
- * {@link com.wiggle.client.worker.Context @Context} parameter (the pre-forEach context) and one
- * collection parameter that receives every item's final context: a {@code List} (ordered by item
+ * handler bound on the worker — a method named the same as the combine taking, in any order, a
+ * collection parameter that receives every item's final context and, optionally, a parameter for
+ * the pre-forEach context: a {@code List} (ordered by item
  * index) or {@code Set} when the input was a list, or a {@code Map} keyed like the input when the
  * input was a map — each element being exactly what that item's last step returned. Its return is
  * the COMPLETE post-join context — the engine replaces the context with it. The forEach leaves the stream with no open end, so a forgotten combine fails at

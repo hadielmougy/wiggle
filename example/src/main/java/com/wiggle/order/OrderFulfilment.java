@@ -46,10 +46,10 @@ public final class OrderFulfilment {
                     .thenApply(s::reserveStock)
                     .thenApply(s::printLabel);
 
-            // the merge needs the pre-fork order as well as both arms, so it takes the @Context;
-            // its shape is checked against these arms here, at definition time
+            // the merge needs the pre-fork order as well as both arms; the worker finds each
+            // parameter by type when it binds the combine
             return Wiggle.allOf(payment, shipping)
-                    .combineWithContext(s::merge)
+                    .combine(s::merge)
                     .thenApply(s::notify)
                     .thenAccept(s::audit);
         });

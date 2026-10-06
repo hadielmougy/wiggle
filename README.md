@@ -36,7 +36,7 @@ FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps
     var shipping = validated.thenApply(s::reserveStock).thenApply(s::printLabel);
 
     return Wiggle.allOf(payment, shipping)          // both arms run, on isolated context copies
-            .combineWithContext(s::merge)           // and rejoin explicitly
+            .combine(s::merge)                      // and rejoin explicitly
             .thenApply(s::notify);
 });
 ```
@@ -267,7 +267,7 @@ FlowSpec orders = FlowSpec.define("order-fulfilment", 1, Order.class, OrderSteps
             .thenApply(s::printLabel);
 
     return Wiggle.allOf(payment, shipping)   // arms ran on isolated context copies...
-            .combineWithContext(s::merge)    // ...so rejoining them is explicit, never implicit
+            .combine(s::merge)               // ...so rejoining them is explicit, never implicit
             .thenApply(s::notify);
 });
 ```
@@ -310,7 +310,7 @@ class OrderHandlers {
     public Order   capture(Order o)      { return o.log("captured"); }
     // The combine is mandatory and explicit: fold what each branch produced onto the pre-fork
     // order and return the COMPLETE post-join context — nothing merges implicitly.
-    public Order   merge(@Context Order base, Order payment, Order shipping) {   // arms, in fork order
+    public Order   merge(Order base, Order payment, Order shipping) {   // found by type; the leading Order is the base
         return base.withPaymentRef(pay.paymentRef())
                    .withShipmentRef(ship.shipmentRef()).withTrackingLabel(ship.trackingLabel());
     }
@@ -329,7 +329,7 @@ Priced price(LineItem line) {                       // the parameter IS the elem
     Order base = Step.base(Order.class);            // frozen pre-forEach context, read-only
     return new Priced(line.sku(), base.rate() * line.amount());
 }
-Order collect(@Context Order base, List<Priced> priced) { /* you decide what lands */ }
+Order collect(List<Priced> priced, Order base) { /* any order; you decide what lands */ }
 ```
 
 Run it from any process — different teams can serve different steps of the *same* flow, each

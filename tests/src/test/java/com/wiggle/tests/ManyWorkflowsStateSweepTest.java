@@ -4,7 +4,6 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.CompensableActivity;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.Worker;
@@ -53,7 +52,7 @@ class ManyWorkflowsStateSweepTest {
         Map<String, Object> a(Map<String, Object> ctx);
         Map<String, Object> left(Map<String, Object> ctx);
         Map<String, Object> right(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> l, Map<String, Object> r);
         Map<String, Object> c(Map<String, Object> ctx);
     }
@@ -61,7 +60,7 @@ class ManyWorkflowsStateSweepTest {
     interface ForeachSteps {
         Map<String, Object> a(Map<String, Object> ctx);
         Map<String, Object> each(Map<String, Object> item);
-        Map<String, Object> collect(@Context Map<String, Object> base, java.util.List<Object> items);
+        Map<String, Object> collect(Map<String, Object> base, java.util.List<Object> items);
     }
 
     interface BranchySteps {
@@ -132,7 +131,7 @@ class ManyWorkflowsStateSweepTest {
         return FlowSpec.define(PREFIX + "forked", 1, Map.class, ForkedSteps.class, (f, s) -> {
             var seeded = f.executeInLocalSync().thenApply(s::a);
             return Wiggle.allOf(seeded.thenApply(s::left), seeded.thenApply(s::right))
-                    .combineWithContext(s::merge)
+                    .combine(s::merge)
                     .thenApply(s::c);
         });
     }
@@ -198,7 +197,7 @@ class ManyWorkflowsStateSweepTest {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public Map<String, Object> left(Map<String, Object> c) { return put(c, "left", 1L); }
         public Map<String, Object> right(Map<String, Object> c) { return put(c, "right", 1L); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> l, Map<String, Object> r) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.putAll(l);
@@ -212,7 +211,7 @@ class ManyWorkflowsStateSweepTest {
     public static final class ForeachH {
         public Map<String, Object> a(Map<String, Object> c) { return c; }
         public Map<String, Object> each(Map<String, Object> item) { return put(item, "priced", true); }
-        public Map<String, Object> collect(@Context Map<String, Object> base, List<Object> items) {
+        public Map<String, Object> collect(Map<String, Object> base, List<Object> items) {
             return put(base, "count", (long) items.size());
         }
     }

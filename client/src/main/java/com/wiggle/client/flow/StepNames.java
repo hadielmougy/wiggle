@@ -1,6 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handles;
 
 import java.io.Serializable;
@@ -113,48 +112,6 @@ public final class StepNames {
                     + "defining JVM is not part of the topology.");
         }
         return impl;
-    }
-
-    /**
-     * The node name for a combine reference, having first checked it really is the combine for
-     * <em>this</em> fork: one parameter per arm, in fork order, preceded by the {@link Context
-     * @Context} parameter when {@code withContext}.
-     *
-     * <p>Arms bind by position, so the shape is all there is to check -- and the typed
-     * {@code combine(...)} signature has already fixed it. What is left is the arity, which catches a
-     * handler written for a different fan-out, and the {@code @Context} parameter, which is the only
-     * thing distinguishing the pre-fork context from an arm.
-     *
-     * @param arms this fork's arm names, in fork order
-     */
-    static String ofCombine(Serializable methodRef, List<String> arms, boolean withContext) {
-        SerializedLambda lambda = serializedForm(methodRef);
-        String name = of(methodRef, lambda);
-        Method m = resolve(methodRef, lambda, lambda.getImplMethodName());
-        if (m == null) return name;   // not resolvable; the worker still checks at bind time
-
-        java.lang.reflect.Parameter[] params = m.getParameters();
-        int expected = arms.size() + (withContext ? 1 : 0);
-        if (params.length != expected) {
-            throw new IllegalArgumentException(combineError(name, arms, withContext)
-                    + " but it declares " + params.length + " parameter(s)");
-        }
-        if (withContext && !params[0].isAnnotationPresent(Context.class)) {
-            throw new IllegalArgumentException(combineError(name, arms, withContext)
-                    + " but its first parameter is not @Context");
-        }
-        return name;
-    }
-
-    private static String combineError(String name, List<String> arms, boolean withContext) {
-        StringBuilder b = new StringBuilder("combine '").append(name).append("' must be declared (");
-        if (withContext) b.append("@Context <context>, ");
-        for (int i = 0; i < arms.size(); i++) {
-            if (i > 0) b.append(", ");
-            b.append("<").append(arms.get(i)).append(">");
-        }
-        return b.append(") to match the fork it merges -- one parameter per arm, in fork order")
-                .toString();
     }
 
     /**

@@ -257,9 +257,9 @@ queue no worker is polling ([chapter 70](70-api.md)).
 
 ## 8. Parameters by type
 
-This section also changes every combine, static or dynamic, and every step that reads a base. It
-drops `@Context` and binds a combine's parameters the way dependency injection binds a constructor:
-by type, in any order. It supersedes [WGL-WRK-004](20-worker.md)'s combine rows,
+This section changes every combine, static or dynamic, and every step that reads a base. It drops
+`@Context` and binds a combine's parameters the way dependency injection binds a constructor: by
+type, in any order. It supersedes [WGL-WRK-004](20-worker.md)'s combine rows,
 [WGL-WRK-005](20-worker.md), [WGL-AUTH-065](10-authoring.md) and the `@Context` clause of
 [WGL-AUTH-071](10-authoring.md).
 
@@ -269,54 +269,56 @@ Receipt merge(@Context Order order, Payment payment, Shipment shipment)
 
 // after: any order; each parameter is found by its type
 Receipt merge(Shipment shipment, Order order, Payment payment)
+
+// created branches: split by the type their last step produces
+Order summarise(List<Shipment> shipped, Order order, List<Link> links)
 ```
 
 **WGL-DYN-080** (MUST) The `@Context` annotation and the `combineWithContext` overloads MUST be
 removed. `Step.base()` remains.
 
-**WGL-DYN-081** (MUST) A combine's **sources** are the base and each arm's or branch's result. Each
-source has a **declared type**, resolved from handler method signatures, never from the JSON:
+**WGL-DYN-081** (MUST) A combine's **sources** are the base and each arm's or branch's result. A
+result's **type** is resolved from the handler of the step that produced it, never from the JSON: the
+step's return type, or — for an effect or a gate, which pass their input on — its parameter type.
+An arm's producing step is its last step, which names the arm. For a forEach or created branches, the
+engine records in each `ITEM` frame the last step that ran in it and stages those names beside the
+results under `__steps__<collectKey>` (`ScratchKeys.steps`), in the same order or under the same keys.
 
-- an arm's or branch's type is the return type of its last step that returns a value; when every step
-  in it is an effect or a gate, it is the type that flowed into it;
-- the base's type is the return type of the last step before the fan-out that returns a value — for a
-  dynamic flow, the spawning step's own return type.
+**WGL-DYN-082** (MUST) A combine parameter is a **collection** when it is a `List`, a `Set`, or a
+`Map` whose value type is not `Object` (`Map<String, Shipment>`). A raw `Map` or a
+`Map<String, Object>` is a single value: it is the shape most contexts have.
 
-**WGL-DYN-082** (MUST) A parameter of type `P` that is not a collection MUST bind the single source
-whose declared type is assignable to `P`. No match, or more than one, is an error naming the
-parameter and the candidates.
+**WGL-DYN-083** (MUST) In a fork's combine, a parameter that is not a collection MUST take the arm
+whose type is assignable to it, preferring an arm of exactly its type. Parameters sharing a type MUST
+take that type's arms in fork order, matched from the last parameter back, so that a parameter left
+over at the front receives the pre-fork context. A collection parameter MUST take every arm of its
+element type, in fork order, or keyed by arm name for a `Map`.
 
-**WGL-DYN-083** (MUST) A parameter of type `List<P>` or `Set<P>` MUST bind every arm or branch result
-whose declared type is assignable to `P`, in fork or creation order, and never the base. `Map<String,
-P>` MUST bind the same results keyed by branch key, forEach map key, or arm name for a fork. An empty
-match binds an empty collection.
+**WGL-DYN-084** (MUST) In the combine of a forEach or of created branches, a parameter that is not a
+collection receives the context from before the fan-out. A single collection parameter MUST take
+every result; several MUST each take the results whose type is assignable to their element type. A
+combine with one parameter, an untyped `Map`, takes the results.
 
-**WGL-DYN-084** (MUST) Parameter order MUST NOT matter. One source MAY bind several parameters, and a
-source that binds none is not injected: a combine need not take every arm.
+**WGL-DYN-085** (MUST) Parameter order MUST NOT matter beyond WGL-DYN-083's tie-break, and a combine
+need not take every result. Two parameters that would both receive the base MUST be refused at worker
+`start()` ([WGL-WRK-021](20-worker.md)), naming what the arms produce.
 
-**WGL-DYN-085** (MUST) Binding MUST be checked as early as the shape is known:
+**WGL-DYN-086** (MUST) A fork combine's worker that holds no handler for some arm's step cannot tell
+that arm's type; its parameters MUST then take the arms in fork order, one each, and the base is
+`Step.base()`. A collection combine that splits results by type and meets a result whose step this
+worker does not hold MUST fail the step non-retryably, naming that step. A combine SHOULD therefore
+live in the same `@ForFlow` class as the steps that feed it.
 
-- a static fork or forEach combine at definition time, by the DSL reading the declared types off the
-  method references ([WGL-AUTH-050](10-authoring.md)), and again at worker `start()`
-  ([WGL-WRK-021](20-worker.md));
-- a dynamic combine at each activation, failing the step non-retryably, because its branches exist
-  only at run time.
+**WGL-DYN-087** (MUST) Every step that is not a combine MUST take exactly one parameter, its input.
+Inside a forEach item or a created branch, the base is read through `Step.base(Type.class)`.
 
-**WGL-DYN-086** (MUST) A worker that cannot resolve a source's declared type, because it holds no
-handler for the step that produced it, MUST fail as in WGL-DYN-085 and name that step. A combine
-SHOULD therefore live in the same `@ForFlow` class as the steps that feed it.
+**WGL-DYN-088** (MUST) The typed DSL MUST accept a combine reference of any arity from 1 to 11 and any
+parameter types (`<P1, …, Pn, R> combine(FlowFnN<P1, …, Pn, R>)`), on every fan-out stage
+(`Combines`). Binding is checked by the worker that binds the combine, not when the workflow is
+defined.
 
-**WGL-DYN-087** (MUST) A step inside a scope (a forEach item or a branch) MAY declare a second
-parameter for the base, and the two MUST bind by type in the same way. When the input and the base
-share a type, the step MUST take only the input and read the base through `Step.base()`.
-
-**WGL-DYN-088** (MUST) The typed DSL MUST accept a combine reference of any arity and parameter types
-(`<P1, …, Pn, R> combine(FlowFnN<P1, …, Pn, R>)`). The compile-time positional check moves to the
-definition-time type check of WGL-DYN-085.
-
-**WGL-DYN-089** (MUST) Nothing on the wire or in the engine changes: staged keys stay
-`__arm__<name>`, `__forEach__<name>` and `__spawn__<name>`. Binding by type is a client binding rule,
-and another client library MAY bind differently.
+**WGL-DYN-089** (MUST) Binding by type is a client binding rule: the wire is unchanged, and another
+client library MAY bind differently. The engine's only part is staging `__steps__<collectKey>`.
 
 ## 9. Retiring `DYN_FORK`
 
@@ -325,9 +327,9 @@ who builds the branches. Once dynamic flows ship, the engine needs only one fan-
 
 **WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged. It leaves
 out nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler), [043](#52-fragments)), the
-`BRANCHES_CREATED` lifecycle entry ([WGL-DYN-065](#7-interaction-with-other-features)), the portal's
-grouping ([WGL-DYN-066](#7-interaction-with-other-features)) and parameters by type
-([§8](#8-parameters-by-type)), which follow it. Until nesting lands, a per-instance cap on created
+`BRANCHES_CREATED` lifecycle entry ([WGL-DYN-065](#7-interaction-with-other-features)) and the
+portal's grouping ([WGL-DYN-066](#7-interaction-with-other-features)), which follow it. Parameters
+by type ([§8](#8-parameters-by-type)) ship with it. Until nesting lands, a per-instance cap on created
 nodes and a nesting depth limit are not needed: a round is bounded by its branches and steps, and
 rounds by their budget.
 
@@ -353,8 +355,5 @@ engine keeps serving stored `DYN_FORK` nodes either way.
   worker chain through a branch. It is worth doing only if dynamic flows turn out to be hot.
 - **Empty-round semantics.** [WGL-DYN-048](#53-fan-out-and-join) diverges from `thenForEach`. If the
   divergence surprises users, an opt-in `skipWhenEmpty()` would align them.
-- **Ambiguous types in practice.** Two arms returning the same type, or an effect arm whose type
-  equals the base, must now be split into distinct types or taken as a collection. Worth measuring
-  against the examples before committing to errors over a positional fallback.
 - **Report size.** 10 000 branches with large inputs can exceed the gRPC message limit. The branch
   limit may need to become a byte limit.

@@ -2,7 +2,6 @@ package com.wiggle.docs;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Decode;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;

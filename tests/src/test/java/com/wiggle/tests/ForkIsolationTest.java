@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -36,7 +35,7 @@ class ForkIsolationTest {
             var right = seeded.thenApply(s::r);
             // The combine ignores both arms' "shared" writes entirely and sets its own value,
             // proving nothing merges unless combine returns it.
-            return Wiggle.allOf(left, right).combineWithContext(s::decide);
+            return Wiggle.allOf(left, right).combine(s::decide);
         });
 
         Map<String, Object> out = run(bp, new IsolationH(), new LinkedHashMap<>(Map.of("id", "iso-1")));
@@ -94,7 +93,7 @@ class ForkIsolationTest {
         Map<String, Object> seed(Map<String, Object> ctx);
         Map<String, Object> l(Map<String, Object> ctx);
         Map<String, Object> r(Map<String, Object> ctx);
-        Map<String, Object> decide(@Context Map<String, Object> base,
+        Map<String, Object> decide(Map<String, Object> base,
                                    Map<String, Object> left, Map<String, Object> right);
     }
 
@@ -130,7 +129,7 @@ class ForkIsolationTest {
         public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "base", "B"); }
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
         public Map<String, Object> r(Map<String, Object> ctx) { return put(ctx, "shared", "from-right"); }
-        public Map<String, Object> decide(@Context Map<String, Object> base,
+        public Map<String, Object> decide(Map<String, Object> base,
                                           Map<String, Object> left,
                                           Map<String, Object> right) {
             // The return is the COMPLETE post-join context: base must be carried explicitly.
@@ -231,7 +230,7 @@ class ForkIsolationTest {
         /** An arm name AND a real context key: the fork stages this arm under its step's name. */
         Map<String, Object> payment(Map<String, Object> c);
         Map<String, Object> shipping(Map<String, Object> c);
-        Map<String, Object> settle(@Context Map<String, Object> base,
+        Map<String, Object> settle(Map<String, Object> base,
                                    Map<String, Object> payment, Map<String, Object> shipping);
     }
 
@@ -252,7 +251,7 @@ class ForkIsolationTest {
             out.put("labelled", true);
             return out;
         }
-        @Override public Map<String, Object> settle(@Context Map<String, Object> base,
+        @Override public Map<String, Object> settle(Map<String, Object> base,
                                                     Map<String, Object> payment,
                                                     Map<String, Object> shipping) {
             Map<String, Object> out = new LinkedHashMap<>(base);
@@ -267,7 +266,7 @@ class ForkIsolationTest {
         FlowSpec bp = FlowSpec.define("arm-key-clash", 1, Map.class, ClashSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             return Wiggle.allOf(seeded.thenApply(s::payment), seeded.thenApply(s::shipping))
-                    .combineWithContext(s::settle);
+                    .combine(s::settle);
         });
 
         Map<String, Object> out = run(bp, new ClashH(), new LinkedHashMap<>(Map.of("id", "clash-1")));

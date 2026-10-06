@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.WiggleClient;
@@ -48,7 +47,7 @@ class JdbcForkJoinStressTest {
                     .thenApply(s::reserve)
                     .thenSleep("await", Duration.ofMillis(150))
                     .thenApply(s::label);
-            return Wiggle.allOf(payment, shipping).combineWithContext(s::merge).thenApply(s::notify);
+            return Wiggle.allOf(payment, shipping).combine(s::merge).thenApply(s::notify);
         });
     }
 
@@ -59,7 +58,7 @@ class JdbcForkJoinStressTest {
         Map<String, Object> capture(Map<String, Object> ctx);
         Map<String, Object> reserve(Map<String, Object> ctx);
         Map<String, Object> label(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> payment, Map<String, Object> shipping);
         Map<String, Object> notify(Map<String, Object> ctx);
     }
@@ -76,7 +75,7 @@ class JdbcForkJoinStressTest {
         public Map<String, Object> capture(Map<String, Object> ctx) { return put(ctx, "captured", true); }
         public Map<String, Object> reserve(Map<String, Object> ctx) { return put(ctx, "reserved", true); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "labelled", true); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> payment,
                                          Map<String, Object> shipping) {
             Map<String, Object> out = new LinkedHashMap<>(base);

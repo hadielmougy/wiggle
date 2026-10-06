@@ -3,7 +3,6 @@ package com.wiggle.order;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.console.Portal;
 import com.wiggle.server.ServerConfig;
@@ -38,8 +37,8 @@ public final class DashboardSeed {
         Map<String, Object> createAccount(Map<String, Object> ctx);
         Map<String, Object> welcome(Map<String, Object> ctx);
         Map<String, Object> provisionHw(Map<String, Object> ctx);
-        // the handler wants the pre-fork context too, so this is a combineWithContext shape
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        // every arm is a Map, so the arms take the last two Map parameters; the first is the pre-fork context
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> welcome, Map<String, Object> provisioned);
         Map<String, Object> autoEscalate(Map<String, Object> ctx);
         Map<String, Object> activate(Map<String, Object> ctx);
@@ -60,7 +59,7 @@ public final class DashboardSeed {
         FlowSpec onboarding = FlowSpec.define("onboarding", 1, Map.class, OnboardingSteps.class, (f, s) -> {
             var created = f.thenApply(s::createAccount);
             return Wiggle.allOf(created.thenApply(s::welcome), created.thenApply(s::provisionHw))
-                    .combineWithContext(s::merge)
+                    .combine(s::merge)
                     .thenSubFlow("run-kyc", "kyc-checks", Map.class)
                     .thenAwait("manager-approval", Duration.ofHours(48),
                             b -> b.thenApply(s::autoEscalate))

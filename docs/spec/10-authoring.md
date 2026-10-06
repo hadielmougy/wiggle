@@ -164,7 +164,7 @@ the same step.
 | `thenAwait(signal[, timeout[, escalation]])` | one `SIGNAL` | `sleepMillis` carries the deadline; the escalation branch is wired to `altNext` |
 | `thenSubFlow(node, workflow, Class<R>)` | one `SUB_WORKFLOW` | `activity` = the child workflow name |
 | `thenForEach(items, body)` → `Items.combine(...)` | one `DYN_FORK`, one dynamic `JOIN`, one branch template, one combine `TASK` | the combine is mandatory |
-| `Wiggle.allOf(arms...)` → `ForkN.combine(...)` | one `FORK`, one static `JOIN(expected = arms)`, one combine `TASK` | 2–10 arms typed, more via `allOf(WiggleFlow...)` |
+| `Wiggle.allOf(arms...)` → `ForkN.combine(...)` | one `FORK`, one static `JOIN(expected = arms)`, one combine `TASK` | the combine's parameters are found by type ([§8 of chapter 35](35-dynamic-flows.md#8-parameters-by-type)) |
 | `Wiggle.oneOf(arms...)` | one `PREDICATE` per guarded arm, chained by `altNext` | no combine |
 | `when(ref)` / `otherwise()` | opens an arm of `oneOf` | `otherwise()` must be last |
 | `repeatWhile(cond, [max,] body)` | body, then one `PREDICATE` looping back | do-while: the body always runs once |
@@ -192,8 +192,9 @@ time, naming the dangling ends.
 isolated context copies, so a combine is the only path by which an arm's result reaches the flow.
 There is no implicit merge, and no default fold.
 
-**WGL-AUTH-065** (MUST) A referenced combine's arity MUST be checked against the fan-out's width at
-definition time; `combine(String name, Class<R>)` is the escape hatch that skips the check.
+**WGL-AUTH-065** *Withdrawn with positional combines.* A combine's parameters are found by type and
+need not cover every arm, so its arity says nothing about the fan-out; the worker checks the binding
+([WGL-DYN-085](35-dynamic-flows.md#8-parameters-by-type)).
 
 **WGL-AUTH-066** (MUST) `oneOf` evaluates guards in the order the arms are given. Exactly one arm
 runs. With an `otherwise()` arm it always picks one; without, a choice where no guard held MUST
@@ -217,8 +218,8 @@ javadoc references a `thenApply(String, Class)` that does not exist — see
 [drift](00-index.md#6-known-documentation-drift).
 
 **WGL-AUTH-071** (MUST) `thenForEach` maps **elements to contexts**: each spawned branch's whole
-context is its element. The frozen pre-fan-out context is read-only and reachable via `Step.base()`
-or a `@Context` parameter on the combine.
+context is its element. The frozen pre-fan-out context is read-only and reachable via `Step.base()`,
+or as a combine parameter that is not a collection.
 
 *Verified by:* `client/…/FlowGuardrailsTest`, `client/…/OneOfArmsTest`,
 `client/…/ForEachAccessorTest`, `tests/DynamicConstructsTest`, `tests/ChooseTest`,

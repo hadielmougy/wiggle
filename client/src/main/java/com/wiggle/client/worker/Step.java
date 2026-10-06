@@ -139,10 +139,11 @@ public final class Step {
     public static String instanceId() { return current().instanceId(); }
 
     /**
-     * The frozen base context, as a JSON map — available wherever a base exists, so handlers can
-     * take it ambiently instead of (or as well as) declaring a {@link Context @Context} parameter:
+     * The frozen base context, as a JSON map — available wherever a base exists. A combine can also
+     * take it as a parameter no result matches; any other step reads it only here:
      * <ul>
      *   <li>inside a forEach item step — the pre-forEach context;</li>
+     *   <li>inside a step of a created branch — what the creating step returned;</li>
      *   <li>inside a fork combine — the pre-fork context (staged arm results excluded);</li>
      *   <li>inside a forEach combine — the pre-forEach context (the collected results excluded).</li>
      * </ul>

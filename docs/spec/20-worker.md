@@ -27,12 +27,13 @@ ambiguous.
 | one parameter, `boolean` return | gate / guard (`PREDICATE`) | selects `next` (true) or `altNext` (false) |
 | one parameter, `void` return | effect (`TASK`) | context flows on untouched |
 | one parameter, any other return | task (`TASK`) | the return **replaces** the context |
-| one parameter per fork arm, in fork order | fork combine | each arm's result decoded into its parameter |
-| one collection parameter | forEach combine | `List` ordered by item index, or `Map` keyed as the input was |
+| named like a fork's combine node | fork combine | each parameter found by type ([WGL-DYN-083](35-dynamic-flows.md#8-parameters-by-type)) |
+| named like a forEach's combine node | forEach combine | collections of results, `List` ordered by item index or `Map` keyed as the input was, and the base, found by type ([WGL-DYN-084](35-dynamic-flows.md#8-parameters-by-type)) |
 | zero arguments returning `Activity`/`GateActivity`/`EffectActivity`/`CompensableActivity` | typed activity factory | the factory's name is the step it serves |
 
-**WGL-WRK-005** (MUST) A combine method MAY additionally declare one `@Context` parameter, bound to
-the pre-fork (or pre-forEach) context decoded into that parameter's type.
+**WGL-WRK-005** *Withdrawn with `@Context`.* A combine takes the pre-fork (or pre-forEach) context as
+a parameter no result matches ([WGL-DYN-083](35-dynamic-flows.md#8-parameters-by-type)), and any
+other step reads it through `Step.base()`.
 
 **WGL-WRK-006** (MUST) A combine's return is the **complete post-join context**. There is no default
 fold, so every combine node MUST have an explicit handler on some worker.

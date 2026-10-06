@@ -27,6 +27,7 @@ public final class PayloadCodec {
     private static final String IDX = "idx";
     private static final String MAP_KEY = "mapKey";
     private static final String VIEW = "view";
+    private static final String STEP = "step";
 
     private PayloadCodec() {}
 
@@ -58,6 +59,7 @@ public final class PayloadCodec {
         out.put(IDX, f.idx());
         if (f.mapKey() != null) out.put(MAP_KEY, f.mapKey());
         out.put(VIEW, f.view().raw());
+        if (f.step() != null) out.put(STEP, f.step());
         return out;
     }
 
@@ -71,7 +73,8 @@ public final class PayloadCodec {
                     "item".equals(m.get(KIND)) ? FrameKind.ITEM : FrameKind.ARM,
                     ((Number) m.get(IDX)).longValue(),
                     m.get(MAP_KEY) == null ? null : String.valueOf(m.get(MAP_KEY)),
-                    Doc.of(m.get(VIEW))));
+                    Doc.of(m.get(VIEW)),
+                    m.get(STEP) == null ? null : String.valueOf(m.get(STEP))));
         }
         return out;
     }

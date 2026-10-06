@@ -2,7 +2,6 @@ package com.wiggle.tutorial;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RetryPolicy;
@@ -34,7 +33,7 @@ public final class Orders {
         Order   validate(Order o);
         boolean inStock(Order o);                              // a gate: false ends the flow cleanly
         Item    price(Item item);                              // the element IS the branch's context
-        Order   total(@Context Order base, List<Item> priced);  // the mandatory combine
+        Order   total(Order base, List<Item> priced);  // the mandatory combine
         Order   confirm(Order o);
     }
     // docs:end contract

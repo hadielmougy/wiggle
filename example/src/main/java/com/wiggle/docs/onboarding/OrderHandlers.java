@@ -1,7 +1,6 @@
 package com.wiggle.docs.onboarding;
 
 import com.wiggle.docs.onboarding.OnboardingSnippet.OrderSteps;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.docs.onboarding.OnboardingSnippet.Order;
 
@@ -22,8 +21,8 @@ class OrderHandlers implements OrderSteps {
     public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
     public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
 
-    // one parameter per arm, in fork order; @Context is the pre-fork context
-    public Order merge(@Context Order base, Order payment, Order shipping) {
+    // found by type: the arms take the last Order parameters in fork order; the first is the pre-fork context
+    public Order merge(Order base, Order payment, Order shipping) {
         return base.withPaymentRef(payment.paymentRef())
                    .withShipmentRef(shipping.shipmentRef());
     }

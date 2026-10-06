@@ -1,6 +1,5 @@
 package com.wiggle.docs;
 
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.docs.ForkJoinSnippet.Order;
 import com.wiggle.docs.ForkJoinSnippet.OrderSteps;
@@ -30,10 +29,10 @@ class OrderHandlers implements OrderSteps {      // the same contract the spec n
     public Order   reserveStock(Order o) { return o.withShipmentRef(wms.reserve(o)); }
     public Order   printLabel(Order o)   { return o.withTrackingLabel(courier.label(o)); }
 
-    // One parameter per arm, in fork order: each is that branch's final context. The pre-fork
-    // base arrives via @Context (or ambiently via Step.base()). The return is the COMPLETE
-    // post-join context.
-    public Order merge(@Context Order base, Order payment, Order shipping) {
+    // Parameters are found by type: every arm here produces an Order, so the arms take the last
+    // two Order parameters in fork order, and the one left at the front is the pre-fork base
+    // (also Step.base()). The return is the COMPLETE post-join context.
+    public Order merge(Order base, Order payment, Order shipping) {
         return base.withPaymentRef(payment.paymentRef())
                    .withShipmentRef(shipping.shipmentRef())
                    .withTrackingLabel(shipping.trackingLabel());

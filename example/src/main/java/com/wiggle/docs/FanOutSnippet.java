@@ -1,7 +1,6 @@
 package com.wiggle.docs;
 
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.client.worker.Context;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -31,7 +30,7 @@ public final class FanOutSnippet {
     interface PricingSteps {
         Order  loadOrder(Order o);
         Priced price(LineItem line);                 // the element IS each branch's context
-        Order  collect(@Context Order base, List<Priced> priced);
+        Order  collect(Order base, List<Priced> priced);
         Order  summarise(Order o);
     }
     // docs:end contract

@@ -2,7 +2,6 @@ package com.wiggle.cookbook;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
@@ -103,7 +102,7 @@ public final class Cookbook {
         boolean isLarge(Purchase p);
         Purchase fraudCheck(Purchase p);
         void managerNotice(Purchase p);
-        Purchase largeMerge(@Context Purchase base, Purchase fraud, Purchase notice);
+        Purchase largeMerge(Purchase base, Purchase fraud, Purchase notice);
         Purchase fastPath(Purchase p);
         Purchase settle(Purchase p);
     }
@@ -120,7 +119,7 @@ public final class Cookbook {
                 var fraud = large.thenApply(s::fraudCheck,
                         RetryPolicy.exponential(3, Duration.ofMillis(50)));
                 var notice = large.thenAccept(s::managerNotice);
-                var largeArm = Wiggle.allOf(fraud, notice).combineWithContext(s::largeMerge);
+                var largeArm = Wiggle.allOf(fraud, notice).combine(s::largeMerge);
 
                 var standard = f.otherwise().thenApply(s::fastPath);
 
@@ -140,7 +139,7 @@ public final class Cookbook {
         }
 
         /** One parameter per arm, in fork order; the notice arm is an effect, so it folds nothing. */
-        public Purchase largeMerge(@Context Purchase base, Purchase fraud, Purchase notice) {
+        public Purchase largeMerge(Purchase base, Purchase fraud, Purchase notice) {
             return new Purchase(base.amount(), fraud.outcome());
         }
 
@@ -155,7 +154,7 @@ public final class Cookbook {
     public interface ForEachSteps {
         Item price(Item i);
         Item renderThumbnail(Item i);
-        Basket collectItems(@Context Basket base, List<Item> priced);
+        Basket collectItems(Basket base, List<Item> priced);
         Basket summarise(Basket b);
     }
 
@@ -181,7 +180,7 @@ public final class Cookbook {
         public Item renderThumbnail(Item i) { return new Item(i.sku() + "@2x", i.price()); }
 
         /** The collected item results, plus the pre-forEach context. Its return is the whole context. */
-        public Basket collectItems(@Context Basket base, List<Item> priced) {
+        public Basket collectItems(Basket base, List<Item> priced) {
             return new Basket(List.copyOf(priced), 0L);
         }
 
@@ -277,7 +276,7 @@ public final class Cookbook {
         boolean childPassed(Classified c);
         Classified provision(Classified c);
         void audit(Classified c);
-        Classified merge(@Context Classified base, Classified provisioned, Classified audited);
+        Classified merge(Classified base, Classified provisioned, Classified audited);
     }
 
     @ForFlow("tcb-parent")
@@ -295,7 +294,7 @@ public final class Cookbook {
                 var provision = checked.thenApply(s::provision);
                 var audit = checked.thenAccept(s::audit);
 
-                return Wiggle.allOf(provision, audit).combineWithContext(s::merge);
+                return Wiggle.allOf(provision, audit).combine(s::merge);
             });
             // docs:end parent
             return spec;
@@ -309,7 +308,7 @@ public final class Cookbook {
 
         public void audit(Classified c) { System.out.println("   [typed] provisioning audited"); }
 
-        public Classified merge(@Context Classified base, Classified provisioned, Classified audited) {
+        public Classified merge(Classified base, Classified provisioned, Classified audited) {
             return new Classified(base.email(), base.vip(), provisioned.provisioned(), "audited");
         }
     }
@@ -355,9 +354,9 @@ public final class Cookbook {
         boolean isVip(Basket b);
         Basket pack(Basket b);
         void notice(Basket b);
-        Basket priorityMerge(@Context Basket base, Basket packed, Basket held);
+        Basket priorityMerge(Basket base, Basket packed, Basket held);
         Item packItem(Item i);
-        Basket collectPacked(@Context Basket base, List<Item> items);
+        Basket collectPacked(Basket base, List<Item> items);
         Basket autoClear(Basket b);
         Basket runCheck(Basket b);
         boolean moreChecks(Basket b);
@@ -380,7 +379,7 @@ public final class Cookbook {
                 var packed = vip.thenApply(s::pack,
                         RetryPolicy.fixed(2, Duration.ofMillis(20)), "packing");
                 var held = vip.thenSleep("brief-hold", Duration.ofMillis(50)).thenAccept(s::notice);
-                var vipArm = Wiggle.allOf(packed, held).combineWithContext(s::priorityMerge);
+                var vipArm = Wiggle.allOf(packed, held).combine(s::priorityMerge);
 
                 var standard = ready.otherwise()
                         .thenForEach("pack-items", Basket::items, item -> item.thenApply(s::packItem))
@@ -405,13 +404,13 @@ public final class Cookbook {
 
         public void notice(Basket b) { System.out.println("   [typed] VIP basket held briefly"); }
 
-        public Basket priorityMerge(@Context Basket base, Basket packed, Basket held) {
+        public Basket priorityMerge(Basket base, Basket packed, Basket held) {
             return new Basket(base.items(), packed.total());
         }
 
         public Item packItem(Item i) { return new Item(i.sku() + "-packed", i.price()); }
 
-        public Basket collectPacked(@Context Basket base, List<Item> items) {
+        public Basket collectPacked(Basket base, List<Item> items) {
             return new Basket(List.copyOf(items), base.total());
         }
 

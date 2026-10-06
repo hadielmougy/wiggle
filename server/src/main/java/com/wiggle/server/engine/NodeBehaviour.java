@@ -207,12 +207,22 @@ abstract class NodeBehaviour {
             }
             if (mapInput) {
                 Map<String, Object> byKey = new LinkedHashMap<>();
-                for (TokenPayload.Frame frame : ordered.values()) byKey.put(frame.mapKey(), frame.view().raw());
+                Map<String, Object> steps = new LinkedHashMap<>();
+                for (TokenPayload.Frame frame : ordered.values()) {
+                    byKey.put(frame.mapKey(), frame.view().raw());
+                    steps.put(frame.mapKey(), frame.step());
+                }
                 staged.put(collectKey, byKey);
+                staged.put(ScratchKeys.steps(collectKey), steps);
             } else {
                 List<Object> values = new ArrayList<>(ordered.size());
-                for (TokenPayload.Frame frame : ordered.values()) values.add(frame.view().raw());
+                List<Object> steps = new ArrayList<>(ordered.size());
+                for (TokenPayload.Frame frame : ordered.values()) {
+                    values.add(frame.view().raw());
+                    steps.add(frame.step());
+                }
                 staged.put(collectKey, values);
+                staged.put(ScratchKeys.steps(collectKey), steps);
             }
             return basePayload.withStaged(staged);
         }

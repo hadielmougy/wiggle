@@ -73,7 +73,7 @@ class FlowApiRegressionTest {
             var seeded = f.thenApply(s::seed);
             var left = seeded.thenApply(s::slowLeft);      // finishes last on purpose
             var right = seeded.thenApply(s::fastRight);
-            return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
+            return Wiggle.allOf(left, right).combine(s::merge).thenApply(s::after);
         });
 
         Map<String, Object> out = run(typed, h, Map.of());
@@ -90,7 +90,7 @@ class FlowApiRegressionTest {
 
         FlowSpec typed = FlowSpec.define("join-once", 1, Map.class, JoinOnceSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
-                        .combineWithContext(s::merge)
+                        .combine(s::merge)
                         .thenApply(s::after));
 
         assertEquals("COMPLETED", runToView(typed, h, Map.of()).status());
@@ -109,10 +109,10 @@ class FlowApiRegressionTest {
         // their position and write their keys, which is the habit to keep.
         FlowSpec typed = FlowSpec.define("nested", 1, Map.class, NestedSteps.class, (f, s) -> {
             var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
-                    .combineWithContext(s::innerMerge)
+                    .combine(s::innerMerge)
                     .thenApply(s::innerDone);
             var right = f.thenApply(s::outerRight);
-            return Wiggle.allOf(left, right).combineWithContext(s::outerMerge).thenApply(s::outerDone);
+            return Wiggle.allOf(left, right).combine(s::outerMerge).thenApply(s::outerDone);
         });
 
         Map<String, Object> out = run(typed, h, Map.of());
@@ -131,7 +131,7 @@ class FlowApiRegressionTest {
         FlowSpec typed = FlowSpec.define("branch-gate", 1, Map.class, BranchGateSteps.class, (f, s) -> {
             var gated = f.thenFilter(s::gate).thenApply(s::skipped);
             var other = f.thenApply(s::ran);
-            return Wiggle.allOf(gated, other).combineWithContext(s::merge).thenApply(s::after);
+            return Wiggle.allOf(gated, other).combine(s::merge).thenApply(s::after);
         });
 
         Map<String, Object> out = run(typed, h, Map.of());
@@ -149,7 +149,7 @@ class FlowApiRegressionTest {
             var seeded = f.thenApply(s::seed);
             var gated = seeded.thenApply(s::reserve).thenFilter(s::gate).thenApply(s::afterGate);
             var other = seeded.thenApply(s::sibling);
-            return Wiggle.allOf(gated, other).combineWithContext(s::merge).thenApply(s::after);
+            return Wiggle.allOf(gated, other).combine(s::merge).thenApply(s::after);
         });
 
         Map<String, Object> out = run(typed, h, Map.of());
@@ -235,7 +235,7 @@ class FlowApiRegressionTest {
         Map<String, Object> seed(Map<String, Object> c);
         Map<String, Object> slowLeft(Map<String, Object> c);
         Map<String, Object> fastRight(Map<String, Object> c);
-        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> after(Map<String, Object> c);
     }
@@ -244,7 +244,7 @@ class FlowApiRegressionTest {
         Map<String, Object> a1(Map<String, Object> c);
         Map<String, Object> b1(Map<String, Object> c);
         Map<String, Object> c1(Map<String, Object> c);
-        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> a, Map<String, Object> b, Map<String, Object> c);
         Map<String, Object> after(Map<String, Object> c);
     }
@@ -252,11 +252,11 @@ class FlowApiRegressionTest {
     interface NestedSteps {
         Map<String, Object> innerA(Map<String, Object> c);
         Map<String, Object> innerB(Map<String, Object> c);
-        Map<String, Object> innerMerge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        Map<String, Object> innerMerge(Map<String, Object> base,
                                        Map<String, Object> ia, Map<String, Object> ib);
         Map<String, Object> innerDone(Map<String, Object> c);
         Map<String, Object> outerRight(Map<String, Object> c);
-        Map<String, Object> outerMerge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        Map<String, Object> outerMerge(Map<String, Object> base,
                                        Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> outerDone(Map<String, Object> c);
     }
@@ -265,7 +265,7 @@ class FlowApiRegressionTest {
         boolean gate(Map<String, Object> c);
         Map<String, Object> skipped(Map<String, Object> c);
         Map<String, Object> ran(Map<String, Object> c);
-        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> gated, Map<String, Object> other);
         Map<String, Object> after(Map<String, Object> c);
     }
@@ -276,7 +276,7 @@ class FlowApiRegressionTest {
         boolean gate(Map<String, Object> c);
         Map<String, Object> afterGate(Map<String, Object> c);
         Map<String, Object> sibling(Map<String, Object> c);
-        Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                  Map<String, Object> gated, Map<String, Object> other);
         Map<String, Object> after(Map<String, Object> c);
     }
@@ -302,7 +302,7 @@ class FlowApiRegressionTest {
             return Scenarios.put(c, "left", "L");
         }
         public Map<String, Object> fastRight(Map<String, Object> c) { return Scenarios.put(c, "right", "R"); }
-        public Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> left, Map<String, Object> right) {
             return Scenarios.fold(base, left, right);
         }
@@ -316,7 +316,7 @@ class FlowApiRegressionTest {
         public Map<String, Object> a1(Map<String, Object> c) { return Scenarios.put(c, "a", 1L); }
         public Map<String, Object> b1(Map<String, Object> c) { return Scenarios.put(c, "b", 1L); }
         public Map<String, Object> c1(Map<String, Object> c) { return Scenarios.put(c, "c", 1L); }
-        public Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> a, Map<String, Object> b, Map<String, Object> c) {
             return Scenarios.fold(base, a, b, c);
         }
@@ -332,11 +332,11 @@ class FlowApiRegressionTest {
         public Map<String, Object> innerB(Map<String, Object> c) { return Scenarios.put(c, "ib", 1L); }
         public Map<String, Object> innerDone(Map<String, Object> c) { return Scenarios.put(c, "innerAfter", 1L); }
         public Map<String, Object> outerRight(Map<String, Object> c) { return Scenarios.put(c, "or", 1L); }
-        public Map<String, Object> innerMerge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        public Map<String, Object> innerMerge(Map<String, Object> base,
                                               Map<String, Object> ia, Map<String, Object> ib) {
             return Scenarios.fold(base, ia, ib);
         }
-        public Map<String, Object> outerMerge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        public Map<String, Object> outerMerge(Map<String, Object> base,
                                               Map<String, Object> left, Map<String, Object> right) {
             return Scenarios.fold(base, left, right);
         }
@@ -348,7 +348,7 @@ class FlowApiRegressionTest {
         public boolean gate(Map<String, Object> c) { return false; }
         public Map<String, Object> skipped(Map<String, Object> c) { return Scenarios.put(c, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> c) { return Scenarios.put(c, "ran", true); }
-        public Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> gated, Map<String, Object> other) {
             return Scenarios.fold(base, gated, other);
         }
@@ -364,7 +364,7 @@ class FlowApiRegressionTest {
         public boolean gate(Map<String, Object> c) { return false; }
         public Map<String, Object> afterGate(Map<String, Object> c) { return Scenarios.put(c, "tail", true); }
         public Map<String, Object> sibling(Map<String, Object> c) { return Scenarios.put(c, "siblingRan", true); }
-        public Map<String, Object> merge(@com.wiggle.client.worker.Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> gated, Map<String, Object> other) {
             return Scenarios.fold(base, gated, other);
         }

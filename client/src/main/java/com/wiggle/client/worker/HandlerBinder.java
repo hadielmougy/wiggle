@@ -13,6 +13,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,11 +32,11 @@ import java.util.TreeSet;
  *       not serve; the {@link Worker} decides what to do with both.</li>
  * </ul>
  *
- * A method's signature defines its step: one input parameter (decoded from JSON into its type),
- * plus an optional {@link Context @Context} parameter for the frozen base where one exists; a
+ * A method's signature defines its step: one input parameter (decoded from JSON into its type); a
  * {@code boolean} return is a gate, {@code void} an effect, anything else a task whose return
- * REPLACES the context. Combine methods take one parameter per fork arm, in order (fork), or a collection
- * parameter (forEach); their return is the complete post-join context.
+ * REPLACES the context. A combine's parameters are found by type, in any order: a fork's arms, or a
+ * forEach's or created branches' results as collections, and the frozen base for a parameter no
+ * result matches. Its return is the complete post-join context.
  */
 final class HandlerBinder {
 
@@ -284,17 +285,21 @@ final class HandlerBinder {
         Object target = c.target();          // the invocation target: handlers object OR activity
         Object decoderOwner = set.target();  // @Decode methods always live on the handlers object
         Map<Class<?>, Method> decoders = set.decoders();
-        if (isCombine(node)) return combineHandler(node, m, target, decoderOwner, decoders);
+        if (node.isCombine()) {
+            return node.collectKey() != null
+                    ? collectionCombineHandler(set, node, m, target)
+                    : forkCombineHandler(set, node, m, target);
+        }
 
         Class<?> ret = m.getReturnType();
         boolean returnsBool = (ret == boolean.class || ret == Boolean.class);
-        Args args = splitArgs(node, m);   // one input parameter + an optional @Context parameter
+        Class<?> input = inputType(node, m);
         if (node.kind() == NodeKind.PREDICATE) {
             if (!returnsBool) {
                 throw new IllegalStateException("gate '" + node.name() + "' handler '" + m.getName()
                         + "' must take the context and return boolean");
             }
-            return ctx -> call(m, target, args.build(ctx, node, m, decoderOwner, decoders));
+            return ctx -> call(m, target, decode(ctx, input, decoderOwner, decoders));
         }
         if (returnsBool) {
             throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
@@ -302,131 +307,88 @@ final class HandlerBinder {
         }
         boolean effect = (ret == void.class || ret == Void.class);
         if (effect) {
-            return ctx -> { call(m, target, args.build(ctx, node, m, decoderOwner, decoders)); return null; };
+            return ctx -> { call(m, target, decode(ctx, input, decoderOwner, decoders)); return null; };
         }
         return ctx -> {
             // The return IS the next context: it is sent whole and REPLACES the previous value
             // server-side (no diff, no merge). A null return leaves the context untouched.
-            Object out = call(m, target, args.build(ctx, node, m, decoderOwner, decoders));
+            Object out = call(m, target, decode(ctx, input, decoderOwner, decoders));
             return out == null ? null : RecordMapper.toJson(out);
         };
     }
 
-    /** A handler's parameter layout: the input's position and type, plus an optional @Context slot.
-     *  Either access style works — declare {@code @Context} to receive the frozen base as a
-     *  parameter, or call {@code Step.base()} inside the method; both read the same value. */
-    private record Args(int inputAt, Class<?> inputType, int contextAt, Class<?> contextType) {
-
-        Object[] build(Object ctx, Node node, Method m, Object decoderOwner, Map<Class<?>, Method> decoders)
-                throws Exception {
-            Object[] out = new Object[contextAt < 0 ? 1 : 2];
-            out[inputAt] = decode(ctx, inputType, decoderOwner, decoders);
-            if (contextAt >= 0) {
-                Map<String, Object> base;
-                try {
-                    base = Step.base();
-                } catch (IllegalStateException e) {
-                    throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
-                            + "' declares a @Context parameter, but this step has no base context — "
-                            + "@Context is only meaningful inside a forEach body (or a combine)", e);
-                }
-                out[contextAt] = decode(base, contextType, decoderOwner, decoders);
-            }
-            return out;
-        }
-    }
-
-    /** Splits a handler's parameters into the single input + an optional @Context parameter. */
-    private static Args splitArgs(Node node, Method m) {
-        java.lang.reflect.Parameter[] params = m.getParameters();
-        int inputAt = -1;
-        int contextAt = -1;
-        for (int i = 0; i < params.length; i++) {
-            if (params[i].isAnnotationPresent(Context.class)) {
-                if (contextAt >= 0) inputAt = -2;   // two @Context params: invalid
-                contextAt = i;
-            } else if (inputAt == -1) {
-                inputAt = i;
-            } else {
-                inputAt = -2;                        // two plain params: invalid
-            }
-        }
-        if (inputAt < 0 || params.length > 2) {
+    /** A step's one parameter: its input. The frozen base, where there is one, is {@code Step.base()}. */
+    private static Class<?> inputType(Node node, Method m) {
+        if (m.getParameterCount() != 1) {
             throw new IllegalStateException("step '" + node.name() + "' handler '" + m.getName()
-                    + "' must take the input (plus at most one @Context parameter for the frozen base)");
+                    + "' must take exactly one parameter, the context; inside a forEach item or a created "
+                    + "branch, read the frozen base with Step.base(Type.class)");
         }
-        return new Args(inputAt, params[inputAt].getType(), contextAt,
-                contextAt < 0 ? null : params[contextAt].getType());
-    }
-
-    /** A combine node carries arm names (fork) or a collect key (forEach); a plain task has neither. */
-    private static boolean isCombine(Node node) {
-        return node.isCombine();
+        return m.getParameterTypes()[0];
     }
 
     /**
-     * Works out, once at bind time, which fork arm each combine parameter receives -- the arm's name,
-     * or null for the {@link Context @Context} parameter that takes the pre-fork context.
+     * The type a step leaves the context in: what it returns, or -- for an effect or a gate, which
+     * pass their input on -- what it takes. This is the type a combine matches the step's result by.
+     */
+    static Class<?> producedType(Method m) {
+        Class<?> ret = m.getReturnType();
+        boolean passesInputOn = ret == void.class || ret == Void.class || ret == boolean.class || ret == Boolean.class;
+        if (!passesInputOn) return ret;
+        return m.getParameterCount() == 0 ? Object.class : m.getParameterTypes()[0];
+    }
+
+    /** The type the step named {@code step} leaves the context in, or null when this set has no such step. */
+    private static Class<?> producedType(HandlerSet set, String step) {
+        Candidate c = step == null ? null : set.byName().get(canonicalName(step));
+        return c == null ? null : producedType(c.method());
+    }
+
+    /** What a combine parameter receives: the base, one fork arm, or every result its element type takes. */
+    private sealed interface Arg {
+        record Base() implements Arg {}
+        record Arm(int index) implements Arg {}
+        record Results(Class<?> element) implements Arg {}
+    }
+
+    /**
+     * Whether a combine parameter takes results rather than one value: a {@code List}, a {@code Set},
+     * or a {@code Map} whose value type says what it holds ({@code Map<String, Shipment>}). A raw
+     * {@code Map} or a {@code Map<String, Object>} is a context, the shape most contexts have.
+     */
+    private static boolean isCollection(java.lang.reflect.Parameter p) {
+        Class<?> t = p.getType();
+        if (Collection.class.isAssignableFrom(t)) return true;
+        return Map.class.isAssignableFrom(t) && elementType(p) != Object.class;
+    }
+
+    /** Whether a value the step typed {@code produced} can be passed as {@code wanted}. */
+    private static boolean assignable(Class<?> wanted, Class<?> produced) {
+        return box(wanted).isAssignableFrom(box(produced));
+    }
+
+    private static Class<?> box(Class<?> t) {
+        return t.isPrimitive() ? java.lang.invoke.MethodType.methodType(t).wrap().returnType() : t;
+    }
+
+    /**
+     * A fork's combine. Each parameter is found by its type, in any order: a parameter takes the
+     * arm whose step produces its type, and a collection parameter takes every arm its element type
+     * matches. Parameters sharing a type take that type's arms in fork order, matched from the last
+     * parameter back, so a parameter left over at the front receives the pre-fork context; at most
+     * one may. A combine need not take every arm.
      *
-     * <p>Arms bind <b>by position</b>: parameter order is fork order, and a combine takes every arm.
-     * The arm names exist for the engine (they are the keys it stages each branch's result under) and
-     * for the console; a handler never spells one out. A {@code @Context} parameter may sit anywhere
-     * and does not count against the arms.
+     * <p>When this worker cannot tell every arm's type, because it holds no handler for some arm's
+     * step, the parameters take the arms in fork order and the base is {@code Step.base()}.
      */
-    private static String[] combineSources(Node node, Method m, java.lang.reflect.Parameter[] params,
-                                           List<String> arms) {
-        String[] sources = new String[params.length];
-        int position = 0;
-        for (int i = 0; i < params.length; i++) {
-            if (params[i].isAnnotationPresent(Context.class)) {
-                sources[i] = null;
-                continue;
-            }
-            if (position >= arms.size()) {
-                throw new IllegalStateException(combineWhat(node, m) + " takes more arms than the fork"
-                        + " has: its arms, in order, are " + arms);
-            }
-            sources[i] = ScratchKeys.arm(arms.get(position++));
-        }
-        if (position != arms.size()) {
-            throw new IllegalStateException(combineWhat(node, m) + " must take all " + arms.size()
-                    + " of the fork's arms " + arms + ", in that order; it takes " + position
-                    + ". Add a parameter for each arm you do not need and ignore it.");
-        }
-        return sources;
-    }
-
-    private static String combineWhat(Node node, Method m) {
-        return "combine '" + node.name() + "' handler '" + m.getName() + "'";
-    }
-
-    private static List<String> armNames(Node node) {
-        return node.armNames();
-    }
-
-    /**
-     * A combine method; its return is the COMPLETE post-join context — the engine replaces the
-     * context with it (nothing from before the join survives unless the handler returned it, and
-     * staged scratch keys are stripped). Two flavors, told apart by which field the node carries:
-     * <ul>
-     *   <li><b>fork</b> (armNames): each parameter gets, in order, that
-     *       branch's final context decoded to its type; an optional {@link Context @Context}
-     *       parameter gets the pre-fork context.</li>
-     *   <li><b>forEach</b> (collectKey): one collection parameter receives
-     *       every item's final context — a {@code List} (ordered by item index) or {@code Set} for
-     *       a list input, or a {@code Map} keyed like the input for a map input — with elements
-     *       decoded to the collection's element type; an optional {@link Context @Context}
-     *       parameter gets the pre-forEach context.</li>
-     * </ul>
-     */
-    private static ActivityHandler combineHandler(Node node, Method m, Object target, Object decoderOwner,
-                                                  Map<Class<?>, Method> decoders) {
-        if (node.collectKey() != null) {
-            return forEachCombineHandler(node, m, target, decoderOwner, decoders, node.collectKey());
-        }
-        List<String> arms = armNames(node);
+    private static ActivityHandler forkCombineHandler(HandlerSet set, Node node, Method m, Object target) {
+        List<String> arms = node.armNames();
         java.lang.reflect.Parameter[] params = m.getParameters();
-        String[] sources = combineSources(node, m, params, arms);
+        List<Class<?>> armTypes = new ArrayList<>(arms.size());
+        for (String arm : arms) armTypes.add(producedType(set, arm));
+        Arg[] plan = armTypes.contains(null)
+                ? armsInOrder(node, m, params, arms)
+                : armsByType(node, m, params, arms, armTypes);
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Map<String, Object> stripped = new LinkedHashMap<>(map);
@@ -434,17 +396,88 @@ final class HandlerBinder {
             Object base = combineBase(stripped);
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
-                args[i] = sources[i] == null
-                        ? decode(base, params[i].getType(), decoderOwner, decoders)
-                        : decode(map.get(sources[i]), params[i].getType(), decoderOwner, decoders);
+                java.lang.reflect.Parameter p = params[i];
+                args[i] = switch (plan[i]) {
+                    case Arg.Base b -> decode(base, p.getType(), set.target(), set.decoders());
+                    case Arg.Arm a -> decode(map.get(ScratchKeys.arm(arms.get(a.index()))), p.getType(),
+                            set.target(), set.decoders());
+                    case Arg.Results r -> {
+                        List<Object> values = new ArrayList<>();
+                        Map<String, Object> byArm = new LinkedHashMap<>();
+                        for (int a = 0; a < arms.size(); a++) {
+                            if (!assignable(r.element(), armTypes.get(a))) continue;
+                            Object v = map.get(ScratchKeys.arm(arms.get(a)));
+                            values.add(v);
+                            byArm.put(arms.get(a), v);
+                        }
+                        yield decodeCollection(Map.class.isAssignableFrom(p.getType()) ? byArm : values, p,
+                                set.target(), set.decoders(), node.name());
+                    }
+                };
             }
-            // Both access styles work: the @Context parameter above, or Step.base() inside the method.
             Object out = Step.withBase(base, () -> call(m, target, args));
             return out == null ? null : RecordMapper.toJson(out);
         };
     }
 
-    /** The combine's base (its @Context / Step.base() view): the dispatched context minus the
+    private static Arg[] armsByType(Node node, Method m, java.lang.reflect.Parameter[] params,
+                                    List<String> arms, List<Class<?>> armTypes) {
+        Arg[] plan = new Arg[params.length];
+        boolean[] taken = new boolean[arms.size()];
+        int baseAt = -1;
+        for (int i = params.length - 1; i >= 0; i--) {
+            Class<?> type = params[i].getType();
+            if (isCollection(params[i])) {
+                plan[i] = new Arg.Results(elementType(params[i]));
+                continue;
+            }
+            int pick = -1;
+            for (int a = arms.size() - 1; a >= 0; a--) {
+                if (taken[a] || !assignable(type, armTypes.get(a))) continue;
+                if (pick < 0 || (armTypes.get(a) == type && armTypes.get(pick) != type)) pick = a;
+            }
+            if (pick >= 0) {
+                taken[pick] = true;
+                plan[i] = new Arg.Arm(pick);
+                continue;
+            }
+            if (baseAt >= 0) {
+                throw new IllegalStateException(combineWhat(node, m) + ": parameters " + (i + 1)
+                        + " and " + (baseAt + 1) + " match no arm, so both would take the pre-fork context; "
+                        + "the arms produce " + describe(arms, armTypes));
+            }
+            baseAt = i;
+            plan[i] = new Arg.Base();
+        }
+        return plan;
+    }
+
+    private static Arg[] armsInOrder(Node node, Method m, java.lang.reflect.Parameter[] params, List<String> arms) {
+        if (params.length != arms.size()) {
+            throw new IllegalStateException(combineWhat(node, m) + " takes " + params.length
+                    + " parameter(s), but this worker holds no handler for some of the fork's arms " + arms
+                    + ", so it cannot match them by type: bind those steps here too, or take one "
+                    + "parameter per arm in fork order");
+        }
+        Arg[] plan = new Arg[params.length];
+        for (int i = 0; i < params.length; i++) plan[i] = new Arg.Arm(i);
+        return plan;
+    }
+
+    private static String describe(List<String> arms, List<Class<?>> types) {
+        StringBuilder b = new StringBuilder();
+        for (int a = 0; a < arms.size(); a++) {
+            if (a > 0) b.append(", ");
+            b.append(arms.get(a)).append(": ").append(types.get(a).getSimpleName());
+        }
+        return b.toString();
+    }
+
+    private static String combineWhat(Node node, Method m) {
+        return "combine '" + node.name() + "' handler '" + m.getName() + "'";
+    }
+
+    /** The combine's base (its {@code Step.base()} view): the dispatched context minus the
      *  staged keys — or, when that leaves nothing and the activation carried a base, the
      *  activation's base: a combine nested inside a scope whose view is not a JSON object gets
      *  the staged inputs alone as its context, with the enclosing view riding on the base. */
@@ -454,39 +487,91 @@ final class HandlerBinder {
         return ambient != null ? ambient : stripped;
     }
 
-    /** The forEach flavor: bind the staged collection (list or map of item results) plus @Context. */
-    private static ActivityHandler forEachCombineHandler(Node node, Method m, Object target, Object decoderOwner,
-                                                         Map<Class<?>, Method> decoders, String scratch) {
+    /**
+     * The combine of a forEach or of a step's created branches: results arrive as one collection,
+     * a {@code List} in order, a {@code Set}, or a {@code Map} by key. Parameters are found by type,
+     * in any order. With one collection parameter it takes every result; with several, each takes
+     * the results whose step produces its element type. A parameter that is not a collection
+     * receives the context from before the fan-out; at most one may.
+     */
+    private static ActivityHandler collectionCombineHandler(HandlerSet set, Node node, Method m, Object target) {
+        String scratch = node.collectKey();
         java.lang.reflect.Parameter[] params = m.getParameters();
+        int collections = 0;
+        int baseAt = -1;
+        // A lone untyped Map is the results, as it always was, when nothing else can be.
+        int onlyMap = params.length == 1 && Map.class.isAssignableFrom(params[0].getType()) ? 0 : -1;
+        for (int i = 0; i < params.length; i++) {
+            if (i == onlyMap || isCollection(params[i])) {
+                collections++;
+            } else if (baseAt >= 0) {
+                throw new IllegalStateException(combineWhat(node, m) + ": parameters " + (baseAt + 1)
+                        + " and " + (i + 1) + " are not collections, so both would take the context "
+                        + "from before the fan-out; the results arrive as a List, Set or Map");
+            } else {
+                baseAt = i;
+            }
+        }
+        if (collections == 0) {
+            throw new IllegalStateException(combineWhat(node, m) + " needs a collection parameter "
+                    + "(List/Set/Map) for the results");
+        }
+        boolean partition = collections > 1;
+        int baseParam = baseAt;
         return ctx -> {
             Map<String, Object> map = Json.asObject(ctx);
             Object staged = map.get(scratch);
+            Object steps = map.get(ScratchKeys.steps(scratch));
             Map<String, Object> stripped = new LinkedHashMap<>(map);
             stripped.remove(scratch);
+            stripped.remove(ScratchKeys.steps(scratch));
             Object base = combineBase(stripped);
             Object[] args = new Object[params.length];
-            boolean itemsBound = false;
             for (int i = 0; i < params.length; i++) {
                 java.lang.reflect.Parameter p = params[i];
-                if (p.isAnnotationPresent(Context.class)) {
-                    args[i] = decode(base, p.getType(), decoderOwner, decoders);
-                } else if (!itemsBound) {
-                    args[i] = decodeCollection(staged, p, decoderOwner, decoders, node.name());
-                    itemsBound = true;
+                if (i == baseParam) {
+                    args[i] = decode(base, p.getType(), set.target(), set.decoders());
                 } else {
-                    throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
-                            + m.getName() + "' takes an optional @Context parameter and exactly one "
-                            + "collection parameter (List/Set/Map) for the item results");
+                    Object results = partition ? ofType(set, node, staged, steps, elementType(p)) : staged;
+                    args[i] = decodeCollection(results, p, set.target(), set.decoders(), node.name());
                 }
             }
-            if (!itemsBound) {
-                throw new IllegalStateException("forEach combine '" + node.name() + "' handler '"
-                        + m.getName() + "' needs a collection parameter (List/Set/Map) for the item results");
-            }
-            // Both access styles work: a @Context parameter, or Step.base() inside the method.
             Object out = Step.withBase(base, () -> call(m, target, args));
             return out == null ? null : RecordMapper.toJson(out);
         };
+    }
+
+    /** The staged results whose producing step leaves the context as {@code element}, shaped as staged. */
+    private static Object ofType(HandlerSet set, Node node, Object staged, Object steps, Class<?> element) {
+        if (staged instanceof Map<?, ?> byKey) {
+            Map<?, ?> stepsByKey = steps instanceof Map<?, ?> s ? s : Map.of();
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> e : byKey.entrySet()) {
+                if (assignable(element, resultType(set, node, stepsByKey.get(e.getKey())))) {
+                    out.put(String.valueOf(e.getKey()), e.getValue());
+                }
+            }
+            return out;
+        }
+        List<?> values = staged instanceof List<?> l ? l : List.of();
+        List<?> stepList = steps instanceof List<?> s ? s : List.of();
+        List<Object> out = new ArrayList<>();
+        for (int i = 0; i < values.size(); i++) {
+            Object step = i < stepList.size() ? stepList.get(i) : null;
+            if (assignable(element, resultType(set, node, step))) out.add(values.get(i));
+        }
+        return out;
+    }
+
+    private static Class<?> resultType(HandlerSet set, Node node, Object step) {
+        Class<?> type = producedType(set, step == null ? null : String.valueOf(step));
+        if (type == null) {
+            throw new PermanentActivityException("combine '" + node.name() + "' splits its results by type, "
+                    + "but this worker holds no handler for the step that produced one of them ("
+                    + (step == null ? "a branch that ran no step" : "'" + step + "'") + "), so it cannot "
+                    + "tell its type; bind that step here too, or take every result in one collection");
+        }
+        return type;
     }
 
     /** Decodes the staged item results into the handler's declared collection type: a List keeps the
@@ -516,7 +601,7 @@ final class HandlerBinder {
         if (List.class.isAssignableFrom(type) || type == Object.class || type == java.util.Collection.class) {
             return decoded;
         }
-        throw new IllegalStateException("forEach combine '" + nodeName + "': unsupported collection "
+        throw new IllegalStateException("combine '" + nodeName + "': unsupported collection "
                 + "parameter type " + type.getName() + " (use List, Set, or Map)");
     }
 
@@ -526,6 +611,7 @@ final class HandlerBinder {
             java.lang.reflect.Type[] args = pt.getActualTypeArguments();
             java.lang.reflect.Type t = args[args.length - 1];   // List<T>/Set<T> -> T; Map<K,V> -> V
             if (t instanceof Class<?> c) return c;
+            if (t instanceof java.lang.reflect.ParameterizedType inner && inner.getRawType() instanceof Class<?> c) return c;
         }
         return Object.class;
     }

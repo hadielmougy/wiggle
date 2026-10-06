@@ -1,6 +1,5 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 
 /**
@@ -54,7 +53,7 @@ public final class OrderHandlers implements OrderSteps {
 
     /** The combine: fold what each branch produced onto the pre-fork order — the return is complete. */
     @Override
-    public Order merge(@Context Order base, Order payment, Order shipping) {
+    public Order merge(Order base, Order payment, Order shipping) {
         return base.withPaymentRef(payment.paymentRef())
                 .withShipmentRef(shipping.shipmentRef())
                 .withTrackingLabel(shipping.trackingLabel());
