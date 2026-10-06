@@ -2,7 +2,6 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.CreatedBranch.BranchStep;
-import com.wiggle.core.Doc;
 import com.wiggle.core.GraphTraversal;
 import com.wiggle.core.Ids;
 import com.wiggle.core.Node;
@@ -103,7 +102,7 @@ final class Spawns {
     static List<Token> fanOut(Tx tx, Instance inst, Token fork, Node creator, String joinId,
                               List<CreatedBranch> branches, List<Node> extraNodes, long now) {
         List<Node> nodes = new ArrayList<>(extraNodes);
-        List<String> starts = new ArrayList<>(branches.size());
+        List<FanOut.Item> items = new ArrayList<>(branches.size());
         for (CreatedBranch b : branches) {
             List<String> ids = new ArrayList<>(b.steps().size());
             for (int p = 0; p < b.steps().size(); p++) ids.add(CreatedBranch.NODE_PREFIX + Ids.token());
@@ -111,20 +110,10 @@ final class Spawns {
                 String next = p + 1 < ids.size() ? ids.get(p + 1) : joinId;
                 nodes.add(compile(inst, creator, b.steps().get(p), ids.get(p), next, joinId));
             }
-            starts.add(ids.getFirst());
+            items.add(new FanOut.Item(ids.getFirst(), b.key(), b.input()));
         }
         tx.insertDynNodes(inst.id, nodes);
-        String group = fork.id + "#" + branches.size();
-        String childStack = fork.pushJoinStack(group);
-        List<Token> children = new ArrayList<>(branches.size());
-        for (int i = 0; i < branches.size(); i++) {
-            CreatedBranch b = branches.get(i);
-            Token child = Tokens.create(inst, starts.get(i), childStack,
-                    fork.payload.push(TokenPayload.FrameKind.ITEM, i, b.key(), Doc.of(b.input())), now);
-            tx.insertToken(child);
-            children.add(child);
-        }
-        return children;
+        return FanOut.items(tx, inst, fork, items, now);
     }
 
     /** The join a later round's branches meet at, leading back to {@code combine}. */

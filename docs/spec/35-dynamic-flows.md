@@ -322,8 +322,9 @@ client library MAY bind differently. The engine's only part is staging `__steps_
 
 ## 9. Retiring `DYN_FORK`
 
-Dynamic flows and `thenForEach` share the minting, frame, join and staging machinery; they differ in
-who builds the branches. Once dynamic flows ship, the engine needs only one fan-out path.
+Dynamic flows and `thenForEach` differ only in who builds the branches: a forEach runs one static body
+per element of a collection, a spawning step builds each branch in its handler. Everything after
+that — the tokens, their frames, the join and the staged results — is one path.
 
 **WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged. It leaves
 out nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler), [043](#52-fragments)), the
@@ -333,13 +334,20 @@ by type ([§8](#8-parameters-by-type)) ship with it. Until nesting lands, a per-
 nodes and a nesting depth limit are not needed: a round is bounded by its branches and steps, and
 rounds by their budget.
 
-**WGL-DYN-071** (MUST) Phase 2 MUST re-implement `DYN_FORK` as branches the server creates: at drive
-time the engine reads `itemsKey` and compiles one branch per element over the static template,
-skipping the combine when the collection is empty ([WGL-ENG-043](30-engine.md)). Stored definitions
-and their fingerprints MUST NOT change, so no instance or registration migrates.
+**WGL-DYN-071** (MUST) Phase 2 MUST give `DYN_FORK` and created branches one fan-out path: the same
+minting (`FanOut.items`), the same `ITEM` frames, join and staging. A forEach keeps its static body —
+each element's token starts at the body's first node — so `DYN_FORK`, stored definitions and their
+fingerprints are unchanged and nothing migrates. A forEach over an empty collection still skips its
+combine ([WGL-ENG-043](30-engine.md)).
 
-**WGL-DYN-072** (MAY) Phase 3 MAY deprecate `thenForEach` in the DSL in favour of spawning steps. The
-engine keeps serving stored `DYN_FORK` nodes either way.
+*Rejected:* compiling the body into created nodes for every element, as this requirement first read.
+It writes one copy of the body per element where a static body writes none, and created branches are
+linear chains, while a forEach body may hold forks, nested fan-outs, signals and sub-flows.
+
+**WGL-DYN-072** (MAY) Phase 3 MAY deprecate `thenForEach` in the DSL in favour of spawning steps, for
+fan-outs whose branches are linear chains. The engine keeps serving `DYN_FORK` either way.
+
+*Verified by:* `tests/DynamicConstructsTest`, `tests/NestedScopesTest`, `tests/DynamicFlowTest`.
 
 ## 10. Open questions
 
