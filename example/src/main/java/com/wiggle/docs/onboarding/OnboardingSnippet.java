@@ -32,7 +32,7 @@ public final class OnboardingSnippet {
         Order   validate(Order o);
         boolean inStock(Order o);
         Order   authorise(Order o);
-        Order   merge(Order base, Order payment, Order shipping);
+        Order   merge(Order payment, Order shipping);
         // docs:elide     ...
         // docs:skip
         Order   capture(Order o);

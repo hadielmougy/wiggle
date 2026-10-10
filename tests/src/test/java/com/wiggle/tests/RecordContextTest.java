@@ -4,6 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.RecordMapper;
@@ -51,7 +52,7 @@ class RecordContextTest {
         boolean hasItems(Shipment s);
         Shipment label(Shipment s);
         Shipment invoice(Shipment s);
-        Shipment merge(Shipment base, Shipment labelling, Shipment billing);
+        Shipment merge(Shipment labelling, Shipment billing);
         Shipment dispatch(Shipment s);
     }
 
@@ -61,8 +62,9 @@ class RecordContextTest {
         public boolean hasItems(Shipment s) { return s.items() > 0; }
         public Shipment label(Shipment s) { return s.withLabel("LBL-" + s.id()); }
         public Shipment invoice(Shipment s) { return s.withInvoice("INV-" + s.id()); }
-        public Shipment merge(Shipment base, Shipment labelling,
+        public Shipment merge(Shipment labelling,
                               Shipment billing) {
+            Shipment base = Step.base(Shipment.class);
             return base.withLabel(labelling.label()).withInvoice(billing.invoice());
         }
         public Shipment dispatch(Shipment s) { return s.withStatus("DISPATCHED"); }

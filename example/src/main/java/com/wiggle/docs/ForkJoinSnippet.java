@@ -31,7 +31,7 @@ public final class ForkJoinSnippet {
         Order   capture(Order o);
         Order   reserveStock(Order o);
         Order   printLabel(Order o);
-        Order   merge(Order base, Order payment, Order shipping);
+        Order   merge(Order payment, Order shipping);
         Order   notify(Order o);
     }
     // docs:end contract

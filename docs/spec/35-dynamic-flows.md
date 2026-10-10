@@ -372,9 +372,12 @@ results under `__steps__<collectKey>` (`ScratchKeys.steps`), in the same order o
 
 **WGL-DYN-083** (MUST) In a fork's combine, a parameter that is not a collection MUST take the arm
 whose type is assignable to it, preferring an arm of exactly its type. Parameters sharing a type MUST
-take that type's arms in fork order, matched from the last parameter back, so that a parameter left
-over at the front receives the pre-fork context. A collection parameter MUST take every arm of its
-element type, in fork order, or keyed by arm name for a `Map`.
+take that type's arms in fork order, matched from the last parameter back. A parameter whose type some
+arm produces, but whose matching arms are all taken, MUST be refused at worker `start()`
+([WGL-WRK-021](20-worker.md)), naming what the arms produce. Only a parameter whose type no arm
+produces receives the pre-fork context; otherwise the combine reads it through `Step.base()`. A
+collection parameter MUST take every arm of its element type, in fork order, or keyed by arm name for
+a `Map`.
 
 **WGL-DYN-084** (MUST) In the combine of a forEach or of created branches, a parameter that is not a
 collection receives the context from before the fan-out. A single collection parameter MUST take

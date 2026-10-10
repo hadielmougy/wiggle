@@ -4,6 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -136,7 +137,7 @@ class ForkJoinContextMergeTest {
         Parcel validate(Parcel p);
         Parcel authorise(Parcel p);
         Parcel label(Parcel p);
-        Parcel merge(Parcel base, Parcel payment, Parcel shipping);
+        Parcel merge(Parcel payment, Parcel shipping);
         Parcel notify(Parcel p);
     }
 
@@ -145,7 +146,8 @@ class ForkJoinContextMergeTest {
         public Parcel validate(Parcel p) { return p; }
         public Parcel authorise(Parcel p) { return p.withPayment("auth"); }
         public Parcel label(Parcel p) { return p.withTracking("DHL"); }
-        public Parcel merge(Parcel base, Parcel payment, Parcel shipping) {
+        public Parcel merge(Parcel payment, Parcel shipping) {
+            Parcel base = Step.base(Parcel.class);
             return base.withPayment(payment.payment()).withTracking(shipping.tracking());
         }
         public Parcel notify(Parcel p) { return p; }

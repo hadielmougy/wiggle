@@ -4,6 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -93,8 +94,7 @@ class ForkIsolationTest {
         Map<String, Object> seed(Map<String, Object> ctx);
         Map<String, Object> l(Map<String, Object> ctx);
         Map<String, Object> r(Map<String, Object> ctx);
-        Map<String, Object> decide(Map<String, Object> base,
-                                   Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> decide(Map<String, Object> left, Map<String, Object> right);
     }
 
     interface IgnoreArmSteps {
@@ -129,9 +129,9 @@ class ForkIsolationTest {
         public Map<String, Object> seed(Map<String, Object> ctx) { return put(ctx, "base", "B"); }
         public Map<String, Object> l(Map<String, Object> ctx) { return put(ctx, "shared", "from-left"); }
         public Map<String, Object> r(Map<String, Object> ctx) { return put(ctx, "shared", "from-right"); }
-        public Map<String, Object> decide(Map<String, Object> base,
-                                          Map<String, Object> left,
+        public Map<String, Object> decide(Map<String, Object> left,
                                           Map<String, Object> right) {
+            Map<String, Object> base = Step.base();
             // The return is the COMPLETE post-join context: base must be carried explicitly.
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("shared", "chosen");
@@ -230,8 +230,7 @@ class ForkIsolationTest {
         /** An arm name AND a real context key: the fork stages this arm under its step's name. */
         Map<String, Object> payment(Map<String, Object> c);
         Map<String, Object> shipping(Map<String, Object> c);
-        Map<String, Object> settle(Map<String, Object> base,
-                                   Map<String, Object> payment, Map<String, Object> shipping);
+        Map<String, Object> settle(Map<String, Object> payment, Map<String, Object> shipping);
     }
 
     @ForFlow("arm-key-clash")
@@ -251,9 +250,9 @@ class ForkIsolationTest {
             out.put("labelled", true);
             return out;
         }
-        @Override public Map<String, Object> settle(Map<String, Object> base,
-                                                    Map<String, Object> payment,
+        @Override public Map<String, Object> settle(Map<String, Object> payment,
                                                     Map<String, Object> shipping) {
+            Map<String, Object> base = Step.base();
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("charged", payment.get("charged"));
             out.put("labelled", shipping.get("labelled"));

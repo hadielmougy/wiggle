@@ -96,7 +96,7 @@ public final class Worker implements AutoCloseable {
      * {@code boolean} return is a gate, {@code void} an effect, any other return type a task whose
      * value becomes the next context. A method taking the fork's arms is the combine for the
      * matching {@code combine} node -- each branch's result found by its type, in any order, and a
-     * parameter no result matches taking the pre-fork context. A {@link Decode @Decode}
+     * parameter whose type no result produces taking the pre-fork context. A {@link Decode @Decode}
      * method is a custom decoder for its return type (versioning / upcasts / bespoke codecs).
      *
      * <p>Matched against the registered graph on {@link #start()}: a name collision here, or a

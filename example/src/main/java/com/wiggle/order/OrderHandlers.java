@@ -1,6 +1,7 @@
 package com.wiggle.order;
 
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 
 /**
  * The step logic for {@link OrderFulfilment}, bound on a worker by name. Each method's name matches a
@@ -53,8 +54,8 @@ public final class OrderHandlers implements OrderSteps {
 
     /** The combine: fold what each branch produced onto the pre-fork order — the return is complete. */
     @Override
-    public Order merge(Order base, Order payment, Order shipping) {
-        return base.withPaymentRef(payment.paymentRef())
+    public Order merge(Order payment, Order shipping) {
+        return Step.base(Order.class).withPaymentRef(payment.paymentRef())
                 .withShipmentRef(shipping.shipmentRef())
                 .withTrackingLabel(shipping.trackingLabel());
     }
