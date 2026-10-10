@@ -39,7 +39,8 @@ final class Wire {
                 t.getItemMapKey().isEmpty() ? null : t.getItemMapKey(),
                 t.getExecutionMode().isEmpty()
                         ? com.wiggle.core.ExecutionMode.SERVER
-                        : com.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()));
+                        : com.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()),
+                t.getCollectKey().isEmpty() ? null : t.getCollectKey());
     }
 
     static WiggleClient.TokenInfo tokenInfo(Token t) {
@@ -89,6 +90,7 @@ final class Wire {
             if (st.name() != null) sb.setName(st.name());
             if (st.queue() != null) sb.setQueue(st.queue());
             if (st.retry() != null) sb.setRetry(com.wiggle.proto.ProtoJson.toValue(st.retry().toJson()));
+            if (st.combine() != null) sb.setCombine(st.combine());
             out.addSteps(sb);
         }
         return out.build();

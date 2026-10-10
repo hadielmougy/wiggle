@@ -312,6 +312,9 @@ message TaskActivation {
     google.protobuf.Value base_context = 14;
     int64 item_index = 15;        // the item's position in the input collection
     string item_map_key = 16;     // the item's source key, when the input collection was a map
+    // Set only for the combine of a forEach or of created branches: where its results are staged. A
+    // worker binds a created combine by it, since no graph it holds has the node.
+    string collect_key = 17;
 }
 
 message TaskList {
@@ -361,6 +364,7 @@ message BranchStep {
     string queue = 4;                      // blank = the creating step's queue
     google.protobuf.Value retry = 5;       // a retry policy as JSON; absent = the creating step's
     int64 sleep_millis = 6;
+    string combine = 7;                    // set: this task creates branches of its own, collected by this combine
 }
 
 // One instance's worth of a report: the ordered steps one worker ran from one leased token.

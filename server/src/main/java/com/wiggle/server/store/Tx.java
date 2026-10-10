@@ -249,6 +249,9 @@ public interface Tx extends ReadTx, GraphStore {
     /** A node an instance created at run time, by its id; empty for any other id. */
     Optional<Node> dynNode(String nodeId);
 
+    /** How many nodes an instance has created at run time. */
+    long dynNodeCount(String instanceId);
+
     void markCompensated(String instanceId, long seq);
 
     /** Cancels every active token of an instance, stamping {@code now} as their update time. */

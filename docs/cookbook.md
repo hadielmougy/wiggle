@@ -138,7 +138,7 @@ deduplicates, a `Map` is keyed like the input.
 
 When the body is a plain chain of steps, prefer [recipe 9](#9-stepcreate--combine): the same fan-out
 built by a step at run time, where each item can run a different chain. Keep `thenForEach` for a body
-that holds a fork, a nested fan-out, a signal or a sub-flow.
+that holds a fork, a signal or a sub-flow.
 
 ## 4. `repeatWhile` + a gate inside the body
 
@@ -306,8 +306,9 @@ combine's parameters are found by type, in any order: `List<Item>` takes the bra
 step returns an `Item`, `List<Gift>` the ones that end in `wrap`, and `Basket`, which is not a
 collection, is the base. A step without its own queue or retry policy takes the creating step's.
 
-Created branches are chains of tasks, effects, gates and sleeps. For a body that needs a fork, a
-nested fan-out, a signal or a sub-flow, use `thenForEach` (recipe 3).
+Created branches are chains of tasks, effects, gates and sleeps, and a step in one can create branches
+of its own: `Step.create(line).thenApply(this::pick).combine(this::packed)`. For a body that needs a
+fork, a signal or a sub-flow, use `thenForEach` (recipe 3).
 
 ## Reference: what's covered where
 

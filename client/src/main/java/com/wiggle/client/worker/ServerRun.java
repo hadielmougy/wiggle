@@ -23,7 +23,7 @@ final class ServerRun {
         Heartbeat lease = w.newHeartbeat(task.taskId(), task.leaseOwner());
         ActivityHandler handler;
         try {
-            handler = w.registrations().handlerFor(task.activity(), task.nodeId(), task.kind());
+            handler = w.registrations().handlerFor(task.activity(), task.nodeId(), task.kind(), task.collectKey());
         } catch (IllegalStateException e) {   // a created step whose method does not fit its kind
             reportFailure(lease, Worker.describe(e), false);
             return;

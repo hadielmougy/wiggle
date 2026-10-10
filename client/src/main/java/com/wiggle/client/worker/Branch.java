@@ -3,6 +3,9 @@ package com.wiggle.client.worker;
 import com.wiggle.client.flow.FlowEffect;
 import com.wiggle.client.flow.FlowFactory;
 import com.wiggle.client.flow.FlowFn;
+import com.wiggle.client.flow.FlowFn2;
+import com.wiggle.client.flow.FlowFn3;
+import com.wiggle.client.flow.FlowFn4;
 import com.wiggle.client.flow.FlowGate;
 import com.wiggle.client.flow.StepNames;
 import com.wiggle.core.CreatedBranch;
@@ -131,6 +134,39 @@ public final class Branch<I> {
     public <R> Branch<R> thenApplyCompensable(FlowFactory<? extends CompensableActivity<?, R>> factory,
                                               String queue, RetryPolicy retry) {
         return add(StepNames.ofBranchStep(factory), NodeKind.TASK, true, retry, queue);
+    }
+
+    /**
+     * Makes the step just chained create branches of its own: inside its handler,
+     * {@code Step.create} opens them, and {@code combine} receives their results, as the combine
+     * after a spawning step does in a workflow. The branch goes on with the combine's return. The
+     * combine runs on the step's queue, under its retry policy.
+     */
+    public <P1, R> Branch<R> combine(FlowFn<P1, R> combine) {
+        return nest(StepNames.ofBranchStep(combine));
+    }
+
+    public <P1, P2, R> Branch<R> combine(FlowFn2<P1, P2, R> combine) {
+        return nest(StepNames.ofBranchStep(combine));
+    }
+
+    public <P1, P2, P3, R> Branch<R> combine(FlowFn3<P1, P2, P3, R> combine) {
+        return nest(StepNames.ofBranchStep(combine));
+    }
+
+    public <P1, P2, P3, P4, R> Branch<R> combine(FlowFn4<P1, P2, P3, P4, R> combine) {
+        return nest(StepNames.ofBranchStep(combine));
+    }
+
+    @SuppressWarnings("unchecked")
+    private <R> Branch<R> nest(String combineName) {
+        BranchStep last = steps.isEmpty() ? null : steps.getLast();
+        if (last == null || last.kind() != NodeKind.TASK || last.combine() != null) {
+            throw new IllegalStateException("combine(" + combineName + ") must directly follow the step "
+                    + "that creates the branches it combines: a thenApply or thenAccept");
+        }
+        steps.set(steps.size() - 1, last.withCombine(combineName));
+        return (Branch<R>) this;
     }
 
     public Branch<I> thenSleep(Duration duration) {

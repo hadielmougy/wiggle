@@ -242,12 +242,13 @@ public final class Worker implements AutoCloseable {
     }
 
     /**
-     * Whether the task's step may create branches. Without the task's graph the server, which holds
-     * it, is the one to refuse.
+     * Whether the task's step may create branches. Without the node in a graph this worker holds --
+     * an unbound version, or a step a branch created -- the server, which holds it, is the one to
+     * refuse.
      */
     boolean createsBranches(TaskActivation task) {
         WorkflowDefinition def = registrations.graphFor(task.workflow() + ":" + task.version());
-        if (def == null) return true;
+        if (def == null || CreatedBranch.isCreatedNode(task.nodeId())) return true;
         Node node = def.nodes().get(task.nodeId());
         return node != null && GraphTraversal.mayCreateBranches(node, id -> Optional.ofNullable(def.nodes().get(id)));
     }

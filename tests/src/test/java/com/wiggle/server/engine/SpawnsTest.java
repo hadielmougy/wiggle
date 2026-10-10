@@ -99,6 +99,15 @@ class SpawnsTest {
         });
     }
 
+    @Test @DisplayName("only a task in a branch may create branches of its own")
+    void refusesAGateThatCreates() {
+        withEngine(spawning(), engine -> {
+            String id = reportFirst(engine, spawning(), List.of(branch(null,
+                    BranchStep.step("check", NodeKind.PREDICATE, false, null, null).withCombine("merge"))));
+            assertTrue(engine.instance(id).orElseThrow().error().contains("only a task can create branches"));
+        });
+    }
+
     @Test @DisplayName("a created step runs one step at a time, on the creating step's queue and policy")
     void createdStepsDispatchServerSide() {
         withEngine(spawning(), engine -> {

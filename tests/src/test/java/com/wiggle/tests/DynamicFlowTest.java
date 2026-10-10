@@ -327,6 +327,90 @@ class DynamicFlowTest {
         assertEquals("o-1", ctx.get("order"), "the parameter that is not a collection is the base");
     }
 
+    interface NestSteps {
+        Map<String, Object> fulfil(Map<String, Object> order);
+        Map<String, Object> summarise(List<Map<String, Object>> lines);
+    }
+
+    @ForFlow("dyn-nest")
+    public static final class NestH {
+        public Map<String, Object> fulfil(Map<String, Object> order) {
+            for (Object line : (List<?>) order.get("lines")) {
+                @SuppressWarnings("unchecked") Map<String, Object> l = (Map<String, Object>) line;
+                Step.create(l).thenApply(this::pick).combine(this::packed).thenApply(this::ship);
+            }
+            return order;
+        }
+
+        /** A created step that creates branches of its own: one per unit of the line. */
+        public Map<String, Object> pick(Map<String, Object> line) {
+            long qty = ((Number) line.get("qty")).longValue();
+            for (long u = 0; u < qty; u++) {
+                Step.create(Map.<String, Object>of("unit", u)).thenApply(this::scan);
+            }
+            return put(line, "picked", true);
+        }
+
+        public Map<String, Object> scan(Map<String, Object> unit) {
+            return put(unit, "sku", Step.base().get("sku"));   // the inner base is the picked line
+        }
+
+        public Map<String, Object> packed(List<Map<String, Object>> units, Map<String, Object> line) {
+            List<String> labels = new ArrayList<>();
+            for (Map<String, Object> u : units) labels.add(u.get("sku") + "#" + u.get("unit"));
+            return put(line, "labels", labels);
+        }
+
+        public Map<String, Object> ship(Map<String, Object> line) { return put(line, "shipped", true); }
+
+        public Map<String, Object> summarise(List<Map<String, Object>> lines) {
+            List<Object> out = new ArrayList<>();
+            for (Map<String, Object> l : lines) out.add(l.get("labels") + ":" + l.get("shipped"));
+            return Map.of("lines", out);
+        }
+    }
+
+    private static FlowSpec nested(ExecutionMode mode) {
+        return FlowSpec.define("dyn-nest", 1, Map.class, NestSteps.class, (f, s) -> Modes.in(f, mode)
+                .thenApply(s::fulfil)
+                .combine(s::summarise));
+    }
+
+    private static final Map<String, Object> TWO_LINES = Map.of("lines", List.of(
+            Map.of("sku", "pen", "qty", 2L), Map.of("sku", "lamp", "qty", 1L)));
+
+    @Test @DisplayName("a created step creates branches of its own; its combine continues the outer branch")
+    void branchesNest() throws Exception {
+        for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC}) {
+            InstanceView v = run(nested(mode), new NestH(), TWO_LINES, null);
+            assertEquals("COMPLETED", v.status(), mode + " " + v.error());
+            assertEquals(List.of("[pen#0, pen#1]:true", "[lamp#0]:true"), Json.asObject(v.context()).get("lines"),
+                    mode + " each line's units were scanned against it, packed, then the line shipped");
+        }
+    }
+
+    @Test @DisplayName("nested branches over JDBC")
+    void branchesNestOverJdbc() throws Exception {
+        InstanceView v = run(nested(ExecutionMode.SERVER), new NestH(), TWO_LINES, TestStorage.url("dynnest"));
+        assertEquals("COMPLETED", v.status(), v.error());
+        assertEquals(List.of("[pen#0, pen#1]:true", "[lamp#0]:true"), Json.asObject(v.context()).get("lines"));
+    }
+
+    @Test @DisplayName("nesting is bounded by depth and by the instance's created nodes")
+    void nestingIsBounded() throws Exception {
+        for (String[] limit : new String[][]{{"wiggle.dyn.maxDepth", "1", "WIGGLE_DYN_MAX_DEPTH"},
+                                              {"wiggle.dyn.maxNodes", "9", "WIGGLE_DYN_MAX_NODES"}}) {   // the lines take 8; a line's units pass 9
+            System.setProperty(limit[0], limit[1]);
+            try {
+                InstanceView v = run(nested(ExecutionMode.SERVER), new NestH(), TWO_LINES, null);
+                assertEquals("FAILED", v.status(), limit[0]);
+                assertTrue(v.error().contains(limit[2]), v.error());
+            } finally {
+                System.clearProperty(limit[0]);
+            }
+        }
+    }
+
     @ForFlow("dyn-plain")
     public static final class PlainH {
         public Map<String, Object> plain(Map<String, Object> ctx) {

@@ -2592,6 +2592,13 @@ public final class JdbcStorage implements Storage {
                     .map(body -> Node.fromJson(Json.parse(body)));
         }
 
+        @Override public long dynNodeCount(String instanceId) {
+            return h.createQuery("SELECT COUNT(*) FROM wf_dyn_node WHERE instance_id=:id")
+                    .bind("id", instanceId)
+                    .mapTo(Long.class)
+                    .one();
+        }
+
         @Override public void appendCompensation(Rows.CompLog e) {
             h.createUpdate("INSERT INTO wf_comp_log "
                             + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "

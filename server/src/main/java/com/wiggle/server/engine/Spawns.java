@@ -29,13 +29,15 @@ import java.util.Set;
 final class Spawns {
 
     /** The bounds on what one instance may create. */
-    record Limits(long maxBranches, long maxSteps, long maxRounds) {
+    record Limits(long maxBranches, long maxSteps, long maxRounds, long maxNodes, long maxDepth) {
 
         static Limits fromEnv() {
             return new Limits(
                     ServerEnv.envLong("wiggle.dyn.maxBranches", "WIGGLE_DYN_MAX_BRANCHES", 10_000),
                     ServerEnv.envLong("wiggle.dyn.maxSteps", "WIGGLE_DYN_MAX_STEPS", 100),
-                    ServerEnv.envLong("wiggle.dyn.maxRounds", "WIGGLE_DYN_MAX_ROUNDS", 100));
+                    ServerEnv.envLong("wiggle.dyn.maxRounds", "WIGGLE_DYN_MAX_ROUNDS", 100),
+                    ServerEnv.envLong("wiggle.dyn.maxNodes", "WIGGLE_DYN_MAX_NODES", 100_000),
+                    ServerEnv.envLong("wiggle.dyn.maxDepth", "WIGGLE_DYN_MAX_DEPTH", 16));
         }
     }
 
@@ -87,6 +89,9 @@ final class Spawns {
 
     private static String refusal(BranchStep step) {
         if (step.kind() == null) return "an unknown step kind";
+        if (step.combine() != null && (step.kind() != NodeKind.TASK || step.combine().isBlank())) {
+            return "only a task can create branches, and its combine needs a name";
+        }
         return switch (step.kind()) {
             case TASK, PREDICATE -> step.name() == null || step.name().isBlank() ? "a step needs a name" : null;
             case SLEEP -> step.sleepMillis() < 0 ? "a negative sleep" : null;
@@ -104,16 +109,25 @@ final class Spawns {
         List<Node> nodes = new ArrayList<>(extraNodes);
         List<FanOut.Item> items = new ArrayList<>(branches.size());
         for (CreatedBranch b : branches) {
-            List<String> ids = new ArrayList<>(b.steps().size());
-            for (int p = 0; p < b.steps().size(); p++) ids.add(CreatedBranch.NODE_PREFIX + Ids.token());
-            for (int p = 0; p < b.steps().size(); p++) {
-                String next = p + 1 < ids.size() ? ids.get(p + 1) : joinId;
-                nodes.add(compile(inst, creator, b.steps().get(p), ids.get(p), next, joinId));
+            String next = joinId;   // compiled last step first, so each knows where it goes
+            for (int p = b.steps().size() - 1; p >= 0; p--) {
+                List<Node> step = compile(inst, creator, b.steps().get(p), next, joinId);
+                nodes.addAll(step);
+                next = step.getFirst().id();
             }
-            items.add(new FanOut.Item(ids.getFirst(), b.key(), b.input()));
+            items.add(new FanOut.Item(next, b.key(), b.input()));
         }
         tx.insertDynNodes(inst.id, nodes);
         return FanOut.items(tx, inst, fork, items, now);
+    }
+
+    /** How many nodes {@code branches} compile to: one per step, two more for each that creates its own. */
+    static long nodeCount(List<CreatedBranch> branches) {
+        long n = 0;
+        for (CreatedBranch b : branches) {
+            for (BranchStep step : b.steps()) n += step.combine() == null ? 1 : 3;
+        }
+        return n;
     }
 
     /** The join a later round's branches meet at, leading back to {@code combine}. */
@@ -126,15 +140,30 @@ final class Spawns {
         return fork.payload.withStaged(Map.of(combine.collectKey(), List.of()));
     }
 
-    private static Node compile(Instance inst, Node creator, BranchStep step, String id, String next,
-                                String joinId) {
-        return switch (step.kind()) {
-            case SLEEP -> Node.sleep(id, "sleep-" + step.sleepMillis() + "ms", step.sleepMillis()).withNext(next);
-            case PREDICATE -> worker(Node.predicate(id, step.name(), inst.workflow + "#" + step.name(),
-                    queue(creator, step), retry(creator, step)), step).withNext(next).withAltNext(joinId);
-            default -> worker(Node.task(id, step.name(), inst.workflow + "#" + step.name(),
-                    queue(creator, step), retry(creator, step)), step).withNext(next);
-        };
+    /**
+     * The nodes one step compiles to, its entry first. A task that creates branches of its own
+     * compiles as a spawning step does in a definition: the task, a dynamic join, and its combine,
+     * which goes on to {@code next}.
+     */
+    private static List<Node> compile(Instance inst, Node creator, BranchStep step, String next, String joinId) {
+        String id = CreatedBranch.NODE_PREFIX + Ids.token();
+        if (step.kind() == NodeKind.SLEEP) {
+            return List.of(Node.sleep(id, "sleep-" + step.sleepMillis() + "ms", step.sleepMillis()).withNext(next));
+        }
+        String queue = queue(creator, step);
+        com.wiggle.core.RetryPolicy retry = retry(creator, step);
+        if (step.kind() == NodeKind.PREDICATE) {
+            return List.of(worker(Node.predicate(id, step.name(), inst.workflow + "#" + step.name(), queue, retry),
+                    step).withNext(next).withAltNext(joinId));
+        }
+        Node task = worker(Node.task(id, step.name(), inst.workflow + "#" + step.name(), queue, retry), step);
+        if (step.combine() == null) return List.of(task.withNext(next));
+        Node combine = Node.task(CreatedBranch.NODE_PREFIX + Ids.token(), step.combine(),
+                        inst.workflow + "#" + step.combine(), queue, retry)
+                .withCollectKey(ScratchKeys.spawn(step.name()))
+                .withNext(next);
+        Node join = Node.join(CreatedBranch.NODE_PREFIX + Ids.token(), "join", 0).withNext(combine.id());
+        return List.of(task.withNext(join.id()), join, combine);
     }
 
     private static Node worker(Node node, BranchStep step) {

@@ -13,10 +13,20 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                              String nodeId, String stepName, String activity, NodeKind kind,
                              int attempt, long leaseExpiresAt, String leaseOwner, Object context,
                              Object baseContext, long itemIndex, String itemMapKey,
-                             ExecutionMode executionMode) {
+                             ExecutionMode executionMode, String collectKey) {
 
     public TaskActivation {
         executionMode = executionMode == null ? ExecutionMode.SERVER : executionMode;
+    }
+
+    /** An activation of a step that is not a forEach's or created branches' combine. */
+    public TaskActivation(String taskId, String instanceId, String workflow, int version,
+                          String nodeId, String stepName, String activity, NodeKind kind,
+                          int attempt, long leaseExpiresAt, String leaseOwner, Object context,
+                          Object baseContext, long itemIndex, String itemMapKey,
+                          ExecutionMode executionMode) {
+        this(taskId, instanceId, workflow, version, nodeId, stepName, activity, kind, attempt,
+                leaseExpiresAt, leaseOwner, context, baseContext, itemIndex, itemMapKey, executionMode, null);
     }
 
     public Map<String, Object> toJson() {
@@ -39,6 +49,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
             if (itemMapKey != null) m.put("itemMapKey", itemMapKey);
         }
         m.put("executionMode", executionMode.name());
+        if (collectKey != null) m.put("collectKey", collectKey);
         return m;
     }
 
@@ -51,6 +62,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                 (int) Json.num(m, "attempt", 0), Json.num(m, "leaseExpiresAt", 0),
                 Json.str(m, "leaseOwner", null), m.get("context"),
                 m.get("baseContext"), Json.num(m, "itemIndex", 0), Json.str(m, "itemMapKey", null),
-                ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.SERVER.name())));
+                ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.SERVER.name())),
+                Json.str(m, "collectKey", null));
     }
 }
