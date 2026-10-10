@@ -425,7 +425,8 @@ steps: the `thenForEach` javadoc, the README and the cookbook (recipe 9) recomme
 branch can now express every body a forEach can ([WGL-DYN-013](#2-creating-branches-in-a-handler),
 [017](#2-creating-branches-in-a-handler)); what a forEach still offers is a body that is part of the
 definition, visible in the portal and fingerprinted, and a fan-out the server makes without a worker
-step. `thenForEach` MAY therefore carry `@Deprecated`, as a decision about those, not a gap. The engine keeps serving `DYN_FORK` either way.
+step. `thenForEach` therefore stays a supported, non-deprecated construct: the DSL MUST NOT mark it
+`@Deprecated`, and the engine keeps serving `DYN_FORK`.
 
 *Verified by:* `tests/DynamicConstructsTest`, `tests/NestedScopesTest`, `tests/DynamicFlowTest`.
 
