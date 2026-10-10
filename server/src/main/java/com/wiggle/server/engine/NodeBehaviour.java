@@ -139,16 +139,12 @@ abstract class NodeBehaviour {
                 s.work().push(cont);
                 return true;
             }
-            String group = s.token().id + "#" + elements.size();   // fork token id + width, parsed back at the join
-            String childStack = s.token().pushJoinStack(group);
             String branchStart = s.node().branches().getFirst();
+            List<FanOut.Item> fanned = new ArrayList<>(elements.size());
             for (int i = 0; i < elements.size(); i++) {
-                String key = mapKeys == null ? null : mapKeys.get(i);
-                Rows.Token child = Tokens.create(
-                        s.inst(), branchStart, childStack, s.token().payload.push(TokenPayload.FrameKind.ITEM, i, key, Doc.of(elements.get(i))), s.now());
-                s.tx().insertToken(child);
-                s.work().push(child);
+                fanned.add(new FanOut.Item(branchStart, mapKeys == null ? null : mapKeys.get(i), elements.get(i)));
             }
+            FanOut.items(s.tx(), s.inst(), s.token(), fanned, s.now()).forEach(s.work()::push);
             return true;
         }
     }
