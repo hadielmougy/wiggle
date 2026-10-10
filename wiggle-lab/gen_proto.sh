@@ -10,14 +10,18 @@ out="$here/wigglelab/pb"
 mkdir -p "$out"
 touch "$out/__init__.py"
 
-python -m grpc_tools.protoc \
+# The stubs pin the grpcio version that generated them, so generate with the interpreter that runs the lab.
+py=python
+[ -x "$here/.venv/bin/python" ] && py="$here/.venv/bin/python"
+
+"$py" -m grpc_tools.protoc \
   -I "$proto_src" \
   --python_out="$out" --grpc_python_out="$out" \
   "$proto_src/wiggle.proto"
 
 # grpc_tools emits top-level imports (`import wiggle_pb2`); rewrite them to package-relative
 # so the stubs import correctly from within wigglelab.pb.
-python - "$out" <<'PY'
+"$py" - "$out" <<'PY'
 import re, sys, pathlib
 out = pathlib.Path(sys.argv[1])
 for f in out.glob("*_pb2*.py"):
