@@ -1,6 +1,6 @@
 # 85 — Sharding (proposed)
 
-← [Storage](80-storage.md) · [Index](00-index.md) · Next: [Operations](90-ops.md)
+← [Storage](80-storage.md) · [Index](00-index.md) · Next: [Partition ownership](87-partition-ownership.md)
 
 **Status: proposed.** Nothing in this chapter is implemented. Every requirement here is *unverified*
 ([WGL-GEN-001](00-index.md)) until the change that builds it names its test. Where this chapter and

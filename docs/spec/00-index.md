@@ -22,6 +22,7 @@ here first, and the requirement names the test that holds it.
 | 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the portal's HTTP surface | `WGL-API` |
 | 80 | [Storage](80-storage.md) | the schema, migrations, dialects, claim mechanics, retention | `WGL-STOR` |
 | 85 | [Sharding](85-sharding.md) *(proposed)* | shard-carrying ids, the topology and shard roles, read replicas, adding shards, the portal in the server, the auth shard, search shards, dropping the coordinator | `WGL-SHARD` |
+| 87 | [Partition ownership](87-partition-ownership.md) *(proposed, spike)* | one owner node applies every write of a partition's instances in fenced group commits; routing, ownership leases, sweeps per partition, the spike plan | `WGL-PART` |
 | 90 | [Operations](90-ops.md) | configuration, cluster and leadership, portal, TLS, deployment; the withdrawn coordinator | `WGL-OPS`, `WGL-COORD` (withdrawn) |
 
 ## 1. Scope
