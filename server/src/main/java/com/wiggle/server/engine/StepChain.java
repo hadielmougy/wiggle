@@ -165,6 +165,7 @@ final class StepChain {
         Node roundJoin = newRound ? Spawns.roundJoin(combine) : null;
         List<Token> children = Spawns.fanOut(tx, inst, fork, node, newRound ? roundJoin.id() : node.next(),
                 branches, newRound ? List.of(roundJoin) : List.of(), now);
+        Events.branchesCreated(tx, inst, node.id(), node.name(), round, branches.size(), now);
         LOG.log(System.Logger.Level.DEBUG, () -> "reportSteps: instance " + inst.id + " step " + node.name()
                 + " created " + branches.size() + " branch(es)");
         Drive.pump(nodeBehaviourFactory, tx, def, inst, new ArrayDeque<>(children), now);

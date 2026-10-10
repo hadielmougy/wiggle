@@ -119,10 +119,36 @@
   (when (and startedAt (pos? availableAt) (>= startedAt availableAt))
     (- startedAt availableAt)))
 
-(defn- step-label [names t]
+(defn- step-label
+  "The node's name in the graph, else its step name -- a node a branch created at run time is in no
+   graph, and its activity is `workflow#step`."
+  [names t]
   (or (get names (:nodeId t))
-      (not-empty (:activity t))
+      (when-let [a (not-empty (:activity t))]
+        (let [i (.indexOf a "#")] (if (neg? i) a (subs a (inc i)))))
       (:nodeId t)))
+
+(defn- scope-label [t]
+  (str (if (= (:scopeKind t) "arm") "arm " "branch ") (inc (:scopeIndex t))
+       (when-let [k (:scopeKey t)] (str " · " k))))
+
+(defn- nested-rows
+  "The tokens in display order, as `[:step depth token]` and `[:branch depth token]` rows: each token
+   in creation order, followed by the tokens of the fork, forEach or created branches it started,
+   one `:branch` header per branch or arm. A token whose scope is not among the tokens is top level."
+  [tokens]
+  (let [ids (set (map :id tokens))
+        by-scope (group-by :scope tokens)
+        ordered #(sort-by (juxt :createdAt :id) %)
+        walk (fn walk [ts depth]
+               (mapcat (fn [t]
+                         (cons [:step depth t]
+                               (mapcat (fn [[_ branch]]
+                                         (cons [:branch (inc depth) (first branch)]
+                                               (walk branch (inc depth))))
+                                       (sort-by key (group-by :scopeIndex (get by-scope (:id t)))))))
+                       (ordered ts)))]
+    (walk (filter #(not (contains? ids (:scope %))) tokens) 0)))
 
 (defn- truncated? [v] (and (map? v) (contains? v :$truncated)))
 
@@ -166,34 +192,39 @@
 (def ^:private step-cols 8)
 
 (defn steps-table
-  "Every token of the instance in the order it was created, one row per step run. Clicking a row
+  "Every token of the instance, one row per step run, numbered in the order they were created. A
+   fan-out's steps are nested under the step that started it, grouped by branch. Clicking a row
    expands it in place to the step's input, output, retries and timing."
   []
   (let [open (r/atom #{})]
     (fn [tokens names]
-      (let [rows (sort-by (juxt :createdAt :id) tokens)]
+      (let [number (into {} (map-indexed (fn [n t] [(:id t) (inc n)]) (sort-by (juxt :createdAt :id) tokens)))]
         [:table.steps
          [:thead [:tr [:th {:style {:width "6%"}} "#"] [:th {:style {:width "28%"}} "step"]
                   [:th {:style {:width "12%"}} "kind"] [:th {:style {:width "12%"}} "status"]
                   [:th {:style {:width "10%"}} "retries"] [:th {:style {:width "11%"}} "started"]
                   [:th {:style {:width "11%"}} "duration"] [:th {:style {:width "10%"}} "waited"]]]
          [:tbody
-          (for [[n t] (map-indexed vector rows)
-                :let [open? (contains? @open (:id t))]]
-            ^{:key (:id t)}
-            [:<>
-             [:tr {:class (when open? "sel")
-                   :on-click #(swap! open (fn [o] (if (contains? o (:id t)) (disj o (:id t)) (conj o (:id t)))))}
-              [:td.muted (if open? "▾ " "▸ ") (inc n)]
-              [:td [:strong (step-label names t)] " " [:code.muted (:nodeId t)]]
-              [:td.muted (:kind t)]
-              [:td [badge (:status t)]]
-              [:td {:class (when (pos? (:attempt t)) "retried")} (or (:attempt t) 0)]
-              [:td.muted (or (clock (:startedAt t)) "—")]
-              [:td (ms (step-duration t))]
-              [:td.muted (ms (queue-wait t))]]
-             (when open?
-               [:tr.expanded [:td {:col-span step-cols} [step-detail t]]])])]]))))
+          (for [[row depth t] (nested-rows tokens)
+                :let [open? (contains? @open (:id t))
+                      indent {:padding-left (str (+ 8 (* 18 depth)) "px")}]]
+            (if (= row :branch)
+              ^{:key (str "branch-" (:id t))}
+              [:tr.branch [:td] [:td {:col-span (dec step-cols) :style indent} (scope-label t)]]
+              ^{:key (:id t)}
+              [:<>
+               [:tr {:class (when open? "sel")
+                     :on-click #(swap! open (fn [o] (if (contains? o (:id t)) (disj o (:id t)) (conj o (:id t)))))}
+                [:td.muted (if open? "▾ " "▸ ") (number (:id t))]
+                [:td {:style indent} [:strong (step-label names t)] " " [:code.muted (:nodeId t)]]
+                [:td.muted (:kind t)]
+                [:td [badge (:status t)]]
+                [:td {:class (when (pos? (:attempt t)) "retried")} (or (:attempt t) 0)]
+                [:td.muted (or (clock (:startedAt t)) "—")]
+                [:td (ms (step-duration t))]
+                [:td.muted (ms (queue-wait t))]]
+               (when open?
+                 [:tr.expanded [:td {:col-span step-cols} [step-detail t]]])]))]]))))
 
 (defn detail-body []
   (let [{:keys [detail selected graph graph-for]} @db

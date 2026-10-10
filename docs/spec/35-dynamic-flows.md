@@ -326,12 +326,16 @@ active token ([WGL-ENG-090](30-engine.md)).
 step runs on whatever handler the claiming worker has for `<workflow>#<name>`. A version-scoped worker
 ([WGL-WRK-024](20-worker.md)) MUST still only claim branch steps of instances of its version.
 
-**WGL-DYN-065** (SHOULD) **Event log.** The engine SHOULD write a `BRANCHES_CREATED` lifecycle entry
-per round carrying the step name, round and width ([chapter 60](60-event-log.md)).
+**WGL-DYN-065** (MUST) **Event log.** Accepting a round's branches MUST append a `wf.branches_created`
+lifecycle entry in the same transaction, on the creating node, with the payload
+`{step, round, width}` ([chapter 60](60-event-log.md)). A step that creates none writes no entry.
 
-**WGL-DYN-066** (SHOULD) **Portal.** The step table SHOULD group fragment steps under their spawning
-step by round and branch, with each branch's key when it has one, and SHOULD flag `READY` tokens on a
-queue no worker is polling ([chapter 70](70-api.md)).
+**WGL-DYN-066** (MUST) **Portal.** A token's view MUST carry its scope: the token whose fork, forEach or
+created branches it runs in — read from its innermost join group — and its frame's kind, index and
+key ([chapter 70](70-api.md)). The step table MUST nest each fan-out's steps under the token that
+started it, one group per arm or branch, labelled with its position and key, to any depth; a later
+round nests under the combine that created it. A created step is labelled by its step name. A queue
+that only branches use and no worker polls shows on the backlog view as uncovered, as any queue does.
 
 ## 8. Parameters by type
 
@@ -404,11 +408,11 @@ Dynamic flows and `thenForEach` differ only in who builds the branches: a forEac
 per element of a collection, a spawning step builds each branch in its handler. Everything after
 that — the tokens, their frames, the join and the staged results — is one path.
 
-**WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged. It leaves
-out the `BRANCHES_CREATED` lifecycle entry ([WGL-DYN-065](#7-interaction-with-other-features)) and
-the portal's grouping ([WGL-DYN-066](#7-interaction-with-other-features)), which follow it.
-Parameters by type ([§8](#8-parameters-by-type)) and nesting
-([WGL-DYN-013](#2-creating-branches-in-a-handler)) follow it in their own changes.
+**WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged. Parameters
+by type ([§8](#8-parameters-by-type)), nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler)),
+the server-side operators ([WGL-DYN-017](#2-creating-branches-in-a-handler)), the lifecycle entry
+([WGL-DYN-065](#7-interaction-with-other-features)) and the portal's grouping
+([WGL-DYN-066](#7-interaction-with-other-features)) follow it in their own changes.
 
 **WGL-DYN-071** (MUST) Phase 2 MUST give `DYN_FORK` and created branches one fan-out path: the same
 minting (`FanOut.items`), the same `ITEM` frames, join and staging. A forEach keeps its static body —

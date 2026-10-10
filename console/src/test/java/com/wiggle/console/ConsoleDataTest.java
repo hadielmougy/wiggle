@@ -134,4 +134,58 @@ class ConsoleDataTest {
             assertTrue(before > 0);
         }
     }
+
+    interface SpawnSteps {
+        Map<String, Object> fan(Map<String, Object> ctx);
+        Map<String, Object> merge(Map<String, Map<String, Object>> results);
+    }
+
+    @ForFlow("wf-spawn")
+    public static final class SpawnH {
+        public Map<String, Object> fan(Map<String, Object> ctx) {
+            for (String sku : List.of("pen", "lamp")) {
+                com.wiggle.client.worker.Step.create(sku, Map.<String, Object>of("sku", sku)).thenApply(this::price);
+            }
+            return ctx;
+        }
+
+        public Map<String, Object> price(Map<String, Object> v) { return v; }
+
+        public Map<String, Object> merge(Map<String, Map<String, Object>> results) { return Map.of("n", (long) results.size()); }
+    }
+
+    @Test @DisplayName("created branches: a wf.branches_created entry, and each step scoped to the step that created it")
+    void createdBranchesAreScoped() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl());
+             Worker w = new Worker(conn.client(), "spawn-w").registerHandler(new SpawnH())) {
+            WiggleClient c = conn.client();
+            c.register(FlowSpec.define("wf-spawn", 1, Map.class, SpawnSteps.class,
+                    (f, s) -> f.thenApply(s::fan).combine(s::merge)));
+            w.start();
+            String id = c.start("wf-spawn", Map.of(), null, null);
+            assertEquals("COMPLETED", c.awaitCompletion(id, Duration.ofSeconds(20)).status());
+
+            com.wiggle.core.EventView created = server.engine().events(0, 1_000).stream()
+                    .filter(e -> e.instanceId().equals(id) && e.type().equals("wf.branches_created"))
+                    .findFirst().orElseThrow();
+            assertEquals(Map.of("step", "fan", "round", 1L, "width", 2L), created.payload());
+
+            List<DashboardData.TokenView> tokens = new EngineDashboardData(server.engine(), server.cluster())
+                    .instance(id).orElseThrow().tokens();
+            DashboardData.TokenView fan = tokens.stream().filter(t -> "wf-spawn#fan".equals(t.activity())).findFirst().orElseThrow();
+            List<DashboardData.TokenView> priced = tokens.stream().filter(t -> "wf-spawn#price".equals(t.activity())).toList();
+            assertEquals(2, priced.size());
+            for (DashboardData.TokenView t : priced) {
+                assertEquals(fan.id(), t.scope(), "a branch's step nests under the step that created it");
+                assertEquals("item", t.scopeKind());
+            }
+            assertEquals(Map.of(0L, "pen", 1L, "lamp"), priced.stream().collect(java.util.stream.Collectors.toMap(
+                    DashboardData.TokenView::scopeIndex, DashboardData.TokenView::scopeKey)));
+            assertEquals(null, fan.scope(), "the creating step is top level");
+            Map<String, Object> json = DashboardJson.token(priced.getFirst());
+            assertEquals(List.of(fan.id(), "item"), List.of(json.get("scope"), json.get("scopeKind")),
+                    "and the portal's JSON carries the scope the step table nests by");
+        }
+    }
 }

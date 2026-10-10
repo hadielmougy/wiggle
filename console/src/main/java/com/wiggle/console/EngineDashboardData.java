@@ -9,6 +9,7 @@ import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.search.Search;
 import com.wiggle.server.store.Rows;
+import com.wiggle.server.store.TokenPayload;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -147,10 +148,17 @@ public final class EngineDashboardData implements DashboardData {
     }
 
     private static TokenView token(Rows.Token t) {
+        String group = t.currentJoinGroup();
+        String scope = group == null ? null : group.contains("#") ? group.substring(0, group.lastIndexOf('#')) : group;
+        TokenPayload.Frame frame = scope == null || t.payload == null ? null : t.payload.top();
         return new TokenView(t.id, t.nodeId, t.kind == null ? null : t.kind.name(),
                 t.status == null ? null : t.status.name(), t.activity, t.queue, t.attempt, t.availableAt,
                 t.leaseOwner, t.leaseExpiresAt, t.lastError, t.updatedAt, t.startedAt, t.finishedAt, t.createdAt,
                 t.stepInput == null ? null : Json.parse(t.stepInput),
-                t.stepOutput == null ? null : Json.parse(t.stepOutput));
+                t.stepOutput == null ? null : Json.parse(t.stepOutput),
+                scope,
+                frame == null ? null : frame.kind() == TokenPayload.FrameKind.ARM ? "arm" : "item",
+                frame == null ? null : frame.idx(),
+                frame == null ? null : frame.mapKey());
     }
 }

@@ -48,6 +48,12 @@ final class DashboardJson {
         m.put("createdAt", t.createdAt());
         m.put("input", t.input());
         m.put("output", t.output());
+        if (t.scope() != null) {
+            m.put("scope", t.scope());
+            m.put("scopeKind", t.scopeKind());
+            m.put("scopeIndex", t.scopeIndex());
+            if (t.scopeKey() != null) m.put("scopeKey", t.scopeKey());
+        }
         return m;
     }
 
