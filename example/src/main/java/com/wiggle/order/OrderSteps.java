@@ -1,6 +1,5 @@
 package com.wiggle.order;
 
-import com.wiggle.client.worker.Context;
 
 /**
  * The steps of {@code order-fulfilment}, as a contract: every step's name and its signature, with no
@@ -32,12 +31,10 @@ public interface OrderSteps {
     Order printLabel(Order order);
 
     /**
-     * The combine: the pre-fork order, then one parameter per fork arm, in fork order. {@code @Context}
-     * is part of the shape, so it is declared here as well as on the implementation -- Java does not
-     * inherit parameter annotations, and each side is read by a different half of the system (this one
-     * when the spec is defined, the implementation's when a worker binds).
+     * The combine. Its parameters are found by type: both arms produce an {@code Order}, so they take
+     * the last two {@code Order} parameters in fork order, and the first is the pre-fork order.
      */
-    Order merge(@Context Order base, Order payment, Order shipping);
+    Order merge(Order base, Order payment, Order shipping);
 
     Order notify(Order order);
 

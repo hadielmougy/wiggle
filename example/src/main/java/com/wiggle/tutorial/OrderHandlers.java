@@ -1,6 +1,5 @@
 package com.wiggle.tutorial;
 
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.tutorial.Orders.Item;
 import com.wiggle.tutorial.Orders.Order;
@@ -28,7 +27,7 @@ public class OrderHandlers implements OrderSteps {  // implementing the contract
         return new Item(item.sku(), item.price().multiply(new BigDecimal("1.20")));   // + VAT
     }
 
-    @Override public Order total(@Context Order base, List<Item> priced) {
+    @Override public Order total(Order base, List<Item> priced) {
         return base.withTotal(priced.stream().map(Item::price)
                 .reduce(BigDecimal.ZERO, BigDecimal::add));
     }

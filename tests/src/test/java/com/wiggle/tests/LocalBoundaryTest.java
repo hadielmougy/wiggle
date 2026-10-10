@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -39,7 +38,7 @@ class LocalBoundaryTest {
         Map<String, Object> l1(Map<String, Object> ctx);
         Map<String, Object> l2(Map<String, Object> ctx);
         Map<String, Object> r1(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> after(Map<String, Object> ctx);
     }
@@ -76,7 +75,7 @@ class LocalBoundaryTest {
                 var prepped = Modes.in(f, mode).thenApply(s::seed).thenApply(s::prep);
                 var left = prepped.thenApply(s::l1).thenApply(s::l2);
                 var right = prepped.thenApply(s::r1);
-                return Wiggle.allOf(left, right).combineWithContext(s::merge).thenApply(s::after);
+                return Wiggle.allOf(left, right).combine(s::merge).thenApply(s::after);
             });
 
             try (WiggleServer server = new WiggleServer(config()).start();
@@ -181,7 +180,7 @@ class LocalBoundaryTest {
         public Map<String, Object> l1(Map<String, Object> ctx) { return counted(runs, "l1", put(ctx, "left", "L")); }
         public Map<String, Object> l2(Map<String, Object> ctx) { return counted(runs, "l2", put(ctx, "left2", "L2")); }
         public Map<String, Object> r1(Map<String, Object> ctx) { return counted(runs, "r1", put(ctx, "right", "R")); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> left,
                                          Map<String, Object> right) {
             Map<String, Object> out = new LinkedHashMap<>(base);

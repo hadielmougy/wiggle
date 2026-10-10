@@ -1,6 +1,5 @@
 package com.wiggle.client.flow;
 
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Handles;
 
 import java.util.List;
@@ -38,7 +37,7 @@ final class Fixtures {
 
         Fulfilment settle(Payment payment, Label label);
 
-        Fulfilment settleWithBase(@Context Order base, Payment payment,
+        Fulfilment settleWithBase(Order base, Payment payment,
                                   Label label);
 
         Fulfilment audit(Payment payment, Label label,
@@ -70,7 +69,7 @@ final class Fixtures {
         Order totalWithBase(Order base, List<Line> priced);
 
         /** A five-armed combine, to exercise the wider end of the typed series. */
-        Fulfilment settleFive(@Context Order base, Payment a, Label b, Shipment c, Order d, Line e);
+        Fulfilment settleFive(Order base, Payment a, Label b, Shipment c, Order d, Line e);
 
         Payment armA(Order o);
 

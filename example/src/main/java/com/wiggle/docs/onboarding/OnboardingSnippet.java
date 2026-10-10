@@ -4,7 +4,6 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.docs.SagaSnippet;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -33,7 +32,7 @@ public final class OnboardingSnippet {
         Order   validate(Order o);
         boolean inStock(Order o);
         Order   authorise(Order o);
-        Order   merge(@Context Order base, Order payment, Order shipping);
+        Order   merge(Order base, Order payment, Order shipping);
         // docs:elide     ...
         // docs:skip
         Order   capture(Order o);
@@ -68,7 +67,7 @@ public final class OnboardingSnippet {
                                     .thenApply(s::label);
 
             return Wiggle.allOf(payment, shipping)   // continuing `validated` twice is the fan-out
-                    .combineWithContext(s::merge)    // arms are isolated, so rejoining is always explicit
+                    .combine(s::merge)    // arms are isolated, so rejoining is always explicit
                     .thenApply(s::notify);
         });
         // docs:end topology

@@ -41,6 +41,15 @@ public final class ScratchKeys {
         return "__forEach__" + forEachNodeName;
     }
 
+    /**
+     * Where, beside a collection staged under {@code collectKey}, the name of the step that produced
+     * each result is staged -- in the same order, or under the same keys -- so a combine can bind
+     * results by the type their step returns.
+     */
+    public static String steps(String collectKey) {
+        return "__steps__" + collectKey;
+    }
+
     /** Where the results of the branches a step created are staged for the combine after it. */
     public static String spawn(String spawningStepName) {
         return SPAWN_PREFIX + spawningStepName;

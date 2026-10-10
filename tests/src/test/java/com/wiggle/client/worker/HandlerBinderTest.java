@@ -181,46 +181,26 @@ class HandlerBinderTest {
     }
 
 
-    @Test @DisplayName("a @Context parameter delivers Step.base(); outside a base scope it fails clearly")
-    void contextParameter() throws Exception {
-        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new CtxParamH()), linear());
-        ActivityHandler work = r.bindings().stream()
-                .filter(b -> b.step().equals("work")).findFirst().orElseThrow().handler();
-
-        // inside an item scope: base is delivered as the parameter
-        Step.begin(new Step.Info(1, "t", "i", Map.of("rate", 2L), true, 0, null));
-        try {
-            assertEquals(Map.of("v", 2L), work.invoke("item"));
-        } finally {
-            Step.end();
-        }
-
-        // outside any base scope: a clear error, not an NPE
-        Step.begin(new Step.Info(1, "t", "i"));
-        try {
-            IllegalStateException e = assertThrows(IllegalStateException.class, () -> work.invoke("item"));
-            assertTrue(e.getMessage().contains("@Context"), e.getMessage());
-        } finally {
-            Step.end();
-        }
+    @Test @DisplayName("a step takes only its input; the base is Step.base(), not a second parameter")
+    void stepTakesOneParameter() {
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new CtxParamH()), linear()));
+        assertTrue(e.getMessage().contains("Step.base(Type.class)"), e.getMessage());
     }
 
     @ForFlow("wf")
     static final class CtxParamH {
-        public Map<String, Object> work(@Context Map<String, Object> base, String item) {
+        public Map<String, Object> work(Map<String, Object> base, String item) {
             return Map.of("v", base.get("rate"));
         }
-        public boolean ok(Map<String, Object> c) { return true; }
-        public void log(Map<String, Object> c) { }
     }
-
 
     private static WorkflowDefinition forked() {
         return FlowSpec.define("wf", 1, Map.class, ForkSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1)).combine(s::merge)).definition();
     }
 
-    @Test @DisplayName("fork combine: arms by position, ambient Step.base(), and a verbatim whole return")
+    @Test @DisplayName("fork combine: same-typed arms in fork order, ambient Step.base(), and a verbatim whole return")
     void forkCombine() throws Exception {
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new ForkCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
@@ -228,7 +208,6 @@ class HandlerBinderTest {
 
         Step.begin(new Step.Info(1, "t", "i"));
         try {
-            // the staged context: pre-fork base + one key per arm, keyed by the arm's step
             // staged under the reserved arm keys, as the engine stages them -- a bare arm name would
             // collide with a context key of the same name and be stripped along with it
             Object out = merge.invoke(Map.of("pre", "P",
@@ -248,7 +227,7 @@ class HandlerBinderTest {
 
     interface EachSteps {
         String norm(String item);
-        Map<String, Object> collect(@Context Map<String, Object> base, List<String> items);
+        Map<String, Object> collect(Map<String, Object> base, List<String> items);
     }
 
     @ForFlow("wf")
@@ -256,15 +235,15 @@ class HandlerBinderTest {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
         public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) {
-            Map<String, Object> out = new LinkedHashMap<>(Step.base());   // ambient style: no @Context param
+            Map<String, Object> out = new LinkedHashMap<>(Step.base());   // ambient style: no base parameter
             out.putAll(a);
             out.putAll(b);
             return out;
         }
     }
 
-    @Test @DisplayName("a combine takes the arms by position, in fork order")
-    void forkCombineBindsByPosition() throws Exception {
+    @Test @DisplayName("same-typed arms go to same-typed parameters in fork order; one left at the front takes the base")
+    void sameTypedArmsBindInForkOrder() throws Exception {
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new PositionalCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
                 .filter(b -> b.step().equals("merge")).findFirst().orElseThrow().handler();
@@ -276,7 +255,7 @@ class HandlerBinderTest {
             Object out = merge.invoke(Map.of("pre", "P",
                     "__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L)));
             assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
-                    "parameter order is fork order: arm 'a' first, arm 'b' second");
+                    "every arm is a Map, so the arms take the last two Map parameters in fork order");
         } finally {
             Step.end();
         }
@@ -286,8 +265,7 @@ class HandlerBinderTest {
     static final class PositionalCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        // @Context still needs its annotation -- it is what distinguishes the base from an arm
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> a, Map<String, Object> b) {
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("base", base.get("pre"));
@@ -297,36 +275,77 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("a combine must take every arm, since they bind by position")
-    void forkCombineMustTakeEveryArm() {
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scan(new BadCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("[a1, b1], in that order"),
-                "the error names the arms and their order: " + ex.getMessage());
-        assertTrue(ex.getMessage().contains("ignore it"),
-                "and says what to do about an arm you do not need: " + ex.getMessage());
+    record Paid(long amount) {}
+
+    record Shipped(String tracking) {}
+
+    @Test @DisplayName("a combine's parameters are found by type, in any order, and need not take every arm")
+    void forkCombineBindsByType() throws Exception {
+        ActivityHandler merge = HandlerBinder.bind(HandlerBinder.scan(new TypedCombineH()), forked()).bindings()
+                .stream().filter(b -> b.step().equals("merge")).findFirst().orElseThrow().handler();
+        ActivityHandler shipOnly = HandlerBinder.bind(HandlerBinder.scan(new OneArmCombineH()), forked()).bindings()
+                .stream().filter(b -> b.step().equals("merge")).findFirst().orElseThrow().handler();
+        Map<String, Object> staged = Map.of("pre", "P",
+                "__arm__a1", Map.of("amount", 5L), "__arm__b1", Map.of("tracking", "T1"));
+
+        Step.begin(new Step.Info(1, "t", "i"));
+        try {
+            assertEquals(Map.of("tracking", "T1", "pre", "P", "amount", 5L), merge.invoke(staged));
+            assertEquals(Map.of("tracking", "T1"), shipOnly.invoke(staged));
+        } finally {
+            Step.end();
+        }
     }
 
     @ForFlow("wf")
-    static final class BadCombineH {
-        public Map<String, Object> a1(Map<String, Object> c) { return c; }
-        public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(Map<String, Object> notAnnotated) { return notAnnotated; }
-    }
-
-    @Test @DisplayName("a combine that takes more parameters than the fork has arms is rejected")
-    void forkCombineRejectsTooManyArms() {
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> HandlerBinder.bind(HandlerBinder.scan(new WideCombineH()), forked()));
-        assertTrue(ex.getMessage().contains("more arms than the fork has"), ex.getMessage());
+    static final class TypedCombineH {
+        public Paid a1(Map<String, Object> c) { return new Paid(5); }
+        public Shipped b1(Map<String, Object> c) { return new Shipped("T1"); }
+        public Map<String, Object> merge(Shipped s, Map<String, Object> base, Paid p) {
+            return Map.of("tracking", s.tracking(), "pre", base.get("pre"), "amount", p.amount());
+        }
     }
 
     @ForFlow("wf")
-    static final class WideCombineH {
-        public Map<String, Object> a1(Map<String, Object> c) { return c; }
-        public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b,
-                                         Map<String, Object> c) { return a; }
+    static final class OneArmCombineH {
+        public Paid a1(Map<String, Object> c) { return new Paid(5); }
+        public Shipped b1(Map<String, Object> c) { return new Shipped("T1"); }
+        public Map<String, Object> merge(Shipped s) { return Map.of("tracking", s.tracking()); }
+    }
+
+    @Test @DisplayName("two parameters that no arm matches would both take the base, and are refused")
+    void forkCombineRefusesTwoBases() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new TwoBasesH()), forked()));
+        assertTrue(ex.getMessage().contains("both would take the pre-fork context"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("a1: Paid, b1: Shipped"), "names what the arms produce: " + ex.getMessage());
+    }
+
+    @ForFlow("wf")
+    static final class TwoBasesH {
+        public Paid a1(Map<String, Object> c) { return new Paid(5); }
+        public Shipped b1(Map<String, Object> c) { return new Shipped("T1"); }
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) { return a; }
+    }
+
+    @Test @DisplayName("without every arm's handler, a combine takes the arms in fork order")
+    void forkCombineFallsBackToForkOrder() throws Exception {
+        ActivityHandler merge = HandlerBinder.bind(HandlerBinder.scan(new CombineOnlyH()), forked()).bindings()
+                .stream().filter(b -> b.step().equals("merge")).findFirst().orElseThrow().handler();
+        Step.begin(new Step.Info(1, "t", "i"));
+        try {
+            assertEquals(Map.of("first", Map.of("x", 1L), "second", Map.of("y", 2L)),
+                    merge.invoke(Map.of("__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L))));
+        } finally {
+            Step.end();
+        }
+    }
+
+    @ForFlow("wf")
+    static final class CombineOnlyH {
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) {
+            return Map.of("first", a, "second", b);
+        }
     }
 
     private static WorkflowDefinition eachGraph() {
@@ -357,7 +376,7 @@ class HandlerBinderTest {
     @ForFlow("wf")
     static final class EachCombineH {
         public String norm(String item) { return item; }
-        public Map<String, Object> collect(@Context Map<String, Object> base, List<String> items) {
+        public Map<String, Object> collect(Map<String, Object> base, List<String> items) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("ordered", items);
             out.put("distinct", (long) Set.copyOf(items).size());
@@ -365,24 +384,16 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("forEach combine requires a collection parameter")
-    void forEachCombineNeedsCollection() throws Exception {
-        HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new NoCollectionH()), eachGraph());
-        ActivityHandler collect = r.bindings().stream()
-                .filter(b -> b.step().equals("collect")).findFirst().orElseThrow().handler();
-        Step.begin(new Step.Info(1, "t", "i"));
-        try {
-            IllegalStateException e = assertThrows(IllegalStateException.class,
-                    () -> collect.invoke(Map.of("per-item", List.of())));
-            assertTrue(e.getMessage().contains("collection parameter"), e.getMessage());
-        } finally {
-            Step.end();
-        }
+    @Test @DisplayName("forEach combine: two parameters that are not collections would both take the base")
+    void forEachCombineRefusesTwoBases() {
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new NoCollectionH()), eachGraph()));
+        assertTrue(e.getMessage().contains("both would take the context"), e.getMessage());
     }
 
     @ForFlow("wf")
     static final class NoCollectionH {
         public String norm(String item) { return item; }
-        public Map<String, Object> collect(@Context Map<String, Object> baseOnly) { return baseOnly; }
+        public Map<String, Object> collect(Map<String, Object> base, String notACollection) { return base; }
     }
 }

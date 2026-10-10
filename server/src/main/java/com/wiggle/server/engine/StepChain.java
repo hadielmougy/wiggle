@@ -75,6 +75,7 @@ final class StepChain {
             Doc compInput = node.compensable() ? input : null;
             StepReport report = StepReport.of(step);
             String next = behaviour.route(inst, current, node, report);
+            current.payload = current.payload.withTopStep(node.name());   // what a combine types the result by
             StepIo.record(current, input, node.kind() == NodeKind.PREDICATE ? step.predicateValue() : step.merge());
             if (node.compensable()) Sagas.capture(tx, inst, current, node, compInput, now);
             Overrun overrun = behaviour.overrun(current, node, report, loopMaxIterations);

@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
@@ -60,16 +59,13 @@ class DynamicConstructsTest {
     interface FanSteps {
         Map<String, Object> upper(String item);
         Map<String, Object> measure(Map<String, Object> v);
-        Map<String, Object> collect(@Context Map<String, Object> base, List<Map<String, Object>> results);
+        Map<String, Object> collect(Map<String, Object> base, List<Map<String, Object>> results);
         Map<String, Object> after(Map<String, Object> ctx);
     }
 
     interface MapFanSteps {
-        // MapFanH.tag takes the frozen base as a @Context parameter as well as the item. A step is
-        // named by reference, and a reference is to a one-argument function, so the name is declared
-        // here in the shape the body sees -- the worker binds the two-parameter handler by name.
         String tag(Long value);
-        Map<String, Object> collect(@Context Map<String, Object> base, Map<String, String> tagged);
+        Map<String, Object> collect(Map<String, Object> base, Map<String, String> tagged);
         Map<String, Object> after(Map<String, Object> ctx);
     }
 
@@ -197,7 +193,7 @@ class DynamicConstructsTest {
         public Map<String, Object> measure(Map<String, Object> v) {
             return put(v, "len", (long) String.valueOf(v.get("out")).length());
         }
-        public Map<String, Object> collect(@Context Map<String, Object> base,
+        public Map<String, Object> collect(Map<String, Object> base,
                                            List<Map<String, Object>> items) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             for (Map<String, Object> item : items) {
@@ -282,12 +278,11 @@ class DynamicConstructsTest {
 
     @ForFlow("dyn-fan-map")
     static final class MapFanH {
-        /** Two-param style: the frozen base as a @Context parameter instead of Step.base(). */
-        public String tag(@Context Map<String, Object> base, Long value) {
-            boolean sawBase = base.containsKey("prices");          // the full pre-forEach context
+        public String tag(Long value) {
+            boolean sawBase = Step.base().containsKey("prices");   // the full pre-forEach context
             return Step.itemMapKey() + ":" + value + (sawBase ? "" : ":no-base");
         }
-        public Map<String, Object> collect(@Context Map<String, Object> base,
+        public Map<String, Object> collect(Map<String, Object> base,
                                            Map<String, String> results) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             results.forEach((k, tagged) -> out.put("tagged-" + k, tagged));
@@ -309,7 +304,7 @@ class DynamicConstructsTest {
     @ForFlow("dyn-fan-set")
     static final class SetFanH {
         public String norm(String item) { return item.toUpperCase(); }   // scalar in, scalar out
-        /** Ambient style: no @Context parameter — the base comes from Step.base() instead. */
+        /** Ambient style: no base parameter — the base comes from Step.base() instead. */
         public Map<String, Object> collect(Set<String> results) {
             return put(Step.base(), "distinct", (long) results.size());
         }
@@ -355,13 +350,13 @@ class DynamicConstructsTest {
 
     interface CartSteps {
         String upper(String item);
-        Cart collect(@Context Cart base, List<String> upper);
+        Cart collect(Cart base, List<String> upper);
     }
 
     @ForFlow("dyn-fan-typed")
     public static final class CartH implements CartSteps {
         @Override public String upper(String item) { return item.toUpperCase(); }
-        @Override public Cart collect(@Context Cart base, List<String> upper) {
+        @Override public Cart collect(Cart base, List<String> upper) {
             return new Cart(base.items(), String.join(",", upper));
         }
     }

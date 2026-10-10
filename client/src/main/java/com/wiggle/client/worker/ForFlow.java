@@ -15,9 +15,9 @@ import java.lang.annotation.Target;
  *   <li>a single parameter is the step input, decoded from the persisted JSON into that type;</li>
  *   <li>a {@code boolean} return is a gate/guard, {@code void} is an effect, any other return type
  *       is a task whose value becomes the next context (types may change from step to step);</li>
- *   <li>one parameter per fork arm, in fork order, makes a combine for the matching {@code combine}
- *       node -- each branch's result decoded into its parameter's type; add a {@link Context}
- *       parameter for the pre-fork context.</li>
+ *   <li>a method named like a {@code combine} node is its combine; its parameters are found by
+ *       type, in any order -- each arm's result for the parameter of its type, and the pre-fork
+ *       context for a parameter no arm matches.</li>
  * </ul>
  * A method annotated {@link Decode} is not a step but a custom decoder for its return type (the
  * seam for schema versioning / upcasts / bespoke codecs).

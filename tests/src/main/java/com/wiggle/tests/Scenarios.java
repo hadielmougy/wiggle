@@ -2,7 +2,6 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.WiggleClient;
@@ -52,7 +51,7 @@ public final class Scenarios {
         Map<String, Object> seed(Map<String, Object> ctx);
         Map<String, Object> slowLeft(Map<String, Object> ctx);
         Map<String, Object> fastRight(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> after(Map<String, Object> ctx);
     }
@@ -61,7 +60,7 @@ public final class Scenarios {
         Map<String, Object> a1(Map<String, Object> ctx);
         Map<String, Object> b1(Map<String, Object> ctx);
         Map<String, Object> c1(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base, Map<String, Object> a,
+        Map<String, Object> merge(Map<String, Object> base, Map<String, Object> a,
                                   Map<String, Object> b, Map<String, Object> c);
         Map<String, Object> after(Map<String, Object> ctx);
     }
@@ -75,11 +74,11 @@ public final class Scenarios {
     interface NestedSteps {
         Map<String, Object> innerA(Map<String, Object> ctx);
         Map<String, Object> innerB(Map<String, Object> ctx);
-        Map<String, Object> innerMerge(@Context Map<String, Object> base,
+        Map<String, Object> innerMerge(Map<String, Object> base,
                                        Map<String, Object> ia, Map<String, Object> ib);
         Map<String, Object> innerDone(Map<String, Object> ctx);
         Map<String, Object> outerRight(Map<String, Object> ctx);
-        Map<String, Object> outerMerge(@Context Map<String, Object> base,
+        Map<String, Object> outerMerge(Map<String, Object> base,
                                        Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> outerDone(Map<String, Object> ctx);
     }
@@ -88,7 +87,7 @@ public final class Scenarios {
         boolean gate(Map<String, Object> ctx);
         Map<String, Object> skipped(Map<String, Object> ctx);
         Map<String, Object> ran(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> gated, Map<String, Object> other);
         Map<String, Object> after(Map<String, Object> ctx);
     }
@@ -216,7 +215,7 @@ public final class Scenarios {
         FlowSpec bp = FlowSpec.define("fork-merge", 1, Map.class, ForkMergeSteps.class, (f, s) -> {
             var seeded = f.thenApply(s::seed);
             return Wiggle.allOf(seeded.thenApply(s::slowLeft), seeded.thenApply(s::fastRight))
-                    .combineWithContext(s::merge).thenApply(s::after);
+                    .combine(s::merge).thenApply(s::after);
         });
 
         withServer((server, client) -> {
@@ -239,7 +238,7 @@ public final class Scenarios {
             return put(ctx, "left", "L");
         }
         public Map<String, Object> fastRight(Map<String, Object> ctx) { return put(ctx, "right", "R"); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> left,
                                          Map<String, Object> right) {
             return fold(base, left, right);   // explicit: the return is the complete post-join context
@@ -252,7 +251,7 @@ public final class Scenarios {
         AtomicInteger afterCount = new AtomicInteger();
         FlowSpec bp = FlowSpec.define("join-once", 1, Map.class, JoinOnceSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::a1), f.thenApply(s::b1), f.thenApply(s::c1))
-                        .combineWithContext(s::merge).thenApply(s::after));
+                        .combine(s::merge).thenApply(s::after));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new JoinOnceH(afterCount))) {
@@ -271,7 +270,7 @@ public final class Scenarios {
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
         public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1L); }
         public Map<String, Object> c1(Map<String, Object> ctx) { return put(ctx, "c", 1L); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> a,
                                          Map<String, Object> b,
                                          Map<String, Object> c) {
@@ -287,10 +286,10 @@ public final class Scenarios {
     public static void nestedForks() throws Exception {
         FlowSpec bp = FlowSpec.define("nested", 1, Map.class, NestedSteps.class, (f, s) -> {
             var left = Wiggle.allOf(f.thenApply(s::innerA), f.thenApply(s::innerB))
-                    .combineWithContext(s::innerMerge)
+                    .combine(s::innerMerge)
                     .thenApply(s::innerDone);
             return Wiggle.allOf(left, f.thenApply(s::outerRight))
-                    .combineWithContext(s::outerMerge)
+                    .combine(s::outerMerge)
                     .thenApply(s::outerDone);
         });
 
@@ -312,12 +311,12 @@ public final class Scenarios {
         public Map<String, Object> innerB(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
         public Map<String, Object> innerDone(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
         public Map<String, Object> outerRight(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
-        public Map<String, Object> innerMerge(@Context Map<String, Object> base,
+        public Map<String, Object> innerMerge(Map<String, Object> base,
                                               Map<String, Object> ia,
                                               Map<String, Object> ib) {
             return fold(base, ia, ib);
         }
-        public Map<String, Object> outerMerge(@Context Map<String, Object> base,
+        public Map<String, Object> outerMerge(Map<String, Object> base,
                                               Map<String, Object> left,
                                               Map<String, Object> right) {
             return fold(base, left, right);
@@ -329,7 +328,7 @@ public final class Scenarios {
     public static void gateInsideBranchDoesNotStrandSiblings() throws Exception {
         FlowSpec bp = FlowSpec.define("branch-gate", 1, Map.class, BranchGateSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenFilter(s::gate).thenApply(s::skipped), f.thenApply(s::ran))
-                        .combineWithContext(s::merge).thenApply(s::after));
+                        .combine(s::merge).thenApply(s::after));
 
         withServer((server, client) -> {
             try (Worker w = startWorker(client, bp, new BranchGateH())) {
@@ -348,7 +347,7 @@ public final class Scenarios {
         public boolean gate(Map<String, Object> ctx) { return false; }
         public Map<String, Object> skipped(Map<String, Object> ctx) { return put(ctx, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> ctx) { return put(ctx, "ran", true); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> gated,
                                          Map<String, Object> other) {
             return fold(base, gated, other);   // the gated arm ended early; its (empty) result folds harmlessly

@@ -1,7 +1,6 @@
 package com.wiggle.docs;
 
 import com.wiggle.docs.FanOutSnippet.PricingSteps;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
 import com.wiggle.docs.FanOutSnippet.LineItem;
@@ -31,7 +30,7 @@ class PricingHandlers implements PricingSteps {
 
     // The engine collects each item's FINAL value: List in order for a list input,
     // Map keyed like the input for a map input. You fold explicitly.
-    public Order collect(@Context Order base, List<Priced> priced) {
+    public Order collect(Order base, List<Priced> priced) {
         return base.withItems(priced)
                    .withTotal(priced.stream().map(Priced::amount)
                            .reduce(BigDecimal.ZERO, BigDecimal::add));

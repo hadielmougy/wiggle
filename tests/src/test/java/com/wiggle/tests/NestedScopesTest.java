@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
@@ -55,15 +54,15 @@ class NestedScopesTest {
     interface ForkInForEachSteps {
         Map<String, Object> up(String item);
         Map<String, Object> down(String item);
-        Map<String, Object> merge(@Context String item, Map<String, Object> u, Map<String, Object> d);
-        Map<String, Object> gather(@Context Map<String, Object> base, List<Map<String, Object>> results);
+        Map<String, Object> merge(String item, Map<String, Object> u, Map<String, Object> d);
+        Map<String, Object> gather(Map<String, Object> base, List<Map<String, Object>> results);
     }
 
     private static FlowSpec forkInForEach(ExecutionMode mode) {
         return FlowSpec.define("fork-in-foreach", 1, Map.class, ForkInForEachSteps.class, (f, s) -> Modes.in(f, mode)
                 .thenForEach("per-item", "items", String.class, item ->
                         Wiggle.allOf(item.thenApply(s::up), item.thenApply(s::down))
-                                .combineWithContext(s::merge))
+                                .combine(s::merge))
                 .combine(s::gather));
     }
 
@@ -71,11 +70,11 @@ class NestedScopesTest {
     static final class ForkInForEachH {
         public Map<String, Object> up(String item) { return Map.of("u", item.toUpperCase()); }
         public Map<String, Object> down(String item) { return Map.of("d", item.toLowerCase()); }
-        /** The inner combine: @Context is the pre-fork scope view — the ITEM itself, a scalar. */
-        public Map<String, Object> merge(@Context String item, Map<String, Object> u, Map<String, Object> d) {
+        /** The inner combine: {@code item}, which no arm matches, is the pre-fork scope view — the ITEM itself, a scalar. */
+        public Map<String, Object> merge(String item, Map<String, Object> u, Map<String, Object> d) {
             return Map.of("v", item + ":" + u.get("u") + "+" + d.get("d"));
         }
-        public Map<String, Object> gather(@Context Map<String, Object> base, List<Map<String, Object>> results) {
+        public Map<String, Object> gather(Map<String, Object> base, List<Map<String, Object>> results) {
             Map<String, Object> out = new LinkedHashMap<>(base);
             out.put("collected", results.stream().map(r -> String.valueOf(r.get("v"))).toList());
             return out;
@@ -100,7 +99,7 @@ class NestedScopesTest {
     interface ForEachInForkSteps {
         Map<String, Object> seed(Map<String, Object> ctx);
         String bump(String item);
-        Map<String, Object> innerFold(@Context Map<String, Object> base, List<String> results);
+        Map<String, Object> innerFold(Map<String, Object> base, List<String> results);
         Map<String, Object> plain(Map<String, Object> ctx);
         Map<String, Object> outerFold(Map<String, Object> wide, Map<String, Object> narrow);
     }
@@ -125,7 +124,7 @@ class NestedScopesTest {
         }
         public String bump(String item) { return item + "!"; }
         /** The inner combine's base is the ARM's view (where the forEach ran), not the shared context. */
-        public Map<String, Object> innerFold(@Context Map<String, Object> base, List<String> results) {
+        public Map<String, Object> innerFold(Map<String, Object> base, List<String> results) {
             return Map.of("inner", results, "keep", base.get("keep"));
         }
         public Map<String, Object> plain(Map<String, Object> ctx) { return Map.of("plainDone", true); }
@@ -198,7 +197,7 @@ class NestedScopesTest {
 
     interface ForEachInForEachSteps {
         Long twice(Long n);
-        Map<String, Object> innerSum(@Context Map<String, Object> base, List<Long> results);
+        Map<String, Object> innerSum(Map<String, Object> base, List<Long> results);
         Map<String, Object> outerGather(List<Map<String, Object>> results);
     }
 
@@ -214,7 +213,7 @@ class NestedScopesTest {
     static final class ForEachInForEachH {
         public Long twice(Long n) { return n * 2; }
         /** The inner forEach fanned out over the ITEM's "nums", not a shared-context key. */
-        public Map<String, Object> innerSum(@Context Map<String, Object> base, List<Long> results) {
+        public Map<String, Object> innerSum(Map<String, Object> base, List<Long> results) {
             long sum = results.stream().mapToLong(Long::longValue).sum();
             return Map.of("sum", sum, "width", (long) Json.asArray(base.get("nums")).size());
         }

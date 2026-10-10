@@ -4,7 +4,6 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.client.worker.Compensation;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Step;
@@ -44,7 +43,7 @@ class DynamicFlowTest {
 
     interface Steps {
         Map<String, Object> fulfil(Map<String, Object> order);
-        Map<String, Object> summarise(@Context Map<String, Object> base, List<Map<String, Object>> results);
+        Map<String, Object> summarise(Map<String, Object> base, List<Map<String, Object>> results);
     }
 
     interface KeyedSteps {
@@ -54,7 +53,7 @@ class DynamicFlowTest {
 
     interface RoundSteps {
         Map<String, Object> begin(Map<String, Object> ctx);
-        Map<String, Object> next(@Context Map<String, Object> base, List<Map<String, Object>> results);
+        Map<String, Object> next(Map<String, Object> base, List<Map<String, Object>> results);
     }
 
     interface SagaSteps {
@@ -96,7 +95,7 @@ class DynamicFlowTest {
 
         public Map<String, Object> ship(Map<String, Object> v) { return put(v, "via", "ship"); }
 
-        public Map<String, Object> summarise(@Context Map<String, Object> base, List<Map<String, Object>> results) {
+        public Map<String, Object> summarise(Map<String, Object> base, List<Map<String, Object>> results) {
             List<String> summary = new ArrayList<>();
             for (Map<String, Object> r : results) summary.add(r.get("item") + ":" + r.get("via"));
             return put(put(base, "summary", summary), "base-seen", base.get("fulfilling"));
@@ -202,7 +201,7 @@ class DynamicFlowTest {
             return Map.of("n", ((Number) v.get("n")).longValue() + 1);
         }
 
-        public Map<String, Object> next(@Context Map<String, Object> base, List<Map<String, Object>> results) {
+        public Map<String, Object> next(Map<String, Object> base, List<Map<String, Object>> results) {
             long n = ((Number) results.getFirst().get("n")).longValue();
             if (n < ((Number) base.get("target")).longValue()) {
                 Step.create(Map.<String, Object>of("n", n)).thenApply(this::inc);
@@ -280,6 +279,52 @@ class DynamicFlowTest {
         InstanceView v = run(spec, handlers, Map.of("items", List.of("a", "b")), null);
         assertEquals("COMPENSATED", v.status(), v.error());
         assertEquals(2, handlers.undone.get(), "each branch's charge was undone");
+    }
+
+    record Link(String item, String url) {}
+
+    record Shipment(String item, String tracking) {}
+
+    interface SplitSteps {
+        Map<String, Object> fulfil(Map<String, Object> order);
+        Map<String, Object> summarise(List<Shipment> shipped, Map<String, Object> order, List<Link> links);
+    }
+
+    @ForFlow("dyn-split")
+    public static final class SplitH {
+        public Map<String, Object> fulfil(Map<String, Object> order) {
+            for (Object o : (List<?>) order.get("items")) {
+                String item = (String) o;
+                Map<String, Object> input = Map.of("item", item);
+                if (item.startsWith("digital")) Step.create(input).thenApply(this::link);
+                else Step.create(input).thenApply(this::ship);
+            }
+            return order;
+        }
+
+        public Link link(Map<String, Object> v) { return new Link((String) v.get("item"), "https://dl/" + v.get("item")); }
+
+        public Shipment ship(Map<String, Object> v) { return new Shipment((String) v.get("item"), "T-" + v.get("item")); }
+
+        public Map<String, Object> summarise(List<Shipment> shipped, Map<String, Object> order, List<Link> links) {
+            return Map.of("order", order.get("id"),
+                    "shipped", shipped.stream().map(Shipment::tracking).toList(),
+                    "links", links.stream().map(Link::url).toList());
+        }
+    }
+
+    @Test @DisplayName("a combine splits the results by the type each branch's last step produces")
+    void combineSplitsResultsByType() throws Exception {
+        FlowSpec spec = FlowSpec.define("dyn-split", 1, Map.class, SplitSteps.class, (f, s) -> f
+                .thenApply(s::fulfil)
+                .combine(s::summarise));
+        InstanceView v = run(spec, new SplitH(),
+                Map.of("id", "o-1", "items", List.of("book", "digital-song", "chair")), null);
+        assertEquals("COMPLETED", v.status(), v.error());
+        Map<String, Object> ctx = Json.asObject(v.context());
+        assertEquals(List.of("T-book", "T-chair"), ctx.get("shipped"), "creation order within a type");
+        assertEquals(List.of("https://dl/digital-song"), ctx.get("links"));
+        assertEquals("o-1", ctx.get("order"), "the parameter that is not a collection is the base");
     }
 
     @ForFlow("dyn-plain")

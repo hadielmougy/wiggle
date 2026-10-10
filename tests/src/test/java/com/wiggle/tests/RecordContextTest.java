@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
@@ -42,7 +41,7 @@ class RecordContextTest {
         return FlowSpec.define("record-shipment", 1, Shipment.class, ShipmentSteps.class, (f, s) -> {
             var checked = f.thenApply(s::validate).thenFilter(s::hasItems);
             return Wiggle.allOf(checked.thenApply(s::label), checked.thenApply(s::invoice))
-                    .combineWithContext(s::merge)
+                    .combine(s::merge)
                     .thenApply(s::dispatch);
         });
     }
@@ -52,7 +51,7 @@ class RecordContextTest {
         boolean hasItems(Shipment s);
         Shipment label(Shipment s);
         Shipment invoice(Shipment s);
-        Shipment merge(@Context Shipment base, Shipment labelling, Shipment billing);
+        Shipment merge(Shipment base, Shipment labelling, Shipment billing);
         Shipment dispatch(Shipment s);
     }
 
@@ -62,7 +61,7 @@ class RecordContextTest {
         public boolean hasItems(Shipment s) { return s.items() > 0; }
         public Shipment label(Shipment s) { return s.withLabel("LBL-" + s.id()); }
         public Shipment invoice(Shipment s) { return s.withInvoice("INV-" + s.id()); }
-        public Shipment merge(@Context Shipment base, Shipment labelling,
+        public Shipment merge(Shipment base, Shipment labelling,
                               Shipment billing) {
             return base.withLabel(labelling.label()).withInvoice(billing.invoice());
         }

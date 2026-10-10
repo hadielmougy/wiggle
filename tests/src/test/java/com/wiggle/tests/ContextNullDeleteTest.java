@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
-import com.wiggle.client.worker.Context;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
@@ -48,7 +47,7 @@ class ContextNullDeleteTest {
     @Test @DisplayName("branch combine clears its per-branch scratch keys from the final context")
     void combineScratchKeysAreRemoved() throws Exception {
         FlowSpec bp = FlowSpec.define("trip", 1, Map.class, TripSteps.class, (f, s) ->
-                Wiggle.allOf(f.thenApply(s::air), f.thenApply(s::hotel)).combineWithContext(s::merge));
+                Wiggle.allOf(f.thenApply(s::air), f.thenApply(s::hotel)).combine(s::merge));
 
         Map<String, Object> out = run(bp, new TripH(), new LinkedHashMap<>(Map.of("id", "t1")));
 
@@ -75,7 +74,7 @@ class ContextNullDeleteTest {
     interface TripSteps {
         Map<String, Object> air(Map<String, Object> ctx);
         Map<String, Object> hotel(Map<String, Object> ctx);
-        Map<String, Object> merge(@Context Map<String, Object> base,
+        Map<String, Object> merge(Map<String, Object> base,
                                   Map<String, Object> air, Map<String, Object> hotel);
     }
 
@@ -83,7 +82,7 @@ class ContextNullDeleteTest {
     static final class TripH {
         public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
         public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
-        public Map<String, Object> merge(@Context Map<String, Object> base,
+        public Map<String, Object> merge(Map<String, Object> base,
                                          Map<String, Object> air,
                                          Map<String, Object> hotel) {
             Map<String, Object> out = new LinkedHashMap<>(base);   // the return is the complete context

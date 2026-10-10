@@ -37,9 +37,15 @@ public record TokenPayload(List<Frame> scopes, Map<String, Long> loopCounts, Map
 
     /**
      * One nesting level's private view of the context. {@code idx} is the arm's or item's position
-     * in fork order; {@code mapKey} is the source key when a forEach iterated a map, else null.
+     * in fork order; {@code mapKey} is the source key when a forEach iterated a map, else null;
+     * {@code step} is the last worker step that ran in it, null before any has.
      */
-    public record Frame(FrameKind kind, long idx, String mapKey, Doc view) {}
+    public record Frame(FrameKind kind, long idx, String mapKey, Doc view, String step) {
+
+        public Frame(FrameKind kind, long idx, String mapKey, Doc view) {
+            this(kind, idx, mapKey, view, null);
+        }
+    }
 
     public TokenPayload {
         scopes = scopes == null ? List.of() : List.copyOf(scopes);
@@ -68,7 +74,16 @@ public record TokenPayload(List<Frame> scopes, Map<String, Long> loopCounts, Map
         if (scopes.isEmpty()) return this;
         List<Frame> next = new ArrayList<>(scopes);
         Frame t = next.getLast();
-        next.set(next.size() - 1, new Frame(t.kind(), t.idx(), t.mapKey(), view));
+        next.set(next.size() - 1, new Frame(t.kind(), t.idx(), t.mapKey(), view, t.step()));
+        return new TokenPayload(next, loopCounts, staged);
+    }
+
+    /** Records {@code step} as the last that ran in the top frame. A no-op outside any scope. */
+    public TokenPayload withTopStep(String step) {
+        if (scopes.isEmpty()) return this;
+        List<Frame> next = new ArrayList<>(scopes);
+        Frame t = next.getLast();
+        next.set(next.size() - 1, new Frame(t.kind(), t.idx(), t.mapKey(), t.view(), step));
         return new TokenPayload(next, loopCounts, staged);
     }
 
