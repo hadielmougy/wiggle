@@ -2,6 +2,7 @@ package com.wiggle.docs.onboarding;
 
 import com.wiggle.docs.onboarding.OnboardingSnippet.OrderSteps;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.docs.onboarding.OnboardingSnippet.Order;
 
 /** The handler class quoted in {@code docs/onboarding.md}. */
@@ -21,9 +22,9 @@ class OrderHandlers implements OrderSteps {
     public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
     public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
 
-    // found by type: the arms take the last Order parameters in fork order; the first is the pre-fork context
-    public Order merge(Order base, Order payment, Order shipping) {
-        return base.withPaymentRef(payment.paymentRef())
+    // found by type: the arms take the Order parameters in fork order; the pre-fork order is Step.base()
+    public Order merge(Order payment, Order shipping) {
+        return Step.base(Order.class).withPaymentRef(payment.paymentRef())
                    .withShipmentRef(shipping.shipmentRef());
     }
 }

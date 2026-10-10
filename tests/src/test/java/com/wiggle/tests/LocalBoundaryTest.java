@@ -4,6 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
@@ -38,8 +39,7 @@ class LocalBoundaryTest {
         Map<String, Object> l1(Map<String, Object> ctx);
         Map<String, Object> l2(Map<String, Object> ctx);
         Map<String, Object> r1(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> merge(Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> after(Map<String, Object> ctx);
     }
 
@@ -180,9 +180,9 @@ class LocalBoundaryTest {
         public Map<String, Object> l1(Map<String, Object> ctx) { return counted(runs, "l1", put(ctx, "left", "L")); }
         public Map<String, Object> l2(Map<String, Object> ctx) { return counted(runs, "l2", put(ctx, "left2", "L2")); }
         public Map<String, Object> r1(Map<String, Object> ctx) { return counted(runs, "r1", put(ctx, "right", "R")); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> left,
+        public Map<String, Object> merge(Map<String, Object> left,
                                          Map<String, Object> right) {
+            Map<String, Object> base = Step.base();
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (left != null) out.putAll(left);
             if (right != null) out.putAll(right);

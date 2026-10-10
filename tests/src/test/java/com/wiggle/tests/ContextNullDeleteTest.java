@@ -4,6 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -74,18 +75,16 @@ class ContextNullDeleteTest {
     interface TripSteps {
         Map<String, Object> air(Map<String, Object> ctx);
         Map<String, Object> hotel(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> air, Map<String, Object> hotel);
+        Map<String, Object> merge(Map<String, Object> air, Map<String, Object> hotel);
     }
 
     @ForFlow("trip")
     static final class TripH {
         public Map<String, Object> air(Map<String, Object> ctx) { return Map.of("price", 100); }
         public Map<String, Object> hotel(Map<String, Object> ctx) { return Map.of("price", 75); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> air,
+        public Map<String, Object> merge(Map<String, Object> air,
                                          Map<String, Object> hotel) {
-            Map<String, Object> out = new LinkedHashMap<>(base);   // the return is the complete context
+            Map<String, Object> out = new LinkedHashMap<>(Step.base());   // the return is the complete context
             out.put("total", price(air) + price(hotel));
             return out;
         }

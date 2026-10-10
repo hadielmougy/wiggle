@@ -5,6 +5,7 @@ import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
@@ -51,8 +52,7 @@ public final class Scenarios {
         Map<String, Object> seed(Map<String, Object> ctx);
         Map<String, Object> slowLeft(Map<String, Object> ctx);
         Map<String, Object> fastRight(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> merge(Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> after(Map<String, Object> ctx);
     }
 
@@ -60,7 +60,7 @@ public final class Scenarios {
         Map<String, Object> a1(Map<String, Object> ctx);
         Map<String, Object> b1(Map<String, Object> ctx);
         Map<String, Object> c1(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base, Map<String, Object> a,
+        Map<String, Object> merge(Map<String, Object> a,
                                   Map<String, Object> b, Map<String, Object> c);
         Map<String, Object> after(Map<String, Object> ctx);
     }
@@ -74,12 +74,10 @@ public final class Scenarios {
     interface NestedSteps {
         Map<String, Object> innerA(Map<String, Object> ctx);
         Map<String, Object> innerB(Map<String, Object> ctx);
-        Map<String, Object> innerMerge(Map<String, Object> base,
-                                       Map<String, Object> ia, Map<String, Object> ib);
+        Map<String, Object> innerMerge(Map<String, Object> ia, Map<String, Object> ib);
         Map<String, Object> innerDone(Map<String, Object> ctx);
         Map<String, Object> outerRight(Map<String, Object> ctx);
-        Map<String, Object> outerMerge(Map<String, Object> base,
-                                       Map<String, Object> left, Map<String, Object> right);
+        Map<String, Object> outerMerge(Map<String, Object> left, Map<String, Object> right);
         Map<String, Object> outerDone(Map<String, Object> ctx);
     }
 
@@ -87,8 +85,7 @@ public final class Scenarios {
         boolean gate(Map<String, Object> ctx);
         Map<String, Object> skipped(Map<String, Object> ctx);
         Map<String, Object> ran(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> gated, Map<String, Object> other);
+        Map<String, Object> merge(Map<String, Object> gated, Map<String, Object> other);
         Map<String, Object> after(Map<String, Object> ctx);
     }
 
@@ -238,9 +235,9 @@ public final class Scenarios {
             return put(ctx, "left", "L");
         }
         public Map<String, Object> fastRight(Map<String, Object> ctx) { return put(ctx, "right", "R"); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> left,
+        public Map<String, Object> merge(Map<String, Object> left,
                                          Map<String, Object> right) {
+            Map<String, Object> base = Step.base();
             return fold(base, left, right);   // explicit: the return is the complete post-join context
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "joined", true); }
@@ -270,10 +267,10 @@ public final class Scenarios {
         public Map<String, Object> a1(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
         public Map<String, Object> b1(Map<String, Object> ctx) { return put(ctx, "b", 1L); }
         public Map<String, Object> c1(Map<String, Object> ctx) { return put(ctx, "c", 1L); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> a,
+        public Map<String, Object> merge(Map<String, Object> a,
                                          Map<String, Object> b,
                                          Map<String, Object> c) {
+            Map<String, Object> base = Step.base();
             return fold(base, a, b, c);
         }
         public Map<String, Object> after(Map<String, Object> ctx) {
@@ -311,14 +308,14 @@ public final class Scenarios {
         public Map<String, Object> innerB(Map<String, Object> ctx) { return put(ctx, "ib", 1L); }
         public Map<String, Object> innerDone(Map<String, Object> ctx) { return put(ctx, "innerAfter", 1L); }
         public Map<String, Object> outerRight(Map<String, Object> ctx) { return put(ctx, "or", 1L); }
-        public Map<String, Object> innerMerge(Map<String, Object> base,
-                                              Map<String, Object> ia,
+        public Map<String, Object> innerMerge(Map<String, Object> ia,
                                               Map<String, Object> ib) {
+            Map<String, Object> base = Step.base();
             return fold(base, ia, ib);
         }
-        public Map<String, Object> outerMerge(Map<String, Object> base,
-                                              Map<String, Object> left,
+        public Map<String, Object> outerMerge(Map<String, Object> left,
                                               Map<String, Object> right) {
+            Map<String, Object> base = Step.base();
             return fold(base, left, right);
         }
         public Map<String, Object> outerDone(Map<String, Object> ctx) { return put(ctx, "outerAfter", 1L); }
@@ -347,9 +344,9 @@ public final class Scenarios {
         public boolean gate(Map<String, Object> ctx) { return false; }
         public Map<String, Object> skipped(Map<String, Object> ctx) { return put(ctx, "skipped", true); }
         public Map<String, Object> ran(Map<String, Object> ctx) { return put(ctx, "ran", true); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> gated,
+        public Map<String, Object> merge(Map<String, Object> gated,
                                          Map<String, Object> other) {
+            Map<String, Object> base = Step.base();
             return fold(base, gated, other);   // the gated arm ended early; its (empty) result folds harmlessly
         }
         public Map<String, Object> after(Map<String, Object> ctx) { return put(ctx, "after", true); }

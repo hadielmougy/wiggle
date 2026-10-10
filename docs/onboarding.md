@@ -180,7 +180,7 @@ interface OrderSteps {
     Order   validate(Order o);
     boolean inStock(Order o);
     Order   authorise(Order o);
-    Order   merge(Order base, Order payment, Order shipping);
+    Order   merge(Order payment, Order shipping);
         ...
 }
 
@@ -227,7 +227,7 @@ interface OrderSteps {
     Order   validate(Order o);
     boolean inStock(Order o);
     Order   authorise(Order o);
-    Order   merge(Order base, Order payment, Order shipping);
+    Order   merge(Order payment, Order shipping);
         ...
 }
 
@@ -254,9 +254,9 @@ class OrderHandlers implements OrderSteps {
     public Order   label(Order o)     { return o.withTrackingLabel(print(o)); }
     public Order   notify(Order o)    { return o.withStatus("FULFILLED"); }
 
-    // found by type: the arms take the last Order parameters in fork order; the first is the pre-fork context
-    public Order merge(Order base, Order payment, Order shipping) {
-        return base.withPaymentRef(payment.paymentRef())
+    // found by type: the arms take the Order parameters in fork order; the pre-fork order is Step.base()
+    public Order merge(Order payment, Order shipping) {
+        return Step.base(Order.class).withPaymentRef(payment.paymentRef())
                    .withShipmentRef(shipping.shipmentRef());
     }
 }
@@ -267,10 +267,11 @@ Publish it with `client.register(orders)`, and bind the steps on a worker with
 against it; it is never given the topology.
 A `combine` node (`merge`) must have an explicit handler, whose return is the COMPLETE post-join
 context. Its parameters are found **by type**, in any order: each takes the arm whose last step
-produces its type, and a parameter no arm matches receives the pre-fork context. Arms of the same
-type go to the parameters of that type in fork order, matched from the last parameter back, so in
-`merge(Order base, Order payment, Order shipping)` the leading `Order` is the base. A combine need
-not take every arm. There is no implicit fold: a combine served by no worker fails its task, and
+produces its type, and a parameter whose type no arm produces receives the pre-fork context. Arms of
+the same type go to the parameters of that type in fork order, matched from the last parameter back;
+an extra parameter of an arm's type is refused when the worker starts. In
+`merge(Order payment, Order shipping)` every arm is an `Order`, so the pre-fork order is read through
+`Step.base(Order.class)`. A combine need not take every arm. There is no implicit fold: a combine served by no worker fails its task, and
 keys the handler does not return do not survive the join.
 
 ### 5.1 Operations
@@ -283,7 +284,7 @@ Every operation is topology only — it names a node; the matching `@ForFlow` me
 | `thenAccept(s::step)` | the handler runs for a side effect (a `void` method); context unchanged |
 | `thenFilter(s::guard)` | continue only while the guard returns true; false ends the instance as `gated:<name>` |
 | `Wiggle.oneOf(arms…)` + `when` / `otherwise` | switch/case: the first arm whose guard holds runs. Every arm opens with `f.when(s::guard)` or `f.otherwise()`; a single arm is legal and reads as "run this, or skip past it" |
-| `Wiggle.allOf(arms…).combine(s::merge)` | run arms in parallel on **isolated** context copies, then rejoin at the mandatory combine. The combine's parameters are found **by type**, in any order; one no arm matches is the pre-fork context |
+| `Wiggle.allOf(arms…).combine(s::merge)` | run arms in parallel on **isolated** context copies, then rejoin at the mandatory combine. The combine's parameters are found **by type**, in any order; one whose type no arm produces is the pre-fork context, else read it with `Step.base()` |
 | `thenForEach(Ctx::items, body).combine(s::collect)` | runtime fan-out: one **isolated** branch per element of the list (or map) at `itemsKey`. **The element IS the item's context** — body handlers take the item's value (scalars included) and their return replaces it; the frozen base is `Step.base()` (the position/source key at `Step.itemIndex()`/`Step.itemMapKey()`); a combine can also take it as a parameter that is not a collection. The **mandatory** combine receives the collected final values (`List`/`Set` for a list input, `Map` keyed like a map input) and returns the complete post-join context. `thenForEach(name, Ctx::items, …)` names the node explicitly. The accessor is a reference to the **context's own component** — it gives both the key and the element type, so no `Class<E>` is needed and a renamed component carries the key with it. Lists, maps and arrays all work. Use the string form `thenForEach("items", Item.class, body)` when the context is a `Map<String, Object>`, which has no accessor to reference |
 | `repeatWhile(s::guard, body)` | run `body`, then repeat while the guard holds (at least once). `repeatWhile(guard, maxIterations, body)` caps it; a trailing `"queue"` pins the condition |
 | `thenSleep(duration)` / `thenSleep(name, duration)` | server-side timer; holds no worker |

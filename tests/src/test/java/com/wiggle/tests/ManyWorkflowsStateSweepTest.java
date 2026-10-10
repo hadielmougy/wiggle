@@ -6,6 +6,7 @@ import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
@@ -52,8 +53,7 @@ class ManyWorkflowsStateSweepTest {
         Map<String, Object> a(Map<String, Object> ctx);
         Map<String, Object> left(Map<String, Object> ctx);
         Map<String, Object> right(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> l, Map<String, Object> r);
+        Map<String, Object> merge(Map<String, Object> l, Map<String, Object> r);
         Map<String, Object> c(Map<String, Object> ctx);
     }
 
@@ -197,9 +197,8 @@ class ManyWorkflowsStateSweepTest {
         public Map<String, Object> a(Map<String, Object> c) { return put(c, "a", 1L); }
         public Map<String, Object> left(Map<String, Object> c) { return put(c, "left", 1L); }
         public Map<String, Object> right(Map<String, Object> c) { return put(c, "right", 1L); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> l, Map<String, Object> r) {
-            Map<String, Object> out = new LinkedHashMap<>(base);
+        public Map<String, Object> merge(Map<String, Object> l, Map<String, Object> r) {
+            Map<String, Object> out = new LinkedHashMap<>(Step.base());
             out.putAll(l);
             out.putAll(r);
             return out;

@@ -34,7 +34,7 @@ public interface OrderSteps {
      * The combine. Its parameters are found by type: both arms produce an {@code Order}, so they take
      * the last two {@code Order} parameters in fork order, and the first is the pre-fork order.
      */
-    Order merge(Order base, Order payment, Order shipping);
+    Order merge(Order payment, Order shipping);
 
     Order notify(Order order);
 

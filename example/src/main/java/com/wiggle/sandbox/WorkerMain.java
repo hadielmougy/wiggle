@@ -83,7 +83,7 @@ public class WorkerMain {
         Order capture(Order o);
         CompensableActivity<Order, Order> reserveStock();
         Order printLabel(Order o);
-        Order merge(Order base, Order payment, Order shipping);
+        Order merge(Order payment, Order shipping);
         CompensableActivity<Order, Order> notify0();
     }
 
@@ -376,9 +376,9 @@ public class WorkerMain {
         }
 
         @Override
-        public Order merge(Order base, Order payment, Order shipping) {
+        public Order merge(Order payment, Order shipping) {
             assigned("merge");
-            base = OrderValidator.requireValid(base, "merge.base@" + serves);
+            Order base = OrderValidator.requireValid(Step.base(Order.class), "merge.base@" + serves);
             OrderValidator.requireValid(payment, "merge.payment@" + serves);
             OrderValidator.requireValid(shipping, "merge.shipping@" + serves);
             if (!Boolean.TRUE.equals(payment.audit().get("captured"))

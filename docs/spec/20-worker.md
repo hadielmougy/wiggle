@@ -32,7 +32,7 @@ ambiguous.
 | zero arguments returning `Activity`/`GateActivity`/`EffectActivity`/`CompensableActivity` | typed activity factory | the factory's name is the step it serves |
 
 **WGL-WRK-005** *Withdrawn with `@Context`.* A combine takes the pre-fork (or pre-forEach) context as
-a parameter no result matches ([WGL-DYN-083](35-dynamic-flows.md#8-parameters-by-type)), and any
+a parameter whose type no result produces ([WGL-DYN-083](35-dynamic-flows.md#8-parameters-by-type)), and any
 other step reads it through `Step.base()`.
 
 **WGL-WRK-006** (MUST) A combine's return is the **complete post-join context**. There is no default

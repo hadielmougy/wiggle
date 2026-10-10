@@ -379,8 +379,9 @@ final class HandlerBinder {
      * A fork's combine. Each parameter is found by its type, in any order: a parameter takes the
      * arm whose step produces its type, and a collection parameter takes every arm its element type
      * matches. Parameters sharing a type take that type's arms in fork order, matched from the last
-     * parameter back, so a parameter left over at the front receives the pre-fork context; at most
-     * one may. A combine need not take every arm.
+     * parameter back. A parameter whose type some arm produces but whose arms are all taken is
+     * refused. A parameter no arm matches receives the pre-fork context; at most one may. A combine
+     * need not take every arm.
      *
      * <p>When this worker cannot tell every arm's type, because it holds no handler for some arm's
      * step, the parameters take the arms in fork order and the base is {@code Step.base()}.
@@ -444,6 +445,13 @@ final class HandlerBinder {
                 taken[pick] = true;
                 plan[i] = new Arg.Arm(pick);
                 continue;
+            }
+            for (Class<?> armType : armTypes) {
+                if (!assignable(type, armType)) continue;
+                throw new IllegalStateException(combineWhat(node, m) + ": parameter " + (i + 1) + " ("
+                        + type.getSimpleName() + ") is left over after its type's arms are taken; the arms produce "
+                        + describe(arms, armTypes) + ". Take one parameter per arm of a type, or a collection; "
+                        + "read the pre-fork context with Step.base()");
             }
             if (baseAt >= 0) {
                 throw new IllegalStateException(combineWhat(node, m) + ": parameters " + (i + 1)

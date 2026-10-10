@@ -457,7 +457,8 @@ class DynamicFlowTest {
 
         public Map<String, Object> right(Map<String, Object> v) { return Map.of("r", "R-" + v.get("item")); }
 
-        public Map<String, Object> merge(Map<String, Object> base, Map<String, Object> l, Map<String, Object> r) {
+        public Map<String, Object> merge(Map<String, Object> l, Map<String, Object> r) {
+            Map<String, Object> base = Step.base();
             return put(put(base, "l", l.get("l")), "r", r.get("r"));
         }
 

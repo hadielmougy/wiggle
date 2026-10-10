@@ -37,9 +37,8 @@ public final class DashboardSeed {
         Map<String, Object> createAccount(Map<String, Object> ctx);
         Map<String, Object> welcome(Map<String, Object> ctx);
         Map<String, Object> provisionHw(Map<String, Object> ctx);
-        // every arm is a Map, so the arms take the last two Map parameters; the first is the pre-fork context
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> welcome, Map<String, Object> provisioned);
+        // every arm is a Map, so the arms take the two Map parameters; the pre-fork context is Step.base()
+        Map<String, Object> merge(Map<String, Object> welcome, Map<String, Object> provisioned);
         Map<String, Object> autoEscalate(Map<String, Object> ctx);
         Map<String, Object> activate(Map<String, Object> ctx);
     }

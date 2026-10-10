@@ -242,7 +242,7 @@ class HandlerBinderTest {
         }
     }
 
-    @Test @DisplayName("same-typed arms go to same-typed parameters in fork order; one left at the front takes the base")
+    @Test @DisplayName("same-typed arms go to same-typed parameters in fork order; the base is Step.base()")
     void sameTypedArmsBindInForkOrder() throws Exception {
         HandlerBinder.Result r = HandlerBinder.bind(HandlerBinder.scan(new PositionalCombineH()), forked());
         ActivityHandler merge = r.bindings().stream()
@@ -255,7 +255,7 @@ class HandlerBinderTest {
             Object out = merge.invoke(Map.of("pre", "P",
                     "__arm__a1", Map.of("x", 1L), "__arm__b1", Map.of("y", 2L)));
             assertEquals(Map.of("base", "P", "first", Map.of("x", 1L), "second", Map.of("y", 2L)), out,
-                    "every arm is a Map, so the arms take the last two Map parameters in fork order");
+                    "every arm is a Map, so the arms take the two Map parameters in fork order");
         } finally {
             Step.end();
         }
@@ -265,10 +265,9 @@ class HandlerBinderTest {
     static final class PositionalCombineH {
         public Map<String, Object> a1(Map<String, Object> c) { return c; }
         public Map<String, Object> b1(Map<String, Object> c) { return c; }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> a, Map<String, Object> b) {
+        public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) {
             Map<String, Object> out = new LinkedHashMap<>();
-            out.put("base", base.get("pre"));
+            out.put("base", Step.base().get("pre"));
             out.put("first", a);
             out.put("second", b);
             return out;
@@ -326,6 +325,21 @@ class HandlerBinderTest {
         public Paid a1(Map<String, Object> c) { return new Paid(5); }
         public Shipped b1(Map<String, Object> c) { return new Shipped("T1"); }
         public Map<String, Object> merge(Map<String, Object> a, Map<String, Object> b) { return a; }
+    }
+
+    @Test @DisplayName("a parameter left over after its type's arms are taken is refused, not given the base")
+    void forkCombineRefusesLeftOverSameType() {
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> HandlerBinder.bind(HandlerBinder.scan(new LeftOverH()), forked()));
+        assertTrue(ex.getMessage().contains("parameter 1 (Paid) is left over"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("a1: Paid, b1: Paid"), "names what the arms produce: " + ex.getMessage());
+    }
+
+    @ForFlow("wf")
+    static final class LeftOverH {
+        public Paid a1(Map<String, Object> c) { return new Paid(5); }
+        public Paid b1(Map<String, Object> c) { return new Paid(7); }
+        public Paid merge(Paid base, Paid a, Paid b) { return a; }
     }
 
     @Test @DisplayName("without every arm's handler, a combine takes the arms in fork order")

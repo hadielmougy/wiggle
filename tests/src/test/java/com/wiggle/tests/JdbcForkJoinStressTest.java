@@ -3,8 +3,8 @@ package com.wiggle.tests;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
-import com.wiggle.client.worker.Step;
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
@@ -58,8 +58,7 @@ class JdbcForkJoinStressTest {
         Map<String, Object> capture(Map<String, Object> ctx);
         Map<String, Object> reserve(Map<String, Object> ctx);
         Map<String, Object> label(Map<String, Object> ctx);
-        Map<String, Object> merge(Map<String, Object> base,
-                                  Map<String, Object> payment, Map<String, Object> shipping);
+        Map<String, Object> merge(Map<String, Object> payment, Map<String, Object> shipping);
         Map<String, Object> notify(Map<String, Object> ctx);
     }
 
@@ -75,9 +74,9 @@ class JdbcForkJoinStressTest {
         public Map<String, Object> capture(Map<String, Object> ctx) { return put(ctx, "captured", true); }
         public Map<String, Object> reserve(Map<String, Object> ctx) { return put(ctx, "reserved", true); }
         public Map<String, Object> label(Map<String, Object> ctx) { return put(ctx, "labelled", true); }
-        public Map<String, Object> merge(Map<String, Object> base,
-                                         Map<String, Object> payment,
+        public Map<String, Object> merge(Map<String, Object> payment,
                                          Map<String, Object> shipping) {
+            Map<String, Object> base = Step.base();
             Map<String, Object> out = new LinkedHashMap<>(base);
             if (payment != null) out.putAll(payment);
             if (shipping != null) out.putAll(shipping);
