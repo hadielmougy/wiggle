@@ -360,7 +360,7 @@ public final class WiggleFlow<T> {
      * <p>When the body is a plain chain of steps, prefer a step that creates the branches itself:
      * {@code thenApply(s::plan).combine(s::collect)}, with {@code Step.create(item).thenApply(...)} in
      * the handler, where each item can run a different chain. Keep {@code thenForEach} for a body
-     * that holds a fork, a signal or a sub-flow, which created branches cannot.
+     * that holds a {@code oneOf} or a {@code repeatWhile}, which created branches cannot.
      */
     public <E> Items thenForEach(String itemsKey, Class<E> itemType,
                                  Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {

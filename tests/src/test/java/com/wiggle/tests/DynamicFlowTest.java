@@ -411,6 +411,107 @@ class DynamicFlowTest {
         }
     }
 
+    interface ServerNodeSteps {
+        Map<String, Object> fulfil(Map<String, Object> order);
+        Map<String, Object> summarise(List<Map<String, Object>> results);
+    }
+
+    interface ChildSteps {
+        Map<String, Object> childWork(Map<String, Object> ctx);
+    }
+
+    @ForFlow("dyn-child")
+    public static final class ChildH {
+        public Map<String, Object> childWork(Map<String, Object> ctx) {
+            return put(ctx, "child", "ran:" + ctx.get("item"));
+        }
+    }
+
+    /** One branch per item, each item naming the server node its branch exercises. */
+    @ForFlow("dyn-nodes")
+    public static final class ServerNodesH {
+        public Map<String, Object> fulfil(Map<String, Object> order) {
+            for (Object o : (List<?>) order.get("items")) {
+                String item = (String) o;
+                Map<String, Object> input = Map.of("item", item);
+                switch (item) {
+                    case "signal" -> Step.create(input).thenAwait("approve-signal").thenApply(this::mark);
+                    case "timeout" -> Step.create(input)
+                            .thenAwait("never", Duration.ofMillis(300), e -> e.thenApply(this::escalate))
+                            .thenApply(this::mark);
+                    case "sub" -> Step.create(input).thenSubFlow("child", "dyn-child", Map.class).thenApply(this::mark);
+                    default -> Step.create(input)
+                            .thenAllOf(arm -> arm.thenApply(this::left), arm -> arm.thenApply(this::right))
+                            .combine(this::merge)
+                            .thenApply(this::mark);
+                }
+            }
+            return order;
+        }
+
+        public Map<String, Object> mark(Map<String, Object> v) { return put(v, "done", true); }
+
+        public Map<String, Object> escalate(Map<String, Object> v) { return put(v, "escalated", true); }
+
+        public Map<String, Object> left(Map<String, Object> v) { return Map.of("l", "L-" + v.get("item")); }
+
+        public Map<String, Object> right(Map<String, Object> v) { return Map.of("r", "R-" + v.get("item")); }
+
+        public Map<String, Object> merge(Map<String, Object> base, Map<String, Object> l, Map<String, Object> r) {
+            return put(put(base, "l", l.get("l")), "r", r.get("r"));
+        }
+
+        public Map<String, Object> summarise(List<Map<String, Object>> results) {
+            Map<String, Object> byItem = new LinkedHashMap<>();
+            for (Map<String, Object> r : results) {
+                Map<String, Object> seen = new LinkedHashMap<>(r);
+                seen.remove("item");
+                byItem.put((String) r.get("item"), seen);
+            }
+            return Map.of("byItem", byItem);
+        }
+    }
+
+    @Test @DisplayName("a branch can wait for a signal, escalate past a deadline, run a sub-flow and fork")
+    void branchesRunServerNodes() throws Exception {
+        FlowSpec child = FlowSpec.define("dyn-child", 1, Map.class, ChildSteps.class, (f, s) -> f.thenApply(s::childWork));
+        FlowSpec spec = FlowSpec.define("dyn-nodes", 1, Map.class, ServerNodeSteps.class, (f, s) -> f
+                .thenApply(s::fulfil)
+                .combine(s::summarise));
+        try (WiggleServer server = new WiggleServer(config(TestStorage.url("dynnodes")), new WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl());
+             Worker w = new Worker(client, "dynflow-" + Ids.next("x"))
+                     .registerHandler(new ServerNodesH()).registerHandler(new ChildH())) {
+            client.register(child);
+            client.register(spec);
+            w.start();
+            String id = client.start(spec, new LinkedHashMap<>(Map.of("items", List.of("signal", "timeout", "sub", "fork"))));
+            awaitSignalled(client, id, "approve-signal", Map.of("approved", "yes"));
+            InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
+            assertEquals("COMPLETED", v.status(), v.error());
+            @SuppressWarnings("unchecked")
+            Map<String, Map<String, Object>> byItem = (Map<String, Map<String, Object>>) Json.asObject(v.context()).get("byItem");
+            assertEquals(Map.of("approved", "yes", "done", true), byItem.get("signal"), "the payload merged into the branch");
+            assertEquals(Map.of("escalated", true, "done", true), byItem.get("timeout"));
+            assertEquals(Map.of("child", "ran:sub", "done", true), byItem.get("sub"), "the child ran on the branch's context");
+            assertEquals(Map.of("l", "L-fork", "r", "R-fork", "done", true), byItem.get("fork"));
+        }
+    }
+
+    /** Signals {@code name} once the instance waits for it. */
+    private static void awaitSignalled(WiggleClient client, String id, String name, Object payload) throws Exception {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (true) {
+            try {
+                client.signal(id, name, payload);
+                return;
+            } catch (WiggleClient.WiggleApiException e) {
+                if (e.status() != 409 || System.currentTimeMillis() > deadline) throw e;
+                Thread.sleep(50);
+            }
+        }
+    }
+
     @ForFlow("dyn-plain")
     public static final class PlainH {
         public Map<String, Object> plain(Map<String, Object> ctx) {

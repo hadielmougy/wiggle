@@ -71,15 +71,8 @@ final class Spawns {
                 keyed++;
                 if (!keys.add(b.key())) return "branch " + i + " repeats the key '" + b.key() + "'";
             }
-            if (b.steps().isEmpty()) return "branch " + i + " has no steps";
-            if (b.steps().size() > limits.maxSteps()) {
-                return "branch " + i + " has " + b.steps().size() + " steps, more than the "
-                        + limits.maxSteps() + " allowed (WIGGLE_DYN_MAX_STEPS)";
-            }
-            for (int p = 0; p < b.steps().size(); p++) {
-                String why = refusal(b.steps().get(p));
-                if (why != null) return "branch " + i + ", step " + p + ": " + why;
-            }
+            String why = chainRefusal(b.steps(), limits);
+            if (why != null) return "branch " + i + why;
         }
         if (keyed != 0 && keyed != branches.size()) {
             return keyed + " of " + branches.size() + " branches carry a key; either all do or none";
@@ -87,16 +80,66 @@ final class Spawns {
         return null;
     }
 
-    private static String refusal(BranchStep step) {
+    /** Why a chain of steps -- a branch, an arm, an escalation -- cannot run, or null. */
+    private static String chainRefusal(List<BranchStep> steps, Limits limits) {
+        if (steps.isEmpty()) return " has no steps";
+        if (steps.size() > limits.maxSteps()) {
+            return " has " + steps.size() + " steps, more than the " + limits.maxSteps()
+                    + " allowed (WIGGLE_DYN_MAX_STEPS)";
+        }
+        for (int p = 0; p < steps.size(); p++) {
+            String why = refusal(steps.get(p), limits);
+            if (why != null) return ", step " + p + ": " + why;
+        }
+        return null;
+    }
+
+    private static String refusal(BranchStep step, Limits limits) {
         if (step.kind() == null) return "an unknown step kind";
-        if (step.combine() != null && (step.kind() != NodeKind.TASK || step.combine().isBlank())) {
+        if (step.combine() != null && step.kind() != NodeKind.FORK
+                && (step.kind() != NodeKind.TASK || step.combine().isBlank())) {
             return "only a task can create branches, and its combine needs a name";
         }
         return switch (step.kind()) {
-            case TASK, PREDICATE -> step.name() == null || step.name().isBlank() ? "a step needs a name" : null;
+            case TASK, PREDICATE -> blank(step.name()) ? "a step needs a name" : null;
             case SLEEP -> step.sleepMillis() < 0 ? "a negative sleep" : null;
+            case SIGNAL -> signalRefusal(step, limits);
+            case SUB_WORKFLOW -> blank(step.name()) || blank(step.workflow())
+                    ? "a sub-flow needs a node name and a workflow" : null;
+            case FORK -> forkRefusal(step, limits);
             default -> "a " + step.kind() + " step cannot run in a created branch";
         };
+    }
+
+    private static String signalRefusal(BranchStep step, Limits limits) {
+        if (blank(step.name())) return "a wait needs the signal's name";
+        if (step.sleepMillis() < 0) return "a negative timeout";
+        if (step.escalation().isEmpty()) return null;
+        if (step.sleepMillis() == 0) return "an escalation needs a timeout";
+        String why = chainRefusal(step.escalation(), limits);
+        return why == null ? null : "its escalation" + why;
+    }
+
+    /** A fork's arms are named by their last step, as in a definition, so each must end in a named step. */
+    private static String forkRefusal(BranchStep step, Limits limits) {
+        if (blank(step.combine())) return "a fork needs a combine";
+        if (step.arms().size() < 2) return "a fork needs at least two arms";
+        Set<String> names = new HashSet<>();
+        for (int a = 0; a < step.arms().size(); a++) {
+            List<BranchStep> arm = step.arms().get(a);
+            String why = chainRefusal(arm, limits);
+            if (why != null) return "arm " + a + why;
+            BranchStep last = arm.getLast();
+            if (last.kind() != NodeKind.TASK && last.kind() != NodeKind.PREDICATE) {
+                return "arm " + a + " must end in a step: the arm is named after it";
+            }
+            if (!names.add(last.name())) return "two arms end in '" + last.name() + "'; an arm is named after its last step";
+        }
+        return null;
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 
     /**
@@ -109,23 +152,41 @@ final class Spawns {
         List<Node> nodes = new ArrayList<>(extraNodes);
         List<FanOut.Item> items = new ArrayList<>(branches.size());
         for (CreatedBranch b : branches) {
-            String next = joinId;   // compiled last step first, so each knows where it goes
-            for (int p = b.steps().size() - 1; p >= 0; p--) {
-                List<Node> step = compile(inst, creator, b.steps().get(p), next, joinId);
-                nodes.addAll(step);
-                next = step.getFirst().id();
-            }
-            items.add(new FanOut.Item(next, b.key(), b.input()));
+            items.add(new FanOut.Item(compileChain(inst, creator, b.steps(), joinId, joinId, nodes), b.key(), b.input()));
         }
         tx.insertDynNodes(inst.id, nodes);
         return FanOut.items(tx, inst, fork, items, now);
     }
 
+    /**
+     * Compiles a chain into {@code nodes}, its last step going on to {@code next}, and answers its
+     * entry. A false gate in it goes to {@code gateExit}, the join that closes the enclosing branch or
+     * arm.
+     */
+    private static String compileChain(Instance inst, Node creator, List<BranchStep> steps, String next,
+                                       String gateExit, List<Node> nodes) {
+        for (int p = steps.size() - 1; p >= 0; p--) {   // last step first, so each knows where it goes
+            next = compile(inst, creator, steps.get(p), next, gateExit, nodes);
+        }
+        return next;
+    }
+
     /** How many nodes {@code branches} compile to: one per step, two more for each that creates its own. */
     static long nodeCount(List<CreatedBranch> branches) {
         long n = 0;
-        for (CreatedBranch b : branches) {
-            for (BranchStep step : b.steps()) n += step.combine() == null ? 1 : 3;
+        for (CreatedBranch b : branches) n += chainNodeCount(b.steps());
+        return n;
+    }
+
+    private static long chainNodeCount(List<BranchStep> steps) {
+        long n = 0;
+        for (BranchStep step : steps) {
+            n += switch (step.kind()) {
+                case TASK -> step.combine() == null ? 1 : 3;
+                case SIGNAL -> 1 + chainNodeCount(step.escalation());
+                case FORK -> 3 + step.arms().stream().mapToLong(Spawns::chainNodeCount).sum();
+                default -> 1;
+            };
         }
         return n;
     }
@@ -141,29 +202,64 @@ final class Spawns {
     }
 
     /**
-     * The nodes one step compiles to, its entry first. A task that creates branches of its own
-     * compiles as a spawning step does in a definition: the task, a dynamic join, and its combine,
-     * which goes on to {@code next}.
+     * Compiles one step into {@code nodes} and answers its entry. Each kind compiles as the same
+     * construct does in a definition: a task that creates branches as a spawning step (the task, a
+     * dynamic join, its combine), a fork as a fork with a static join and a combine over its arms.
      */
-    private static List<Node> compile(Instance inst, Node creator, BranchStep step, String next, String joinId) {
-        String id = CreatedBranch.NODE_PREFIX + Ids.token();
-        if (step.kind() == NodeKind.SLEEP) {
-            return List.of(Node.sleep(id, "sleep-" + step.sleepMillis() + "ms", step.sleepMillis()).withNext(next));
-        }
+    private static String compile(Instance inst, Node creator, BranchStep step, String next, String gateExit,
+                                  List<Node> nodes) {
+        String id = newId();
         String queue = queue(creator, step);
         com.wiggle.core.RetryPolicy retry = retry(creator, step);
-        if (step.kind() == NodeKind.PREDICATE) {
-            return List.of(worker(Node.predicate(id, step.name(), inst.workflow + "#" + step.name(), queue, retry),
-                    step).withNext(next).withAltNext(joinId));
+        switch (step.kind()) {
+            case SLEEP -> nodes.add(Node.sleep(id, "sleep-" + step.sleepMillis() + "ms", step.sleepMillis()).withNext(next));
+            case PREDICATE -> nodes.add(worker(Node.predicate(id, step.name(), activity(inst, step.name()), queue, retry),
+                    step).withNext(next).withAltNext(gateExit));
+            case SIGNAL -> {
+                Node wait = Node.signal(id, step.name(), step.sleepMillis()).withNext(next);
+                if (!step.escalation().isEmpty()) {
+                    wait = wait.withAltNext(compileChain(inst, creator, step.escalation(), next, gateExit, nodes));
+                }
+                nodes.add(wait);
+            }
+            case SUB_WORKFLOW -> nodes.add(Node.subWorkflow(id, step.name(), step.workflow()).withNext(next));
+            case FORK -> {
+                Node combine = Node.task(newId(), step.combine(), activity(inst, step.combine()), queue, retry)
+                        .withArmNames(step.arms().stream().map(arm -> arm.getLast().name()).toList())
+                        .withNext(next);
+                Node join = Node.join(newId(), "join", step.arms().size()).withNext(combine.id());
+                List<String> starts = new ArrayList<>(step.arms().size());
+                for (List<BranchStep> arm : step.arms()) {
+                    starts.add(compileChain(inst, creator, arm, join.id(), join.id(), nodes));
+                }
+                nodes.add(Node.fork(id, "fork").withBranches(starts));
+                nodes.add(join);
+                nodes.add(combine);
+            }
+            default -> {
+                Node task = worker(Node.task(id, step.name(), activity(inst, step.name()), queue, retry), step);
+                if (step.combine() == null) {
+                    nodes.add(task.withNext(next));
+                } else {
+                    Node combine = Node.task(newId(), step.combine(), activity(inst, step.combine()), queue, retry)
+                            .withCollectKey(ScratchKeys.spawn(step.name()))
+                            .withNext(next);
+                    Node join = Node.join(newId(), "join", 0).withNext(combine.id());
+                    nodes.add(task.withNext(join.id()));
+                    nodes.add(join);
+                    nodes.add(combine);
+                }
+            }
         }
-        Node task = worker(Node.task(id, step.name(), inst.workflow + "#" + step.name(), queue, retry), step);
-        if (step.combine() == null) return List.of(task.withNext(next));
-        Node combine = Node.task(CreatedBranch.NODE_PREFIX + Ids.token(), step.combine(),
-                        inst.workflow + "#" + step.combine(), queue, retry)
-                .withCollectKey(ScratchKeys.spawn(step.name()))
-                .withNext(next);
-        Node join = Node.join(CreatedBranch.NODE_PREFIX + Ids.token(), "join", 0).withNext(combine.id());
-        return List.of(task.withNext(join.id()), join, combine);
+        return id;
+    }
+
+    private static String newId() {
+        return CreatedBranch.NODE_PREFIX + Ids.token();
+    }
+
+    private static String activity(Instance inst, String step) {
+        return inst.workflow + "#" + step;
     }
 
     private static Node worker(Node node, BranchStep step) {

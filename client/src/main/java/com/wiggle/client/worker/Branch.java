@@ -17,6 +17,8 @@ import com.wiggle.core.RetryPolicy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
+import java.util.function.UnaryOperator;
 
 /**
  * A branch the running step creates, opened by {@link Step#create}. It chains steps with the
@@ -167,6 +169,96 @@ public final class Branch<I> {
         }
         steps.set(steps.size() - 1, last.withCombine(combineName));
         return (Branch<R>) this;
+    }
+
+    /** Waits, without holding a worker, for the signal {@code signal} delivered to the instance. */
+    public Branch<I> thenAwait(String signal) {
+        steps.add(CreatedBranch.BranchStep.await(signal, 0, List.of()));
+        return this;
+    }
+
+    /** {@link #thenAwait(String)} with a deadline; when it passes, the instance fails. */
+    public Branch<I> thenAwait(String signal, Duration timeout) {
+        return thenAwait(signal, timeout, null);
+    }
+
+    /**
+     * {@link #thenAwait(String)} with a deadline; when it passes, {@code escalation} runs instead and
+     * the branch goes on after it, as it does after the signal.
+     */
+    public Branch<I> thenAwait(String signal, Duration timeout, UnaryOperator<Branch<I>> escalation) {
+        if (timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("a wait's timeout must be positive: " + timeout);
+        }
+        List<BranchStep> onTimeout = escalation == null ? List.of() : chain(escalation, "the escalation of '" + signal + "'");
+        steps.add(CreatedBranch.BranchStep.await(signal, timeout.toMillis(), onTimeout));
+        return this;
+    }
+
+    /**
+     * Runs the workflow {@code workflow} as a child; its final context merges into this branch's
+     * when it completes, and the branch fails if it does not. {@code node} names the step.
+     */
+    @SuppressWarnings("unchecked")
+    public <R> Branch<R> thenSubFlow(String node, String workflow, Class<R> result) {
+        steps.add(CreatedBranch.BranchStep.subFlow(node, workflow));
+        return (Branch<R>) this;
+    }
+
+    /**
+     * Runs {@code arms} in parallel, each on its own copy of this branch's context; the
+     * {@link Arms#combine combine} merges them, as after {@code Wiggle.allOf}. An arm is named after
+     * its last step, which must be a task or a gate.
+     */
+    @SafeVarargs
+    public final Arms thenAllOf(Function<Branch<I>, Branch<?>>... arms) {
+        if (arms.length < 2) throw new IllegalArgumentException("thenAllOf needs at least two arms");
+        List<List<BranchStep>> chains = new ArrayList<>(arms.length);
+        for (int a = 0; a < arms.length; a++) {
+            Function<Branch<I>, Branch<?>> arm = arms[a];
+            chains.add(chain(b -> { arm.apply(b); return b; }, "arm " + a));
+        }
+        return new Arms(chains);
+    }
+
+    /** The mandatory merge after {@link #thenAllOf}: its parameters are found by type, in any order. */
+    public final class Arms {
+
+        private final List<List<BranchStep>> arms;
+
+        private Arms(List<List<BranchStep>> arms) {
+            this.arms = arms;
+        }
+
+        public <P1, R> Branch<R> combine(FlowFn<P1, R> combine) {
+            return fork(StepNames.ofBranchStep(combine));
+        }
+
+        public <P1, P2, R> Branch<R> combine(FlowFn2<P1, P2, R> combine) {
+            return fork(StepNames.ofBranchStep(combine));
+        }
+
+        public <P1, P2, P3, R> Branch<R> combine(FlowFn3<P1, P2, P3, R> combine) {
+            return fork(StepNames.ofBranchStep(combine));
+        }
+
+        public <P1, P2, P3, P4, R> Branch<R> combine(FlowFn4<P1, P2, P3, P4, R> combine) {
+            return fork(StepNames.ofBranchStep(combine));
+        }
+
+        @SuppressWarnings("unchecked")
+        private <R> Branch<R> fork(String combineName) {
+            steps.add(CreatedBranch.BranchStep.fork(arms, combineName));
+            return (Branch<R>) Branch.this;
+        }
+    }
+
+    /** The steps {@code body} chains onto a fresh branch: an arm or an escalation. */
+    private List<BranchStep> chain(UnaryOperator<Branch<I>> body, String what) {
+        Branch<I> sub = new Branch<>(null, null);
+        body.apply(sub);
+        if (sub.steps.isEmpty()) throw new IllegalArgumentException(what + " has no steps");
+        return List.copyOf(sub.steps);
     }
 
     public Branch<I> thenSleep(Duration duration) {

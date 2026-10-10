@@ -73,7 +73,8 @@ final class Registrations {
      * workflow -- and so is its undo, which may run on a worker that never ran the step. Any other
      * step binds against the graph only, as at startup.
      */
-    ActivityHandler handlerFor(String activity, String nodeId, NodeKind kind, String collectKey) {
+    ActivityHandler handlerFor(String activity, String nodeId, NodeKind kind, String collectKey,
+                               List<String> armNames) {
         ActivityHandler bound = handlers.get(activity);
         if (bound != null || !CreatedBranch.isCreatedNode(nodeId)) return bound;
         boolean undo = activity.endsWith(COMPENSATE_SUFFIX);
@@ -85,7 +86,7 @@ final class Registrations {
         for (Registration r : registrations) {
             if (!workflow.equals(r.set().workflow())) continue;
             HandlerBinder.Binding b = HandlerBinder.bindCreated(r.set(), stepActivity, name,
-                    undo ? NodeKind.TASK : kind, undo ? null : collectKey);
+                    undo ? NodeKind.TASK : kind, undo ? null : collectKey, undo ? List.of() : armNames);
             if (b == null) continue;
             install(b);
             return handlers.get(activity);

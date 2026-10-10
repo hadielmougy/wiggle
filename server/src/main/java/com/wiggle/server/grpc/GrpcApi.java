@@ -432,7 +432,11 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             authz.requireAny(Permissions.TASK_POLL);
             List<WorkflowEngine.Run> runs = new ArrayList<>(req.getRunsCount());
             for (ReportedRun r : req.getRunsList()) {
-                runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), stepInputs(r), r.getFinal()));
+                List<WorkflowEngine.StepInput> steps = stepInputs(r);
+                for (WorkflowEngine.StepInput step : steps) {
+                    for (com.wiggle.core.CreatedBranch b : step.branches()) requireSubFlowStarts(b.steps());
+                }
+                runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), steps, r.getFinal()));
             }
             Map<String, WorkflowEngine.RunResult> results = engine.report(runs, servedQueues());
             ReportStepsResult.Builder out = ReportStepsResult.newBuilder();
@@ -450,6 +454,21 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             }
             return out.build();
         });
+    }
+
+    /**
+     * A branch that runs a sub-flow starts that workflow, so the reporter must be allowed to start it,
+     * exactly as if it had called {@code StartWorkflow} -- a worker serving one tenant's queues must
+     * not start another tenant's workflows through the branches it creates.
+     */
+    private void requireSubFlowStarts(List<com.wiggle.core.CreatedBranch.BranchStep> steps) {
+        for (com.wiggle.core.CreatedBranch.BranchStep st : steps) {
+            if (st.kind() == com.wiggle.core.NodeKind.SUB_WORKFLOW && st.workflow() != null) {
+                authz.require(Permissions.INSTANCE_START, st.workflow());
+            }
+            requireSubFlowStarts(st.escalation());
+            for (List<com.wiggle.core.CreatedBranch.BranchStep> arm : st.arms()) requireSubFlowStarts(arm);
+        }
     }
 
     private static RunApplied.Builder applied(ReportOutcome out) {
@@ -483,21 +502,30 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
     private static List<com.wiggle.core.CreatedBranch> branches(List<CreatedBranch> reported) {
         List<com.wiggle.core.CreatedBranch> out = new ArrayList<>(reported.size());
         for (CreatedBranch b : reported) {
-            List<com.wiggle.core.CreatedBranch.BranchStep> steps = new ArrayList<>(b.getStepsCount());
-            for (BranchStep st : b.getStepsList()) {
-                steps.add(new com.wiggle.core.CreatedBranch.BranchStep(
-                        st.getName().isEmpty() ? null : st.getName(),
-                        nodeKind(st.getKind()),
-                        st.getCompensable(),
-                        st.getQueue().isEmpty() ? null : st.getQueue(),
-                        st.hasRetry() ? com.wiggle.core.RetryPolicy.fromJson(ProtoJson.fromValue(st.getRetry())) : null,
-                        st.getSleepMillis(),
-                        st.getCombine().isEmpty() ? null : st.getCombine()));
-            }
             out.add(new com.wiggle.core.CreatedBranch(b.hasInput() ? ProtoJson.fromValue(b.getInput()) : null,
-                    b.getKey().isEmpty() ? null : b.getKey(), steps));
+                    b.getKey().isEmpty() ? null : b.getKey(), branchSteps(b.getStepsList())));
         }
         return out;
+    }
+
+    private static List<com.wiggle.core.CreatedBranch.BranchStep> branchSteps(List<BranchStep> reported) {
+        List<com.wiggle.core.CreatedBranch.BranchStep> steps = new ArrayList<>(reported.size());
+        for (BranchStep st : reported) {
+            List<List<com.wiggle.core.CreatedBranch.BranchStep>> arms = new ArrayList<>(st.getArmsCount());
+            for (BranchArm arm : st.getArmsList()) arms.add(branchSteps(arm.getStepsList()));
+            steps.add(new com.wiggle.core.CreatedBranch.BranchStep(
+                    st.getName().isEmpty() ? null : st.getName(),
+                    nodeKind(st.getKind()),
+                    st.getCompensable(),
+                    st.getQueue().isEmpty() ? null : st.getQueue(),
+                    st.hasRetry() ? com.wiggle.core.RetryPolicy.fromJson(ProtoJson.fromValue(st.getRetry())) : null,
+                    st.getSleepMillis(),
+                    st.getCombine().isEmpty() ? null : st.getCombine(),
+                    st.getWorkflow().isEmpty() ? null : st.getWorkflow(),
+                    branchSteps(st.getEscalationList()),
+                    arms));
+        }
+        return steps;
     }
 
     private static com.wiggle.core.NodeKind nodeKind(String name) {
@@ -691,6 +719,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             if (t.itemMapKey() != null) m.setItemMapKey(t.itemMapKey());
         }
         if (t.collectKey() != null) m.setCollectKey(t.collectKey());
+        m.addAllArmNames(t.armNames());
         return m.build();
     }
 

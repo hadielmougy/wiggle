@@ -40,7 +40,8 @@ final class Wire {
                 t.getExecutionMode().isEmpty()
                         ? com.wiggle.core.ExecutionMode.SERVER
                         : com.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()),
-                t.getCollectKey().isEmpty() ? null : t.getCollectKey());
+                t.getCollectKey().isEmpty() ? null : t.getCollectKey(),
+                t.getArmNamesList());
     }
 
     static WiggleClient.TokenInfo tokenInfo(Token t) {
@@ -82,18 +83,27 @@ final class Wire {
         com.wiggle.proto.CreatedBranch.Builder out = com.wiggle.proto.CreatedBranch.newBuilder()
                 .setInput(com.wiggle.proto.ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(b.input())));
         if (b.key() != null) out.setKey(b.key());
-        for (com.wiggle.core.CreatedBranch.BranchStep st : b.steps()) {
-            com.wiggle.proto.BranchStep.Builder sb = com.wiggle.proto.BranchStep.newBuilder()
-                    .setKind(st.kind().name())
-                    .setCompensable(st.compensable())
-                    .setSleepMillis(st.sleepMillis());
-            if (st.name() != null) sb.setName(st.name());
-            if (st.queue() != null) sb.setQueue(st.queue());
-            if (st.retry() != null) sb.setRetry(com.wiggle.proto.ProtoJson.toValue(st.retry().toJson()));
-            if (st.combine() != null) sb.setCombine(st.combine());
-            out.addSteps(sb);
-        }
+        for (com.wiggle.core.CreatedBranch.BranchStep st : b.steps()) out.addSteps(branchStep(st));
         return out.build();
+    }
+
+    private static com.wiggle.proto.BranchStep branchStep(com.wiggle.core.CreatedBranch.BranchStep st) {
+        com.wiggle.proto.BranchStep.Builder sb = com.wiggle.proto.BranchStep.newBuilder()
+                .setKind(st.kind().name())
+                .setCompensable(st.compensable())
+                .setSleepMillis(st.sleepMillis());
+        if (st.name() != null) sb.setName(st.name());
+        if (st.queue() != null) sb.setQueue(st.queue());
+        if (st.retry() != null) sb.setRetry(com.wiggle.proto.ProtoJson.toValue(st.retry().toJson()));
+        if (st.combine() != null) sb.setCombine(st.combine());
+        if (st.workflow() != null) sb.setWorkflow(st.workflow());
+        for (com.wiggle.core.CreatedBranch.BranchStep e : st.escalation()) sb.addEscalation(branchStep(e));
+        for (List<com.wiggle.core.CreatedBranch.BranchStep> arm : st.arms()) {
+            com.wiggle.proto.BranchArm.Builder ab = com.wiggle.proto.BranchArm.newBuilder();
+            for (com.wiggle.core.CreatedBranch.BranchStep a : arm) ab.addSteps(branchStep(a));
+            sb.addArms(ab);
+        }
+        return sb.build();
     }
 
     static List<com.wiggle.core.EventView> events(com.wiggle.proto.EventList res) {
