@@ -512,6 +512,88 @@ class DynamicFlowTest {
         }
     }
 
+    interface ChoiceLoopSteps {
+        Map<String, Object> fulfil(Map<String, Object> order);
+        Map<String, Object> summarise(List<Map<String, Object>> results);
+    }
+
+    @ForFlow("dyn-choose")
+    public static final class ChoiceLoopH {
+        public Map<String, Object> fulfil(Map<String, Object> order) {
+            for (Object o : (List<?>) order.get("items")) {
+                long qty = ((Number) o).longValue();
+                Step.create(Map.<String, Object>of("qty", qty))
+                        .thenApply(this::score)                       // the choice reads this step's result
+                        .thenOneOf(b -> b.when(this::isBulk).thenApply(this::bulk),
+                                   b -> b.when(this::isSingle).thenApply(this::single))
+                        .repeatWhile(this::moreToPack, b -> b.thenApply(this::packOne));
+            }
+            return order;
+        }
+
+        public Map<String, Object> score(Map<String, Object> v) {
+            return put(put(v, "score", ((Number) v.get("qty")).longValue() * 10), "packed", 0L);
+        }
+
+        public boolean isBulk(Map<String, Object> v) { return ((Number) v.get("score")).longValue() >= 50; }
+
+        public boolean isSingle(Map<String, Object> v) { return ((Number) v.get("score")).longValue() == 10; }
+
+        public Map<String, Object> bulk(Map<String, Object> v) { return put(v, "route", "bulk"); }
+
+        public Map<String, Object> single(Map<String, Object> v) { return put(v, "route", "single"); }
+
+        public boolean moreToPack(Map<String, Object> v) {
+            return ((Number) v.get("packed")).longValue() < ((Number) v.get("qty")).longValue();
+        }
+
+        public Map<String, Object> packOne(Map<String, Object> v) {
+            return put(v, "packed", ((Number) v.get("packed")).longValue() + 1);
+        }
+
+        public Map<String, Object> summarise(List<Map<String, Object>> results) {
+            List<String> out = new ArrayList<>();
+            for (Map<String, Object> r : results) out.add(r.get("qty") + ":" + r.get("route") + ":" + r.get("packed"));
+            return Map.of("out", out);
+        }
+    }
+
+    private static FlowSpec choosing() {
+        return FlowSpec.define("dyn-choose", 1, Map.class, ChoiceLoopSteps.class, (f, s) -> f
+                .thenApply(s::fulfil)
+                .combine(s::summarise));
+    }
+
+    @Test @DisplayName("a branch chooses on a step's result and loops while a condition holds")
+    void branchesChooseAndLoop() throws Exception {
+        InstanceView v = run(choosing(), new ChoiceLoopH(), Map.of("items", List.of(5L, 1L, 3L)), null);
+        assertEquals("COMPLETED", v.status(), v.error());
+        assertEquals(List.of("5:bulk:5", "1:single:1", "3:null:3"), Json.asObject(v.context()).get("out"),
+                "no guard held for 3 and there is no otherwise, so it went on past the choice; "
+                        + "the loop packed each unit, its body running before the condition is first tested");
+    }
+
+    @ForFlow("dyn-choose")
+    public static final class RunawayLoopH {
+        public Map<String, Object> fulfil(Map<String, Object> order) {
+            Step.create(Map.<String, Object>of("n", 0L)).repeatWhile(this::always, 3, b -> b.thenApply(this::spin));
+            return order;
+        }
+
+        public boolean always(Map<String, Object> v) { return true; }
+
+        public Map<String, Object> spin(Map<String, Object> v) { return put(v, "n", ((Number) v.get("n")).longValue() + 1); }
+
+        public Map<String, Object> summarise(List<Map<String, Object>> results) { return Map.of(); }
+    }
+
+    @Test @DisplayName("a branch's loop fails the instance past its iteration budget")
+    void branchLoopBudget() throws Exception {
+        InstanceView v = run(choosing(), new RunawayLoopH(), Map.of(), null);
+        assertEquals("FAILED", v.status());
+        assertTrue(v.error().contains("exceeded its budget of 3"), v.error());
+    }
+
     @ForFlow("dyn-plain")
     public static final class PlainH {
         public Map<String, Object> plain(Map<String, Object> ctx) {

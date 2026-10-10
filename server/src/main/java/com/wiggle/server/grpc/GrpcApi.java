@@ -467,7 +467,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 authz.require(Permissions.INSTANCE_START, st.workflow());
             }
             requireSubFlowStarts(st.escalation());
+            requireSubFlowStarts(st.body());
             for (List<com.wiggle.core.CreatedBranch.BranchStep> arm : st.arms()) requireSubFlowStarts(arm);
+            for (com.wiggle.core.CreatedBranch.BranchStep.Case c : st.cases()) requireSubFlowStarts(c.steps());
         }
     }
 
@@ -513,6 +515,11 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         for (BranchStep st : reported) {
             List<List<com.wiggle.core.CreatedBranch.BranchStep>> arms = new ArrayList<>(st.getArmsCount());
             for (BranchArm arm : st.getArmsList()) arms.add(branchSteps(arm.getStepsList()));
+            List<com.wiggle.core.CreatedBranch.BranchStep.Case> cases = new ArrayList<>(st.getCasesCount());
+            for (BranchCase c : st.getCasesList()) {
+                cases.add(new com.wiggle.core.CreatedBranch.BranchStep.Case(
+                        c.getGuard().isEmpty() ? null : c.getGuard(), branchSteps(c.getStepsList())));
+            }
             steps.add(new com.wiggle.core.CreatedBranch.BranchStep(
                     st.getName().isEmpty() ? null : st.getName(),
                     nodeKind(st.getKind()),
@@ -523,7 +530,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                     st.getCombine().isEmpty() ? null : st.getCombine(),
                     st.getWorkflow().isEmpty() ? null : st.getWorkflow(),
                     branchSteps(st.getEscalationList()),
-                    arms));
+                    arms,
+                    branchSteps(st.getBodyList()),
+                    st.getLoopBudget(),
+                    cases));
         }
         return steps;
     }

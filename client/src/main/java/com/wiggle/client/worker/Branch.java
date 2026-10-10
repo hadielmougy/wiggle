@@ -37,6 +37,10 @@ public final class Branch<I> {
     private final Object input;
     private final String key;
     private final List<BranchStep> steps = new ArrayList<>(4);
+    /** Whether this is an arm of {@link #thenOneOf}, and the guard that opened it, or {@code otherwise}. */
+    private boolean choiceArm;
+    private String guard;
+    private boolean otherwise;
 
     private Branch(Object input, String key) {
         this.input = input;
@@ -250,6 +254,75 @@ public final class Branch<I> {
         private <R> Branch<R> fork(String combineName) {
             steps.add(CreatedBranch.BranchStep.fork(arms, combineName));
             return (Branch<R>) Branch.this;
+        }
+    }
+
+    /**
+     * Runs {@code body}, then again while {@code condition} holds -- a do-while, as in a workflow --
+     * failing the instance past the engine's iteration budget.
+     */
+    public Branch<I> repeatWhile(FlowGate<? super I> condition, UnaryOperator<Branch<I>> body) {
+        return loop(condition, 0, body);
+    }
+
+    /** {@link #repeatWhile(FlowGate, UnaryOperator)} failing past {@code maxIterations}. */
+    public Branch<I> repeatWhile(FlowGate<? super I> condition, int maxIterations, UnaryOperator<Branch<I>> body) {
+        if (maxIterations <= 0) throw new IllegalArgumentException("maxIterations must be positive: " + maxIterations);
+        return loop(condition, maxIterations, body);
+    }
+
+    private Branch<I> loop(FlowGate<? super I> condition, int maxIterations, UnaryOperator<Branch<I>> body) {
+        String name = StepNames.ofBranchStep(condition);
+        steps.add(BranchStep.loop(name, chain(body, "the body of repeatWhile(" + name + ")"), maxIterations));
+        return this;
+    }
+
+    /**
+     * Runs the first of {@code arms} whose guard holds, as {@code Wiggle.oneOf} does: each arm opens
+     * with {@link #when} or, last, {@link #otherwise}. Without an {@code otherwise}, a choice where no
+     * guard held goes on past it. The arms are alternatives on this branch's context, so there is no
+     * combine.
+     */
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    public final <R> Branch<R> thenOneOf(Function<Branch<I>, Branch<R>>... arms) {
+        List<BranchStep.Case> cases = new ArrayList<>(arms.length);
+        for (int a = 0; a < arms.length; a++) {
+            Branch<I> arm = new Branch<>(null, null);
+            arm.choiceArm = true;
+            arms[a].apply(arm);
+            if (arm.guard == null && !arm.otherwise) {
+                throw new IllegalArgumentException("arm " + a + " of thenOneOf must open with when(...) or otherwise()");
+            }
+            if (arm.otherwise && a != arms.length - 1) {
+                throw new IllegalArgumentException("otherwise() must be the last arm of thenOneOf");
+            }
+            cases.add(new BranchStep.Case(arm.otherwise ? null : arm.guard, arm.steps));
+        }
+        if (cases.isEmpty() || cases.getFirst().guard() == null) {
+            throw new IllegalArgumentException("thenOneOf needs an arm opened with when(...)");
+        }
+        steps.add(BranchStep.choice(cases));
+        return (Branch<R>) this;
+    }
+
+    /** Opens an arm of {@link #thenOneOf}: the steps chained after it run when {@code guard} holds. */
+    public Branch<I> when(FlowGate<? super I> guard) {
+        requireArmStart("when");
+        this.guard = StepNames.ofBranchStep(guard);
+        return this;
+    }
+
+    /** Opens the last arm of {@link #thenOneOf}, run when no guard held. */
+    public Branch<I> otherwise() {
+        requireArmStart("otherwise");
+        this.otherwise = true;
+        return this;
+    }
+
+    private void requireArmStart(String what) {
+        if (!choiceArm || !steps.isEmpty() || guard != null || otherwise) {
+            throw new IllegalStateException(what + "(...) opens an arm of thenOneOf, so it comes first in one");
         }
     }
 

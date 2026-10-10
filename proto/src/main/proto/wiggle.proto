@@ -370,6 +370,16 @@ message BranchStep {
     string workflow = 8;                   // SUB_WORKFLOW: the child workflow
     repeated BranchStep escalation = 9;    // SIGNAL: run when the deadline in sleep_millis passes
     repeated BranchArm arms = 10;          // FORK: each arm runs on its own copy of the context
+    // A PREDICATE with a body is a loop: the body runs, then again while the condition `name` holds.
+    repeated BranchStep body = 11;
+    int32 loop_budget = 12;                // a loop's most iterations; 0 = the engine's default
+    // A PREDICATE with cases is a choice: the first case whose guard holds runs its steps.
+    repeated BranchCase cases = 13;
+}
+
+message BranchCase {
+    string guard = 1;                      // blank: the otherwise, which must come last
+    repeated BranchStep steps = 2;
 }
 
 message BranchArm {
