@@ -1,9 +1,9 @@
 # Cookbook
 
-Eight small workflows, each pairing operators that don't otherwise appear together in the
+Nine small workflows, each pairing operators that don't otherwise appear together in the
 `order-fulfilment` example. Read the source at
 [`example/src/main/java/com/wiggle/cookbook/Cookbook.java`](../example/src/main/java/com/wiggle/cookbook/Cookbook.java)
-alongside this page; run all eight end to end with:
+alongside this page; run all nine end to end with:
 
 ```bash
 ./gradlew :example:runCookbook
@@ -136,6 +136,10 @@ to reference, so name the key: `thenForEach("items", Item.class, body)`.
 The combine's collection parameter decides how results arrive: a `List` keeps order, a `Set`
 deduplicates, a `Map` is keyed like the input.
 
+When the body is a plain chain of steps, prefer [recipe 9](#9-stepcreate--combine): the same fan-out
+built by a step at run time, where each item can run a different chain. Keep `thenForEach` for a body
+that holds a fork, a nested fan-out, a signal or a sub-flow.
+
 ## 4. `repeatWhile` + a gate inside the body
 
 Poll-until-ready, with an inner gate short-circuiting a cancelled job.
@@ -259,6 +263,52 @@ Every step takes an optional `RetryPolicy` and an optional queue, in either orde
 `thenApply(s::pack, policy, "packing")` and `thenApply(s::pack, "packing", policy)` are the same
 thing.
 
+## 9. `Step.create` + `combine`
+
+Recipe 3's fan-out, built by a step at run time. A `combine` directly after a step makes that step
+one that creates branches:
+
+<!-- snippet: cookbook/dynamic-branches -->
+```java
+FlowSpec spec = FlowSpec.define("tcb-dynamic-branches", 1, Basket.class, DynamicSteps.class, (f, s) -> f
+        .thenApply(s::plan)        // creates one branch per item, below
+        .combine(s::collect));     // runs once every branch is done
+```
+
+Inside its handler, `Step.create(input)` opens a branch and chains steps onto it with the same
+operators a workflow uses. The `for` and the `if` are ordinary Java, so each item runs the chain it
+needs: a gift is priced and wrapped, anything else is only priced.
+
+<!-- snippet: cookbook/dynamic-branches-handler -->
+```java
+public Basket plan(Basket b) {
+    for (Item i : b.items()) {
+        if (i.sku().startsWith("gift")) {
+            Step.create(i).thenApply(this::price).thenApply(this::wrap);
+        } else {
+            Step.create(i).thenApply(this::price);
+        }
+    }
+    return b;   // the base the combine receives
+}
+
+public Basket collect(List<Item> priced, Basket base, List<Gift> gifts) {
+    long total = 0;
+    for (Item i : priced) total += i.price();
+    for (Gift g : gifts) total += g.price() + 50;   // wrapping is extra
+    return new Basket(base.items(), total);
+}
+```
+
+The branches are sent with the step's report, like `Step.emit`, and run once it is committed; an
+attempt that throws creates none. The handler's return is the base the combine receives. The
+combine's parameters are found by type, in any order: `List<Item>` takes the branches whose last
+step returns an `Item`, `List<Gift>` the ones that end in `wrap`, and `Basket`, which is not a
+collection, is the base. A step without its own queue or retry policy takes the creating step's.
+
+Created branches are chains of tasks, effects, gates and sleeps. For a body that needs a fork, a
+nested fan-out, a signal or a sub-flow, use `thenForEach` (recipe 3).
+
 ## Reference: what's covered where
 
 | Operator | Recipe |
@@ -269,6 +319,7 @@ thing.
 | `Wiggle.oneOf` + `when` / `otherwise` | 2, 5, 8 |
 | `Wiggle.allOf` + `combine` | 2, 6, 8 |
 | `thenForEach` + `combine` | 3, 8 |
+| `Step.create` + `combine` (branches built at run time) | 9 |
 | `repeatWhile` | 4, 7, 8 |
 | `thenAwait` (+ timeout, + escalation) | 5, 8 |
 | `thenSubFlow` | 6, 8 |

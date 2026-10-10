@@ -54,9 +54,10 @@ import java.util.function.UnaryOperator;
  *
  * <p>One handler method is one node: node names address the graph and must be unique, so referencing
  * the same method twice in a workflow is a duplicate and is rejected. An unrolled loop therefore
- * means one handler per iteration, not one handler called n times -- for that, use
- * {@link #thenForEach} (parallel, over a collection in the context) or {@link #repeatWhile}
- * (sequential, over a condition the engine evaluates).
+ * means one handler per iteration, not one handler called n times -- for that, use a step that
+ * creates branches ({@code thenApply(s::plan).combine(s::collect)} with {@code Step.create} in the
+ * handler) or {@link #thenForEach} (parallel, over a collection in the context), or
+ * {@link #repeatWhile} (sequential, over a condition the engine evaluates).
  *
  * @param <T> the context type at this point in the graph
  */
@@ -355,6 +356,11 @@ public final class WiggleFlow<T> {
      * element being that branch's whole context</b> (hence {@code itemType}). As with
      * {@link Wiggle#allOf} there is no implicit merge -- {@link Items#combine} receives every item's
      * final value and returns the complete post-join context.
+     *
+     * <p>When the body is a plain chain of steps, prefer a step that creates the branches itself:
+     * {@code thenApply(s::plan).combine(s::collect)}, with {@code Step.create(item).thenApply(...)} in
+     * the handler, where each item can run a different chain. Keep {@code thenForEach} for a body
+     * that holds a fork, a nested fan-out, a signal or a sub-flow, which created branches cannot.
      */
     public <E> Items thenForEach(String itemsKey, Class<E> itemType,
                                  Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
@@ -388,6 +394,9 @@ public final class WiggleFlow<T> {
      *
      * <p>Use the string form when the context is a {@code Map<String, Object>}: raw JSON has no
      * accessor to reference.
+     *
+     * <p>For a body that is a plain chain of steps, prefer {@link #combine(FlowFn)} after a step that
+     * creates branches with {@code Step.create} -- see {@link #thenForEach(String, Class, Function)}.
      */
     public <E> Items thenForEach(FlowItems<T, E> items, Function<WiggleFlow<E>, WiggleFlow<?>> loopBody) {
         String key = StepNames.ofKey(items);

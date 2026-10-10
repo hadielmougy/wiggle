@@ -3,6 +3,7 @@ package com.wiggle.cookbook;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
+import com.wiggle.client.worker.Step;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.RetryPolicy;
 
@@ -11,7 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Eight recipes covering every operator the engine has, each one runnable:
+ * Nine recipes covering every operator the engine has, each one runnable:
  *
  * <pre>./gradlew :example:runCookbook</pre>
  *
@@ -424,5 +425,52 @@ public final class Cookbook {
             List<Item> shipped = new ArrayList<>(b.items());
             return new Basket(shipped, b.total() + 1000);
         }
+    }
+
+    // 9. Step.create + combine -- recipe 3's fan-out, built by a step at run time. Each item gets its
+    //    own chain, decided by ordinary Java, and the combine splits the results by type.
+    /** What tcb-dynamic-branches names; DynamicBranches implements it. */
+    public interface DynamicSteps {
+        Basket plan(Basket b);
+        Basket collect(List<Item> priced, Basket base, List<Gift> gifts);
+    }
+
+    public record Gift(String sku, long price, String wrapping) {}
+
+    @ForFlow("tcb-dynamic-branches")
+    public static final class DynamicBranches implements DynamicSteps {
+
+        public FlowSpec spec() {
+            // docs:begin dynamic-branches
+            FlowSpec spec = FlowSpec.define("tcb-dynamic-branches", 1, Basket.class, DynamicSteps.class, (f, s) -> f
+                    .thenApply(s::plan)        // creates one branch per item, below
+                    .combine(s::collect));     // runs once every branch is done
+            // docs:end dynamic-branches
+            return spec;
+        }
+
+        // docs:begin dynamic-branches-handler
+        public Basket plan(Basket b) {
+            for (Item i : b.items()) {
+                if (i.sku().startsWith("gift")) {
+                    Step.create(i).thenApply(this::price).thenApply(this::wrap);
+                } else {
+                    Step.create(i).thenApply(this::price);
+                }
+            }
+            return b;   // the base the combine receives
+        }
+
+        public Basket collect(List<Item> priced, Basket base, List<Gift> gifts) {
+            long total = 0;
+            for (Item i : priced) total += i.price();
+            for (Gift g : gifts) total += g.price() + 50;   // wrapping is extra
+            return new Basket(base.items(), total);
+        }
+        // docs:end dynamic-branches-handler
+
+        public Item price(Item i) { return new Item(i.sku(), i.sku().length() * 100L); }
+
+        public Gift wrap(Item i) { return new Gift(i.sku(), i.price(), "red"); }
     }
 }
