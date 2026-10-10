@@ -1,6 +1,8 @@
 package com.wiggle.client.flow;
 
 import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.Node;
+import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
@@ -285,6 +287,25 @@ final class GraphBuilder {
         pipeline.wireNext(joinId, combineId);  // JOIN -> combine (the collected results' consumer)
         openAt(combineId, Edge.NEXT);
         lastStepId = combineId;
+    }
+
+    /**
+     * Makes the step just added one that creates branches at run time ({@code Step.create}), and
+     * adds its mandatory combine: a dynamic join the branches meet at, then the combine that receives
+     * their results. Must directly follow a task or effect step.
+     */
+    public GraphBuilder spawnCombine(String combineName, RetryPolicy combineRetry, String combineQueue) {
+        Node spawning = lastStepId == null ? null : pipeline.node(lastStepId);
+        if (spawning == null || spawning.kind() != NodeKind.TASK || spawning.isCombine()) {
+            throw new IllegalStateException("combine(" + combineName + ") must directly follow the step "
+                    + "that creates the branches it combines: a thenApply or thenAccept");
+        }
+        String joinId = pipeline.addJoin(0);   // 0 = dynamic width, carried in the join group
+        attach(joinId);
+        String combineId = pipeline.addSpawnCombine(combineName, spawning.name(), combineRetry, combineQueue);
+        attach(combineId);
+        lastStepId = combineId;
+        return this;
     }
 
     /**

@@ -120,6 +120,22 @@ final class Pipeline {
         return id;
     }
 
+    /**
+     * The mandatory merge node after a step that creates branches at run time. It collects under
+     * {@link ScratchKeys#spawn} of the creating step's name, which is how the engine recognises that
+     * step as one that may create branches.
+     */
+    String addSpawnCombine(String name, String spawningStepName, RetryPolicy retry, String queue) {
+        String id = addTask(name, retry, queue);
+        nodes.put(id, nodes.get(id).withCollectKey(ScratchKeys.spawn(spawningStepName)));
+        return id;
+    }
+
+    /** The node recorded under {@code id}. */
+    Node node(String id) {
+        return nodes.get(id);
+    }
+
     /** A server-side timer. Sleep names are not required to be unique (nothing addresses them). */
     String addSleep(String name, long millis) {
         return add(NodeDraft.sleep(name, millis));

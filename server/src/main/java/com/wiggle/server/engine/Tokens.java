@@ -245,7 +245,9 @@ final class Tokens {
         }
         if (comp) return Optional.of(Sagas.activation(inst, t, workerId, until));
         Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
-        ExecutionMode mode = ExecutionModes.resolve(definitions.executionMode(tx, t.workflow, t.version));
+        // A created node is in no worker's compiled graph, so it runs one step at a time.
+        ExecutionMode mode = Spawns.isCreated(node.id()) ? ExecutionMode.SERVER
+                : ExecutionModes.resolve(definitions.executionMode(tx, t.workflow, t.version));
         Doc base = null;
         long itemIndex = 0;
         String itemMapKey = null;

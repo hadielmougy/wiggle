@@ -1,5 +1,6 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.EmittedEvent;
 import com.wiggle.core.Json;
 import com.wiggle.core.RecordMapper;
@@ -26,17 +27,28 @@ import java.util.Map;
  */
 public final class Step {
 
-    /** Immutable snapshot of the running task's identity (plus base/item scope, when present). */
+    /**
+     * Immutable snapshot of the running task's identity (plus base/item scope, when present).
+     * {@code createsBranches} says whether the step may call {@link #create}.
+     */
     public record Info(int attempt, String name, String instanceId,
-                       Object base, boolean itemScope, long itemIndex, String itemMapKey) {
+                       Object base, boolean itemScope, long itemIndex, String itemMapKey,
+                       boolean createsBranches) {
         public Info(int attempt, String name, String instanceId) {
-            this(attempt, name, instanceId, null, false, 0, null);
+            this(attempt, name, instanceId, null, false, 0, null, false);
+        }
+
+        public Info(int attempt, String name, String instanceId,
+                    Object base, boolean itemScope, long itemIndex, String itemMapKey) {
+            this(attempt, name, instanceId, base, itemScope, itemIndex, itemMapKey, false);
         }
     }
 
     private static final ThreadLocal<Info> CURRENT = new ThreadLocal<>();
     /** What this step has emitted so far; the worker drains it when it reports the step. */
     private static final ThreadLocal<List<EmittedEvent>> EMITTED = new ThreadLocal<>();
+    /** The branches this step has created so far; the worker drains them when it reports the step. */
+    private static final ThreadLocal<List<Branch<?>>> CREATED = new ThreadLocal<>();
 
     private Step() {}
 
@@ -72,6 +84,49 @@ public final class Step {
         List<EmittedEvent> buffer = EMITTED.get();
         EMITTED.remove();
         return buffer == null ? List.of() : List.copyOf(buffer);
+    }
+
+    /**
+     * Opens a branch over {@code input} -- its whole, isolated context -- to chain steps onto:
+     *
+     * <pre>{@code
+     * for (Item i : order.items()) Step.create(i).thenApply(this::reserve).thenApply(this::ship);
+     * }</pre>
+     *
+     * Like {@link #emit}, the branch is buffered here and rides the step's report: it runs once the
+     * step completes, and an attempt that throws leaves nothing behind. Its result reaches the
+     * combine after the step. Only a step followed directly by a combine, or that combine, may
+     * create branches.
+     */
+    public static <I> Branch<I> create(I input) {
+        return create(null, input);
+    }
+
+    /** {@link #create(Object)} with a key: the combine then receives a {@code Map} by key. */
+    public static <I> Branch<I> create(String key, I input) {
+        Info info = current();
+        if (!info.createsBranches()) {
+            throw new IllegalStateException("step '" + info.name() + "' cannot create branches: only a "
+                    + "step followed directly by a combine, or that combine, may call Step.create");
+        }
+        Branch<I> branch = Branch.open(input, key);
+        List<Branch<?>> created = CREATED.get();
+        if (created == null) {
+            created = new ArrayList<>(4);
+            CREATED.set(created);
+        }
+        created.add(branch);
+        return branch;
+    }
+
+    /** Takes (and clears) the branches this step created; the worker ships them with its report. */
+    static List<CreatedBranch> drainCreated() {
+        List<Branch<?>> created = CREATED.get();
+        CREATED.remove();
+        if (created == null) return List.of();
+        List<CreatedBranch> out = new ArrayList<>(created.size());
+        for (Branch<?> b : created) out.add(b.build());
+        return out;
     }
 
     /** The engine-global attempt number: 1 on the first try, incremented on every retry. */
@@ -126,7 +181,7 @@ public final class Step {
     static Object withBase(Object base, java.util.concurrent.Callable<Object> body) throws Exception {
         Info prev = CURRENT.get();
         CURRENT.set(new Info(prev.attempt(), prev.name(), prev.instanceId(), base, false,
-                prev.itemIndex(), prev.itemMapKey()));
+                prev.itemIndex(), prev.itemMapKey(), prev.createsBranches()));
         try {
             return body.call();
         } finally {
@@ -150,5 +205,6 @@ public final class Step {
     static void end() {
         CURRENT.remove();
         EMITTED.remove();   // an attempt that failed before its drain must not leak into the next task
+        CREATED.remove();
     }
 }

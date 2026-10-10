@@ -344,6 +344,23 @@ message StepResult {
     int64 started_at = 5;
     int64 finished_at = 6;
     repeated EmittedEvent events = 7;      // emitted while this step ran, in emission order
+    repeated CreatedBranch branches = 8;   // created while this step ran (Step.create), in creation order
+}
+
+// A branch a step created at run time: its whole context, an optional key, and its chain of steps.
+message CreatedBranch {
+    google.protobuf.Value input = 1;
+    string key = 2;                        // optional; all-or-none across one report
+    repeated BranchStep steps = 3;         // at least one
+}
+
+message BranchStep {
+    string name = 1;                       // the step name; blank for a sleep
+    string kind = 2;                       // TASK | PREDICATE | SLEEP
+    bool compensable = 3;
+    string queue = 4;                      // blank = the creating step's queue
+    google.protobuf.Value retry = 5;       // a retry policy as JSON; absent = the creating step's
+    int64 sleep_millis = 6;
 }
 
 // One instance's worth of a report: the ordered steps one worker ran from one leased token.

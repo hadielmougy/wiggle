@@ -77,6 +77,23 @@ final class Wire {
         return b.build();
     }
 
+    static com.wiggle.proto.CreatedBranch branch(com.wiggle.core.CreatedBranch b) {
+        com.wiggle.proto.CreatedBranch.Builder out = com.wiggle.proto.CreatedBranch.newBuilder()
+                .setInput(com.wiggle.proto.ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(b.input())));
+        if (b.key() != null) out.setKey(b.key());
+        for (com.wiggle.core.CreatedBranch.BranchStep st : b.steps()) {
+            com.wiggle.proto.BranchStep.Builder sb = com.wiggle.proto.BranchStep.newBuilder()
+                    .setKind(st.kind().name())
+                    .setCompensable(st.compensable())
+                    .setSleepMillis(st.sleepMillis());
+            if (st.name() != null) sb.setName(st.name());
+            if (st.queue() != null) sb.setQueue(st.queue());
+            if (st.retry() != null) sb.setRetry(com.wiggle.proto.ProtoJson.toValue(st.retry().toJson()));
+            out.addSteps(sb);
+        }
+        return out.build();
+    }
+
     static List<com.wiggle.core.EventView> events(com.wiggle.proto.EventList res) {
         List<com.wiggle.core.EventView> out = new ArrayList<>(res.getEventsCount());
         for (com.wiggle.proto.EventView e : res.getEventsList()) {
@@ -124,6 +141,7 @@ final class Wire {
     static StepResult stepResult(WiggleClient.StepReport s) {
         StepResult.Builder sr = StepResult.newBuilder().setNodeId(s.nodeId());
         for (com.wiggle.core.EmittedEvent e : s.events()) sr.addEvents(emitted(e));
+        for (com.wiggle.core.CreatedBranch b : s.branches()) sr.addBranches(branch(b));
         if (s.startedAt() != null && s.finishedAt() != null) sr.setStartedAt(s.startedAt()).setFinishedAt(s.finishedAt());
         if (s.predicateValue() != null) sr.setPredicateValue(s.predicateValue());
         else if (s.merge() != null) sr.setMerge(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(s.merge())));

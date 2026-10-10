@@ -8,8 +8,10 @@ import com.wiggle.server.store.GraphStore;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -113,6 +115,15 @@ public final class DefinitionRegistry {
     }
 
     /**
+     * {@link #graph(GraphStore, String, int)} for an engine transaction, which also resolves the
+     * nodes an instance created at run time ({@link Spawns}); they live beside the instance, not in
+     * the definition.
+     */
+    public LazyGraph graph(Tx tx, String name, int version) {
+        return new WithCreatedNodes(graph((GraphStore) tx, name, version), tx);
+    }
+
+    /**
      * Holds a small definition whole the first time this node reads it, so a node that did not
      * register it stops reading its graph a node at a time on every step -- reads made while the
      * step's instance is locked. A published version never changes, so the copy never goes stale;
@@ -188,6 +199,42 @@ public final class DefinitionRegistry {
             tx.putGraph(def);
         }
 
+    }
+
+    /** A graph that also answers for the nodes created at run time, read once per handle. */
+    private static final class WithCreatedNodes implements LazyGraph {
+
+        private final LazyGraph graph;
+        private final Tx tx;
+        private final Map<String, Node> created = new HashMap<>();
+
+        WithCreatedNodes(LazyGraph graph, Tx tx) {
+            this.graph = graph;
+            this.tx = tx;
+        }
+
+        @Override public String name() { return graph.name(); }
+
+        @Override public int version() { return graph.version(); }
+
+        @Override public String key() { return graph.key(); }
+
+        @Override public String startNode() { return graph.startNode(); }
+
+        @Override public Node node(String id) {
+            return find(id).orElseThrow(
+                    () -> new IllegalStateException("unknown node '" + id + "' in workflow " + graph.name()));
+        }
+
+        @Override public Optional<Node> find(String id) {
+            if (!Spawns.isCreated(id)) return graph.find(id);
+            Node n = created.get(id);
+            if (n == null) {
+                n = tx.dynNode(id).orElse(null);
+                if (n != null) created.put(id, n);
+            }
+            return Optional.ofNullable(n);
+        }
     }
 
     /** A handle over a definition already held whole: every lookup is a map read, no store, no

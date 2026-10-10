@@ -49,16 +49,18 @@ determinism discipline, and a spawning step may call a model, a database or a cl
 | **round** | One report's branches and the combine run that consumes them. A combine that creates branches starts the next round. |
 
 **WGL-DYN-001** (MUST) A combine directly after a task (`thenApply` or `thenAccept`), rather than after
-`allOf` or `thenForEach`, MUST make that task a spawning step. Compilation MUST set the task's new
-`spawning` flag and emit a dynamic `JOIN` (`expected == 0`) followed by a combine `TASK` carrying
-`collectKey = __spawn__<step name>` (`ScratchKeys.spawn`).
+`allOf` or `thenForEach`, MUST make that task a spawning step. Compilation MUST emit a dynamic `JOIN`
+(`expected == 0`) after the task, followed by a combine `TASK` carrying
+`collectKey = __spawn__<step name>` (`ScratchKeys.spawn`). That shape is what marks a spawning step
+(`GraphTraversal.spawnCombine`); no node carries a flag for it.
 
 **WGL-DYN-002** (MUST) A spawning step is still a `TASK`: no node kind is added, and its handler
 signature is that of any task ([WGL-WRK-004](20-worker.md)).
 
-**WGL-DYN-003** (MUST) The `spawning` flag MUST be part of the fingerprint
-([WGL-AUTH-100](10-authoring.md)). Created branches MUST NOT be: what a branch runs is decided per
-instance, by the handler, and is not part of the topology.
+**WGL-DYN-003** (MUST) Whether a step spawns MUST be part of the fingerprint
+([WGL-AUTH-100](10-authoring.md)), which it is through the combine's `collectKey`. Created branches
+MUST NOT be: what a branch runs is decided per instance, by the handler, and is not part of the
+topology.
 
 ## 2. Creating branches in a handler
 
@@ -73,9 +75,9 @@ overloads ([WGL-AUTH-061](10-authoring.md)): `thenApply`, `thenAccept`, `thenFil
 Steps are named by reference — `this::reserve` on the handler object, or `Steps::reserve` on the
 contract — and nothing referenced is invoked.
 
-**WGL-DYN-012** (MUST) A branch step without its own queue MUST use the spawning step's queue, and one
-without its own retry policy MUST use the spawning step's policy. Its activity MUST be
-`<workflow>#<name>` ([WGL-AUTH-084](10-authoring.md)).
+**WGL-DYN-012** (MUST) A branch step without its own queue MUST use the creating step's queue, and one
+without its own retry policy MUST use the creating step's policy — the spawning step's in round 1, the
+combine's in a later round. Its activity MUST be `<workflow>#<name>` ([WGL-AUTH-084](10-authoring.md)).
 
 **WGL-DYN-013** (MUST) `Branch` MUST also offer `combine(ref)` directly after a task, making that
 branch step a spawning step of its own. This is how dynamic flows nest.
@@ -90,7 +92,8 @@ injected into the combine by type ([§8](#8-parameters-by-type)) and reachable f
 through `Step.base()` ([WGL-WRK-061](20-worker.md)).
 
 **WGL-DYN-016** (MUST) `Step.create` MUST throw when the running step is neither a spawning step nor
-its combine.
+its combine. A worker that does not hold the task's graph MUST leave the check to the server
+([WGL-DYN-051](#6-validation-and-limits)).
 
 ## 3. Worker contract
 
@@ -98,10 +101,13 @@ its combine.
 id: a fragment node's id is minted per instance and is unknown to the worker's graph.
 
 **WGL-DYN-021** (MUST) Binding is graph-driven today, and a method matching no node is ignored as a
-helper ([WGL-WRK-020](20-worker.md)). For an activity not in the graph, a worker MUST instead bind the
-`@ForFlow` method of that name on first dispatch and check its signature against the branch step's
-kind and `compensable` flag then, failing the step non-retryably on a mismatch with the message
-[WGL-WRK-021](20-worker.md) and [WGL-WRK-011](20-worker.md) would give at `start()`.
+helper ([WGL-WRK-020](20-worker.md)). For a task on a created node (id prefix `~`), a worker MUST
+instead bind the `@ForFlow` method of that name on first dispatch and check its signature against the branch step's
+kind then, failing the step on a mismatch with the message [WGL-WRK-021](20-worker.md) would give at
+`start()`. Its undo, `<activity>#compensate`, MUST bind the same way, since it may run on a worker
+that never ran the step. A task on any other node MUST still bind against the graph only, so a
+step a newer version added stays unbound on a worker that bound an older graph
+([WGL-WRK-023](20-worker.md)).
 
 **WGL-DYN-022** (MUST) A branch step's queue need not appear in the graph. A worker on default
 settings serves only the graph's queues ([WGL-WRK-030](20-worker.md)), so a queue that appears only in
@@ -120,19 +126,18 @@ message CreatedBranch {
 }
 message BranchStep {
     string name = 1;                   // step name; blank for a sleep
-    NodeKind kind = 2;                 // TASK | PREDICATE | SLEEP
+    string kind = 2;                   // TASK | PREDICATE | SLEEP
     bool compensable = 3;
-    bool spawning = 4;                 // followed by its own combine, named by `combine`
-    string combine = 5;
-    string queue = 6;                  // blank = the spawning step's queue
-    RetryPolicy retry = 7;             // absent = the spawning step's policy
-    int64 sleep_millis = 8;
+    string queue = 4;                  // blank = the creating step's queue
+    google.protobuf.Value retry = 5;   // a retry policy as JSON; absent = the creating step's
+    int64 sleep_millis = 6;
 }
 ```
 
-**WGL-DYN-031** (MUST) The node message MUST gain `spawning`. A client library that does not know it
-MUST still register a topology without spawning steps with a byte-identical fingerprint
-([WGL-GEN-006](00-index.md)).
+**WGL-DYN-031** (MUST) A step kind the server does not know MUST reach the engine as unknown and be
+refused there ([WGL-DYN-051](#6-validation-and-limits)), failing the step rather than the report.
+Definitions are unchanged on the wire, so a topology registers with the same fingerprint from a
+client library that does not know dynamic flows ([WGL-GEN-006](00-index.md)).
 
 ## 5. Engine
 
@@ -152,9 +157,9 @@ spawning step can never both fan out.
 **WGL-DYN-042** (MUST) Each step of each branch MUST compile to one fragment node carrying the step's
 kind, name, activity, queue, retry and `compensable` flag, with:
 
-- id `d<spawnTokenId>.<round>.<branch>.<position>`;
-- `next` = the branch's following fragment node, or the spawning step's `JOIN` for the last step;
-- for a gate, `altNext` = the spawning step's `JOIN` (a false gate short-circuits the branch, as in
+- id `~` followed by a freshly minted token ([`Ids.token`](../../core/src/main/java/com/wiggle/core/Ids.java));
+- `next` = the branch's following fragment node, or the round's `JOIN` for the last step;
+- for a gate, `altNext` = the round's `JOIN` (a false gate short-circuits the branch, as in
   [WGL-AUTH-087](10-authoring.md));
 - for a sleep, kind `SLEEP` with the given `sleepMillis`.
 
@@ -162,23 +167,24 @@ kind, name, activity, queue, retry and `compensable` flag, with:
 followed by its own fragment `JOIN` and combine; that combine continues at the branch's following
 fragment node. The inner step's branches are written when it reports, under its own token id.
 
-**WGL-DYN-044** (MUST) Fragment nodes MUST be stored in a new table `wf_dyn_node`, keyed
-`(instance_id, node_id)`, on the instance's shard ([WGL-SHARD-001](85-sharding.md)). They MUST be
-immutable once written and purged with their instance ([WGL-STOR-060](80-storage.md)).
+**WGL-DYN-044** (MUST) Fragment nodes MUST be stored in a new table `wf_dyn_node` (migration 33),
+keyed by node id with the owning instance id beside it, on the instance's shard
+([WGL-SHARD-001](85-sharding.md)). They MUST be immutable once written and purged with their instance
+([WGL-STOR-060](80-storage.md)).
 
-**WGL-DYN-045** (MUST) Graph lookup MUST resolve an id with the `d` prefix from the instance's
-fragments and any other id from the definition. Node id generation ([WGL-AUTH-080](10-authoring.md))
-MUST NOT mint a static id with that shape. A server MAY cache fragments per instance.
+**WGL-DYN-045** (MUST) Graph lookup MUST resolve an id with the `~` prefix from the fragments and any
+other id from the definition. Node id generation ([WGL-AUTH-080](10-authoring.md)) MUST NOT mint a
+static id containing `~`. A graph handle MAY cache the fragments it has read.
 
 ### 5.3 Fan-out and join
 
 **WGL-DYN-046** (MUST) Branch tokens MUST be minted exactly as `DYN_FORK` mints them
 ([WGL-ENG-043](30-engine.md)): one token per branch at its first fragment node, each carrying an
 `ITEM` frame whose view is the branch's `input` and whose index is its creation position, all sharing
-the group `"<spawnTokenId>.<round>#<width>"`. The drive budget MUST grow by the width
+the group `"<creatingTokenId>#<width>"`. The drive budget MUST grow by the width
 ([WGL-ENG-032](30-engine.md)).
 
-**WGL-DYN-047** (MUST) The spawning step's `JOIN` MUST behave as a dynamic barrier
+**WGL-DYN-047** (MUST) The round's `JOIN` MUST behave as a dynamic barrier
 ([WGL-ENG-044](30-engine.md), [045](30-engine.md)). On satisfaction it MUST stage the branch views
 under `__spawn__<step name>`: a list ordered by creation, or a map keyed by branch key when the
 branches carried keys ([WGL-ENG-046](30-engine.md)).
@@ -190,13 +196,13 @@ runs, because it is where another round is decided.
 ### 5.4 Rounds
 
 **WGL-DYN-049** (MUST) A spawning step's combine MAY itself call `Step.create`. When it does, its
-report MUST, in one transaction: make its returned context the new base, write the new branches as
-round `r + 1` of the same spawning token, and mint them. Their results reach the same combine, which
-runs again. A combine that creates nothing continues the flow with its return as the post-join
-context, as today.
+report MUST, in one transaction: make its returned context the new base, write the new branches with
+a `JOIN` created for this round whose `next` is the same combine, and mint them from the combine's
+token. Their results reach the same combine, which runs again. A combine that creates nothing
+continues the flow with its return as the post-join context, as today.
 
-**WGL-DYN-050** (MUST) Rounds MUST be budgeted: the spawning step's own budget when declared
-(`combine(ref).maxRounds(n)`), else `WIGGLE_DYN_MAX_ROUNDS` (default 100). The report that would
+**WGL-DYN-050** (MUST) Rounds MUST be budgeted by `WIGGLE_DYN_MAX_ROUNDS` (default 100), counting the
+spawning step's own branches as round 1. The report that would
 start round `budget + 1` MUST fail the instance with a message naming the step and how to raise the
 budget, as [WGL-ENG-102](30-engine.md) does for loops.
 
@@ -208,12 +214,10 @@ with a reason naming the offending branch and step, when:
 - the running step is neither a spawning step nor its combine;
 - a branch has no steps, a blank step name, a negative sleep, or a malformed retry policy
   ([WGL-AUTH-030](10-authoring.md));
-- a nested spawning step names no combine;
 - some but not all branches carry a key, or two share one;
 - one report creates more than `WIGGLE_DYN_MAX_BRANCHES` branches (default 10 000);
 - a branch exceeds `WIGGLE_DYN_MAX_STEPS` steps (default 100);
-- the instance's fragments would exceed `WIGGLE_DYN_MAX_NODES` nodes in total (default 100 000);
-- nesting would exceed `WIGGLE_DYN_MAX_DEPTH` spawning steps deep (default 16).
+- a step kind is unknown, or is not `TASK`, `PREDICATE` or `SLEEP`.
 
 **WGL-DYN-052** (MUST) The server MUST NOT refuse a branch step for its queue. Which queues have
 workers is a deployment fact, not part of the report ([WGL-DYN-022](#3-worker-contract)).
@@ -319,7 +323,13 @@ and another client library MAY bind differently.
 Dynamic flows and `thenForEach` share the minting, frame, join and staging machinery; they differ in
 who builds the branches. Once dynamic flows ship, the engine needs only one fan-out path.
 
-**WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged.
+**WGL-DYN-070** (MUST) Phase 1 ships dynamic flows beside `DYN_FORK`, which is unchanged. It leaves
+out nesting ([WGL-DYN-013](#2-creating-branches-in-a-handler), [043](#52-fragments)), the
+`BRANCHES_CREATED` lifecycle entry ([WGL-DYN-065](#7-interaction-with-other-features)), the portal's
+grouping ([WGL-DYN-066](#7-interaction-with-other-features)) and parameters by type
+([§8](#8-parameters-by-type)), which follow it. Until nesting lands, a per-instance cap on created
+nodes and a nesting depth limit are not needed: a round is bounded by its branches and steps, and
+rounds by their budget.
 
 **WGL-DYN-071** (MUST) Phase 2 MUST re-implement `DYN_FORK` as branches the server creates: at drive
 time the engine reads `itemsKey` and compiles one branch per element over the static template,

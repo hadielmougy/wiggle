@@ -1,6 +1,8 @@
 package com.wiggle.core;
 
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Pure graph-walking decisions shared by the server's state machine and the worker's local
@@ -19,6 +21,25 @@ public final class GraphTraversal {
         return node.kind() == NodeKind.PREDICATE
                 ? (predicateValue ? node.next() : node.altNext())
                 : node.next();
+    }
+
+    /**
+     * The combine a step that creates branches at run time feeds, or empty when {@code node} is not
+     * such a step: a task followed directly by a dynamic join and the combine collecting under
+     * {@link ScratchKeys#spawn} of the task's name.
+     */
+    public static Optional<Node> spawnCombine(Node node, Function<String, Optional<Node>> lookup) {
+        if (node.kind() != NodeKind.TASK || node.isCombine() || node.next() == null) return Optional.empty();
+        return lookup.apply(node.next())
+                .filter(join -> join.kind() == NodeKind.JOIN && join.expected() == 0 && join.next() != null)
+                .flatMap(join -> lookup.apply(join.next()))
+                .filter(c -> c.isCombine() && ScratchKeys.spawn(node.name()).equals(c.collectKey()));
+    }
+
+    /** Whether {@code node} may create branches: a step followed by its combine, or that combine. */
+    public static boolean mayCreateBranches(Node node, Function<String, Optional<Node>> lookup) {
+        return (node.isCombine() && ScratchKeys.isSpawn(node.collectKey()))
+                || spawnCombine(node, lookup).isPresent();
     }
 
     /**

@@ -1,7 +1,9 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
+import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.Json;
+import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
 
@@ -21,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class Registrations {
 
     private static final System.Logger LOG = System.getLogger(Registrations.class.getName());
+    private static final String COMPENSATE_SUFFIX = "#compensate";
 
     /** One {@code registerHandler(...)} call: the scanned methods, and the version they were bound for. */
     private record Registration(HandlerBinder.HandlerSet set, Integer version) {}
@@ -64,6 +67,31 @@ final class Registrations {
         return handlers.get(activity);
     }
 
+    /**
+     * {@link #handlerFor(String)}, binding on first use a step a handler created at run time: such a
+     * step's activity is in no graph, so it is matched by name against the scanned methods of its
+     * workflow -- and so is its undo, which may run on a worker that never ran the step. Any other
+     * step binds against the graph only, as at startup.
+     */
+    ActivityHandler handlerFor(String activity, String nodeId, NodeKind kind) {
+        ActivityHandler bound = handlers.get(activity);
+        if (bound != null || !CreatedBranch.isCreatedNode(nodeId)) return bound;
+        boolean undo = activity.endsWith(COMPENSATE_SUFFIX);
+        String stepActivity = undo ? activity.substring(0, activity.length() - COMPENSATE_SUFFIX.length()) : activity;
+        int hash = stepActivity.indexOf('#');
+        if (hash < 0) return null;
+        String workflow = stepActivity.substring(0, hash);
+        String name = stepActivity.substring(hash + 1);
+        for (Registration r : registrations) {
+            if (!workflow.equals(r.set().workflow())) continue;
+            HandlerBinder.Binding b = HandlerBinder.bindCreated(r.set(), stepActivity, name, undo ? NodeKind.TASK : kind);
+            if (b == null) continue;
+            install(b);
+            return handlers.get(activity);
+        }
+        return null;
+    }
+
     WorkflowDefinition graphFor(String key) {
         return graphs.get(key);
     }
@@ -94,25 +122,30 @@ final class Registrations {
         WorkflowDefinition def = fetchGraph(client, options, set.workflow(), registration.version());
         HandlerBinder.Result result = HandlerBinder.bind(set, def);
         for (HandlerBinder.Binding b : result.bindings()) {
-            if (handlers.putIfAbsent(b.activity(), b.handler()) != null) {
+            if (handlers.containsKey(b.activity())) {
                 throw new IllegalStateException("duplicate handler for activity '" + b.activity() + "'");
             }
-            if (b.compensator() != null) {
-                // The undo is a normal claimable activity under "<activity>#compensate"; its
-                // context is the {input, result} snapshot pair the engine staged.
-                HandlerBinder.Compensator comp = b.compensator();
-                handlers.putIfAbsent(b.activity() + "#compensate", ctx -> {
-                    Map<String, Object> snaps = Json.asObject(ctx);
-                    comp.invoke(snaps.get("input"), snaps.get("result"));
-                    return null;
-                });
-            }
+            install(b);
             queues.add(b.queue());
         }
         graphs.put(def.key(), def);
         if (!result.unserved().isEmpty()) {   // info, not an error: this worker may serve a subset
             LOG.log(System.Logger.Level.INFO, () -> "workflow '" + set.workflow()
                     + "' has steps served by no handler on this worker: " + result.unserved());
+        }
+    }
+
+    private void install(HandlerBinder.Binding b) {
+        handlers.putIfAbsent(b.activity(), b.handler());
+        if (b.compensator() != null) {
+            // The undo is a normal claimable activity under "<activity>#compensate"; its
+            // context is the {input, result} snapshot pair the engine staged.
+            HandlerBinder.Compensator comp = b.compensator();
+            handlers.putIfAbsent(b.activity() + COMPENSATE_SUFFIX, ctx -> {
+                Map<String, Object> snaps = Json.asObject(ctx);
+                comp.invoke(snaps.get("input"), snaps.get("result"));
+                return null;
+            });
         }
     }
 

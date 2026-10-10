@@ -442,6 +442,99 @@ public final class WiggleFlow<T> {
 
 
     /**
+     * The merge for the branches the preceding step creates at run time. Inside that step's handler,
+     * {@code Step.create(input)} opens a branch and chains steps onto it; each branch runs on its own
+     * isolated context, and this handler receives their results -- a {@code List} in creation order,
+     * or a {@code Map} by branch key when the branches were keyed -- returning the complete post-join
+     * context. It also runs when the step created none, with an empty collection.
+     *
+     * <pre>{@code
+     * f.thenApply(s::fulfil).combine(s::summarise)
+     * }</pre>
+     *
+     * <p>Must directly follow a {@link #thenApply} or {@link #thenAccept}: that step is the one that
+     * may create branches. The combine may create branches too, which runs another round and calls
+     * it again with their results.
+     */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine) {
+        return spawnCombine(StepNames.of(combine), null, null);
+    }
+
+    /** {@link #combine(FlowFn)} with an explicit retry policy for the combine node. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, RetryPolicy retry) {
+        return spawnCombine(StepNames.of(combine), retry, null);
+    }
+
+    /** {@link #combine(FlowFn)} pinned to a dedicated worker queue. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, String queue) {
+        return spawnCombine(StepNames.of(combine), null, queue);
+    }
+
+    /** {@link #combine(FlowFn)} with both a retry policy and a dedicated queue. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, RetryPolicy retry, String queue) {
+        return spawnCombine(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn)} with both, queue first. */
+    public <X, R> WiggleFlow<R> combine(FlowFn<X, R> combine, String queue, RetryPolicy retry) {
+        return spawnCombine(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn)} for a handler that also takes the context the creating step returned. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine) {
+        return spawnCombine(StepNames.of(combine), null, null);
+    }
+
+    /** {@link #combine(FlowFn2)} with an explicit retry policy for the combine node. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, RetryPolicy retry) {
+        return spawnCombine(StepNames.of(combine), retry, null);
+    }
+
+    /** {@link #combine(FlowFn2)} pinned to a dedicated worker queue. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, String queue) {
+        return spawnCombine(StepNames.of(combine), null, queue);
+    }
+
+    /** {@link #combine(FlowFn2)} with both a retry policy and a dedicated queue. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, RetryPolicy retry, String queue) {
+        return spawnCombine(StepNames.of(combine), retry, queue);
+    }
+
+    /** {@link #combine(FlowFn2)} with both, queue first. */
+    public <C, X, R> WiggleFlow<R> combine(FlowFn2<C, X, R> combine, String queue, RetryPolicy retry) {
+        return spawnCombine(StepNames.of(combine), retry, queue);
+    }
+
+    /** The merge named explicitly. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result) {
+        return spawnCombine(name, null, null);
+    }
+
+    /** {@link #combine(String, Class)} with an explicit retry policy for the combine node. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, RetryPolicy retry) {
+        return spawnCombine(name, retry, null);
+    }
+
+    /** {@link #combine(String, Class)} pinned to a dedicated worker queue. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, String queue) {
+        return spawnCombine(name, null, queue);
+    }
+
+    /** {@link #combine(String, Class)} with both a retry policy and a dedicated queue. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, RetryPolicy retry, String queue) {
+        return spawnCombine(name, retry, queue);
+    }
+
+    /** {@link #combine(String, Class)} with both, queue first. */
+    public <R> WiggleFlow<R> combine(String name, Class<R> result, String queue, RetryPolicy retry) {
+        return spawnCombine(name, retry, queue);
+    }
+
+    private <R> WiggleFlow<R> spawnCombine(String name, RetryPolicy retry, String queue) {
+        return record(name, b -> b.spawnCombine(name, retry, queue));
+    }
+
+    /**
      * Opens an arm of a {@link Wiggle#oneOf}: the steps chained after this run only when {@code guard}
      * is the first of the choice's guards to hold.
      *
