@@ -39,14 +39,16 @@ public final class DefinitionRegistry {
     private static final int DEF_MAX_NODES = 40;
 
     private final Storage storage;
-    private final ConcurrentHashMap<String, ExecutionMode> modeCache = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, List<DispatchAttribute>> attributeCache = new ConcurrentHashMap<>();
+    /** What the engine reads from a version's definition beyond its nodes, parsed from one read. */
+    private record Meta(ExecutionMode mode, List<DispatchAttribute> attributes) { }
+
+    private final ConcurrentHashMap<String, Meta> metaCache = new ConcurrentHashMap<>();
 
     /** Small definitions held whole, so the drive loop reads their nodes without touching the
      *  store. Per registry, never static: the key is {@code name:version}, which says nothing about
      *  which database it came from, and two cells in one JVM may serve different graphs under the
      *  same name. Bounded per entry by {@link #DEF_MAX_NODES} and in count by the versions this
-     *  cell serves -- the same order as {@link #modeCache}. */
+     *  cell serves -- the same order as {@link #metaCache}. */
     private final ConcurrentHashMap<String, WorkflowDefinition> defCache = new ConcurrentHashMap<>();
     /** Versions read once and found larger than {@link #DEF_MAX_NODES}: they stay on the lazy path. */
     private final Set<String> tooLarge = ConcurrentHashMap.newKeySet();
@@ -85,27 +87,28 @@ public final class DefinitionRegistry {
                 return null;
             });
         }
-        modeCache.put(def.key(), def.executionMode());
-        attributeCache.put(def.key(), def.attributes());
+        metaCache.put(def.key(), new Meta(def.executionMode(), def.attributes()));
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
         else tooLarge.add(def.key());
         return def;
     }
 
-    /** The execution mode for a version, cached; parses the blob at most once per version. */
+    /** The execution mode for a version, cached; see {@link #meta}. */
     public ExecutionMode executionMode(GraphStore graphs, String name, int version) {
-        return modeCache.computeIfAbsent(name + ":" + version, k ->
-                graphs.definition(name, version)
-                        .map(body -> WorkflowDefinition.fromJson(Json.parse(body)).executionMode())
-                        .orElse(ExecutionMode.DEFAULT));
+        return meta(graphs, name, version).mode();
     }
 
-    /** The attributes a version declares, cached; parses the blob at most once per version. */
+    /** The attributes a version declares, cached; see {@link #meta}. */
     public List<DispatchAttribute> attributes(GraphStore graphs, String name, int version) {
-        return attributeCache.computeIfAbsent(name + ":" + version, k ->
-                graphs.definition(name, version)
-                        .map(body -> WorkflowDefinition.fromJson(Json.parse(body)).attributes())
-                        .orElse(List.of()));
+        return meta(graphs, name, version).attributes();
+    }
+
+    /** A version's mode and attributes: the blob is read and parsed at most once per version, for both. */
+    private Meta meta(GraphStore graphs, String name, int version) {
+        return metaCache.computeIfAbsent(name + ":" + version, k -> graphs.definition(name, version)
+                .map(body -> WorkflowDefinition.fromJson(Json.parse(body)))
+                .map(def -> new Meta(def.executionMode(), def.attributes()))
+                .orElse(new Meta(ExecutionMode.DEFAULT, List.of())));
     }
 
     /**
@@ -150,6 +153,7 @@ public final class DefinitionRegistry {
         }
         WorkflowDefinition def = load(graphs, name, version).orElse(null);
         if (def == null) return null;
+        metaCache.putIfAbsent(key, new Meta(def.executionMode(), def.attributes()));
         WorkflowDefinition held = defCache.putIfAbsent(key, def);
         return held == null ? def : held;
     }
