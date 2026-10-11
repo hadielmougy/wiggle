@@ -5,6 +5,7 @@ import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PortalTest {
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "portal-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "portal-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -77,7 +78,7 @@ class PortalTest {
     }
 
     private static HttpResponse<String> cluster(DashboardData data) throws Exception {
-        try (ConsoleServer http = new ConsoleServer(data, new ConsoleAuth("admin", null, false), 0,
+        try (ConsoleServer http = new ConsoleServer(data, new ConsoleAuth("admin", null, false), TestPorts.free(),
                 Tls.Options.DISABLED).start()) {
             return HttpClient.newHttpClient().send(HttpRequest.newBuilder(
                     URI.create("http://localhost:" + http.port() + "/api/cluster")).build(),

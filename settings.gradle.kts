@@ -13,5 +13,6 @@ include(
     "dist",
     "example",
     "tests",
-    "console"
+    "console",
+    "test-fixtures"
 )
