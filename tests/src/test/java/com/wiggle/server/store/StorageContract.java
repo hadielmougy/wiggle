@@ -1115,7 +1115,7 @@ abstract class StorageContract {
             }
             assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
 
-            ClaimFilter filter = ClaimFilter.of(List.of(criteria), null);
+            ClaimFilter filter = new ClaimFilter(List.of(criteria), null);
             Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
             Set<Integer> got = new TreeSet<>();
             for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
@@ -1138,10 +1138,10 @@ abstract class StorageContract {
         storage.inTxVoid(tx -> tx.updateToken(t));
 
         var region = Task_.attr("region", String.class);
-        ClaimFilter us = ClaimFilter.of(List.of(QueueCriteria.from(q).where(cb -> cb.or(
+        ClaimFilter us = new ClaimFilter(List.of(QueueCriteria.from(q).where(cb -> cb.or(
                 cb.equal(region, "us"), cb.isNotNull(Task_.attr("tier", String.class))))), null);
         assertTrue(storage.inTx(tx -> tx.claimTasks("w1", us, 10, now, now + 1_000)).isEmpty(), "the old rows are gone");
-        ClaimFilter eu = ClaimFilter.of(List.of(QueueCriteria.from(q).where(cb -> cb.equal(region, "eu"))), null);
+        ClaimFilter eu = new ClaimFilter(List.of(QueueCriteria.from(q).where(cb -> cb.equal(region, "eu"))), null);
         assertEquals(List.of(t.id), idsOf(storage.inTx(tx -> tx.claimTasks("w1", eu, 10, now, now + 1_000))));
     }
 
