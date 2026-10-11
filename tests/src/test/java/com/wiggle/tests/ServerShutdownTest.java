@@ -5,6 +5,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Ids;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
