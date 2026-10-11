@@ -8,6 +8,7 @@ package com.wiggle.agents;
  * the call is tried again. It holds no conversation state — whatever an agent needs to remember
  * travels in the workflow's context, which is what makes a crashed worker's step re-runnable.
  */
+// docs:begin model
 public interface Model {
 
     /**
@@ -19,3 +20,4 @@ public interface Model {
 
     String complete(Prompt prompt);
 }
+// docs:end model

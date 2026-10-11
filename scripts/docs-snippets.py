@@ -64,6 +64,10 @@ SOURCES = {
     "queues": FIXTURES / "docs/QueuesSnippet.java",
     "local-execution": FIXTURES / "docs/LocalExecutionSnippet.java",
     "event-log": FIXTURES / "docs/EventLogSnippet.java",
+    "agents": FIXTURES / "agents/ResearchTeam.java",
+    "agents-model": FIXTURES / "agents/Model.java",
+    "agents-demo": FIXTURES / "agents/AgentsDemo.java",
+    "agents-claude": ROOT / "example-claude/src/main/java/com/wiggle/agents/claude/ClaudeModel.java",
 }
 
 MARKER = re.compile(r"^(?P<indent>[ \t]*)<!-- snippet: (?P<source>[\w-]+)/(?P<regions>[\w,-]+) -->$")

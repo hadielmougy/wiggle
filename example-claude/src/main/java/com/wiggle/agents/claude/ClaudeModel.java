@@ -40,6 +40,7 @@ public final class ClaudeModel implements Model {
         return new ClaudeModel(AnthropicOkHttpClient.builder().fromEnv().maxRetries(0).build(), model);
     }
 
+    // docs:begin complete
     @Override
     public String complete(Prompt p) {
         MessageCreateParams params = MessageCreateParams.builder()
@@ -66,4 +67,5 @@ public final class ClaudeModel implements Model {
                 .map(text -> text.text())
                 .collect(Collectors.joining());
     }
+    // docs:end complete
 }

@@ -289,7 +289,12 @@ class DocSnippetsTest {
             Map.entry("tut-standalone", "tutorial/Standalone.java"),
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
-            Map.entry("event-log", "docs/EventLogSnippet.java"));
+            Map.entry("event-log", "docs/EventLogSnippet.java"),
+            Map.entry("agents", "agents/ResearchTeam.java"),
+            Map.entry("agents-model", "agents/Model.java"),
+            Map.entry("agents-demo", "agents/AgentsDemo.java"),
+            Map.entry("agents-claude",
+                    "../example-claude/src/main/java/com/wiggle/agents/claude/ClaudeModel.java"));
 
     private static Path sourcePath(String source) {
         String path = SOURCE_FILES.get(source);

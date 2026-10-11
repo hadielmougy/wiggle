@@ -35,10 +35,12 @@ public final class AgentsDemo {
                     .registerHandler(new ResearchTeam.Agents(model))) {
                 worker.start();
 
+                // docs:begin editor
                 String id = client.start(spec, new ResearchTeam.Brief(topic));
                 awaitEditor(client, id, Duration.ofMinutes(10));
                 System.out.println("brief is with the editor; approving");
                 client.signal(id, ResearchTeam.APPROVAL, Map.of("decision", "approved"));
+                // docs:end editor
 
                 InstanceView v = client.awaitCompletion(id, Duration.ofMinutes(1));
                 System.out.println("status:  " + v.status());
