@@ -24,13 +24,13 @@ public final class CriteriaBuilder {
     public final <T> Predicate in(Attribute<T> a, T... values) {
         List<Object> args = new ArrayList<>(values.length);
         for (T v : values) args.add(a.literal(v));
-        return new Comparison(a.field(), Op.IN, args);
+        return new Comparison(a.field(), a.name(), Op.IN, args);
     }
 
     public <T> Predicate in(Attribute<T> a, List<T> values) {
         List<Object> args = new ArrayList<>(values.size());
         for (T v : values) args.add(a.literal(v));
-        return new Comparison(a.field(), Op.IN, args);
+        return new Comparison(a.field(), a.name(), Op.IN, args);
     }
 
     public <T extends Comparable<? super T>> Predicate lessThan(Attribute<T> a, T value) {
@@ -50,7 +50,7 @@ public final class CriteriaBuilder {
     }
 
     public <T extends Comparable<? super T>> Predicate between(Attribute<T> a, T low, T high) {
-        return new Comparison(a.field(), Op.BETWEEN, List.of(a.literal(low), a.literal(high)));
+        return new Comparison(a.field(), a.name(), Op.BETWEEN, List.of(a.literal(low), a.literal(high)));
     }
 
     public Predicate like(Attribute<String> a, String pattern) {
@@ -58,11 +58,11 @@ public final class CriteriaBuilder {
     }
 
     public Predicate isNull(Attribute<?> a) {
-        return new Comparison(a.field(), Op.IS_NULL, List.of());
+        return new Comparison(a.field(), a.name(), Op.IS_NULL, List.of());
     }
 
     public Predicate isNotNull(Attribute<?> a) {
-        return new Comparison(a.field(), Op.IS_NOT_NULL, List.of());
+        return new Comparison(a.field(), a.name(), Op.IS_NOT_NULL, List.of());
     }
 
     public Predicate and(Predicate... terms) {
@@ -78,6 +78,6 @@ public final class CriteriaBuilder {
     }
 
     private static <T> Predicate cmp(Attribute<T> a, Op op, T value) {
-        return new Comparison(a.field(), op, List.of(a.literal(value)));
+        return new Comparison(a.field(), a.name(), op, List.of(a.literal(value)));
     }
 }

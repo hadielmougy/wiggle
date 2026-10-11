@@ -3,6 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
+import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.store.GraphStore;
 import com.wiggle.server.store.Storage;
@@ -39,6 +40,7 @@ public final class DefinitionRegistry {
 
     private final Storage storage;
     private final ConcurrentHashMap<String, ExecutionMode> modeCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<DispatchAttribute>> attributeCache = new ConcurrentHashMap<>();
 
     /** Small definitions held whole, so the drive loop reads their nodes without touching the
      *  store. Per registry, never static: the key is {@code name:version}, which says nothing about
@@ -84,6 +86,7 @@ public final class DefinitionRegistry {
             });
         }
         modeCache.put(def.key(), def.executionMode());
+        attributeCache.put(def.key(), def.attributes());
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
         else tooLarge.add(def.key());
         return def;
@@ -95,6 +98,14 @@ public final class DefinitionRegistry {
                 graphs.definition(name, version)
                         .map(body -> WorkflowDefinition.fromJson(Json.parse(body)).executionMode())
                         .orElse(ExecutionMode.DEFAULT));
+    }
+
+    /** The attributes a version declares, cached; parses the blob at most once per version. */
+    public List<DispatchAttribute> attributes(GraphStore graphs, String name, int version) {
+        return attributeCache.computeIfAbsent(name + ":" + version, k ->
+                graphs.definition(name, version)
+                        .map(body -> WorkflowDefinition.fromJson(Json.parse(body)).attributes())
+                        .orElse(List.of()));
     }
 
     /**

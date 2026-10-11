@@ -2,6 +2,7 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.core.*;
+import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.TaskFacts;
 
@@ -76,12 +77,17 @@ public final class Worker implements AutoCloseable {
         return options.queues().isEmpty() ? registrations.queues() : options.queues();
     }
 
-    /** Whether this worker's poll would claim {@code next} as the continuation of {@code task}. */
-    boolean claims(TaskActivation task, Node next) {
+    /**
+     * Whether this worker's poll would claim {@code next} as the continuation of {@code task}, with
+     * {@code ctx} the context it would receive.
+     */
+    boolean claims(TaskActivation task, WorkflowDefinition def, Node next, Object ctx) {
         QueueCriteria c = options.criteria();
         if (c == null) return true;
+        Map<String, Object> attributes = def.attributes().isEmpty() ? Map.of()
+                : DispatchAttribute.extractAll(def.attributes(), RecordMapper.toJson(ctx));
         return c.matches(new TaskFacts(task.workflow(), task.version(), next.queue(), next.name(), next.id(),
-                next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt()));
+                next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt(), attributes));
     }
 
     public int inFlight() { return inFlight.get(); }

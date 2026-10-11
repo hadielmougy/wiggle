@@ -5,6 +5,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
+import com.wiggle.core.criteria.AttrType;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 
@@ -12,6 +13,21 @@ import com.wiggle.core.criteria.Task_;
 public final class QueuesSnippet {
 
     public record Order(String status) {}
+
+    public record Customer(String region) {}
+
+    public record RegionalOrder(Customer customer, java.math.BigDecimal total) {}
+
+    interface RegionalSteps {
+        RegionalOrder validate(RegionalOrder o);
+        RegionalOrder charge(RegionalOrder o);
+    }
+
+    @ForFlow("regional-orders")
+    static class RegionalHandlers {
+        public RegionalOrder validate(RegionalOrder o) { return o; }
+        public RegionalOrder charge(RegionalOrder o) { return o; }
+    }
 
     interface OrderSteps {
         Order validate(Order o);
@@ -69,6 +85,29 @@ public final class QueuesSnippet {
                 .start();
         // docs:end criteria-worker
         eu.close();
+    }
+
+    static void attributes(WiggleClient client) {
+        // docs:begin attributes
+        FlowSpec orders = FlowSpec.define("regional-orders", 1, RegionalOrder.class, RegionalSteps.class, (f, s) -> f
+                .attribute("region", AttrType.STRING, "customer.region")   // read from each step's context
+                .attribute("total", AttrType.DECIMAL, "total")
+                .thenApply(s::validate)
+                .thenApply(s::charge, "payments"));
+
+        // payments-eu-large: EU charges of 1000 or more
+        QueueCriteria euLarge = QueueCriteria.from("payments")
+                .where(cb -> cb.and(
+                        cb.equal(Task_.attr("region", String.class), "eu"),
+                        cb.greaterThanOrEqualTo(Task_.attr("total", java.math.BigDecimal.class),
+                                new java.math.BigDecimal("1000"))));
+        Worker large = new Worker(client, "payments-eu-large-1",
+                        WorkerOptions.defaults().withCriteria(euLarge))
+                .registerHandler(new RegionalHandlers())
+                .start();
+        // docs:end attributes
+        client.register(orders);
+        large.close();
     }
 
     static void general(WiggleClient client) {

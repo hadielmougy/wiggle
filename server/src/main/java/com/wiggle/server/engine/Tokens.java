@@ -3,6 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
+import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.ShardIds;
@@ -98,13 +99,25 @@ final class Tokens {
         tx.insertToken(cont);
     }
 
-    void markReady(Tx tx, Token t, Node node, long now) {
+    void markReady(Tx tx, Instance inst, Token t, Node node, long now) {
         t.kind = node.kind();
         t.activity = node.activity();
         t.queue = node.queue();
         t.availableAt = now;
+        stampAttributes(definitions, tx, inst, t);
         move(tx, t, TokenStatus.READY, now);
         wake(node.queue());
+    }
+
+    /**
+     * Reads the flow's declared attributes from the context {@code t}'s step receives, to be written
+     * with the token. A flow that declares none costs a cache lookup and writes nothing.
+     */
+    static void stampAttributes(DefinitionRegistry definitions, Tx tx, Instance inst, Token t) {
+        List<DispatchAttribute> declared = definitions.attributes(tx, t.workflow, t.version);
+        if (declared.isEmpty()) return;
+        t.attributes = DispatchAttribute.extractAll(declared, Scopes.dispatchContext(inst, t).raw());
+        t.attributesChanged = true;
     }
 
     static void markWaiting(Tx tx, Token t, long availableAt, long now) {

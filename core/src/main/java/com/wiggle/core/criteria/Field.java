@@ -17,10 +17,13 @@ public enum Field {
     ATTEMPT(Type.INTEGER),
     CORRELATION_ID(Type.TEXT),
     /** Epoch millis of the instance's creation. */
-    INSTANCE_CREATED_AT(Type.INTEGER);
+    INSTANCE_CREATED_AT(Type.INTEGER),
+    /** A value the flow declares ({@link DispatchAttribute}); its comparison names which. */
+    ATTRIBUTE(Type.ANY);
 
-    /** How a field's literals are typed: TEXT takes {@link String}, INTEGER takes {@link Long}. */
-    public enum Type { TEXT, INTEGER }
+    /** How a field's literals are typed: TEXT takes {@link String}, INTEGER takes {@link Long}, and
+     *  ANY takes a String, Long, BigDecimal or Boolean. */
+    public enum Type { TEXT, INTEGER, ANY }
 
     private final Type type;
 

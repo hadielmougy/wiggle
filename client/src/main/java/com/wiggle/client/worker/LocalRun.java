@@ -152,12 +152,12 @@ final class LocalRun {
         boolean isPredicate = node.kind() == NodeKind.PREDICATE;
         boolean predicateValue = isPredicate && (Boolean) result;
         Node next = def.node(GraphTraversal.successor(node, predicateValue));
+        if (!isPredicate) ctx = applyReplace(ctx, result);
         boolean handback = !created.isEmpty() || GraphTraversal.classify(next, w.servedQueues()) != null
-                || !w.claims(task, next);
+                || !w.claims(task, def, next, ctx);
         buffer.add(isPredicate
                 ? new WiggleClient.StepReport(node.id(), null, predicateValue, startedAt, finishedAt, events, created)
                 : new WiggleClient.StepReport(node.id(), result, null, startedAt, finishedAt, events, created));
-        if (!isPredicate) ctx = applyReplace(ctx, result);
         if (shouldFlush(handback) && !flushAndContinue(handback)) return false;
         node = next;
         attempt = 1;

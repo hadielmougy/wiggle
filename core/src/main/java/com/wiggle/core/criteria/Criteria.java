@@ -5,8 +5,8 @@ import com.wiggle.core.criteria.Predicate.Comparison;
 import com.wiggle.core.criteria.Predicate.Not;
 import com.wiggle.core.criteria.Predicate.Or;
 
+import java.math.BigDecimal;
 import java.util.List;
-import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
@@ -20,6 +20,15 @@ public final class Criteria {
     public static final int MAX_NODES = 64;
     public static final int MAX_IN = 256;
     public static final int MAX_TEXT = 256;
+
+    /** What a predicate is evaluated against: a field's value, or {@link #UNKNOWN}. */
+    @FunctionalInterface
+    public interface Facts {
+        /** {@code attribute} names the declared attribute when {@code field} is ATTRIBUTE, else null. */
+        Object value(Field field, String attribute);
+    }
+
+    private static final Pattern ATTRIBUTE_NAME = Pattern.compile("[a-z][a-z0-9_]{0,62}");
 
     /** A fact {@link #evaluate} cannot know, as returned by its facts function. */
     public static final Object UNKNOWN = new Object() {
@@ -75,8 +84,12 @@ public final class Criteria {
         if (f == Field.STEP && op != Op.EQUAL && op != Op.NOT_EQUAL && op != Op.IN) {
             throw new IllegalArgumentException("STEP supports equal, notEqual and in only, not " + op);
         }
-        if (op == Op.LIKE && f.type() != Field.Type.TEXT) {
+        if (op == Op.LIKE && f.type() == Field.Type.INTEGER) {
             throw new IllegalArgumentException("like needs a text field, not " + f);
+        }
+        if (f == Field.ATTRIBUTE) {
+            validateAttribute(c);
+            return;
         }
         for (Object arg : c.args()) {
             boolean fits = f.type() == Field.Type.TEXT ? arg instanceof String : arg instanceof Long;
@@ -84,21 +97,57 @@ public final class Criteria {
                 throw new IllegalArgumentException(f + " takes " + (f.type() == Field.Type.TEXT ? "text" : "an integer")
                         + ", got " + (arg == null ? "null" : arg.getClass().getSimpleName()));
             }
-            if (arg instanceof String s && s.length() > MAX_TEXT) {
-                throw new IllegalArgumentException(f + ": a text argument is longer than " + MAX_TEXT + " characters");
-            }
+            requireShortText(f.name(), arg);
         }
         if (op == Op.LIKE) likeRegex((String) c.args().getFirst());
     }
 
-    public static boolean matches(Predicate p, TaskFacts task) {
-        return evaluate(p, task::value) == Truth.TRUE;
+    private static void validateAttribute(Comparison c) {
+        String what = "attribute '" + c.attribute() + "'";
+        if (!ATTRIBUTE_NAME.matcher(c.attribute()).matches()) {
+            throw new IllegalArgumentException(what + " is not a valid attribute name");
+        }
+        Class<?> kind = null;
+        for (Object arg : c.args()) {
+            Class<?> k = switch (arg) {
+                case String s -> String.class;
+                case Long n -> Number.class;
+                case BigDecimal d -> {
+                    if (!AttrType.fits(d)) {
+                        throw new IllegalArgumentException(what + ": " + d + " has more than " + AttrType.MAX_SCALE
+                                + " fraction or " + AttrType.MAX_INTEGER_DIGITS + " integer digits");
+                    }
+                    yield Number.class;
+                }
+                case Boolean b -> Boolean.class;
+                case null, default -> throw new IllegalArgumentException(what + " takes a String, Long, BigDecimal "
+                        + "or Boolean, got " + (arg == null ? "null" : arg.getClass().getSimpleName()));
+            };
+            if (kind != null && kind != k) throw new IllegalArgumentException(what + ": arguments of mixed types");
+            kind = k;
+            requireShortText(what, arg);
+        }
+        if (c.op() == Op.LIKE && kind != String.class) throw new IllegalArgumentException(what + ": like needs text");
+        if (kind == Boolean.class && (c.op().ordering() || c.op() == Op.LIKE)) {
+            throw new IllegalArgumentException(what + ": a boolean supports equal, notEqual and in only");
+        }
+        if (c.op() == Op.LIKE) likeRegex((String) c.args().getFirst());
+    }
+
+    private static void requireShortText(String what, Object arg) {
+        if (arg instanceof String s && s.length() > MAX_TEXT) {
+            throw new IllegalArgumentException(what + ": a text argument is longer than " + MAX_TEXT + " characters");
+        }
+    }
+
+    public static boolean matches(Predicate p, Facts task) {
+        return evaluate(p, task) == Truth.TRUE;
     }
 
     /** Evaluates with three values: a comparison on an {@link #UNKNOWN} fact is UNKNOWN. */
-    public static Truth evaluate(Predicate p, Function<Field, Object> facts) {
+    public static Truth evaluate(Predicate p, Facts facts) {
         return switch (p) {
-            case Comparison c -> compare(c, facts.apply(c.field()));
+            case Comparison c -> compare(c, facts.value(c.field(), c.attribute()));
             case And a -> {
                 Truth out = Truth.TRUE;
                 for (Predicate t : a.terms()) {
@@ -132,8 +181,8 @@ public final class Criteria {
         if (value == null) return Truth.FALSE;
         List<Object> args = c.args();
         return Truth.of(switch (c.op()) {
-            case EQUAL -> order(value, args.getFirst()) == 0;
-            case NOT_EQUAL -> { Integer o = order(value, args.getFirst()); yield o != null && o != 0; }
+            case EQUAL -> order(value, args.getFirst()) instanceof Integer o && o == 0;
+            case NOT_EQUAL -> order(value, args.getFirst()) instanceof Integer o && o != 0;
             case IN -> args.stream().anyMatch(a -> order(value, a) instanceof Integer o && o == 0);
             case LESS_THAN -> order(value, args.getFirst()) instanceof Integer o && o < 0;
             case LESS_THAN_OR_EQUAL -> order(value, args.getFirst()) instanceof Integer o && o <= 0;
@@ -146,11 +195,18 @@ public final class Criteria {
         });
     }
 
-    /** The order of two literals, or null when their types differ. Text orders by code point. */
+    /** The order of two literals, or null when their types differ. Numbers compare by value, text by
+     *  code point. */
     private static Integer order(Object a, Object b) {
         if (a instanceof Long x && b instanceof Long y) return Long.compare(x, y);
+        if (a instanceof Number x && b instanceof Number y) return decimal(x).compareTo(decimal(y));
         if (a instanceof String x && b instanceof String y) return codePointOrder(x, y);
-        return a.equals(b) ? Integer.valueOf(0) : null;
+        if (a instanceof Boolean x && b instanceof Boolean y) return Boolean.compare(x, y);
+        return null;
+    }
+
+    private static BigDecimal decimal(Number n) {
+        return n instanceof BigDecimal d ? d : BigDecimal.valueOf(n.longValue());
     }
 
     private static int codePointOrder(String a, String b) {

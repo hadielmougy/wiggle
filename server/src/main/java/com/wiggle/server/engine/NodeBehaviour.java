@@ -29,7 +29,7 @@ abstract class NodeBehaviour {
 
 
         @Override boolean advance(Step s) {
-            tokens.markReady(s.tx(), s.token(), s.node(), s.now());
+            tokens.markReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
             return true;
         }
 
@@ -49,7 +49,7 @@ abstract class NodeBehaviour {
         }
 
         @Override boolean advance(Step s) {
-            tokens.markReady(s.tx(), s.token(), s.node(), s.now());
+            tokens.markReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
             return true;
         }
 

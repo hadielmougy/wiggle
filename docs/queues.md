@@ -128,6 +128,39 @@ have to refuse. A local-execution chain hands back at the first step the criteri
 worker sets `withQueues` or `withCriteria`, not both. Tasks that no worker's criteria match stay
 `READY`, exactly like tasks on a queue nobody serves, so check the Backlog tab after changing them.
 
+#### Routing on business data
+
+The fields above are the task's own. To route on the data an instance carries (a region, a tenant,
+an amount), the flow declares **attributes**: a name, a type, and a dotted path into the context.
+
+<!-- snippet: queues/attributes -->
+```java
+FlowSpec orders = FlowSpec.define("regional-orders", 1, RegionalOrder.class, RegionalSteps.class, (f, s) -> f
+        .attribute("region", AttrType.STRING, "customer.region")   // read from each step's context
+        .attribute("total", AttrType.DECIMAL, "total")
+        .thenApply(s::validate)
+        .thenApply(s::charge, "payments"));
+
+// payments-eu-large: EU charges of 1000 or more
+QueueCriteria euLarge = QueueCriteria.from("payments")
+        .where(cb -> cb.and(
+                cb.equal(Task_.attr("region", String.class), "eu"),
+                cb.greaterThanOrEqualTo(Task_.attr("total", java.math.BigDecimal.class),
+                        new java.math.BigDecimal("1000"))));
+Worker large = new Worker(client, "payments-eu-large-1",
+                WorkerOptions.defaults().withCriteria(euLarge))
+        .registerHandler(new RegionalHandlers())
+        .start();
+```
+
+Each time a step becomes ready, the server reads the attributes from the context that step will
+receive and stores them beside the task. The values therefore follow the data: a step that moves an
+order to another region hands the next step to the workers for that region. A path that doesn't
+resolve, or a value that doesn't fit the declared type (an object, a number under `STRING`, a
+fraction under `LONG`), leaves the attribute absent rather than failing. Types are exact: `"1000"`
+the string never equals `1000` the number, while `LONG` and `DECIMAL` compare by value. A flow
+declares at most 16 attributes, and only the declared paths are copied out of the context.
+
 The claim walks each queue oldest-instance-first and tests the predicate on each row it reaches. A
 predicate that matches only a small slice of a deep queue therefore reads past every older row that
 doesn't match on each poll. The full contract is in [the spec](spec/25-queue-criteria.md).

@@ -1,5 +1,7 @@
 package com.wiggle.core;
 
+import com.wiggle.core.criteria.DispatchAttribute;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
@@ -8,17 +10,26 @@ import java.util.*;
  * An immutable, compiled workflow graph. The {@code version} is declared by the author and is
  * positive; a published version is immutable, which the engine enforces by comparing
  * {@link #fingerprint()} on re-registration. Running instances always keep executing the exact
- * graph they started on.
+ * graph they started on. {@code attributes} are the values queue criteria can test, read from the
+ * context of each step as it becomes ready.
  */
 public record WorkflowDefinition(String name, int version, String startNode,
                                  Map<String, Node> nodes, Set<String> queues, ExecutionMode executionMode,
-                                 Set<String> checkpoints) {
+                                 Set<String> checkpoints, List<DispatchAttribute> attributes) {
 
     public WorkflowDefinition {
         if (version <= 0) {
             throw new IllegalArgumentException("workflow '" + name + "' needs a positive version, got " + version);
         }
         executionMode = executionMode == null ? ExecutionMode.DEFAULT : executionMode;
+        attributes = attributes == null ? List.of() : List.copyOf(attributes);
+        DispatchAttribute.validate(attributes);
+    }
+
+    public WorkflowDefinition(String name, int version, String startNode,
+                              Map<String, Node> nodes, Set<String> queues, ExecutionMode executionMode,
+                              Set<String> checkpoints) {
+        this(name, version, startNode, nodes, queues, executionMode, checkpoints, List.of());
     }
 
     /** Convenience constructor with no checkpoints. */
@@ -63,6 +74,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
         m.put("queues", new ArrayList<>(new TreeSet<>(queues)));
         m.put("executionMode", executionMode.name());
         if (!checkpoints.isEmpty()) m.put("checkpoints", new ArrayList<>(new TreeSet<>(checkpoints)));
+        if (!attributes.isEmpty()) m.put("attributes", attributesJson(attributes));
         return m;
     }
 
@@ -88,8 +100,10 @@ public record WorkflowDefinition(String name, int version, String startNode,
         ExecutionMode mode = mode(Json.str(m, "executionMode", ExecutionMode.DEFAULT.name()));
         Set<String> checkpoints = new LinkedHashSet<>();
         for (Object c : Json.asArray(m.get("checkpoints"))) checkpoints.add(String.valueOf(c));
+        List<DispatchAttribute> attributes = new ArrayList<>();
+        for (Object a : Json.asArray(m.get("attributes"))) attributes.add(DispatchAttribute.fromJson(a));
         return new WorkflowDefinition(Json.reqStr(m, "name"), (int) Json.num(m, "version", 0),
-                Json.reqStr(m, "startNode"), nodes, queues, mode, checkpoints);
+                Json.reqStr(m, "startNode"), nodes, queues, mode, checkpoints, attributes);
     }
 
     /** The current fingerprint algorithm, stored beside a fingerprint so a later change to the
@@ -98,7 +112,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
 
     /** This definition's {@link #fingerprint(String, String, Collection, ExecutionMode, Set) fingerprint}. */
     public String fingerprint() {
-        return fingerprint(name, startNode, nodes.values(), executionMode, checkpoints);
+        return fingerprint(name, startNode, nodes.values(), executionMode, checkpoints, attributes);
     }
 
     public int numberOfNodes() {
@@ -115,6 +129,13 @@ public record WorkflowDefinition(String name, int version, String startNode,
      */
     public static String fingerprint(String name, String startNode, Collection<Node> nodes,
                                      ExecutionMode executionMode, Set<String> checkpoints) {
+        return fingerprint(name, startNode, nodes, executionMode, checkpoints, List.of());
+    }
+
+    /** The same, with declared attributes; a graph without any digests exactly as it did before them. */
+    public static String fingerprint(String name, String startNode, Collection<Node> nodes,
+                                     ExecutionMode executionMode, Set<String> checkpoints,
+                                     List<DispatchAttribute> attributes) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
         m.put("startNode", startNode);
@@ -123,6 +144,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
         m.put("nodes", ns);
         m.put("executionMode", (executionMode == null ? ExecutionMode.DEFAULT : executionMode).name());
         m.put("checkpoints", new ArrayList<>(new TreeSet<>(checkpoints == null ? Set.of() : checkpoints)));
+        if (attributes != null && !attributes.isEmpty()) m.put("attributes", attributesJson(attributes));
         byte[] digest;
         try {
             digest = MessageDigest.getInstance("SHA-256")
@@ -133,5 +155,11 @@ public record WorkflowDefinition(String name, int version, String startNode,
         StringBuilder hex = new StringBuilder(64);
         for (byte b : digest) hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
         return hex.toString();
+    }
+
+    private static List<Object> attributesJson(List<DispatchAttribute> attributes) {
+        List<Object> out = new ArrayList<>();
+        attributes.stream().sorted(Comparator.comparing(DispatchAttribute::name)).forEach(a -> out.add(a.toJson()));
+        return out;
     }
 }

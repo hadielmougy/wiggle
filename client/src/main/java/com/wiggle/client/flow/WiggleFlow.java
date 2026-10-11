@@ -2,6 +2,7 @@ package com.wiggle.client.flow;
 
 import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.criteria.AttrType;
 import com.wiggle.core.RetryPolicy;
 
 import java.time.Duration;
@@ -687,6 +688,11 @@ public final class WiggleFlow<T> {
     /** Marks the step just added as a flush boundary under {@code LOCAL_ASYNC}. */
     public WiggleFlow<T> checkpoint() {
         return record(null, GraphBuilder::checkpoint);
+    }
+
+    /** Declares a value queue criteria can test; see {@link GraphBuilder#attribute}. */
+    public WiggleFlow<T> attribute(String name, AttrType type, String path) {
+        return record(null, b -> b.attribute(name, type, path));
     }
 
     /** Sets the queue used by every step defined after this point. */

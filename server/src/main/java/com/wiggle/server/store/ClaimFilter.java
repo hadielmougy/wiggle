@@ -30,6 +30,6 @@ public record ClaimFilter(Set<String> queues, Set<WorkflowVersion> versions, Pre
 
     public static TaskFacts facts(Token t) {
         return new TaskFacts(t.workflow, t.version, t.queue, TaskFacts.stepOf(t.workflow, t.activity), t.nodeId,
-                t.kind == null ? null : t.kind.name(), t.nextAttempt(), t.correlationId, t.instCreatedAt);
+                t.kind == null ? null : t.kind.name(), t.nextAttempt(), t.correlationId, t.instCreatedAt, t.attributes);
     }
 }
