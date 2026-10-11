@@ -7,6 +7,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.ShardIds;
 import com.wiggle.core.TaskActivation;
+import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
@@ -40,8 +41,9 @@ final class Tokens {
         this.queueWake = queueWake;
     }
 
-    void wake(String queue) {
-        queueWake.ready(queue);
+    /** Marks {@code t}'s queue as having gained work of {@code t}'s version. */
+    void wake(Token t) {
+        queueWake.ready(t.queue, new WorkflowVersion(t.workflow, t.version));
     }
 
     /** The one place a token's status is written. */
@@ -104,7 +106,7 @@ final class Tokens {
         t.queue = node.queue();
         t.availableAt = now;
         move(tx, t, TokenStatus.READY, now);
-        wake(node.queue());
+        wake(t);
     }
 
     static void markWaiting(Tx tx, Token t, long availableAt, long now) {
@@ -184,7 +186,7 @@ final class Tokens {
     /** A parked retry whose backoff has run out becomes dispatchable, and its queue is woken. */
     void promote(Tx tx, Token t, long now) {
         move(tx, t, TokenStatus.READY, now);
-        wake(t.queue);
+        wake(t);
     }
 
     /** Cancels every still-active token of an instance in one statement. The per-token

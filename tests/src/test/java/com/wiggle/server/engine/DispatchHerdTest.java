@@ -38,13 +38,17 @@ class DispatchHerdTest {
     private static final class CountingStorage implements Storage {
         final InMemoryStorage delegate = new InMemoryStorage();
         final AtomicInteger claims = new AtomicInteger();
+        final Map<String, AtomicInteger> claimsBy = new java.util.concurrent.ConcurrentHashMap<>();
 
         @Override public void migrate() { delegate.migrate(); }
 
         @Override public <R> R inTx(Function<Tx, R> work) {
             return delegate.inTx(tx -> work.apply((Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(),
                     new Class<?>[]{Tx.class}, (proxy, method, args) -> {
-                        if (method.getName().equals("claimTasks")) claims.incrementAndGet();
+                        if (method.getName().equals("claimTasks")) {
+                            claims.incrementAndGet();
+                            claimsBy.computeIfAbsent((String) args[0], k -> new AtomicInteger()).incrementAndGet();
+                        }
                         try {
                             return method.invoke(tx, args);
                         } catch (InvocationTargetException e) {
@@ -122,6 +126,44 @@ class DispatchHerdTest {
                 assertEquals(1, polls.stream().filter(Future::isDone).count(),
                         "a signalled claim that came back full did not wake another poll");
                 assertEquals(1, polls.stream().filter(Future::isDone).count(), "the other polls stayed parked");
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    @Test @DisplayName("#293: an idle version-scoped poll ignores other versions' work and backs off its fallback")
+    void idleScopedPollStaysQuiet() throws Exception {
+        try (CountingStorage storage = new CountingStorage()) {
+            storage.migrate();
+            WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
+            String name = "herd-" + Ids.next("wf");
+            FlowSpec v1 = FlowSpec.define(name, 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+            FlowSpec v2 = FlowSpec.define(name, 2, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+            engine.register(v1.definition());
+            engine.register(v2.definition());
+            Set<String> queues = v1.definition().workerQueues();
+            ExecutorService pool = Executors.newCachedThreadPool();
+            try {
+                long deadline = System.currentTimeMillis() + 2_500;
+                Future<List<TaskActivation>> scoped = pool.submit(() -> engine.poll("scoped", queues,
+                        Set.of(new com.wiggle.core.WorkflowVersion(name, 2)), 1, null, deadline, Cancellation.never()));
+                for (int i = 0; i < 100; i++) {   // v1 work keeps arriving on the same queue
+                    engine.start(name, 1, Map.of(), null);
+                    Thread.sleep(20);
+                }
+                int idle = storage.claimsBy.getOrDefault("scoped", new AtomicInteger()).get();
+                // Arrival, then fallbacks at 100, 300, 700 and 1500 ms. Woken by every v1 task, it
+                // would have claimed about a hundred times.
+                assertTrue(idle <= 8, "claims by an idle scoped poll over two busy seconds: " + idle);
+
+                long t0 = System.nanoTime();
+                engine.start(name, 2, Map.of(), null);
+                List<TaskActivation> got = scoped.get(5, TimeUnit.SECONDS);
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                assertEquals(1, got.size(), "its own version's task reaches it");
+                assertEquals(2, got.getFirst().version());
+                assertTrue(ms < 300, "on the wake, not a backed-off fallback: " + ms + " ms");
             } finally {
                 pool.shutdownNow();
             }

@@ -510,6 +510,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_HOUSEKEEPING_BATCH` | `100` | timers/signals/reclaims swept per pass |
 | `WIGGLE_DISPATCH_LINGER_MILLIS` | `5` | wake-on-produce batch linger (`0` = claim immediately) |
 | `WIGGLE_FALLBACK_POLL_MILLIS` | `100` | long-poll fallback re-claim interval |
+| `WIGGLE_SCOPED_FALLBACK_MAX_MILLIS` | `2000` | the most a version-scoped poll's fallback interval grows to while its claims find nothing |
 | `WIGGLE_HEARTBEAT_INTERVAL_MILLIS` | `5000` | node heartbeat cadence |
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
