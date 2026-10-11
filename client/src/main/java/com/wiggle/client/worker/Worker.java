@@ -2,6 +2,7 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.core.*;
+import com.wiggle.core.criteria.Criteria;
 import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.TaskFacts;
@@ -159,6 +160,7 @@ public final class Worker implements AutoCloseable {
         }
         if (!running.compareAndSet(false, true)) return this;
         if (!registrations.isEmpty()) registrations.reconcile(client, options);
+        warnAboutCriteria();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         outbox = new Outbox(workerId, options.errorBackoff().toMillis());
@@ -168,6 +170,19 @@ public final class Worker implements AutoCloseable {
         LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());
         return this;
+    }
+
+    /** WGL-QC-045: logs, once, each attribute comparison the bound flows make impossible to satisfy. */
+    private void warnAboutCriteria() {
+        QueueCriteria c = options.criteria();
+        if (c == null || c.where() == null || registrations.isEmpty()) return;
+        List<DispatchAttribute> declared = new ArrayList<>();
+        for (WorkflowDefinition def : registrations.graphs()) {
+            if (!Collections.disjoint(def.workerQueues(), c.queues())) declared.addAll(def.attributes());
+        }
+        for (String problem : Criteria.attributeProblems(c.where(), declared)) {
+            LOG.log(System.Logger.Level.WARNING, "worker " + workerId + " criteria: " + problem);
+        }
     }
 
     private void pollLoop() {

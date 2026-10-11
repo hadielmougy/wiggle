@@ -6,7 +6,10 @@ import com.wiggle.core.criteria.Predicate.Not;
 import com.wiggle.core.criteria.Predicate.Or;
 
 import java.math.BigDecimal;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -138,6 +141,37 @@ public final class Criteria {
         if (arg instanceof String s && s.length() > MAX_TEXT) {
             throw new IllegalArgumentException(what + ": a text argument is longer than " + MAX_TEXT + " characters");
         }
+    }
+
+    /**
+     * What is wrong with {@code where}'s attribute comparisons given the attributes the flows on its
+     * queues declare: a name none declares, or a literal of a type no declaration of that name has.
+     * Either makes the comparison false for every task (and {@code isNull} true). Empty when sound.
+     */
+    public static List<String> attributeProblems(Predicate where, Collection<DispatchAttribute> declared) {
+        if (where == null) return List.of();
+        Set<String> out = new LinkedHashSet<>();
+        for (Comparison c : where.comparisons()) {
+            if (c.field() != Field.ATTRIBUTE) continue;
+            List<AttrType> types = declared.stream().filter(a -> a.name().equals(c.attribute()))
+                    .map(DispatchAttribute::type).distinct().toList();
+            if (types.isEmpty()) {
+                out.add("attribute '" + c.attribute() + "' is declared by no flow on these queues, so no task carries it");
+                continue;
+            }
+            if (c.args().isEmpty()) continue;
+            Object literal = c.args().getFirst();
+            boolean fits = types.stream().anyMatch(t -> switch (t) {
+                case STRING -> literal instanceof String;
+                case BOOLEAN -> literal instanceof Boolean;
+                case LONG, DECIMAL -> literal instanceof Number;
+            });
+            if (!fits) {
+                out.add("attribute '" + c.attribute() + "' is declared " + types + " but compared with a "
+                        + literal.getClass().getSimpleName() + ", which never matches it");
+            }
+        }
+        return List.copyOf(out);
     }
 
     public static boolean matches(Predicate p, Facts task) {

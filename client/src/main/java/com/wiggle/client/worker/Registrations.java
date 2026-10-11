@@ -7,6 +7,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -96,6 +97,11 @@ final class Registrations {
 
     WorkflowDefinition graphFor(String key) {
         return graphs.get(key);
+    }
+
+    /** The graphs the bound handlers were matched against. */
+    Collection<WorkflowDefinition> graphs() {
+        return graphs.values();
     }
 
     Set<String> queues() {

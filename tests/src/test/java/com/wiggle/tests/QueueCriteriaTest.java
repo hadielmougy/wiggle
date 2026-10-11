@@ -289,6 +289,38 @@ class QueueCriteriaTest {
     }
 
     @Test
+    @DisplayName("WGL-QC-045: a worker warns, once, about an attribute its flows do not declare")
+    void warnsAboutUndeclaredAttributes() throws Exception {
+        String wf = unique("qc-warn");
+        FlowSpec spec = regionFlow(wf, ExecutionMode.SERVER);
+        QueueCriteria typo = QueueCriteria.from(wf).where(cb -> cb.and(
+                cb.equal(Task_.attr("regoin", String.class), "eu"),
+                cb.equal(Task_.attr("region", Long.class), 7L)));
+        java.util.List<String> warnings = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(Worker.class.getName());
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord r) {
+                if (r.getLevel() == java.util.logging.Level.WARNING) warnings.add(r.getMessage());
+            }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        logger.addHandler(handler);
+        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl());
+             Worker w = new Worker(client, "warned", WorkerOptions.defaults().withCriteria(typo))
+                     .registerHandler(wf, new H("warned", new ConcurrentHashMap<>()))) {
+            client.register(spec);
+            w.start();
+        } finally {
+            logger.removeHandler(handler);
+        }
+        assertEquals(2, warnings.size(), warnings.toString());
+        assertTrue(warnings.stream().anyMatch(m -> m.contains("'regoin'")), warnings.toString());
+        assertTrue(warnings.stream().anyMatch(m -> m.contains("'region'") && m.contains("[STRING]")), warnings.toString());
+    }
+
+    @Test
     @DisplayName("WGL-QC-014: a worker refuses both withQueues and withCriteria")
     void workerRefusesBothForms() throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();

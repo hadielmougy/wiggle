@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DispatchAttributeTest {
 
@@ -90,5 +91,28 @@ class DispatchAttributeTest {
                 .where(cb -> cb.equal(Task_.attr("d", BigDecimal.class), new BigDecimal("0.00000000001"))));
         assertThrows(IllegalArgumentException.class, () -> Task_.attr("d", Double.class));
         assertThrows(IllegalArgumentException.class, () -> new Predicate.Comparison(Field.WORKFLOW, "w", Op.EQUAL, List.of("x")));
+    }
+
+    @Test
+    @DisplayName("WGL-QC-045: criteria naming an undeclared attribute, or comparing it as another type, are reported")
+    void attributeProblems() {
+        List<DispatchAttribute> declared = List.of(
+                new DispatchAttribute("region", AttrType.STRING, "customer.region"),
+                new DispatchAttribute("total", AttrType.DECIMAL, "total"));
+        Predicate sound = QueueCriteria.from("q").where(cb -> cb.and(
+                cb.equal(Task_.attr("region", String.class), "eu"),
+                cb.greaterThan(Task_.attr("total", Long.class), 100L),
+                cb.isNull(Task_.attr("region", String.class)))).where();
+        assertEquals(List.of(), Criteria.attributeProblems(sound, declared));
+
+        Predicate typo = QueueCriteria.from("q").where(cb -> cb.equal(Task_.attr("regoin", String.class), "eu")).where();
+        List<String> undeclared = Criteria.attributeProblems(typo, declared);
+        assertEquals(1, undeclared.size());
+        assertTrue(undeclared.getFirst().contains("'regoin'") && undeclared.getFirst().contains("no flow"), undeclared.getFirst());
+
+        Predicate wrongType = QueueCriteria.from("q").where(cb -> cb.equal(Task_.attr("total", String.class), "100")).where();
+        List<String> mismatch = Criteria.attributeProblems(wrongType, declared);
+        assertEquals(1, mismatch.size());
+        assertTrue(mismatch.getFirst().contains("[DECIMAL]") && mismatch.getFirst().contains("String"), mismatch.getFirst());
     }
 }
