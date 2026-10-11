@@ -49,6 +49,7 @@ public final class JdbcStorage implements Storage {
     private final Jdbi jdbi;
     private final String fingerprint;
     private final boolean readOnly;
+    private final List<StatementListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** Attempts a transaction gets when it rolled back on a momentary failure; 1 disables the replay. */
     private final int txAttempts = (int) envLong("wiggle.jdbc.txAttempts", "WIGGLE_JDBC_TX_ATTEMPTS", 3);
@@ -90,7 +91,7 @@ public final class JdbcStorage implements Storage {
             cfg.setInitializationFailTimeout(-1);
         }
         this.ds = new HikariDataSource(cfg);
-        this.jdbi = Jdbi.create(this.ds)
+        this.jdbi = Jdbi.create(this::connection)
                 .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
                 .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs))
                 .registerRowMapper(Rows.Event.class, (rs, ctx) -> readEvent(rs))
@@ -101,10 +102,30 @@ public final class JdbcStorage implements Storage {
 
     private Connection borrow() {
         try {
-            return ds.getConnection();
+            return connection();
         } catch (SQLException e) {
             throw connectionFailure(e);
         }
+    }
+
+    /** A pooled connection; one that reports to the {@link #observe} listeners while any are attached. */
+    private Connection connection() throws SQLException {
+        Connection c = ds.getConnection();
+        return listeners.isEmpty() ? c : ObservedConnections.wrap(c, listeners);
+    }
+
+    /**
+     * Reports every statement, commit and rollback this store issues to {@code listener} until the
+     * returned handle is closed. Connections borrowed while no listener is attached are not observed.
+     */
+    public Observation observe(StatementListener listener) {
+        listeners.add(Objects.requireNonNull(listener, "listener"));
+        return () -> listeners.remove(listener);
+    }
+
+    /** A listener's attachment to a store; closing it detaches the listener. */
+    public interface Observation extends AutoCloseable {
+        @Override void close();
     }
 
     /**
