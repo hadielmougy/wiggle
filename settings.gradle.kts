@@ -12,6 +12,7 @@ include(
     "bom",
     "dist",
     "example",
+    "example-claude",
     "tests",
     "console",
     "test-fixtures"

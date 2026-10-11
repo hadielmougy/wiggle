@@ -61,6 +61,12 @@ tasks.register<JavaExec>("runCookbook") {
     mainClass.set("com.wiggle.cookbook.CookbookDemo")
 }
 
+tasks.register<JavaExec>("runAgents") {
+    group = "application"
+    description = "Runs the multi-agent research team against a scripted model. Pass a topic with --args."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.wiggle.agents.AgentsDemo")
+}
 
 tasks.register<JavaExec>("bench") {
     group = "application"
