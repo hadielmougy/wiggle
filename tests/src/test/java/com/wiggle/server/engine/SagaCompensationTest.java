@@ -1,7 +1,6 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.client.worker.CompensableActivity;
-import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Activity;
@@ -13,6 +12,7 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;

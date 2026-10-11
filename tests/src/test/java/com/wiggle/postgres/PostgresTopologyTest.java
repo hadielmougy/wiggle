@@ -7,6 +7,7 @@ import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.topology.Topology;
 import com.wiggle.server.topology.TopologyParser;
+import com.wiggle.testfixtures.TestPorts;
 import com.wiggle.tests.TestDb;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -86,7 +87,7 @@ class PostgresTopologyTest {
                 }
                 """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
-        ServerConfig config = new ServerConfig(0, "pg-topo", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "pg-topo", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
@@ -133,7 +134,7 @@ class PostgresTopologyTest {
                 }
                 """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
-        ServerConfig config = new ServerConfig(0, "pg-auth", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "pg-auth", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
@@ -168,7 +169,7 @@ class PostgresTopologyTest {
                 }
                 """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
-        ServerConfig config = new ServerConfig(0, "pg-search", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "pg-search", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
@@ -211,7 +212,7 @@ class PostgresTopologyTest {
                 }
                 """.formatted(urlOf(databases.get(0)), urlOf(databases.get(1))),
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
-        ServerConfig config = new ServerConfig(0, "pg-vector", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "pg-vector", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t)

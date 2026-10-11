@@ -10,7 +10,7 @@ import com.wiggle.proto.WiggleControlPlaneGrpc;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.Accounts;
-import com.wiggle.tests.TestPorts;
+import com.wiggle.testfixtures.TestPorts;
 import io.grpc.CallOptions;
 import io.grpc.Grpc;
 import io.grpc.InsecureChannelCredentials;

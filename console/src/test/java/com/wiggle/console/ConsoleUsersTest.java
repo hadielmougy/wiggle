@@ -6,6 +6,7 @@ import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.AuthCache;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -28,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConsoleUsersTest {
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "users-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "users-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -59,7 +60,7 @@ class ConsoleUsersTest {
     private static ConsoleServer portal(WiggleServer server, String builtinPassword) {
         AuthCache cache = new AuthCache(server.accounts(), 30_000, System::currentTimeMillis).start(50);
         ConsoleAuth auth = new ConsoleAuth("admin", builtinPassword, "viewer", null, false, server.accounts(), cache);
-        return new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()), auth, 0,
+        return new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()), auth, TestPorts.free(),
                 Tls.Options.DISABLED).start();
     }
 

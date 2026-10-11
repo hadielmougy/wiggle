@@ -6,6 +6,7 @@ import com.wiggle.core.ShardIds;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -76,7 +77,7 @@ class PlacementTest {
                 base + "-one;MODE=PostgreSQL;DB_CLOSE_DELAY=-1")
                 .replace("2026-10-01T00:00:00Z", "2000-01-01T00:00:00Z")
                 .replace("2026-11-01T00:00:00Z", "2999-01-01T00:00:00Z"), Map.of());
-        ServerConfig config = new ServerConfig(0, "topo-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "topo-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);

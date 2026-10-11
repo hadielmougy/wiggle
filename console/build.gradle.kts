@@ -9,6 +9,7 @@ dependencies {
     implementation("org.apache.tomcat.embed:tomcat-embed-core:${property("tomcatVersion")}")
 
     testImplementation(project(":client"))
+    testImplementation(project(":test-fixtures"))
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

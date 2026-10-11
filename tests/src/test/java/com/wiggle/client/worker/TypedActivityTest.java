@@ -1,12 +1,12 @@
 package com.wiggle.client.worker;
 
-import com.wiggle.tests.TestPorts;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

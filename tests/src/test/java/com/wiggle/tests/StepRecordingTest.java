@@ -10,6 +10,7 @@ import com.wiggle.core.RetryPolicy;
 import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -117,7 +118,7 @@ class StepRecordingTest {
         String url = store.equals("h2")
                 ? "jdbc:h2:mem:step-io-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1"
                 : null;
-        ServerConfig config = new ServerConfig(0, "step-io", url, url == null ? null : "sa", url == null ? null : "", 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "step-io", url, url == null ? null : "sa", url == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
