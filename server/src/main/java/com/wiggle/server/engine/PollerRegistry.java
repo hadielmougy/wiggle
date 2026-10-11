@@ -77,7 +77,7 @@ public final class PollerRegistry {
 
     private static boolean mayMatch(Predicate where, String workflow, int version) {
         if (where == null) return true;
-        return Criteria.evaluate(where, f -> switch (f) {
+        return Criteria.evaluate(where, (f, attribute) -> switch (f) {
             case WORKFLOW -> workflow;
             case VERSION -> (long) version;
             default -> Criteria.UNKNOWN;

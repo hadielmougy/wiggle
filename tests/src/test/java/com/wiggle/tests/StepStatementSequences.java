@@ -114,9 +114,9 @@ public abstract class StepStatementSequences {
         runLinear(registering, START, List.of());
     }
 
-    @Test @DisplayName("a linear flow on another node: the graph is read once, at its first start and first claim")
+    @Test @DisplayName("a linear flow on another node: the graph is read once, at its first start")
     void linearOnOtherNode() {
-        runLinear(other, concat(GRAPH, START), List.of("SELECT wf_definition"));
+        runLinear(other, concat(GRAPH, START), List.of());
     }
 
     private void runLinear(WorkflowEngine engine, List<String> start, List<String> firstClaimExtra) {

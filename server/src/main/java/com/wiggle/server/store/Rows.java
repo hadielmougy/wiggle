@@ -47,6 +47,11 @@ public final class Rows {
         public long instCreatedAt;
         /** The instance's correlation id, or null; copied so queue criteria need no join. */
         public String correlationId;
+        /** The flow's declared attributes as read from this step's context when it became ready,
+         *  by name; null when not read (the flow declares none, or the store did not load them). */
+        public java.util.Map<String, Object> attributes;
+        /** Set when {@link #attributes} must be written with the token's next write. */
+        public boolean attributesChanged;
         public String leaseOwner;
         public long leaseExpiresAt;
         /** Comma separated stack of enclosing fork groups; last element is innermost. */

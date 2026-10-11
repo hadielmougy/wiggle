@@ -86,6 +86,7 @@ public final class JdbcStorage implements Storage {
         // stays in manual-commit, read-committed mode.
         cfg.setAutoCommit(false);
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
+        if (dialect.connectionInitSql() != null) cfg.setConnectionInitSql(dialect.connectionInitSql());
         cfg.setPoolName("wiggle-" + dialect.id() + (readOnly ? "-replica" : ""));
         if (readOnly) {
             cfg.setReadOnly(true);
@@ -667,6 +668,22 @@ public final class JdbcStorage implements Storage {
             // Null on rows written before this.
             new Migration(34, "token-correlation-id", """
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(200);
+            """),
+            // A flow's declared attributes as each step's context had them when it became ready, for
+            // queue criteria. t is S (text in s_val), B ('true'/'false' in s_val) or N (n_val). The
+            // value indexes let a claim whose predicate is rare start from the matching attributes
+            // rather than read every row of the table.
+            new Migration(35, "token-attributes", """
+            CREATE TABLE IF NOT EXISTS wf_token_attr (
+              token_id     VARCHAR(128)   NOT NULL,
+              name         VARCHAR(63)    NOT NULL,
+              t            CHAR(1)        NOT NULL,
+              s_val        VARCHAR(256),
+              n_val        DECIMAL(38,10),
+              PRIMARY KEY (token_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS ix_token_attr_s ON wf_token_attr (name, s_val);
+            CREATE INDEX IF NOT EXISTS ix_token_attr_n ON wf_token_attr (name, n_val);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -910,6 +927,18 @@ public final class JdbcStorage implements Storage {
      * {@code wiggle.jdbc.txAttempts} / {@code WIGGLE_JDBC_TX_ATTEMPTS} bounds the replays (read once
      * per store, at construction); 1 turns them off.
      */
+    /**
+     * The plan PostgreSQL chooses for a claim of up to {@code max} tasks matching {@code filter} at
+     * {@code now}, as {@code EXPLAIN} prints it, one line per plan line. Nothing is claimed. Only for
+     * a dialect that claims in one statement.
+     */
+    public String explainClaim(ClaimFilter filter, int max, long now) {
+        if (!dialect.supportsSkipLocked() || !dialect.supportsReturning()) {
+            throw new UnsupportedOperationException(dialect.id() + " claims by compare-and-set, not in one statement");
+        }
+        return attemptTx(tx -> ((JdbcTx) tx).explainClaim(filter, max, now));
+    }
+
     @Override public <R> R inTx(Function<Tx, R> work) {
         for (int attempt = 1; ; attempt++) {
             try {
@@ -2039,6 +2068,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
+            writeAttributes(List.of(t), false);
             recorded(t);
         }
 
@@ -2047,7 +2077,45 @@ public final class JdbcStorage implements Storage {
             PreparedBatch b = h.prepareBatch(INSERT_TOKEN);
             for (Token t : tokens) bindToken(b, t).add();
             requireOneRowEach(b.execute(), "insert wf_token");
+            writeAttributes(tokens, false);
             for (Token t : tokens) recorded(t);
+        }
+
+        /**
+         * The attribute rows of the tokens whose attributes changed, in one batch; none at all for a
+         * flow that declares no attributes. {@code replace} drops a token's earlier rows first.
+         */
+        private void writeAttributes(List<Token> tokens, boolean replace) {
+            Map<String, Token> last = new LinkedHashMap<>();
+            for (Token t : tokens) if (t.attributesChanged) last.put(t.id, t);
+            if (last.isEmpty()) return;
+            List<Token> changed = List.copyOf(last.values());
+            if (replace) {
+                h.createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (<ids>)")
+                        .bindList("ids", List.copyOf(last.keySet()))
+                        .execute();
+            }
+            for (Token t : tokens) t.attributesChanged = false;
+            PreparedBatch b = h.prepareBatch("INSERT INTO wf_token_attr (token_id,name,t,s_val,n_val)"
+                    + " VALUES (:tokenId,:name,:t,:s,:n)");
+            int rows = 0;
+            for (Token t : changed) {
+                if (t.attributes == null) continue;
+                for (Map.Entry<String, Object> a : t.attributes.entrySet()) {
+                    Object v = a.getValue();
+                    b.bind("tokenId", t.id).bind("name", a.getKey())
+                            .bind("t", v instanceof Boolean ? "B" : v instanceof String ? "S" : "N")
+                            .bindByType("s", v instanceof Number ? null : String.valueOf(v), String.class)
+                            .bindByType("n", v instanceof Number n ? attributeNumber(n) : null, java.math.BigDecimal.class)
+                            .add();
+                    rows++;
+                }
+            }
+            if (rows > 0) b.execute();
+        }
+
+        private static java.math.BigDecimal attributeNumber(Number n) {
+            return n instanceof java.math.BigDecimal d ? d : java.math.BigDecimal.valueOf(n.longValue());
         }
 
         /** Every wf_token column, by name. The empty join-stack sentinel is applied here, not
@@ -2136,10 +2204,10 @@ public final class JdbcStorage implements Storage {
             return keepPayload ? bindUpdatable(s, t) : bindToken(s, t);
         }
 
-        @Override
         public void updateToken(Token t) {
             boolean keep = payloadUnchanged(t);
             bindTokenUpdate(h.createUpdate(keep ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN), t, keep).execute();
+            writeAttributes(List.of(t), true);
             recorded(t);
         }
 
@@ -2162,6 +2230,7 @@ public final class JdbcStorage implements Storage {
             }
             updateBatch(write, false);
             updateBatch(keep, true);
+            writeAttributes(tokens, true);
             for (Token t : tokens) recorded(t);
         }
 
@@ -2328,11 +2397,23 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimSkipLockedReturning(String workerId, QueueSql queues,
                                                      Set<WorkflowVersion> versions,
                                                      int max, long now, long leaseUntil) {
+            return claimQuery("", workerId, queues, versions, max, now, leaseUntil).mapTo(Token.class).list();
+        }
+
+        /** The plan the database chooses for {@link #claimSkipLockedReturning}, as {@code EXPLAIN} prints it. */
+        String explainClaim(ClaimFilter filter, int max, long now) {
+            return String.join("\n", claimQuery("EXPLAIN ", "explain", QueueSql.of(filter, dialect), filter.versions(),
+                    max, now, now).mapTo(String.class).list());
+        }
+
+        /** The single-statement claim, after {@code prefix}. */
+        private Query claimQuery(String prefix, String workerId, QueueSql queues, Set<WorkflowVersion> versions,
+                                 int max, long now, long leaseUntil) {
             boolean perQueue = queues.queues().size() > 1;
             String pick = perQueue
                     ? perQueuePick(queues, versions)
                     : claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
-            Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+            Query q = h.createQuery(prefix + "UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                     + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                     + " WHERE id IN (" + pick + ") RETURNING *");
             q.bind("owner", workerId)
@@ -2346,7 +2427,7 @@ public final class JdbcStorage implements Storage {
                 queues.bind(q);
             }
             bindVersions(q, versions);
-            return q.mapTo(Token.class).list();
+            return q;
         }
 
         /**
@@ -2647,6 +2728,9 @@ public final class JdbcStorage implements Storage {
                     .list());
             if (ids.isEmpty()) return 0;
             // Children before parents: a token or comp-log row outliving its instance is a leak.
+            h.createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (SELECT id FROM wf_token WHERE instance_id IN (<ids>))")
+                    .bindList("ids", ids)
+                    .execute();
             for (String table : List.of("wf_token", "wf_comp_log", "wf_dyn_node")) {
                 h.createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
                         .bindList("ids", ids)

@@ -86,8 +86,8 @@ class CriteriaTest {
         Predicate p = QueueCriteria.from("q").where(cb -> cb.and(
                 cb.equal(Task_.WORKFLOW, "orders"), cb.equal(Task_.STEP, "charge"))).where();
         assertEquals(Criteria.Truth.UNKNOWN,
-                Criteria.evaluate(p, f -> f == Field.WORKFLOW ? "orders" : Criteria.UNKNOWN));
+                Criteria.evaluate(p, (f, attribute) -> f == Field.WORKFLOW ? "orders" : Criteria.UNKNOWN));
         assertEquals(Criteria.Truth.FALSE,
-                Criteria.evaluate(p, f -> f == Field.WORKFLOW ? "billing" : Criteria.UNKNOWN));
+                Criteria.evaluate(p, (f, attribute) -> f == Field.WORKFLOW ? "billing" : Criteria.UNKNOWN));
     }
 }

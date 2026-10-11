@@ -1,7 +1,9 @@
 package com.wiggle.client.flow;
 
 import com.wiggle.core.*;
+import com.wiggle.core.criteria.DispatchAttribute;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,6 +32,7 @@ final class Pipeline {
     private String startNode;
     private String defaultQueue;
     private ExecutionMode executionMode = ExecutionMode.DEFAULT;
+    private final List<DispatchAttribute> attributes = new ArrayList<>();
     private int counter;
 
     Pipeline(String name, int version, RetryPolicy defaultRetry) {
@@ -44,6 +47,9 @@ final class Pipeline {
     }
 
     void defaultQueue(String queue) { this.defaultQueue = Objects.requireNonNull(queue); }
+
+    /** Declares a value queue criteria can test; see {@link GraphBuilder#attribute}. */
+    void attribute(DispatchAttribute attribute) { attributes.add(attribute); }
 
     /** SERVER, LOCAL_SYNC or LOCAL_ASYNC: a spec declares how workers run it. */
     void executionMode(ExecutionMode mode) {
@@ -213,7 +219,8 @@ final class Pipeline {
     FlowSpec build() {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         WorkflowDefinition def = new WorkflowDefinition(
-                name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints));
+                name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints),
+                attributes);
         validate(def);
         return new FlowSpec(def);
     }

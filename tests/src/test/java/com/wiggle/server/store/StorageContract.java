@@ -1054,6 +1054,97 @@ abstract class StorageContract {
         }
     }
 
+    /** Five ready tasks on {@code q} carrying attributes; {@link #claimAppliesAttributeCriteriaAlike} names them 1..5. */
+    private List<Token> attributeFixture(String q) {
+        List<Map<String, Object>> attrs = List.of(
+                Map.of("region", "eu", "amount", new java.math.BigDecimal("250.5"), "vip", true, "code", "1000"),
+                Map.of("region", "us", "amount", 5L, "vip", false, "code", 1000L),
+                Map.of("region", "\u00e9clair", "amount", new java.math.BigDecimal("5")),
+                Map.of("vip", true),
+                Map.of());
+        List<Token> out = new ArrayList<>();
+        for (Map<String, Object> a : attrs) {
+            Instance i = instance("attr-wf");
+            Token t = token(i, NodeKind.TASK, TokenStatus.READY, q);
+            t.availableAt = ANCIENT;
+            t.attributes = a;
+            t.attributesChanged = true;
+            store(i, t);
+            out.add(t);
+        }
+        return out;
+    }
+
+    @Test
+    @DisplayName("WGL-QC-064: every backend claims exactly the tasks attribute criteria match")
+    void claimAppliesAttributeCriteriaAlike() {
+        var region = Task_.attr("region", String.class);
+        var amount = Task_.attr("amount", java.math.BigDecimal.class);
+        var amountLong = Task_.attr("amount", Long.class);
+        var vip = Task_.attr("vip", Boolean.class);
+        var codeText = Task_.attr("code", String.class);
+        var codeNumber = Task_.attr("code", Long.class);
+        record Case(String name, Function<CriteriaBuilder, Predicate> where, Set<Integer> expected) { }
+        List<Case> cases = List.of(
+                new Case("equal text", cb -> cb.equal(region, "eu"), Set.of(1)),
+                new Case("in text", cb -> cb.in(region, "eu", "us"), Set.of(1, 2)),
+                new Case("decimal greaterThan", cb -> cb.greaterThan(amount, new java.math.BigDecimal("100")), Set.of(1)),
+                new Case("a long and a decimal compare by value", cb -> cb.equal(amountLong, 5L), Set.of(2, 3)),
+                new Case("between numbers", cb -> cb.between(amount, new java.math.BigDecimal("5.00"),
+                        new java.math.BigDecimal("250.5")), Set.of(1, 2, 3)),
+                new Case("equal boolean", cb -> cb.equal(vip, true), Set.of(1, 4)),
+                new Case("notEqual boolean skips an absent value", cb -> cb.notEqual(vip, true), Set.of(2)),
+                new Case("not() of an absent attribute is true", cb -> cb.not(cb.equal(region, "eu")), Set.of(2, 3, 4, 5)),
+                new Case("isNull", cb -> cb.isNull(region), Set.of(4, 5)),
+                new Case("isNotNull", cb -> cb.isNotNull(vip), Set.of(1, 2, 4)),
+                new Case("text 1000 is not the number 1000", cb -> cb.equal(codeText, "1000"), Set.of(1)),
+                new Case("the number 1000 is not text 1000", cb -> cb.equal(codeNumber, 1000L), Set.of(2)),
+                new Case("a text literal never matches a number", cb -> cb.equal(Task_.attr("amount", String.class), "5"), Set.of()),
+                new Case("like", cb -> cb.like(region, "e%"), Set.of(1)),
+                new Case("text orders by code point", cb -> cb.greaterThan(region, "z"), Set.of(3)),
+                new Case("attributes with fields", cb -> cb.and(cb.equal(Task_.WORKFLOW, "attr-wf"),
+                        cb.or(cb.equal(vip, false), cb.isNull(vip))), Set.of(2, 3, 5)));
+
+        for (Case c : cases) {
+            String q = id("q");
+            List<Token> fixture = attributeFixture(q);
+            QueueCriteria criteria = QueueCriteria.from(q).where(c.where());
+            Set<Integer> reference = new TreeSet<>();
+            for (int k = 0; k < fixture.size(); k++) {
+                if (Criteria.matches(criteria.where(), ClaimFilter.facts(fixture.get(k)))) reference.add(k + 1);
+            }
+            assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
+
+            ClaimFilter filter = new ClaimFilter(List.of(criteria), null);
+            Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
+            Set<Integer> got = new TreeSet<>();
+            for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
+            assertEquals(new TreeSet<>(c.expected()), got, c.name() + ": the claim");
+        }
+    }
+
+    @Test
+    @DisplayName("WGL-QC-090: a token written again with new attributes is claimed by them alone")
+    void attributesAreReplaced() {
+        String q = id("q");
+        Instance i = instance("attr-wf");
+        Token t = token(i, NodeKind.TASK, TokenStatus.READY, q);
+        t.availableAt = ANCIENT;
+        t.attributes = Map.of("region", "us", "tier", "gold");
+        t.attributesChanged = true;
+        store(i, t);
+        t.attributes = Map.of("region", "eu");
+        t.attributesChanged = true;
+        storage.inTxVoid(tx -> tx.updateToken(t));
+
+        var region = Task_.attr("region", String.class);
+        ClaimFilter us = new ClaimFilter(List.of(QueueCriteria.from(q).where(cb -> cb.or(
+                cb.equal(region, "us"), cb.isNotNull(Task_.attr("tier", String.class))))), null);
+        assertTrue(storage.inTx(tx -> tx.claimTasks("w1", us, 10, now, now + 1_000)).isEmpty(), "the old rows are gone");
+        ClaimFilter eu = new ClaimFilter(List.of(QueueCriteria.from(q).where(cb -> cb.equal(region, "eu"))), null);
+        assertEquals(List.of(t.id), idsOf(storage.inTx(tx -> tx.claimTasks("w1", eu, 10, now, now + 1_000))));
+    }
+
     @Test
     @DisplayName("WGL-QC-061: each queue's criteria narrow that queue's pick alone")
     void claimAppliesCriteriaPerQueue() {

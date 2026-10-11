@@ -2,6 +2,8 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.core.*;
+import com.wiggle.core.criteria.Criteria;
+import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.TaskFacts;
 
@@ -80,13 +82,18 @@ public final class Worker implements AutoCloseable {
         return options.queues().isEmpty() ? registrations.queues() : options.queues();
     }
 
-    /** Whether this worker's poll would claim {@code next} as the continuation of {@code task}. */
-    boolean claims(TaskActivation task, Node next) {
+    /**
+     * Whether this worker's poll would claim {@code next} as the continuation of {@code task}, with
+     * {@code ctx} the context it would receive.
+     */
+    boolean claims(TaskActivation task, WorkflowDefinition def, Node next, Object ctx) {
         if (options.criteria().isEmpty()) return true;
         QueueCriteria c = QueueCriteria.forQueue(options.criteria(), next.queue());
         if (c == null) return false;
+        Map<String, Object> attributes = c.where() == null || def.attributes().isEmpty() ? Map.of()
+                : DispatchAttribute.extractAll(def.attributes(), RecordMapper.toJson(ctx));
         return c.matches(new TaskFacts(task.workflow(), task.version(), next.queue(), next.name(), next.id(),
-                next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt()));
+                next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt(), attributes));
     }
 
     public int inFlight() { return inFlight.get(); }
@@ -158,6 +165,7 @@ public final class Worker implements AutoCloseable {
         }
         if (!running.compareAndSet(false, true)) return this;
         if (!registrations.isEmpty()) registrations.reconcile(client, options);
+        warnAboutCriteria();
         executor = Executors.newVirtualThreadPerTaskExecutor();
         heartbeats = Executors.newScheduledThreadPool(heartbeatThreads(), heartbeatThreadFactory);
         outbox = new Outbox(workerId, options.errorBackoff().toMillis());
@@ -167,6 +175,22 @@ public final class Worker implements AutoCloseable {
         LOG.log(System.Logger.Level.INFO, () -> "worker " + workerId + " polling queues " + servedQueues()
                 + " with concurrency " + options.concurrency());
         return this;
+    }
+
+    /** WGL-QC-045: logs, once, each attribute comparison the bound flows make impossible to satisfy. */
+    private void warnAboutCriteria() {
+        if (registrations.isEmpty()) return;
+        for (QueueCriteria c : options.criteria()) {
+            if (c.where() == null) continue;
+            List<DispatchAttribute> declared = new ArrayList<>();
+            for (WorkflowDefinition def : registrations.graphs()) {
+                if (def.workerQueues().contains(c.queue())) declared.addAll(def.attributes());
+            }
+            for (String problem : Criteria.attributeProblems(c.where(), declared)) {
+                LOG.log(System.Logger.Level.WARNING, "worker " + workerId + " criteria on queue '" + c.queue()
+                        + "': " + problem);
+            }
+        }
     }
 
     private void pollLoop() {

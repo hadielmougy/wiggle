@@ -14,12 +14,23 @@ public sealed interface Predicate permits Predicate.Comparison, Predicate.And, P
         return new Not(this);
     }
 
-    /** {@code args} are literals: a String for a TEXT field, a Long for an INTEGER one. */
-    record Comparison(Field field, Op op, List<Object> args) implements Predicate {
+    /**
+     * {@code args} are literals: a String for a TEXT field, a Long for an INTEGER one, and a String,
+     * Long, BigDecimal or Boolean for an attribute. {@code attribute} names the declared attribute,
+     * and is null for every other field.
+     */
+    record Comparison(Field field, String attribute, Op op, List<Object> args) implements Predicate {
         public Comparison {
             Objects.requireNonNull(field, "field");
             Objects.requireNonNull(op, "op");
+            if ((field == Field.ATTRIBUTE) != (attribute != null)) {
+                throw new IllegalArgumentException("an attribute name goes with the ATTRIBUTE field, and only with it");
+            }
             args = args == null ? List.of() : List.copyOf(args);
+        }
+
+        public Comparison(Field field, Op op, List<Object> args) {
+            this(field, null, op, args);
         }
     }
 

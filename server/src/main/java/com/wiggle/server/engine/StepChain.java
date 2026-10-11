@@ -4,6 +4,8 @@ import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.Doc;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.criteria.Criteria;
+import com.wiggle.core.criteria.Field;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.TaskFacts;
 import com.wiggle.server.engine.WorkflowEngine.Run;
@@ -15,6 +17,7 @@ import com.wiggle.server.store.Tx;
 
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -108,7 +111,12 @@ final class StepChain {
             Node nextNode = def.node(next);
             // The last step ends the run unless this worker both may and wants to carry on.
             boolean lastStep = i == steps.size() - 1;
-            boolean claimable = !nextNode.isWorkerDispatched() || claims(run.criteria(), inst, nextNode);
+            if (nextNode.isWorkerDispatched()) Tokens.stampAttributes(definitions, tx, inst, cont);
+            boolean claimable = !nextNode.isWorkerDispatched() || claims(run.criteria(), inst, nextNode, cont.attributes);
+            if (!claimable && !lastStep) {
+                throw EngineException.badRequest("step '" + nextNode.name() + "' does not match the criteria the "
+                        + "worker polled with, so it may not run in that worker's chain");
+            }
             if ((lastStep && (run.finalHandback() || !chainsBack || !claimable)) || !nextNode.isWorkerDispatched()) {
                 Instances.touch(tx, inst, now);
                 handBack(tx, def, inst, cont, nextNode, now);
@@ -124,12 +132,16 @@ final class StepChain {
         return new ReportOutcome(inst.status.name(), leaseExpiry, nextTaskId);
     }
 
-    /** Refuses, before anything is written, a run that chained into a step its worker's criteria exclude. */
+    /**
+     * Refuses, before anything is written, a run that chained into a step its worker's criteria
+     * exclude whatever that step's attributes turn out to be. One that depends on them is checked as
+     * each continuation is created, once its context is known.
+     */
     private static void requireClaimable(LazyGraph def, Instance inst, Run run) {
         if (run.criteria().isEmpty()) return;
         for (StepInput step : run.steps().subList(1, run.steps().size())) {
             Node node = def.find(step.nodeId()).orElse(null);
-            if (node != null && !claims(run.criteria(), inst, node)) {
+            if (node != null && excluded(run.criteria(), inst, node)) {
                 throw EngineException.badRequest("step '" + node.name() + "' does not match the criteria the "
                         + "worker polled with, so it may not run in that worker's chain");
             }
@@ -137,11 +149,26 @@ final class StepChain {
     }
 
     /** Whether a worker polling with {@code criteria} (empty: by queue names) would claim {@code next}. */
-    private static boolean claims(List<QueueCriteria> criteria, Instance inst, Node next) {
+    private static boolean claims(List<QueueCriteria> criteria, Instance inst, Node next,
+                                  Map<String, Object> attributes) {
         if (criteria.isEmpty()) return true;
         QueueCriteria forQueue = QueueCriteria.forQueue(criteria, next.queue());
-        return forQueue != null && forQueue.matches(new TaskFacts(inst.workflow, inst.version, next.queue(),
-                next.name(), next.id(), next.kind().name(), 1, inst.correlationId, inst.createdAt));
+        return forQueue != null && forQueue.matches(facts(inst, next, attributes));
+    }
+
+    /** Whether {@code criteria} exclude {@code next} for every value its attributes could take. */
+    private static boolean excluded(List<QueueCriteria> criteria, Instance inst, Node next) {
+        QueueCriteria forQueue = QueueCriteria.forQueue(criteria, next.queue());
+        if (forQueue == null) return true;
+        if (forQueue.where() == null) return false;
+        TaskFacts known = facts(inst, next, null);
+        return Criteria.evaluate(forQueue.where(), (f, attribute) ->
+                f == Field.ATTRIBUTE ? Criteria.UNKNOWN : known.value(f, attribute)) == Criteria.Truth.FALSE;
+    }
+
+    private static TaskFacts facts(Instance inst, Node next, Map<String, Object> attributes) {
+        return new TaskFacts(inst.workflow, inst.version, next.queue(), next.name(), next.id(), next.kind().name(), 1,
+                inst.correlationId, inst.createdAt, attributes);
     }
 
     /** Why a step's created branches cannot be accepted, or null. */

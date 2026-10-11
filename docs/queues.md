@@ -130,9 +130,57 @@ have to refuse. A local-execution chain hands back at the first step whose queue
 match it. A worker names each queue once, and sets `withQueues` or `withCriteria`, not both. Tasks that no worker's criteria match stay
 `READY`, exactly like tasks on a queue nobody serves, so check the Backlog tab after changing them.
 
-The claim walks each queue oldest-instance-first and tests the predicate on each row it reaches. A
-predicate that matches only a small slice of a deep queue therefore reads past every older row that
-doesn't match on each poll. The full contract is in [the spec](spec/25-queue-criteria.md).
+#### Routing on business data
+
+The fields above are the task's own. To route on the data an instance carries (a region, a tenant,
+an amount), the flow declares **attributes**: a name, a type, and a dotted path into the context.
+
+<!-- snippet: queues/attributes -->
+```java
+FlowSpec orders = FlowSpec.define("regional-orders", 1, RegionalOrder.class, RegionalSteps.class, (f, s) -> f
+        .attribute("region", AttrType.STRING, "customer.region")   // read from each step's context
+        .attribute("total", AttrType.DECIMAL, "total")
+        .thenApply(s::validate)
+        .thenApply(s::charge, "payments"));
+
+// payments-eu-large: EU charges of 1000 or more
+QueueCriteria euLarge = QueueCriteria.from("payments")
+        .where(cb -> cb.and(
+                cb.equal(Task_.attr("region", String.class), "eu"),
+                cb.greaterThanOrEqualTo(Task_.attr("total", java.math.BigDecimal.class),
+                        new java.math.BigDecimal("1000"))));
+Worker large = new Worker(client, "payments-eu-large-1",
+                WorkerOptions.defaults().withCriteria(euLarge))
+        .registerHandler(new RegionalHandlers())
+        .start();
+```
+
+Each time a step becomes ready, the server reads the attributes from the context that step will
+receive and stores them beside the task. The values therefore follow the data: a step that moves an
+order to another region hands the next step to the workers for that region. A path that doesn't
+resolve, or a value that doesn't fit the declared type (an object, a number under `STRING`, a
+fraction under `LONG`), leaves the attribute absent rather than failing. Types are exact: `"1000"`
+the string never equals `1000` the number, while `LONG` and `DECIMAL` compare by value. A flow
+declares at most 16 attributes, and only the declared paths are copied out of the context.
+
+What a claim costs depends on how often the predicate matches. Measured on PostgreSQL with a
+million ready tasks on one queue:
+
+- **Matches are common** (1% or more, spread through the queue): about 1 ms with task fields and
+  3 ms with attributes, at any depth. The claim walks the queue oldest-first and stops after a few
+  thousand rows at most. Wiggle's PostgreSQL connections price random reads at
+  `random_page_cost` 1.1 for this (`WIGGLE_PG_RANDOM_PAGE_COST`): at the server default of 4, a
+  common correlation-id prefix the planner judges rare makes it read and sort every ready task
+  instead, about 20 ms at 100,000.
+- **An attribute matches rarely or never**: under 1 ms when nothing matches. When only the newest
+  tasks match, the cost grows with the number of matching tasks rather than the queue depth (22 ms
+  for 10,000). The attribute value indexes let the claim start from the matching rows.
+- **A task field matches rarely or never** (a correlation id no ready task has, say): the claim
+  reads the whole queue, about 250 ms per poll at a million tasks. An idle worker re-polls about
+  every 100 ms. Routing on a value that is often absent from a deep queue belongs in an attribute,
+  not a task field.
+
+The full contract is in [the spec](spec/25-queue-criteria.md).
 
 ---
 

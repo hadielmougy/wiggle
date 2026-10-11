@@ -58,10 +58,22 @@ final class CriteriaWire {
             args.add(switch (l.getVCase()) {
                 case TEXT -> l.getText();
                 case INTEGER -> l.getInteger();
+                case DECIMAL -> decimal(field, l.getDecimal());
+                case FLAG -> l.getFlag();
                 case V_NOT_SET -> throw new IllegalArgumentException(field + ": an empty argument");
             });
         }
-        return new Predicate.Comparison(field, op, args);
+        String attribute = c.getAttribute().isEmpty() ? null : c.getAttribute();
+        return new Predicate.Comparison(field, attribute, op, args);
+    }
+
+    private static java.math.BigDecimal decimal(Field field, String text) {
+        if (text.length() > 64) throw new IllegalArgumentException(field + ": a decimal of more than 64 characters");
+        try {
+            return new java.math.BigDecimal(text).stripTrailingZeros();
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(field + ": '" + text + "' is not a decimal");
+        }
     }
 
     private static <E extends Enum<E>> E named(Class<E> type, String name, String what) {

@@ -1,6 +1,8 @@
 package com.wiggle.client.flow;
 
 import com.wiggle.core.ExecutionMode;
+import com.wiggle.core.criteria.AttrType;
+import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
@@ -455,6 +457,16 @@ final class GraphBuilder {
         return new Sub(start[0], tail);
     }
 
+
+    /**
+     * Declares {@code name}, the value at the dotted {@code path} of each step's context read as
+     * {@code type}, for queue criteria to test with {@code Task_.attr(name, ...)}. Flow-wide wherever
+     * it is declared; a path that does not resolve, or a value that does not fit, leaves it absent.
+     */
+    public GraphBuilder attribute(String name, AttrType type, String path) {
+        pipeline.attribute(new DispatchAttribute(name, type, path));
+        return this;
+    }
 
     /** Sets the queue used by every subsequently defined step (per-step {@code queue} overrides it). */
     public GraphBuilder defaultQueue(String queue) {

@@ -320,12 +320,15 @@ message CriteriaComparison {
     string field = 1;
     string op = 2;
     repeated CriteriaLiteral args = 3;
+    string attribute = 4;                 // the declared attribute's name, iff field is ATTRIBUTE
 }
 
 message CriteriaLiteral {
     oneof v {
         string text = 1;
         sint64 integer = 2;
+        string decimal = 3;               // exact decimal text, for an attribute
+        bool flag = 4;                    // for an attribute
     }
 }
 

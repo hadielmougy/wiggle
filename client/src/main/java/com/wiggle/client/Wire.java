@@ -58,10 +58,16 @@ final class Wire {
             case com.wiggle.core.criteria.Predicate.Comparison c -> {
                 com.wiggle.proto.CriteriaComparison.Builder cmp = com.wiggle.proto.CriteriaComparison.newBuilder()
                         .setField(c.field().name()).setOp(c.op().name());
+                if (c.attribute() != null) cmp.setAttribute(c.attribute());
                 for (Object arg : c.args()) {
-                    cmp.addArgs(arg instanceof Long n
-                            ? com.wiggle.proto.CriteriaLiteral.newBuilder().setInteger(n)
-                            : com.wiggle.proto.CriteriaLiteral.newBuilder().setText((String) arg));
+                    com.wiggle.proto.CriteriaLiteral.Builder l = com.wiggle.proto.CriteriaLiteral.newBuilder();
+                    switch (arg) {
+                        case Long n -> l.setInteger(n);
+                        case java.math.BigDecimal d -> l.setDecimal(d.toPlainString());
+                        case Boolean f -> l.setFlag(f);
+                        default -> l.setText((String) arg);
+                    }
+                    cmp.addArgs(l);
                 }
                 b.setCmp(cmp);
             }
