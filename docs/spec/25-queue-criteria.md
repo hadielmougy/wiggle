@@ -2,8 +2,10 @@
 
 ← [Worker contract](20-worker.md) · [Index](00-index.md) · Next: [Engine semantics](30-engine.md)
 
-**Status: proposed.** Nothing in this chapter is implemented yet; criteria over task metadata
-(everything but [§3](#3-attributes)) are built in the change that follows this one. Every requirement here is
+**Status: proposed.** Nothing in this chapter is implemented yet. Criteria over task metadata and
+the attributes of [§3](#3-attributes) are built in the two changes that follow this one; the
+portal's three coverage states ([WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog)), the warning of
+[WGL-QC-045](#3-attributes) and the benchmark of [WGL-QC-100](#6-cost) are not. Every requirement here is
 *unverified* ([WGL-GEN-001](00-index.md)) until the change that builds it names its test. Where this
 chapter and the rest of the suite disagree, the rest of the suite describes the code as it is today.
 
@@ -103,9 +105,10 @@ task does not carry, or a null correlation id) is **false**, and `not` of it is 
 **WGL-QC-031** (MUST) `like` supports `%` and `_` only, with `\` as the escape character, and is
 case-sensitive on every dialect.
 
-**WGL-QC-032** (MUST) Numeric attributes compare numerically and strings compare by code point. An
+**WGL-QC-032** (MUST) Numeric attributes compare numerically, `LONG` and `DECIMAL` with each other,
+and strings compare by code point. A boolean supports `equal`, `notEqual` and `in` only. An
 attribute compared with a value of another type is false: the attribute `"1000"` is not equal to the
-number `1000`.
+number `1000`. The literals of one comparison MUST all have one type.
 
 ## 3. Attributes
 
@@ -139,9 +142,16 @@ time the task's token becomes `READY` and when a local-chain continuation is lea
 step.
 
 **WGL-QC-043** (MUST) A path that does not resolve, resolves to JSON null, or resolves to a value
-that does not fit the declared type (an object, an array, or a string under `LONG`) MUST leave the
-attribute **absent**. It is never an error, and the step still dispatches. A `STRING` value longer
-than 256 characters MUST also be absent, so that the attribute index stays bounded.
+that does not fit the declared type (an object, an array, a string under `LONG`, a number under
+`STRING`, a fraction under `LONG`) MUST leave the attribute **absent**. It is never an error, and the
+step still dispatches. Numbers are read from their decimal text, so every JSON reader agrees. A
+`STRING` value longer than 256 characters, and a `DECIMAL` with more than 10 fraction digits or 28
+integer digits, MUST also be absent, so every store keeps a value exactly. A decimal literal outside
+the same range is `INVALID_ARGUMENT`.
+
+**WGL-QC-046** (MUST) A token's attributes are read once, when it becomes ready or is leased as a
+continuation. A retry keeps them: a failed attempt leaves the context as it was. A compensation task
+carries no attributes.
 
 **WGL-QC-044** (MUST) Only declared paths are copied out of the context. Undeclared data, and the
 context itself, MUST NOT be written to the attribute table.
@@ -250,7 +260,9 @@ match, evaluated on what the activation carries. A `TaskActivation` therefore ca
 continuation only if the continuation's queue is in the criteria's queues **and** the predicate holds
 for the continuation, with its attributes freshly extracted ([WGL-QC-042](#3-attributes)). Otherwise
 the continuation is parked `READY` for whoever matches. A run that reports a step after a
-continuation its criteria do not match MUST be refused (400) before any of it is written. This
+continuation its criteria do not match MUST be refused (400). Where the mismatch does not depend on
+attributes it MUST be refused before any of the run is written; one that does is found as the
+continuation is created, once its context is known, and the transaction is rolled back. This
 extends [WGL-WRK-031](20-worker.md): a worker cannot run, through a chain, a step its criteria would
 not claim.
 
@@ -277,28 +289,32 @@ criteria match stays `READY` indefinitely, exactly like a task on a queue nobody
 ALTER TABLE wf_token ADD COLUMN correlation_id VARCHAR(200);  -- matches wf_instance
 
 CREATE TABLE wf_token_attr (
-    token_id  VARCHAR(128) NOT NULL,
-    name      VARCHAR(63)  NOT NULL,
-    s_val     VARCHAR(256),       -- STRING, BOOLEAN ('true'/'false')
-    n_val     DECIMAL(38, 10),    -- LONG, DECIMAL
+    token_id  VARCHAR(128)   NOT NULL,
+    name      VARCHAR(63)    NOT NULL,
+    t         CHAR(1)        NOT NULL,   -- S (s_val), B ('true'/'false' in s_val), N (n_val)
+    s_val     VARCHAR(256),
+    n_val     DECIMAL(38, 10),
     PRIMARY KEY (token_id, name)
 );
-CREATE INDEX ix_token_attr_s ON wf_token_attr (name, s_val, token_id);
-CREATE INDEX ix_token_attr_n ON wf_token_attr (name, n_val, token_id);
 ```
 
-**WGL-QC-090** (MUST) A token's attribute rows MUST be written in the transaction that inserts or
-readies the token, through the buffered write path, as one multi-row insert. For a flow with no
-attributes no row and no statement is written ([WGL-QC-002](#1-model)). When a token is readied again
-(a retry after backoff), its old rows MUST be replaced.
+The primary key serves the claim's probe of each candidate row. Indexes on `(name, value)` would only
+serve a claim driven from the attribute table ([§6](#6-cost)), and every attribute write would pay for
+them, so they are left out until that claim exists.
 
-**WGL-QC-091** (MUST) Attribute rows MUST be deleted with their token by retention, and never on
-claim, so the claim adds no statement.
+**WGL-QC-090** (MUST) A token's attribute rows MUST be written in the transaction that inserts or
+readies the token, through the buffered write path, as one batch. For a flow with no attributes no
+row and no statement is written ([WGL-QC-002](#1-model)). When a written token's attributes are read
+again, its old rows MUST be replaced.
+
+**WGL-QC-091** (MUST) Attribute rows MUST be deleted with their token by retention (found through the
+token's instance, so the table needs no index of its own), and never on claim, so the claim adds no
+statement.
 
 **WGL-QC-092** (MUST) `correlation_id` MUST be copied onto every token when it is created, the same
 way `inst_created_at` is, so the claim needs no join to `wf_instance`.
 
-**WGL-QC-093** (MUST) The migration adds the table, the column and the indexes. On a dialect where
+**WGL-QC-093** (MUST) The migrations add the column (34) and the table (35). On a dialect where
 `ADD COLUMN` rewrites the table, it MUST follow the large-table guidance of
 [WGL-STOR](80-storage.md). Existing tokens keep a null `correlation_id` and no attributes, which
 match only `isNull`.
