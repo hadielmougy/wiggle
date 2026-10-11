@@ -40,22 +40,26 @@ dispatched: no added statement, column write, or extraction.
 ### 2.1 Building criteria
 
 ```java
-QueueCriteria eu = QueueCriteria.from("payments", "refunds")
+QueueCriteria payments = QueueCriteria.from("payments")
         .where(cb -> cb.and(
                 cb.equal(Task_.WORKFLOW, "orders"),
-                cb.in(Task_.STEP, "charge", "refund"),
+                cb.in(Task_.STEP, "charge", "capture"),
                 cb.lessThan(Task_.ATTEMPT, 3),
                 cb.equal(Task_.attr("region", String.class), "eu"),
-                cb.greaterThanOrEqualTo(Task_.attr("amount", BigDecimal.class), new BigDecimal("1000")),
                 cb.not(cb.like(Task_.CORRELATION_ID, "test-%"))));
+QueueCriteria refunds = QueueCriteria.from("refunds")
+        .where(cb -> cb.greaterThanOrEqualTo(Task_.attr("amount", BigDecimal.class), new BigDecimal("1000")));
+QueueCriteria notify = QueueCriteria.from("notify");                 // every task on it
 
-Worker w = new Worker(client, "pay-eu-1", WorkerOptions.defaults().withCriteria(eu))
+Worker w = new Worker(client, "pay-eu-1", WorkerOptions.defaults().withCriteria(payments, refunds, notify))
         .registerHandler(new PaymentHandlers())
         .start();
 ```
 
-**WGL-QC-010** (MUST) `QueueCriteria.from(String... queues)` MUST be the only way to create criteria,
-and MUST reject an empty or blank queue list. Criteria therefore never span every queue.
+**WGL-QC-010** (MUST) `QueueCriteria.from(String queue)` MUST be the only way to create criteria, and
+MUST reject a blank queue. One `QueueCriteria` is one queue and that queue's predicate; a worker or a
+poll holds one per queue it serves, and MUST name each queue at most once. Criteria therefore never
+span every queue, and a predicate never applies to a queue it was not written for.
 
 **WGL-QC-011** (MUST) `CriteriaBuilder` MUST provide `equal`, `notEqual`, `in`, `lessThan`,
 `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`, `between`, `like`, `isNull`, `isNotNull`,
@@ -71,7 +75,7 @@ once, and the same criteria object goes on every poll.
 
 **WGL-QC-014** (MUST) `WorkerOptions.withCriteria(...)` and `withQueues(...)` MUST be mutually
 exclusive. Setting both MUST fail `start()`. The worker's served queue set
-([WGL-WRK-030](20-worker.md)) is the criteria's queues.
+([WGL-WRK-030](20-worker.md)) is the queues its criteria name.
 
 **WGL-QC-015** (MUST NOT) Criteria MUST NOT have an `orderBy`. The claim keeps its order: oldest
 instance first, then longest ready ([WGL-STOR-021](80-storage.md)).
@@ -82,7 +86,6 @@ instance first, then longest ready ([WGL-STOR-021](80-storage.md)).
 |---|---|---|
 | `WORKFLOW` | `String` | `wf_token.workflow` |
 | `VERSION` | `Integer` | `wf_token.version` |
-| `QUEUE` | `String` | `wf_token.queue` (narrows within the criteria's queues) |
 | `STEP` | `String` | the step's name, the part of `wf_token.activity` after `workflow#`; `equal`, `notEqual` and `in` only |
 | `NODE_ID` | `String` | `wf_token.node_id` |
 | `KIND` | `String` | `TASK` or `PREDICATE` |
@@ -174,12 +177,12 @@ message PollRequest {
     int64 lease_millis = 4;
     int64 wait_millis = 5;
     repeated WorkflowVersion versions = 6;
-    QueueCriteria criteria = 7;           // the criteria form
+    repeated QueueCriteria criteria = 7;  // the criteria form: one per queue served
 }
 
 message QueueCriteria {
-    repeated string queues = 1;           // required, non-empty
-    CriteriaPredicate where = 2;          // absent = every task on those queues
+    string queue = 1;                     // required
+    CriteriaPredicate where = 2;          // absent = every task on the queue
 }
 
 message CriteriaPredicate {
@@ -210,12 +213,12 @@ message CriteriaLiteral {                 // exact, unlike google.protobuf.Value
 }
 ```
 
-**WGL-QC-050** (MUST) A poll MUST carry **either** `queues` **or** `criteria`. Both set is
-`INVALID_ARGUMENT`. `versions` is allowed with either form and is ANDed with the criteria, so
+**WGL-QC-050** (MUST) A poll MUST carry **either** `queues` **or** `criteria`. Both set, or a queue
+named by two criteria, is `INVALID_ARGUMENT`. `versions` is allowed with either form and is ANDed with the criteria, so
 version-scoped registration ([WGL-WRK-024](20-worker.md)) keeps working.
 
 **WGL-QC-051** (MUST) The server MUST validate criteria before any claim and answer
-`INVALID_ARGUMENT` on any of the following: an empty queue list, a tree deeper than 8, more than 64
+`INVALID_ARGUMENT` on any of the following: a blank queue, a tree deeper than 8, more than 64
 nodes, an `in` with more than 256 arguments, an empty `and`/`or`, an unknown field or operator, an argument
 count wrong for its operator, an argument whose literal type does not fit its field, an ordering or
 `like` on `STEP`, a text argument longer than 256 characters, or a `like` pattern ending in an
@@ -227,13 +230,15 @@ authorization ([gRPC authz](70-api.md)) would not let it claim by queue name.
 ### 4.2 The claim
 
 **WGL-QC-060** (MUST) `Tx.claimTasks` takes a `ClaimFilter` in place of the queue and version sets.
-The filter is the queues, the versions, and the predicate. The queue-name form is a filter with no
-predicate.
+The filter is the queues, the versions, and a predicate per queue. The queue-name form is a filter
+with none.
 
-**WGL-QC-061** (MUST) On JDBC the predicate MUST compile to a SQL fragment with named binds, added
-to the existing candidate filter of both claim paths: the per-queue lateral pick with `SKIP LOCKED`,
-and the compare-and-set fallback ([WGL-STOR-021](80-storage.md), [WGL-STOR-022](80-storage.md)). The
-claim stays one statement on PostgreSQL. A comparison on an attribute compiles to `EXISTS` (or
+**WGL-QC-061** (MUST) On JDBC each queue's predicate MUST compile to a SQL fragment with its own
+named binds, applied to that queue's rows only, in both claim paths ([WGL-STOR-021](80-storage.md),
+[WGL-STOR-022](80-storage.md)). On PostgreSQL a claim over several queues with criteria picks through
+one `SKIP LOCKED` subquery per queue under `UNION ALL`, each planned for its own predicate; one
+queue, or several without criteria, keep the statement they had. The claim stays one statement on
+PostgreSQL. A comparison on an attribute compiles to `EXISTS` (or
 `NOT EXISTS` for `isNull`) against the attribute table, which gives two-valued results
 ([WGL-QC-030](#23-semantics)) without extra handling. A nullable token column is wrapped so that an
 absent value compares false.
@@ -259,7 +264,7 @@ match, evaluated on what the activation carries. A `TaskActivation` therefore ca
 `correlation_id` and `instance_created_at`.
 
 **WGL-QC-070** (MUST) When the reporting worker polled with criteria, the server MUST lease it a
-continuation only if the continuation's queue is in the criteria's queues **and** the predicate holds
+continuation only if its criteria name the continuation's queue **and** that queue's predicate holds
 for the continuation, with its attributes freshly extracted ([WGL-QC-042](#3-attributes)). Otherwise
 the continuation is parked `READY` for whoever matches. A run that reports a step after a
 continuation its criteria do not match MUST be refused (400). Where the mismatch does not depend on
@@ -280,8 +285,8 @@ means spurious wake-ups, never missed ones. Parked polls with different criteria
 different lines, so a wake taken by a poll that rejects the task does not leave a poll that accepts
 it waiting for the fallback.
 
-**WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria and evaluate them, three
-valued, against each `(workflow, version, queue)` backlog slice. The slice is **COVERED** when some
+**WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria and evaluate the predicate it
+has for the slice's queue, three valued, against each `(workflow, version, queue)` backlog slice. The slice is **COVERED** when some
 live poller's criteria are true for it, **CONDITIONAL** when none is but some depend on properties the
 slice does not fix (a step, a node, a correlation id, an attribute), and **UNCOVERED** otherwise. A
 task that no poller's criteria match stays `READY` indefinitely, exactly like a task on a queue nobody
