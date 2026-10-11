@@ -16,7 +16,6 @@ public record TaskFacts(String workflow, int version, String queue, String step,
         return switch (field) {
             case WORKFLOW -> workflow;
             case VERSION -> (long) version;
-            case QUEUE -> queue;
             case STEP -> step;
             case NODE_ID -> nodeId;
             case KIND -> kind;

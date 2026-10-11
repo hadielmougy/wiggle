@@ -126,7 +126,7 @@ final class StepChain {
 
     /** Refuses, before anything is written, a run that chained into a step its worker's criteria exclude. */
     private static void requireClaimable(LazyGraph def, Instance inst, Run run) {
-        if (run.criteria() == null) return;
+        if (run.criteria().isEmpty()) return;
         for (StepInput step : run.steps().subList(1, run.steps().size())) {
             Node node = def.find(step.nodeId()).orElse(null);
             if (node != null && !claims(run.criteria(), inst, node)) {
@@ -136,9 +136,11 @@ final class StepChain {
         }
     }
 
-    /** Whether a worker polling with {@code criteria} (null: by queue names) would claim {@code next}. */
-    private static boolean claims(QueueCriteria criteria, Instance inst, Node next) {
-        return criteria == null || criteria.matches(new TaskFacts(inst.workflow, inst.version, next.queue(),
+    /** Whether a worker polling with {@code criteria} (empty: by queue names) would claim {@code next}. */
+    private static boolean claims(List<QueueCriteria> criteria, Instance inst, Node next) {
+        if (criteria.isEmpty()) return true;
+        QueueCriteria forQueue = QueueCriteria.forQueue(criteria, next.queue());
+        return forQueue != null && forQueue.matches(new TaskFacts(inst.workflow, inst.version, next.queue(),
                 next.name(), next.id(), next.kind().name(), 1, inst.correlationId, inst.createdAt));
     }
 

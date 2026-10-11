@@ -1046,7 +1046,7 @@ abstract class StorageContract {
             }
             assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
 
-            ClaimFilter filter = new ClaimFilter(Set.copyOf(criteria.queues()), null, criteria.where());
+            ClaimFilter filter = ClaimFilter.of(List.of(criteria), null);
             Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
             Set<Integer> got = new TreeSet<>();
             for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
@@ -1055,19 +1055,26 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("WGL-QC-061: criteria over several queues narrow each queue's pick")
-    void claimAppliesCriteriaAcrossQueues() {
+    @DisplayName("WGL-QC-061: each queue's criteria narrow that queue's pick alone")
+    void claimAppliesCriteriaPerQueue() {
         String q1 = id("q");
         String q2 = id("q");
+        String q3 = id("q");
         List<Token> first = criteriaFixture(q1);
         List<Token> second = criteriaFixture(q2);
-        QueueCriteria criteria = QueueCriteria.from(q1, q2).where(cb -> cb.equal(Task_.WORKFLOW, "crit-a"));
-        ClaimFilter filter = new ClaimFilter(Set.copyOf(criteria.queues()), null, criteria.where());
+        List<Token> third = criteriaFixture(q3);
+        ClaimFilter filter = ClaimFilter.of(List.of(
+                QueueCriteria.from(q1).where(cb -> cb.equal(Task_.WORKFLOW, "crit-a")),
+                QueueCriteria.from(q2).where(cb -> cb.equal(Task_.WORKFLOW, "crit-b")),
+                QueueCriteria.from(q3)), null);
 
-        Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
-        Set<String> expected = Stream.concat(first.stream(), second.stream())
-                .filter(t -> t.workflow.equals("crit-a")).map(t -> t.id).collect(java.util.stream.Collectors.toSet());
-        assertEquals(expected, claimed);
+        Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 20, now, now + 1_000))));
+        Set<String> expected = Stream.of(
+                        first.stream().filter(t -> t.workflow.equals("crit-a")),
+                        second.stream().filter(t -> t.workflow.equals("crit-b")),
+                        third.stream())
+                .flatMap(s -> s).map(t -> t.id).collect(java.util.stream.Collectors.toSet());
+        assertEquals(expected, claimed, "crit-a from the first queue, crit-b from the second, all of the third");
     }
 
     @Test

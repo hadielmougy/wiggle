@@ -47,7 +47,7 @@ final class Wire {
     }
 
     static com.wiggle.proto.QueueCriteria criteria(com.wiggle.core.criteria.QueueCriteria c) {
-        com.wiggle.proto.QueueCriteria.Builder b = com.wiggle.proto.QueueCriteria.newBuilder().addAllQueues(c.queues());
+        com.wiggle.proto.QueueCriteria.Builder b = com.wiggle.proto.QueueCriteria.newBuilder().setQueue(c.queue());
         if (c.where() != null) b.setWhere(predicate(c.where()));
         return b.build();
     }

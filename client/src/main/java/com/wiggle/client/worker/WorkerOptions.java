@@ -3,18 +3,20 @@ package com.wiggle.client.worker;
 import com.wiggle.core.criteria.QueueCriteria;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 /** Worker tuning. Defaults are chosen for interactive workloads, not throughput benchmarks. */
 public record WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
                             Duration idleBackoff, Duration errorBackoff,
                             int localBatchSize, Set<String> queues, Duration awaitRegistration,
-                            boolean crossInstanceBatching, QueueCriteria criteria) {
+                            boolean crossInstanceBatching, List<QueueCriteria> criteria) {
 
     public WorkerOptions {
         if (localBatchSize < 1) throw new IllegalArgumentException("localBatchSize must be >= 1");
         queues = queues == null ? Set.of() : Set.copyOf(queues);
         awaitRegistration = awaitRegistration == null ? Duration.ZERO : awaitRegistration;
+        criteria = criteria == null || criteria.isEmpty() ? List.of() : QueueCriteria.forPoll(criteria);
     }
 
     public WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
@@ -90,12 +92,13 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
     }
 
     /**
-     * Polls with {@code criteria} instead of queue names: the worker serves the criteria's queues and
-     * claims only the tasks on them its predicate matches, and a local-execution chain hands back at
-     * a step the criteria do not match. Exclusive with {@link #withQueues}.
+     * Polls with criteria instead of queue names, one per queue served: the worker serves those queues,
+     * claims only the tasks the entry for their queue matches, and a local-execution chain hands back
+     * at a step its queue's entry does not match. A queue named twice is refused. Exclusive with
+     * {@link #withQueues}.
      */
-    public WorkerOptions withCriteria(QueueCriteria c) {
+    public WorkerOptions withCriteria(QueueCriteria... perQueue) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration, crossInstanceBatching, c);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching, List.of(perQueue));
     }
 }

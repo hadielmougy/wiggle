@@ -268,12 +268,17 @@ public final class WorkflowEngine {
     }
 
     /** One run of a cross-instance batch: exactly the arguments of {@link #report}. */
-    /** {@code criteria}, when the worker polled with them, bound which continuation it may be leased. */
+    /** {@code criteria}, when the worker polled with them (one per queue), bound which continuation it
+     *  may be leased; empty when it polled by queue names. */
     public record Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback,
-                      QueueCriteria criteria) {
+                      List<QueueCriteria> criteria) {
+
+        public Run {
+            criteria = criteria == null ? List.of() : List.copyOf(criteria);
+        }
 
         public Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
-            this(startTaskId, leaseOwner, steps, finalHandback, null);
+            this(startTaskId, leaseOwner, steps, finalHandback, List.of());
         }
     }
 

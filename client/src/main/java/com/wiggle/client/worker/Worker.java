@@ -72,14 +72,19 @@ public final class Worker implements AutoCloseable {
 
     /** The queues this worker actually serves: its criteria's, the explicit restriction, or everything registered. */
     Set<String> servedQueues() {
-        if (options.criteria() != null) return new LinkedHashSet<>(options.criteria().queues());
+        if (!options.criteria().isEmpty()) {
+            Set<String> out = new LinkedHashSet<>();
+            for (QueueCriteria c : options.criteria()) out.add(c.queue());
+            return out;
+        }
         return options.queues().isEmpty() ? registrations.queues() : options.queues();
     }
 
     /** Whether this worker's poll would claim {@code next} as the continuation of {@code task}. */
     boolean claims(TaskActivation task, Node next) {
-        QueueCriteria c = options.criteria();
-        if (c == null) return true;
+        if (options.criteria().isEmpty()) return true;
+        QueueCriteria c = QueueCriteria.forQueue(options.criteria(), next.queue());
+        if (c == null) return false;
         return c.matches(new TaskFacts(task.workflow(), task.version(), next.queue(), next.name(), next.id(),
                 next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt()));
     }
@@ -148,7 +153,7 @@ public final class Worker implements AutoCloseable {
     }
 
     public Worker start() {
-        if (options.criteria() != null && !options.queues().isEmpty()) {
+        if (!options.criteria().isEmpty() && !options.queues().isEmpty()) {
             throw new IllegalStateException("worker " + workerId + ": set withQueues or withCriteria, not both");
         }
         if (!running.compareAndSet(false, true)) return this;
@@ -186,7 +191,7 @@ public final class Worker implements AutoCloseable {
         }
         int free = options.concurrency() - inFlight.get();
         long polledAt = System.currentTimeMillis();
-        PollResult result = options.criteria() != null
+        PollResult result = !options.criteria().isEmpty()
                 ? client.poll(workerId, options.criteria(), registrations.claimedVersions(), free,
                         options.lease().toMillis(), options.longPollWait().toMillis())
                 : client.poll(workerId, servedQueues(), registrations.claimedVersions(), free,

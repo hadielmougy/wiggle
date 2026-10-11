@@ -153,6 +153,38 @@ class QueueCriteriaTest {
     }
 
     @Test
+    @DisplayName("WGL-QC-010: each queue a worker serves has its own criteria, in claims and local chains")
+    void criteriaPerQueue() throws Exception {
+        for (ExecutionMode mode : List.of(ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC)) {
+            Map<String, String> byStep = new ConcurrentHashMap<>();
+            String wf = "qc-two-" + mode.name().toLowerCase(java.util.Locale.ROOT);
+            String other = wf + "-other";
+            FlowSpec spec = FlowSpec.define(wf, 1, Map.class, Steps.class, (f, s) -> Modes.in(f, mode)
+                    .thenApply(s::a)
+                    .thenApply(s::b)
+                    .thenApply(s::c, other)
+                    .thenApply(s::d, other));
+            // front takes everything on wf, and only d on the other queue; back takes c there.
+            QueueCriteria all = QueueCriteria.from(wf);
+            QueueCriteria onlyD = QueueCriteria.from(other).where(cb -> cb.equal(Task_.STEP, "d"));
+            QueueCriteria onlyC = QueueCriteria.from(other).where(cb -> cb.equal(Task_.STEP, "c"));
+            try (WiggleServer server = new WiggleServer(config()).start();
+                 WiggleClient client = new WiggleClient(server.baseUrl());
+                 Worker f = new Worker(client, "front", WorkerOptions.defaults().withCriteria(all, onlyD))
+                         .registerHandler(wf, new H("front", new ConcurrentHashMap<>(), byStep));
+                 Worker b = new Worker(client, "back", WorkerOptions.defaults().withCriteria(onlyC))
+                         .registerHandler(wf, new H("back", new ConcurrentHashMap<>(), byStep))) {
+                client.register(spec);
+                f.start();
+                b.start();
+                InstanceView done = client.awaitCompletion(client.start(spec, Map.of()), Duration.ofSeconds(20));
+                assertEquals("COMPLETED", done.status(), mode + " status");
+                assertEquals(Map.of("a", "front", "b", "front", "c", "back", "d", "front"), byStep, mode.name());
+            }
+        }
+    }
+
+    @Test
     @DisplayName("WGL-QC-070/071: the server leases a continuation only when the reported criteria match it")
     void serverChecksTheContinuation() throws Exception {
         FlowSpec spec = flow("qc-lease", ExecutionMode.LOCAL_ASYNC);
@@ -163,21 +195,21 @@ class QueueCriteriaTest {
             client.register(spec);
 
             client.start(spec, Map.of());
-            TaskActivation a = client.poll("w1", onlyA, Set.of(), 1, 30_000, 2_000).tasks().getFirst();
+            TaskActivation a = client.poll("w1", List.of(onlyA), Set.of(), 1, 30_000, 2_000).tasks().getFirst();
             assertEquals("a", a.stepName());
             List<WiggleClient.StepReport> twoSteps = List.of(
                     new WiggleClient.StepReport(a.nodeId(), Map.of("a", 1), null),
                     new WiggleClient.StepReport(nodeB, Map.of("b", 1), null));
             WiggleApiException refused = assertThrows(WiggleApiException.class,
-                    () -> client.reportSteps(a.taskId(), a.leaseOwner(), twoSteps, false, onlyA));
+                    () -> client.reportSteps(a.taskId(), a.leaseOwner(), twoSteps, false, List.of(onlyA)));
             assertEquals(400, refused.status(), "running b in a chain is outside the worker's criteria");
 
             ReportResult released = client.reportSteps(a.taskId(), a.leaseOwner(),
-                    List.of(twoSteps.getFirst()), false, onlyA);
+                    List.of(twoSteps.getFirst()), false, List.of(onlyA));
             assertNull(released.nextTaskId(), "b is parked for whoever matches, not leased back");
 
             client.start(spec, Map.of());
-            TaskActivation a2 = client.poll("w2", onlyA, Set.of(), 1, 30_000, 2_000).tasks().getFirst();
+            TaskActivation a2 = client.poll("w2", List.of(onlyA), Set.of(), 1, 30_000, 2_000).tasks().getFirst();
             ReportResult leased = client.reportSteps(a2.taskId(), a2.leaseOwner(),
                     List.of(new WiggleClient.StepReport(a2.nodeId(), Map.of("a", 1), null)), false, null);
             assertNotNull(leased.nextTaskId(), "a worker polling by queue name is leased b as before");
@@ -191,22 +223,27 @@ class QueueCriteriaTest {
             ManagedChannel channel = Grpc.newChannelBuilder(server.baseUrl(), InsecureChannelCredentials.create()).build();
             try {
                 var stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
-                com.wiggle.proto.QueueCriteria ok = com.wiggle.proto.QueueCriteria.newBuilder().addQueues("q").build();
+                com.wiggle.proto.QueueCriteria ok = com.wiggle.proto.QueueCriteria.newBuilder().setQueue("q").build();
                 StatusRuntimeException both = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
-                        PollRequest.newBuilder().setWorkerId("w").addQueues("q").setCriteria(ok).build()));
+                        PollRequest.newBuilder().setWorkerId("w").addQueues("q").addCriteria(ok).build()));
                 assertEquals(Status.Code.INVALID_ARGUMENT, both.getStatus().getCode());
 
                 com.wiggle.proto.QueueCriteria unknownField = ok.toBuilder().setWhere(CriteriaPredicate.newBuilder()
                         .setCmp(CriteriaComparison.newBuilder().setField("lease_owner").setOp("IS_NULL"))).build();
                 StatusRuntimeException bad = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
-                        PollRequest.newBuilder().setWorkerId("w").setCriteria(unknownField).build()));
+                        PollRequest.newBuilder().setWorkerId("w").addCriteria(unknownField).build()));
                 assertEquals(Status.Code.INVALID_ARGUMENT, bad.getStatus().getCode());
                 assertTrue(bad.getStatus().getDescription().contains("lease_owner"), bad.getStatus().getDescription());
 
                 StatusRuntimeException noQueue = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
                         PollRequest.newBuilder().setWorkerId("w")
-                                .setCriteria(com.wiggle.proto.QueueCriteria.getDefaultInstance()).build()));
+                                .addCriteria(com.wiggle.proto.QueueCriteria.getDefaultInstance()).build()));
                 assertEquals(Status.Code.INVALID_ARGUMENT, noQueue.getStatus().getCode());
+
+                StatusRuntimeException twice = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
+                        PollRequest.newBuilder().setWorkerId("w").addCriteria(ok).addCriteria(ok).build()));
+                assertEquals(Status.Code.INVALID_ARGUMENT, twice.getStatus().getCode());
+                assertTrue(twice.getStatus().getDescription().contains("more than one"), twice.getStatus().getDescription());
             } finally {
                 channel.shutdownNow();
             }

@@ -101,31 +101,33 @@ a `withQueues(...)` set or retiring a service.
 ### Narrowing a queue with criteria
 
 `withQueues(...)` decides *which queues* a worker serves. `withCriteria(...)` also decides *which
-tasks on them* it claims, with a predicate built like a JPA Criteria query:
+tasks on each* it claims: one `QueueCriteria` per queue, each with its own predicate built like a
+JPA Criteria query, or none to take every task on that queue:
 
 <!-- snippet: queues/criteria-worker -->
 ```java
-// payments-eu: serves the "payments" queue, but only charges of orders keyed "eu-..."
+// payments-eu: on "payments", only charges of orders keyed "eu-..."; on "refunds", everything
 QueueCriteria euCharges = QueueCriteria.from("payments")
         .where(cb -> cb.and(
                 cb.equal(Task_.STEP, "charge"),
                 cb.like(Task_.CORRELATION_ID, "eu-%"),
                 cb.lessThan(Task_.ATTEMPT, 4)));
+QueueCriteria refunds = QueueCriteria.from("refunds");
 Worker eu = new Worker(client, "payments-eu-1",
-                WorkerOptions.defaults().withCriteria(euCharges))
+                WorkerOptions.defaults().withCriteria(euCharges, refunds))
         .registerHandler(new OrderHandlers())
         .start();
 ```
 
-A predicate can test the task's workflow, version, queue, step name, node id, kind, attempt (1 on
-the first run), the instance's correlation id, and when the instance was created. Comparisons
+A predicate can test the task's workflow, version, step name, node id, kind, attempt (1 on the
+first run), the instance's correlation id, and when the instance was created. Comparisons
 combine with `and`, `or` and `not`. A comparison on a value the task doesn't have (an instance with
 no correlation id, say) is false, and `not` of it is true. Text orders by code point and `like` is
 case-sensitive, the same on every store.
 
 The server applies the predicate in the claim itself, so a worker never receives a task it would
-have to refuse. A local-execution chain hands back at the first step the criteria don't match. A
-worker sets `withQueues` or `withCriteria`, not both. Tasks that no worker's criteria match stay
+have to refuse. A local-execution chain hands back at the first step whose queue's criteria don't
+match it. A worker names each queue once, and sets `withQueues` or `withCriteria`, not both. Tasks that no worker's criteria match stay
 `READY`, exactly like tasks on a queue nobody serves, so check the Backlog tab after changing them.
 
 The claim walks each queue oldest-instance-first and tests the predicate on each row it reaches. A

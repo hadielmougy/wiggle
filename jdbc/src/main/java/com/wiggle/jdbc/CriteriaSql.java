@@ -21,7 +21,12 @@ import java.util.Map;
 record CriteriaSql(String sql, Map<String, Object> binds) {
 
     static CriteriaSql compile(Predicate p, Dialect dialect) {
-        Compiler c = new Compiler(dialect);
+        return compile(p, dialect, "crit");
+    }
+
+    /** {@code prefix} names the binds, so several compiled predicates can share one statement. */
+    static CriteriaSql compile(Predicate p, Dialect dialect, String prefix) {
+        Compiler c = new Compiler(dialect, prefix);
         c.emit(p);
         return new CriteriaSql(c.sql.toString(), Map.copyOf(c.binds));
     }
@@ -34,9 +39,11 @@ record CriteriaSql(String sql, Map<String, Object> binds) {
         private final Dialect dialect;
         private final StringBuilder sql = new StringBuilder();
         private final Map<String, Object> binds = new LinkedHashMap<>();
+        private final String prefix;
 
-        Compiler(Dialect dialect) {
+        Compiler(Dialect dialect, String prefix) {
             this.dialect = dialect;
+            this.prefix = prefix;
         }
 
         void emit(Predicate p) {
@@ -116,7 +123,7 @@ record CriteriaSql(String sql, Map<String, Object> binds) {
         }
 
         private String bind(Object value) {
-            String name = "crit" + binds.size();
+            String name = prefix + binds.size();
             binds.put(name, value);
             return ":" + name;
         }
@@ -125,7 +132,6 @@ record CriteriaSql(String sql, Map<String, Object> binds) {
             return switch (f) {
                 case WORKFLOW -> "workflow";
                 case VERSION -> "version";
-                case QUEUE -> "queue";
                 case NODE_ID -> "node_id";
                 case KIND -> "kind";
                 case ATTEMPT -> "(attempt + 1)";

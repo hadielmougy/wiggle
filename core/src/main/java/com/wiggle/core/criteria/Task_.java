@@ -7,7 +7,6 @@ public final class Task_ {
 
     public static final Attribute<String> WORKFLOW = new Attribute<>(Field.WORKFLOW, String.class);
     public static final Attribute<Integer> VERSION = new Attribute<>(Field.VERSION, Integer.class);
-    public static final Attribute<String> QUEUE = new Attribute<>(Field.QUEUE, String.class);
     public static final Attribute<String> STEP = new Attribute<>(Field.STEP, String.class);
     public static final Attribute<String> NODE_ID = new Attribute<>(Field.NODE_ID, String.class);
     public static final Attribute<String> KIND = new Attribute<>(Field.KIND, String.class);
