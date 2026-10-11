@@ -684,6 +684,13 @@ public final class JdbcStorage implements Storage {
             );
             CREATE INDEX IF NOT EXISTS ix_token_attr_s ON wf_token_attr (name, s_val);
             CREATE INDEX IF NOT EXISTS ix_token_attr_n ON wf_token_attr (name, n_val);
+            """),
+            // Instance listings, newest first, with or without a workflow; and the audit read by
+            // action. Each otherwise read its whole table.
+            new Migration(36, "listing-indexes", """
+            CREATE INDEX IF NOT EXISTS ix_instance_created ON wf_instance (created_at);
+            CREATE INDEX IF NOT EXISTS ix_instance_workflow ON wf_instance (workflow, created_at);
+            CREATE INDEX IF NOT EXISTS ix_auth_audit_action ON wf_auth_audit (action);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
