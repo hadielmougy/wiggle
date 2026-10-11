@@ -15,6 +15,7 @@ import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
+import com.wiggle.testfixtures.TestPorts;
 
 import java.time.Duration;
 import java.util.*;
@@ -116,7 +117,7 @@ public final class Scenarios {
     }
 
     private static void withServer(Body body) throws Exception {
-        ServerConfig config = new ServerConfig(0, "test-node", null, null, null, 4,
+        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
         try (WiggleServer server = new WiggleServer(config, STORAGE.get()).start();

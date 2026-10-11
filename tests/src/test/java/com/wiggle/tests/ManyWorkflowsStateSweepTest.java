@@ -15,6 +15,7 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

@@ -19,6 +19,7 @@ import com.wiggle.core.ScratchKeys;
 import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
