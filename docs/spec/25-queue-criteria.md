@@ -3,9 +3,9 @@
 ← [Worker contract](20-worker.md) · [Index](00-index.md) · Next: [Engine semantics](30-engine.md)
 
 **Status: proposed.** Nothing in this chapter is implemented yet. Criteria over task metadata and
-the attributes of [§3](#3-attributes) are built in the two changes that follow this one; the
-portal's three coverage states ([WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog)) and the Backlog
-half of [WGL-QC-045](#3-attributes) are not. The benchmark of [WGL-QC-100](#6-cost) has run. Every requirement here is
+the attributes of [§3](#3-attributes) are built in the changes that follow this one, and so are the
+three coverage states of [WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog); the Backlog half of
+[WGL-QC-045](#3-attributes) is not. The benchmark of [WGL-QC-100](#6-cost) has run. Every requirement here is
 *unverified* ([WGL-GEN-001](00-index.md)) until the change that builds it names its test. Where this
 chapter and the rest of the suite disagree, the rest of the suite describes the code as it is today.
 
@@ -280,12 +280,19 @@ means spurious wake-ups, never missed ones. Parked polls with different criteria
 different lines, so a wake taken by a poll that rejects the task does not leave a poll that accepts
 it waiting for the fallback.
 
-**WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria. Until the portal shows the
-three states below, a slice counts as covered unless every live poller's predicate is false for it. The portal's Backlog tab
-MUST evaluate them against each `(workflow, version, queue, step)` slice and show the slice as
-*covered*, *conditionally covered* (only an attribute predicate stands between a poller and the
-slice, and the slice's attribute values are not known) or *uncovered*. A task that no poller's
-criteria match stays `READY` indefinitely, exactly like a task on a queue nobody serves.
+**WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria and evaluate them, three
+valued, against each `(workflow, version, queue)` backlog slice. The slice is **COVERED** when some
+live poller's criteria are true for it, **CONDITIONAL** when none is but some depend on properties the
+slice does not fix (a step, a node, a correlation id, an attribute), and **UNCOVERED** otherwise. A
+task that no poller's criteria match stays `READY` indefinitely, exactly like a task on a queue nobody
+serves.
+
+**WGL-QC-082** (MUST) For a CONDITIONAL slice of at most 100,000 ready tasks, the server MUST count how
+many of them the conditional pollers' criteria match, across every instance shard, with the claim's
+own predicate, stopping at 10,000. The count is reported exactly, or not at all when the slice is too
+large or the count reached the cap below the slice's size. `BacklogSlice` carries `coverage`,
+`claimable` and the criteria as text (`Criteria.describe`); `covered` stays true for both COVERED
+and CONDITIONAL. The portal MUST show a CONDITIONAL slice as such, with its count and criteria.
 
 ## 5. Storage
 
