@@ -5,6 +5,7 @@ plugins {
 dependencies {
     implementation(project(":client"))
     implementation(project(":server"))
+    implementation(project(":test-fixtures"))
 
     testImplementation(project(":client"))
     testImplementation(project(":server"))

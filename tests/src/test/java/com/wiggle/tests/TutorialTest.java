@@ -9,6 +9,7 @@ import com.wiggle.core.Json;
 import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import com.wiggle.tutorial.OrderHandlers;
 import com.wiggle.tutorial.Orders;
 import org.junit.jupiter.api.DisplayName;
@@ -40,7 +41,7 @@ class TutorialTest {
 
     private static ServerConfig config() {
         String url = "jdbc:h2:mem:tut-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        return new ServerConfig(0, "node-0", url, "sa", "", 8,
+        return new ServerConfig(TestPorts.free(), "node-0", url, "sa", "", 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));

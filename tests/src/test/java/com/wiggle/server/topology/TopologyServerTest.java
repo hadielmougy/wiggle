@@ -6,6 +6,7 @@ import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.ServerNode;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -20,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class TopologyServerTest {
 
     private static ServerConfig config(Topology t) {
-        return new ServerConfig(0, "topo-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "topo-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(200), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);

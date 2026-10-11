@@ -7,6 +7,7 @@ import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
