@@ -1,7 +1,9 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.Criteria;
 import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.TaskFacts;
 import com.wiggle.server.store.ClaimFilter;
 
 import java.util.ArrayDeque;
@@ -35,6 +37,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p>A signal names the version of each token it announces, where it is known. A version-scoped line
  * is woken, and counts as signalled, only by its own versions or by a signal of unknown version;
  * a line for every version is woken by any.
+ *
+ * <p>A signal also carries each token's facts where they are known, and a line whose criteria test
+ * them is woken, and counts as signalled, only by tokens its queue's criteria admit (or whose facts
+ * are unknown). Such a line's count is kept per interest, from its first snapshot.
  */
 final class DispatchNotifier {
 
@@ -69,13 +75,23 @@ final class DispatchNotifier {
         }
 
         boolean covers(Ready ready) {
-            return covers(ready.queue())
-                    && (versions.isEmpty() || ready.version() == null || versions.contains(ready.version()));
+            if (!covers(ready.queue())) return false;
+            if (!versions.isEmpty() && ready.version() != null && !versions.contains(ready.version())) return false;
+            if (ready.facts() == null || queues.isEmpty()) return true;
+            QueueCriteria c = QueueCriteria.forQueue(queues, ready.queue());
+            return c.where() == null || Criteria.matches(c.where(), ready.facts());
+        }
+
+        /** Whether some queue's criteria test the tasks themselves, beyond their queue and version. */
+        boolean filtersTasks() {
+            return queues.stream().anyMatch(c -> c.where() != null);
         }
 
         /** The signal counters a poll of this interest watches: its queues, or for a version-scoped
-         *  poll, its versions on its queues and the unknown-version count of each. */
+         *  poll, its versions on its queues and the unknown-version count of each. A poll whose
+         *  criteria test the tasks watches its own count instead ({@link #MATCHED}). */
         List<String> counters() {
+            if (filtersTasks()) return List.of(MATCHED);
             if (versions.isEmpty()) return List.copyOf(names());
             List<String> keys = new ArrayList<>();
             for (String q : names()) {
@@ -86,8 +102,26 @@ final class DispatchNotifier {
         }
     }
 
-    /** Tokens made ready on {@code queue}, of {@code version} (null when not known). */
-    record Ready(String queue, WorkflowVersion version) { }
+    /** Tokens made ready on {@code queue}, of {@code version} and with {@code facts} (each null when
+     *  not known). */
+    record Ready(String queue, WorkflowVersion version, TaskFacts facts) {
+
+        Ready(String queue, WorkflowVersion version) {
+            this(queue, version, null);
+        }
+    }
+
+    /** The key of an interest's own count of the signals its criteria admit, in a snapshot. */
+    private static final String MATCHED = "\u0001matched";
+
+    /** How long an interest's own count outlives its last snapshot. */
+    private static final long MATCHED_TTL_MILLIS = 10 * 60_000;
+
+    /** An interest's count of admitted signals, and when a poll last snapshotted it. */
+    private static final class Matched {
+        long count;
+        long lastUsed;
+    }
 
     private static String versionCounter(String queue, WorkflowVersion version) {
         return queue + '\u0000' + (version == null ? "?" : version.key());
@@ -106,7 +140,8 @@ final class DispatchNotifier {
 
     private final ReentrantLock lock = new ReentrantLock();
     private final Map<String, Long> versions = new HashMap<>();                 // counter -> signal count
-    private final Map<Interest, ArrayDeque<Waiter>> lines = new HashMap<>();   // both guarded by lock
+    private final Map<Interest, ArrayDeque<Waiter>> lines = new HashMap<>();   // all three guarded by lock
+    private final Map<Interest, Matched> matched = new HashMap<>();
 
     /** One token parked on each of {@code queues}. */
     void signal(Set<String> queues) {
@@ -135,6 +170,11 @@ final class DispatchNotifier {
                 if (counted.add(versionCounter(r.queue(), r.version()))) {
                     versions.merge(versionCounter(r.queue(), r.version()), 1L, Long::sum);
                 }
+            }
+            long now = System.currentTimeMillis();
+            matched.values().removeIf(m -> now - m.lastUsed > MATCHED_TTL_MILLIS);
+            for (Map.Entry<Interest, Matched> m : matched.entrySet()) {
+                if (produced.keySet().stream().anyMatch(r -> m.getKey().covers(r))) m.getValue().count++;
             }
             for (Map.Entry<Interest, ArrayDeque<Waiter>> line : lines.entrySet()) {
                 int tokens = 0;
@@ -180,7 +220,15 @@ final class DispatchNotifier {
 
     /** The current count of every signal {@code interest} watches, taken before a claim. */
     Map<String, Long> snapshot(Interest interest) {
-        return snapshot(interest.counters());
+        if (!interest.filtersTasks()) return snapshot(interest.counters());
+        lock.lock();
+        try {
+            Matched m = matched.computeIfAbsent(interest, k -> new Matched());
+            m.lastUsed = System.currentTimeMillis();
+            return Map.of(MATCHED, m.count);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private Map<String, Long> snapshot(List<String> counters) {
@@ -204,7 +252,7 @@ final class DispatchNotifier {
     boolean await(Interest interest, int capacity, Map<String, Long> since, long fallbackMillis, long deadline) {
         lock.lock();
         try {
-            if (advanced(interest.counters(), since)) return true;
+            if (advanced(interest, since)) return true;
             ArrayDeque<Waiter> line = lines.computeIfAbsent(interest, k -> new ArrayDeque<>());
             Waiter me = new Waiter(lock.newCondition(), Math.max(1, capacity));
             line.addLast(me);
@@ -239,9 +287,14 @@ final class DispatchNotifier {
         }
     }
 
-    /** True if any watched count is now higher than it was in {@code since}. Caller holds the lock. */
-    private boolean advanced(List<String> counters, Map<String, Long> since) {
-        for (String q : counters) {
+    /** True if any count {@code interest} watches is now higher than it was in {@code since}. Caller
+     *  holds the lock. */
+    private boolean advanced(Interest interest, Map<String, Long> since) {
+        if (interest.filtersTasks()) {
+            Matched m = matched.get(interest);
+            return m != null && m.count > since.getOrDefault(MATCHED, 0L);
+        }
+        for (String q : interest.counters()) {
             if (versions.getOrDefault(q, 0L) > since.getOrDefault(q, 0L)) return true;
         }
         return false;
