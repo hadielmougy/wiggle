@@ -18,7 +18,7 @@ class PollerRegistryTest {
     private static final long NOW = 1_000_000;
 
     private static ClaimFilter criteria(QueueCriteria c) {
-        return new ClaimFilter(Set.copyOf(c.queues()), null, c.where());
+        return ClaimFilter.of(List.of(c), null);
     }
 
     @Test
@@ -46,6 +46,18 @@ class PollerRegistryTest {
 
         r.seen("orders", criteria(QueueCriteria.from("payments").where(cb -> cb.equal(Task_.WORKFLOW, "orders"))), NOW);
         assertEquals(State.COVERED, r.coverage("orders", 1, "payments", NOW).state(), "true for every task of it");
+    }
+
+    @Test
+    @DisplayName("WGL-QC-081: a poller's criteria count for their own queue only")
+    void criteriaPerQueue() {
+        PollerRegistry r = new PollerRegistry(60_000);
+        r.seen("w", ClaimFilter.of(List.of(
+                QueueCriteria.from("payments").where(cb -> cb.equal(Task_.attr("region", String.class), "eu")),
+                QueueCriteria.from("refunds")), null), NOW);
+        assertEquals(State.CONDITIONAL, r.coverage("orders", 1, "payments", NOW).state());
+        assertEquals(State.COVERED, r.coverage("orders", 1, "refunds", NOW).state());
+        assertEquals(State.UNCOVERED, r.coverage("orders", 1, "notify", NOW).state());
     }
 
     @Test

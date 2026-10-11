@@ -646,7 +646,8 @@ public final class InMemoryStorage implements Storage {
 
         @Override public int countReady(String workflow, int version, String queue,
                                         com.wiggle.core.criteria.Predicate where, long now, int cap) {
-            ClaimFilter filter = new ClaimFilter(Set.of(queue), Set.of(new WorkflowVersion(workflow, version)), where);
+            ClaimFilter filter = new ClaimFilter(Set.of(queue), Set.of(new WorkflowVersion(workflow, version)),
+                    where == null ? Map.of() : Map.of(queue, where));
             int n = 0;
             for (Token t : readyTasks) {
                 if (n >= cap) break;

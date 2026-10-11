@@ -175,10 +175,10 @@ class DispatchNotifierTest {
     @Test @DisplayName("WGL-QC-080: polls with different criteria wait in different lines, so each is woken")
     void eachCriteriaIsWoken() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Interest vip = new DispatchNotifier.Interest(Set.of("orders"), null,
-                QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%")).where());
-        DispatchNotifier.Interest rest = new DispatchNotifier.Interest(Set.of("orders"), null,
-                QueueCriteria.from("orders").where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%"))).where());
+        DispatchNotifier.Interest vip = new DispatchNotifier.Interest(Set.of("orders"), null, Map.of("orders",
+                QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%")).where()));
+        DispatchNotifier.Interest rest = new DispatchNotifier.Interest(Set.of("orders"), null, Map.of("orders",
+                QueueCriteria.from("orders").where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%"))).where()));
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             List<Future<Boolean>> first = park(pool, n, vip, 1, 1, LONG);

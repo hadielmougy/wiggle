@@ -375,12 +375,12 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
         run(resp, () -> {
-            if (req.hasCriteria() && req.getQueuesCount() > 0) {
+            if (req.getCriteriaCount() > 0 && req.getQueuesCount() > 0) {
                 throw EngineException.badRequest("a poll carries queues or criteria, not both");
             }
-            com.wiggle.core.criteria.QueueCriteria criteria =
-                    req.hasCriteria() ? CriteriaWire.decode(req.getCriteria()) : null;
-            List<String> polled = criteria != null ? criteria.queues() : req.getQueuesList();
+            List<com.wiggle.core.criteria.QueueCriteria> criteria = CriteriaWire.decode(req.getCriteriaList());
+            List<String> polled = criteria.isEmpty() ? req.getQueuesList()
+                    : criteria.stream().map(com.wiggle.core.criteria.QueueCriteria::queue).toList();
             if (polled.isEmpty()) authz.require(Permissions.TASK_POLL, null);   // every queue
             for (String q : polled) authz.require(Permissions.TASK_POLL, q);
             // Admission control: under memory pressure, reject a configured fraction of incoming
@@ -395,8 +395,9 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 return TaskList.newBuilder().setRetryAfterMillis(retryAfter).build();
             }
 
-            com.wiggle.server.store.ClaimFilter filter = new com.wiggle.server.store.ClaimFilter(
-                    new LinkedHashSet<>(polled), versionFilter(req), criteria == null ? null : criteria.where());
+            com.wiggle.server.store.ClaimFilter filter = criteria.isEmpty()
+                    ? com.wiggle.server.store.ClaimFilter.of(new LinkedHashSet<>(polled), versionFilter(req))
+                    : com.wiggle.server.store.ClaimFilter.of(criteria, versionFilter(req));
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
             long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
@@ -447,7 +448,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                     for (com.wiggle.core.CreatedBranch b : step.branches()) requireSubFlowStarts(b.steps());
                 }
                 runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), steps, r.getFinal(),
-                        r.hasCriteria() ? CriteriaWire.decode(r.getCriteria()) : null));
+                        CriteriaWire.decode(r.getCriteriaList())));
             }
             Map<String, WorkflowEngine.RunResult> results = engine.report(runs, servedQueues());
             ReportStepsResult.Builder out = ReportStepsResult.newBuilder();

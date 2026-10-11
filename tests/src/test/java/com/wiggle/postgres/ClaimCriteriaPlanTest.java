@@ -52,6 +52,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ClaimCriteriaPlanTest {
 
     private static final String QUEUE = "qc-plan";
+    /** A second, short queue of newer tasks, for a claim across two queues with different criteria. */
+    private static final String OTHER = "qc-plan-other";
+    private static final int OTHER_BACKLOG = 1_000;
     private static final int BACKLOG = 100_000;
     private static final int HISTORY = 4;
     private static final int MAX = 10;
@@ -75,6 +78,11 @@ class ClaimCriteriaPlanTest {
                     + " SELECT 'h'||i, 'wfi-h'||i, 'plan', 1, 'n1', 'TASK', 'DONE', 'plan#step', '" + QUEUE + "',"
                     + " 0, 0, 0, '', 0, 0, i / " + HISTORY + ", 'us-h'||i"
                     + " FROM generate_series(1," + HISTORY * BACKLOG + ") i");
+            st.execute("INSERT INTO wf_token (id,instance_id,workflow,version,node_id,kind,status,activity,queue,"
+                    + "attempt,available_at,lease_expires,join_stack,created_at,updated_at,inst_created_at,correlation_id)"
+                    + " SELECT 'o'||i, 'wfi-o'||i, 'plan', 1, 'n2', 'TASK', 'READY', 'plan#other', '" + OTHER + "',"
+                    + " 0, 0, 0, '', 0, 0, " + (2 * BACKLOG) + " + i, 'us-o'||i"
+                    + " FROM generate_series(1," + OTHER_BACKLOG + ") i");
             st.execute("INSERT INTO wf_token_attr (token_id,name,t,s_val)"
                     + " SELECT 'p'||i, 'region', 'S', CASE WHEN i % 100 = 0 THEN 'eu' ELSE 'us' END"
                     + " FROM generate_series(1," + BACKLOG + ") i");
@@ -98,8 +106,10 @@ class ClaimCriteriaPlanTest {
 
     /** Deletes the tokens and attributes this test loads, and nothing else. */
     private static void removeLoaded(Statement st) throws SQLException {
-        st.execute("DELETE FROM wf_token_attr WHERE token_id IN (SELECT id FROM wf_token WHERE queue='" + QUEUE + "')");
-        st.execute("DELETE FROM wf_token WHERE queue='" + QUEUE + "'");
+        for (String q : List.of(QUEUE, OTHER)) {
+            st.execute("DELETE FROM wf_token_attr WHERE token_id IN (SELECT id FROM wf_token WHERE queue='" + q + "')");
+            st.execute("DELETE FROM wf_token WHERE queue='" + q + "'");
+        }
     }
 
     @Test @DisplayName("queue name only: the queue's ready index, walked in age order")
@@ -140,15 +150,36 @@ class ClaimCriteriaPlanTest {
         assertNoSeqScan(plan);
     }
 
+    @Test @DisplayName("two queues, each with its own criteria: each queue's pick planned for its own predicate")
+    void criteriaPerQueue() {
+        List<QueueCriteria> criteria = List.of(
+                QueueCriteria.from(QUEUE).where(cb -> cb.equal(Task_.attr("tier", String.class), "gold")),
+                QueueCriteria.from(OTHER));
+        ClaimFilter filter = ClaimFilter.of(criteria, null);
+        List<Token> claimed = claim(filter);
+        assertEquals(MAX, claimed.size(), "tasks claimed");
+        for (Token t : claimed) {
+            assertEquals(QUEUE, t.queue, "the gold tasks are older than every task on the other queue");
+            assertTrue(t.instCreatedAt > BACKLOG - BACKLOG / 100, "claimed " + t.id);
+        }
+        String plan = storage.explainClaim(filter, MAX, System.currentTimeMillis());
+        assertUses(plan, "ix_token_attr_s");
+        assertUses(plan, "ix_token_ready_age");
+        assertNoSeqScan(plan);
+    }
+
     /** The claim's plan for {@code where}, after checking a rolled-back claim takes {@code expected}. */
     private String plan(Predicate where, int expected) {
         assertEquals(expected, claim(where).size(), "tasks claimed");
-        return storage.explainClaim(new ClaimFilter(Set.of(QUEUE), null, where), MAX, System.currentTimeMillis());
+        return storage.explainClaim(ClaimFilter.of(List.of(new QueueCriteria(QUEUE, where)), null), MAX, System.currentTimeMillis());
     }
 
     /** What a claim for {@code where} takes, rolled back so every test sees the same backlog. */
     private List<Token> claim(Predicate where) {
-        ClaimFilter filter = new ClaimFilter(Set.of(QUEUE), null, where);
+        return claim(ClaimFilter.of(List.of(new QueueCriteria(QUEUE, where)), null));
+    }
+
+    private List<Token> claim(ClaimFilter filter) {
         long now = System.currentTimeMillis();
         try {
             storage.inTx(tx -> {

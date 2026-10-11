@@ -300,15 +300,16 @@ message PollRequest {
     // Empty = serve every version, which is the default and what an unversioned worker sends.
     // Non-empty = claim only these (workflow, version) pairs.
     repeated WorkflowVersion versions = 6;
-    // The alternative to `queues`: set one or the other, never both.
-    QueueCriteria criteria = 7;
+    // The alternative to `queues`: one entry per queue served, each with its own predicate. Set
+    // one or the other, never both; a queue named twice is rejected.
+    repeated QueueCriteria criteria = 7;
 }
 
-// The queues a poll serves plus a predicate over the properties of their tasks. A comparison's
-// field and op are names of com.wiggle.core.criteria.Field and Op; the server rejects any other.
+// One queue a poll serves, and a predicate over the properties of its tasks. A comparison's field
+// and op are names of com.wiggle.core.criteria.Field and Op; the server rejects any other.
 message QueueCriteria {
-    repeated string queues = 1;           // required, non-empty
-    CriteriaPredicate where = 2;          // absent = every task on those queues
+    string queue = 1;                     // required
+    CriteriaPredicate where = 2;          // absent = every task on the queue
 }
 
 message CriteriaPredicate {
@@ -444,9 +445,10 @@ message ReportedRun {
     // draining. A statement about this worker, not about the workflow -- a mode that never chains
     // hands back regardless.
     bool final = 4;
-    // The criteria the worker polled with. The server leases a continuation back only when it
-    // matches them, so a chain cannot run a step the worker's poll would not have claimed.
-    QueueCriteria criteria = 5;
+    // The criteria the worker polled with. The server leases a continuation back only when the
+    // entry for its queue matches it, so a chain cannot run a step the worker's poll would not
+    // have claimed.
+    repeated QueueCriteria criteria = 5;
 }
 
 // One run, or several across different instances. Several are admitted only where batching is

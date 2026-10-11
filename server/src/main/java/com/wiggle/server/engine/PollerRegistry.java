@@ -26,9 +26,10 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class PollerRegistry {
 
-    /** What one worker last told us it serves. Empty {@code versions} means every version; a null
-     *  {@code where} means every task on its queues. */
-    public record Poller(String workerId, Set<String> queues, Set<WorkflowVersion> versions, Predicate where,
+    /** What one worker last told us it serves. Empty {@code versions} means every version;
+     *  {@code where} holds each queue's criteria, and a queue without one takes every task. */
+    public record Poller(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
+                         Map<String, Predicate> where,
                          long lastSeen) {}
 
     private final Map<String, Poller> pollers = new ConcurrentHashMap<>();
@@ -60,8 +61,8 @@ public final class PollerRegistry {
      * <p>Both halves must hold: the worker polls that queue, and either it is unscoped (serves every
      * version) or it named this one. That mirrors the claim exactly — a version-scoped worker filters
      * its claim by the same pairs — so this answers what the dispatcher would actually do. A worker
-     * polling with criteria covers the slice unless its predicate is false for every task in it; a
-     * predicate on other properties counts as covering.
+     * polling with criteria covers the slice unless its queue's predicate is false for every task in
+     * it; a predicate on other properties counts as covering.
      */
     public boolean covers(String workflow, int version, String queue, long now) {
         return coverage(workflow, version, queue, now).state() != Coverage.State.UNCOVERED;
@@ -80,9 +81,10 @@ public final class PollerRegistry {
             boolean servesQueue = p.queues().isEmpty() || p.queues().contains(queue);
             boolean servesVersion = p.versions().isEmpty() || p.versions().contains(wv);
             if (!servesQueue || !servesVersion) continue;
-            switch (onSlice(p.where(), workflow, version, queue)) {
+            Predicate where = p.where().get(queue);
+            switch (onSlice(where, workflow, version)) {
                 case TRUE -> { return new Coverage(Coverage.State.COVERED, List.of()); }
-                case UNKNOWN -> conditions.add(p.where());
+                case UNKNOWN -> conditions.add(where);
                 case FALSE -> { }
             }
         }
@@ -95,12 +97,12 @@ public final class PollerRegistry {
         public enum State { COVERED, CONDITIONAL, UNCOVERED }
     }
 
-    private static Criteria.Truth onSlice(Predicate where, String workflow, int version, String queue) {
+    /** {@code where}, the criteria of the slice's queue, on what the slice fixes: TRUE when null. */
+    private static Criteria.Truth onSlice(Predicate where, String workflow, int version) {
         if (where == null) return Criteria.Truth.TRUE;
         return Criteria.evaluate(where, (f, attribute) -> switch (f) {
             case WORKFLOW -> workflow;
             case VERSION -> (long) version;
-            case QUEUE -> queue;
             default -> Criteria.UNKNOWN;
         });
     }

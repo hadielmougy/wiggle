@@ -18,9 +18,15 @@ final class CriteriaWire {
 
     private CriteriaWire() { }
 
-    static QueueCriteria decode(com.wiggle.proto.QueueCriteria c) {
+    /** One poll's criteria; empty when it carries none. */
+    static List<QueueCriteria> decode(List<com.wiggle.proto.QueueCriteria> all) {
+        if (all.isEmpty()) return List.of();
         try {
-            return new QueueCriteria(c.getQueuesList(), c.hasWhere() ? predicate(c.getWhere(), 1) : null);
+            List<QueueCriteria> out = new ArrayList<>(all.size());
+            for (com.wiggle.proto.QueueCriteria c : all) {
+                out.add(new QueueCriteria(c.getQueue(), c.hasWhere() ? predicate(c.getWhere(), 1) : null));
+            }
+            return QueueCriteria.forPoll(out);
         } catch (IllegalArgumentException e) {
             throw EngineException.badRequest("invalid criteria: " + e.getMessage());
         }
