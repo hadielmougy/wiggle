@@ -574,6 +574,7 @@ Suggestions and PRs welcome — open an issue.
 |---|---|
 | 🚀 **[Onboarding + full configuration reference](docs/onboarding.md)** | everything, one page |
 | 🧑‍🍳 **[Cookbook](docs/cookbook.md)** | every operator in runnable code — `./gradlew :example:runCookbook` |
+| 🤖 **[Multi-agent research team](docs/agents.md)** | LLM agents as durable steps: a supervisor's branches, a critic loop, a human sign-off — `./gradlew :example:runAgents` |
 | 🧵 **[Queues](docs/queues.md)** | one flow's steps across many microservices |
 | ⚡ **[Local execution](docs/local-execution.md)** | `LOCAL_SYNC` / `LOCAL_ASYNC` step chaining |
 | 📨 **[Event log](docs/event-log.md)** | durable lifecycle and handler-emitted events, pulled and acknowledged by named consumers |

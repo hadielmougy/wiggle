@@ -12,6 +12,9 @@ alongside this page; run all nine end to end with:
 `CookbookDemo` starts an embedded server and one worker, registers every flow spec below and binds
 its handlers, runs one instance of each, and prints the resulting context.
 
+For the operators combined into one larger scenario — a team of LLM agents, a critic loop and a human
+sign-off — see [a multi-agent research team](agents.md).
+
 ## How a recipe is written
 
 Each recipe is an **interface** declaring its steps, and a class implementing them:

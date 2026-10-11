@@ -85,6 +85,7 @@ public final class ResearchTeam {
 
     /** The topology, with the editor given {@code approvalTimeout} to answer. */
     public static FlowSpec spec(Duration approvalTimeout) {
+        // docs:begin topology
         return FlowSpec.define(FLOW, 1, Brief.class, TeamSteps.class, (f, s) -> {
             var reviewed = f
                     .thenApply(s::plan, MODEL_RETRY)       // starts one specialist branch per subtask
@@ -100,6 +101,7 @@ public final class ResearchTeam {
                     reviewed.when(s::approved).thenApply(s::publish),
                     reviewed.otherwise().thenApply(s::shelve));
         });
+        // docs:end topology
     }
 
     @ForFlow(FLOW)
@@ -109,6 +111,7 @@ public final class ResearchTeam {
 
         public Agents(Model model) { this.model = model; }
 
+        // docs:begin supervisor
         public Brief plan(Brief b) {
             String reply = model.complete(new Model.Prompt(SUPERVISOR, """
                     You lead a research team. Split the topic into at most %d subtasks, one per \
@@ -124,7 +127,9 @@ public final class ResearchTeam {
             }
             return b;
         }
+        // docs:end supervisor
 
+        // docs:begin specialists
         public Finding research(Task t) {
             return new Finding(RESEARCHER, t.question(), model.complete(new Model.Prompt(RESEARCHER,
                     "You are a researcher. Answer the question in a short paragraph of facts.",
@@ -147,6 +152,7 @@ public final class ResearchTeam {
         public Brief collect(Brief base, List<Finding> findings) {
             return new Brief(base.topic(), List.copyOf(findings), null, null, 0, null, null);
         }
+        // docs:end specialists
 
         public Brief draft(Brief b) {
             return withDraft(b, model.complete(new Model.Prompt(WRITER,
@@ -163,6 +169,7 @@ public final class ResearchTeam {
                     b.decision(), b.status());
         }
 
+        // docs:begin revision
         /** Rewrites the draft against the critique; an approved draft passes through unchanged. */
         public Brief revise(Brief b) {
             if (isApproved(b)) return b;
@@ -174,6 +181,7 @@ public final class ResearchTeam {
         public boolean needsRevision(Brief b) {
             return !isApproved(b) && b.revisions() < MAX_REVISIONS;
         }
+        // docs:end revision
 
         public Brief shelveUnanswered(Brief b) { return withDecision(b, "timed-out"); }
 
