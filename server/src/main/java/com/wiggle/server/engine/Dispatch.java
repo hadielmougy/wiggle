@@ -72,11 +72,11 @@ final class Dispatch {
      */
     List<TaskActivation> poll(String workerId, ClaimFilter filter,
                               int max, Long leaseMillis, long deadline, Cancellation cancelled) {
-        Set<String> queues = filter.queues();
+        Set<String> queues = filter.queueNames();
         pollers.seen(workerId, filter, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
-        DispatchNotifier.Interest interest = new DispatchNotifier.Interest(queues, filter.versions(), filter.where());
+        DispatchNotifier.Interest interest = DispatchNotifier.Interest.of(filter);
         Map<String, Long> since = notifier.snapshot(queues);
         List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);

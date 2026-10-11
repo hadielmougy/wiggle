@@ -208,7 +208,7 @@ public final class WorkflowEngine {
     public List<TaskActivation> poll(String workerId, Set<String> queues, Set<WorkflowVersion> versions, int max,
                                      Long leaseMillis, long deadline,
                                      Cancellation cancelled) {
-        return poll(workerId, new ClaimFilter(queues, versions, null), max, leaseMillis, deadline, cancelled);
+        return poll(workerId, ClaimFilter.byName(queues, versions), max, leaseMillis, deadline, cancelled);
     }
 
     /** Long-polls for work the filter admits; see {@link Dispatch#poll}. */

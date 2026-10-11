@@ -23,7 +23,6 @@ import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -396,8 +395,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             }
 
             com.wiggle.server.store.ClaimFilter filter = criteria.isEmpty()
-                    ? com.wiggle.server.store.ClaimFilter.of(new LinkedHashSet<>(polled), versionFilter(req))
-                    : com.wiggle.server.store.ClaimFilter.of(criteria, versionFilter(req));
+                    ? com.wiggle.server.store.ClaimFilter.byName(polled, versionFilter(req))
+                    : new com.wiggle.server.store.ClaimFilter(criteria, versionFilter(req));
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
             long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());

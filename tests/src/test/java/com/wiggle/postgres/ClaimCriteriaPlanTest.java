@@ -155,7 +155,7 @@ class ClaimCriteriaPlanTest {
         List<QueueCriteria> criteria = List.of(
                 QueueCriteria.from(QUEUE).where(cb -> cb.equal(Task_.attr("tier", String.class), "gold")),
                 QueueCriteria.from(OTHER));
-        ClaimFilter filter = ClaimFilter.of(criteria, null);
+        ClaimFilter filter = new ClaimFilter(criteria, null);
         List<Token> claimed = claim(filter);
         assertEquals(MAX, claimed.size(), "tasks claimed");
         for (Token t : claimed) {
@@ -171,12 +171,12 @@ class ClaimCriteriaPlanTest {
     /** The claim's plan for {@code where}, after checking a rolled-back claim takes {@code expected}. */
     private String plan(Predicate where, int expected) {
         assertEquals(expected, claim(where).size(), "tasks claimed");
-        return storage.explainClaim(ClaimFilter.of(List.of(new QueueCriteria(QUEUE, where)), null), MAX, System.currentTimeMillis());
+        return storage.explainClaim(new ClaimFilter(List.of(new QueueCriteria(QUEUE, where)), null), MAX, System.currentTimeMillis());
     }
 
     /** What a claim for {@code where} takes, rolled back so every test sees the same backlog. */
     private List<Token> claim(Predicate where) {
-        return claim(ClaimFilter.of(List.of(new QueueCriteria(QUEUE, where)), null));
+        return claim(new ClaimFilter(List.of(new QueueCriteria(QUEUE, where)), null));
     }
 
     private List<Token> claim(ClaimFilter filter) {

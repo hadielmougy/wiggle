@@ -208,7 +208,7 @@ public interface Tx extends ReadTx, GraphStore {
 
     default List<Token> claimTasks(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
                                    int max, long now, long leaseUntil) {
-        return claimTasks(workerId, new ClaimFilter(queues, versions, null), max, now, leaseUntil);
+        return claimTasks(workerId, ClaimFilter.byName(queues, versions), max, now, leaseUntil);
     }
 
     /** WAITING timer tokens whose fire time has passed. */

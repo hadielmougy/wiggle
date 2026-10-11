@@ -18,7 +18,7 @@ class PollerRegistryTest {
     private static final long NOW = 1_000_000;
 
     private static ClaimFilter criteria(QueueCriteria c) {
-        return ClaimFilter.of(List.of(c), null);
+        return new ClaimFilter(List.of(c), null);
     }
 
     @Test
@@ -26,7 +26,7 @@ class PollerRegistryTest {
     void plainPollers() {
         PollerRegistry r = new PollerRegistry(60_000);
         assertEquals(State.UNCOVERED, r.coverage("orders", 1, "payments", NOW).state());
-        r.seen("w1", new ClaimFilter(Set.of("payments"), null, null), NOW);
+        r.seen("w1", ClaimFilter.byName(Set.of("payments"), null), NOW);
         assertEquals(State.COVERED, r.coverage("orders", 1, "payments", NOW).state());
         assertEquals(State.UNCOVERED, r.coverage("orders", 1, "refunds", NOW).state());
     }
@@ -52,7 +52,7 @@ class PollerRegistryTest {
     @DisplayName("WGL-QC-081: a poller's criteria count for their own queue only")
     void criteriaPerQueue() {
         PollerRegistry r = new PollerRegistry(60_000);
-        r.seen("w", ClaimFilter.of(List.of(
+        r.seen("w", new ClaimFilter(List.of(
                 QueueCriteria.from("payments").where(cb -> cb.equal(Task_.attr("region", String.class), "eu")),
                 QueueCriteria.from("refunds")), null), NOW);
         assertEquals(State.CONDITIONAL, r.coverage("orders", 1, "payments", NOW).state());
@@ -64,7 +64,7 @@ class PollerRegistryTest {
     @DisplayName("WGL-QC-081: a version-scoped poller covers only its versions")
     void scopedPollers() {
         PollerRegistry r = new PollerRegistry(60_000);
-        r.seen("v2", new ClaimFilter(Set.of("payments"), Set.of(new WorkflowVersion("orders", 2)), null), NOW);
+        r.seen("v2", ClaimFilter.byName(Set.of("payments"), Set.of(new WorkflowVersion("orders", 2))), NOW);
         assertEquals(State.UNCOVERED, r.coverage("orders", 1, "payments", NOW).state());
         assertEquals(State.COVERED, r.coverage("orders", 2, "payments", NOW).state());
     }
