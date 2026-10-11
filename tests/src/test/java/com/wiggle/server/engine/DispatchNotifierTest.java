@@ -2,6 +2,7 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.TaskFacts;
 import com.wiggle.core.criteria.Task_;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -258,5 +259,47 @@ class DispatchNotifierTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    private static final DispatchNotifier.Interest VIP = new DispatchNotifier.Interest(Set.of(
+            QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%"))), null);
+
+    private static DispatchNotifier.Ready task(String correlationId) {
+        return new DispatchNotifier.Ready("orders", new WorkflowVersion("w", 1),
+                new TaskFacts("w", 1, "orders", "pay", "n1", "TASK", 1, correlationId, 0));
+    }
+
+    @Test @DisplayName("a criteria line is woken by tasks its criteria admit and by unknown ones, not by others")
+    void criteriaLinesWakeForMatchingTasks() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            List<Future<Boolean>> parked = park(pool, n, VIP, 1, 1, LONG);
+            n.signalReady(Map.of(task("std-1"), 5));
+            Thread.sleep(100);
+            assertEquals(0, returned(parked), "std work leaves the vip poll parked");
+            n.signalReady(Map.of(task("vip-1"), 1));
+            assertTrue(parked.getFirst().get(2, TimeUnit.SECONDS), "vip work wakes it");
+
+            parked = park(pool, n, VIP, 1, 1, LONG);
+            n.signal(Map.of("orders", 1));
+            assertTrue(parked.getFirst().get(2, TimeUnit.SECONDS), "work whose facts are unknown wakes it too");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("a task the criteria reject, between snapshot and await, does not cut the wait short")
+    void criteriaSnapshotIgnoresRejectedTasks() {
+        DispatchNotifier n = new DispatchNotifier();
+        Map<String, Long> since = n.snapshot(VIP);
+        n.signalReady(Map.of(task("std-1"), 1));
+        long start = System.currentTimeMillis();
+        assertFalse(n.await(VIP, 1, since, 150, in(LONG)), "it waited out its fallback");
+        assertTrue(System.currentTimeMillis() - start >= 140, "and was not returned early");
+
+        Map<String, Long> again = n.snapshot(VIP);
+        n.signalReady(Map.of(task("vip-1"), 1));
+        assertTrue(n.await(VIP, 1, again, 5_000, in(LONG)), "a task it admits is not lost");
     }
 }

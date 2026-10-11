@@ -50,16 +50,20 @@ final class Transactions {
         this.notifier = notifier;
     }
 
-    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op.
-     *  Handed to producers as a {@link QueueWake}. */
+    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op. */
     void wake(String queue) {
         wake(queue, null);
     }
 
     /** The same, for a token of {@code version} (null: not known). */
     void wake(String queue, WorkflowVersion version) {
-        Map<DispatchNotifier.Ready, Integer> ready = readyQueues.get();
-        if (ready != null && queue != null) ready.merge(new DispatchNotifier.Ready(queue, version), 1, Integer::sum);
+        wake(new DispatchNotifier.Ready(queue, version));
+    }
+
+    /** The same, for a token {@code ready} describes. Handed to producers as a {@link QueueWake}. */
+    void wake(DispatchNotifier.Ready ready) {
+        Map<DispatchNotifier.Ready, Integer> marked = readyQueues.get();
+        if (marked != null && ready.queue() != null) marked.merge(ready, 1, Integer::sum);
     }
 
     /** The shard the instance or token {@code id} lives on. */

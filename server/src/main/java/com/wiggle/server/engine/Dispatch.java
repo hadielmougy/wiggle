@@ -27,16 +27,16 @@ final class Dispatch {
     private final long fallbackPollMillis =
             ServerEnv.envLong("wiggle.fallback.pollMillis", "WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
-    /** The longest a version-scoped poll waits between fallback claims. Each fallback claim that finds
-     *  nothing doubles its wait, up to this, and a claim that finds work resets it; the wait carries
-     *  over between a worker's polls. A same-node wake for its versions still claims at once, so
-     *  only work produced on another node can wait this long. Such a claim filters a queue's ready
-     *  rows by version, and for a version with none it reads them all. Overridable via
-     *  {@code WIGGLE_SCOPED_FALLBACK_MAX_MILLIS}. */
+    /** The longest a narrowed poll -- one scoped to versions, or with criteria that test its tasks --
+     *  waits between fallback claims. Each fallback claim that finds nothing doubles its wait, up to
+     *  this, and a claim that finds work resets it; the wait carries over between a worker's polls.
+     *  A same-node wake for work it would take still claims at once, so only work produced on
+     *  another node can wait this long. Such a claim filters a queue's ready rows, and when few or
+     *  none match it can read them all. Overridable via {@code WIGGLE_SCOPED_FALLBACK_MAX_MILLIS}. */
     private final long scopedFallbackMaxMillis =
             ServerEnv.envLong("wiggle.fallback.scopedMaxMillis", "WIGGLE_SCOPED_FALLBACK_MAX_MILLIS", 2_000);
 
-    /** The current fallback wait of each version-scoped worker whose fallback claims found nothing. */
+    /** The current fallback wait of each narrowed poll's worker whose fallback claims found nothing. */
     private final Map<String, Long> scopedFallback = new ConcurrentHashMap<>();
 
     /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
@@ -93,7 +93,7 @@ final class Dispatch {
         Map<String, Long> since = notifier.snapshot(interest);
         List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
-        boolean scoped = !filter.versions().isEmpty();
+        boolean scoped = !filter.versions().isEmpty() || filter.queues().stream().anyMatch(c -> c.where() != null);
         long fallbackWait = scoped ? scopedFallback.getOrDefault(workerId, fallbackPollMillis)
                 : adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
         boolean signaled = false;

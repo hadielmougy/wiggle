@@ -42,9 +42,15 @@ final class Tokens {
         this.queueWake = queueWake;
     }
 
-    /** Marks {@code t}'s queue as having gained work of {@code t}'s version. */
-    void wake(Token t) {
-        queueWake.ready(t.queue, new WorkflowVersion(t.workflow, t.version));
+    /**
+     * Marks {@code t}'s queue as having gained work of {@code t}'s version, with its facts for parked
+     * polls' criteria. The facts are left unknown when the flow declares attributes this token's
+     * copy does not carry (a token read back from a store that does not load them).
+     */
+    void wake(Tx tx, Token t) {
+        boolean factsKnown = t.attributes != null || definitions.attributes(tx, t.workflow, t.version).isEmpty();
+        queueWake.ready(new DispatchNotifier.Ready(t.queue, new WorkflowVersion(t.workflow, t.version),
+                factsKnown ? ClaimFilter.facts(t) : null));
     }
 
     /** The one place a token's status is written. */
@@ -108,7 +114,7 @@ final class Tokens {
         t.availableAt = now;
         stampAttributes(definitions, tx, inst, t);
         move(tx, t, TokenStatus.READY, now);
-        wake(t);
+        wake(tx, t);
     }
 
     /**
@@ -199,7 +205,7 @@ final class Tokens {
     /** A parked retry whose backoff has run out becomes dispatchable, and its queue is woken. */
     void promote(Tx tx, Token t, long now) {
         move(tx, t, TokenStatus.READY, now);
-        wake(t);
+        wake(tx, t);
     }
 
     /** Cancels every still-active token of an instance in one statement. The per-token

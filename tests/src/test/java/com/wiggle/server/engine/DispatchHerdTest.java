@@ -3,6 +3,10 @@ package com.wiggle.server.engine;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Ids;
 import com.wiggle.core.TaskActivation;
+import com.wiggle.core.criteria.AttrType;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.Task_;
+import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
@@ -163,6 +167,57 @@ class DispatchHerdTest {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 assertEquals(1, got.size(), "its own version's task reaches it");
                 assertEquals(2, got.getFirst().version());
+                assertTrue(ms < 300, "on the wake, not a backed-off fallback: " + ms + " ms");
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    @Test @DisplayName("an idle poll with criteria ignores the tasks they reject and backs off its fallback")
+    void idleCriteriaPollStaysQuiet() throws Exception {
+        idleCriteriaPoll(false);
+    }
+
+    @Test @DisplayName("the same with criteria on an attribute, read from each task's context as it becomes ready")
+    void idleAttributeCriteriaPollStaysQuiet() throws Exception {
+        idleCriteriaPoll(true);
+    }
+
+    /** 100 tasks the poll's criteria reject arrive on its queue, then one they admit. */
+    private static void idleCriteriaPoll(boolean onAttribute) throws Exception {
+        try (CountingStorage storage = new CountingStorage()) {
+            storage.migrate();
+            WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
+            String name = "herd-" + Ids.next("wf");
+            FlowSpec flow = FlowSpec.define(name, 1, Map.class, OneStep.class, (f, s) -> f
+                    .attribute("region", AttrType.STRING, "region")
+                    .thenApply(s::work));
+            engine.register(flow.definition());
+            String queue = flow.definition().workerQueues().iterator().next();
+            QueueCriteria vip = QueueCriteria.from(queue).where(cb -> onAttribute
+                    ? cb.equal(Task_.attr("region", String.class), "eu")
+                    : cb.like(Task_.CORRELATION_ID, "vip-%"));
+            ExecutorService pool = Executors.newCachedThreadPool();
+            try {
+                long deadline = System.currentTimeMillis() + 2_500;
+                Future<List<TaskActivation>> narrowed = pool.submit(() -> engine.poll("narrowed",
+                        new ClaimFilter(List.of(vip), null), 1, null, deadline, Cancellation.never()));
+                for (int i = 0; i < 100; i++) {   // work its criteria reject keeps arriving on the same queue
+                    engine.start(name, 1, Map.of("region", "us"), "std-" + i);
+                    Thread.sleep(20);
+                }
+                int idle = storage.claimsBy.getOrDefault("narrowed", new AtomicInteger()).get();
+                // Arrival, then fallbacks at 100, 300, 700 and 1500 ms. Woken by every rejected task,
+                // it would have claimed about a hundred times.
+                assertTrue(idle <= 8, "claims by an idle criteria poll over two busy seconds: " + idle);
+
+                long t0 = System.nanoTime();
+                engine.start(name, 1, Map.of("region", "eu"), "vip-1");
+                List<TaskActivation> got = narrowed.get(5, TimeUnit.SECONDS);
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                assertEquals(1, got.size(), "the task its criteria admit reaches it");
+                assertEquals("vip-1", got.getFirst().correlationId());
                 assertTrue(ms < 300, "on the wake, not a backed-off fallback: " + ms + " ms");
             } finally {
                 pool.shutdownNow();

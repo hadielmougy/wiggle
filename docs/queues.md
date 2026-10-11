@@ -176,9 +176,15 @@ million ready tasks on one queue:
   tasks match, the cost grows with the number of matching tasks rather than the queue depth (22 ms
   for 10,000). The attribute value indexes let the claim start from the matching rows.
 - **A task field matches rarely or never** (a correlation id no ready task has, say): the claim
-  reads the whole queue, about 250 ms per poll at a million tasks. An idle worker re-polls about
-  every 100 ms. Routing on a value that is often absent from a deep queue belongs in an attribute,
-  not a task field.
+  reads the whole queue, about 250 ms per poll at a million tasks. Routing on a value that is
+  often absent from a deep queue belongs in an attribute, not a task field.
+
+An idle worker with criteria isn't woken by tasks its criteria reject: the server checks each new
+task against the waiting workers' criteria before waking them. When its claims keep finding
+nothing, its periodic re-check backs off from 100 ms to `WIGGLE_SCOPED_FALLBACK_MAX_MILLIS` (2 s), so
+a rare task-field predicate costs about one full read of the queue every two seconds, not one per
+task produced. A matching task produced on the same server still wakes it at once; one produced on
+another server can wait up to that interval.
 
 The full contract is in [the spec](spec/25-queue-criteria.md).
 

@@ -44,7 +44,7 @@ conventions, not the library's.
 | `WIGGLE_ADAPTIVE_HOUSEKEEPING` | `wiggle.adaptive.housekeeping` | `false` | a sweep that fills its batch runs again immediately (drain mode) |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim fast (fallback ÷ 4, floor 10 ms) and decay to the configured interval |
 | `WIGGLE_FALLBACK_POLL_MILLIS` | — | `100` | long-poll fallback re-claim interval |
-| `WIGGLE_SCOPED_FALLBACK_MAX_MILLIS` | — | `2000` | the most a version-scoped poll's fallback interval grows to while its claims find nothing |
+| `WIGGLE_SCOPED_FALLBACK_MAX_MILLIS` | — | `2000` | the most a narrowed poll's fallback interval (version-scoped, or with criteria) grows to while its claims find nothing |
 | `WIGGLE_DISPATCH_LINGER_MILLIS` | — | `5` | wake-on-produce batch linger; `0` claims immediately |
 | `WIGGLE_HEARTBEAT_INTERVAL_MILLIS` | `wiggle.heartbeat.intervalMillis` | `5000` | node heartbeat / election interval |
 | `WIGGLE_MISSED_HEARTBEATS` | `wiggle.heartbeat.missedBeforeDead` | `3` | missed beats before a node is dead |

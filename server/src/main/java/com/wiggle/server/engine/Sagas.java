@@ -125,7 +125,7 @@ final class Sagas {
         t.activity = next.activity + "#compensate";
         t.queue = next.queue;
         tx.insertToken(t);
-        tokens.wake(t);   // wake-on-produce, post-commit
+        tokens.wake(tx, t);   // wake-on-produce, post-commit
         Rows.CompLog fNext = next;
         LOG.log(System.Logger.Level.DEBUG, () -> "compensation: instance " + inst.id
                 + " dispatching undo seq " + fNext.seq + " (" + fNext.activity + ")");
