@@ -905,6 +905,18 @@ public final class JdbcStorage implements Storage {
      * {@code wiggle.jdbc.txAttempts} / {@code WIGGLE_JDBC_TX_ATTEMPTS} bounds the replays (read once
      * per store, at construction); 1 turns them off.
      */
+    /**
+     * The plan PostgreSQL chooses for a claim of up to {@code max} tasks matching {@code filter} at
+     * {@code now}, as {@code EXPLAIN} prints it, one line per plan line. Nothing is claimed. Only for
+     * a dialect that claims in one statement.
+     */
+    public String explainClaim(ClaimFilter filter, int max, long now) {
+        if (!dialect.supportsSkipLocked() || !dialect.supportsReturning()) {
+            throw new UnsupportedOperationException(dialect.id() + " claims by compare-and-set, not in one statement");
+        }
+        return attemptTx(tx -> ((JdbcTx) tx).explainClaim(filter, max, now));
+    }
+
     @Override public <R> R inTx(Function<Tx, R> work) {
         for (int attempt = 1; ; attempt++) {
             try {
@@ -2320,11 +2332,24 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
                                                      Set<WorkflowVersion> versions, CriteriaSql where,
                                                      int max, long now, long leaseUntil) {
+            return claimQuery("", workerId, queues, versions, where, max, now, leaseUntil).mapTo(Token.class).list();
+        }
+
+        /** The plan the database chooses for {@link #claimSkipLockedReturning}, as {@code EXPLAIN} prints it. */
+        String explainClaim(ClaimFilter filter, int max, long now) {
+            CriteriaSql where = filter.where() == null ? null : CriteriaSql.compile(filter.where(), dialect);
+            return String.join("\n", claimQuery("EXPLAIN ", "explain", filter.queues(), filter.versions(), where,
+                    max, now, now).mapTo(String.class).list());
+        }
+
+        /** The single-statement claim, after {@code prefix}. */
+        private Query claimQuery(String prefix, String workerId, Set<String> queues, Set<WorkflowVersion> versions,
+                                 CriteriaSql where, int max, long now, long leaseUntil) {
             boolean perQueue = queues != null && queues.size() > 1;
             String pick = perQueue
                     ? perQueuePick(queues.size(), versions, where)
                     : claimFilter(queues, versions, where).formatted("id") + " FOR UPDATE SKIP LOCKED";
-            Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+            Query q = h.createQuery(prefix + "UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                     + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                     + " WHERE id IN (" + pick + ") RETURNING *");
             q.bind("owner", workerId)
@@ -2340,7 +2365,7 @@ public final class JdbcStorage implements Storage {
             }
             bindVersions(q, versions);
             if (where != null) where.bind(q);
-            return q.mapTo(Token.class).list();
+            return q;
         }
 
         /**
