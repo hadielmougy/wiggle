@@ -648,7 +648,9 @@ public final class JdbcStorage implements Storage {
             ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(200);
             """),
             // A flow's declared attributes as each step's context had them when it became ready, for
-            // queue criteria. t is S (text in s_val), B ('true'/'false' in s_val) or N (n_val).
+            // queue criteria. t is S (text in s_val), B ('true'/'false' in s_val) or N (n_val). The
+            // value indexes let a claim whose predicate is rare start from the matching attributes
+            // rather than read every row of the table.
             new Migration(35, "token-attributes", """
             CREATE TABLE IF NOT EXISTS wf_token_attr (
               token_id     VARCHAR(128)   NOT NULL,
@@ -658,6 +660,8 @@ public final class JdbcStorage implements Storage {
               n_val        DECIMAL(38,10),
               PRIMARY KEY (token_id, name)
             );
+            CREATE INDEX IF NOT EXISTS ix_token_attr_s ON wf_token_attr (name, s_val);
+            CREATE INDEX IF NOT EXISTS ix_token_attr_n ON wf_token_attr (name, n_val);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */

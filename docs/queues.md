@@ -161,9 +161,21 @@ fraction under `LONG`), leaves the attribute absent rather than failing. Types a
 the string never equals `1000` the number, while `LONG` and `DECIMAL` compare by value. A flow
 declares at most 16 attributes, and only the declared paths are copied out of the context.
 
-The claim walks each queue oldest-instance-first and tests the predicate on each row it reaches. A
-predicate that matches only a small slice of a deep queue therefore reads past every older row that
-doesn't match on each poll. The full contract is in [the spec](spec/25-queue-criteria.md).
+What a claim costs depends on how often the predicate matches. Measured on PostgreSQL with a
+million ready tasks on one queue:
+
+- **Matches are common** (1% or more, spread through the queue): about 1 ms with task fields and
+  3 ms with attributes, at any depth. The claim walks the queue oldest-first and stops after a few
+  thousand rows at most.
+- **An attribute matches rarely or never**: under 1 ms when nothing matches. When only the newest
+  tasks match, the cost grows with the number of matching tasks rather than the queue depth (22 ms
+  for 10,000). The attribute value indexes let the claim start from the matching rows.
+- **A task field matches rarely or never** (a correlation id no ready task has, say): the claim
+  reads the whole queue, about 250 ms per poll at a million tasks. An idle worker re-polls about
+  every 100 ms. Routing on a value that is often absent from a deep queue belongs in an attribute,
+  not a task field.
+
+The full contract is in [the spec](spec/25-queue-criteria.md).
 
 ---
 
