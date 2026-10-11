@@ -28,6 +28,28 @@ public final class PostgresDialect implements Dialect {
 
     @Override public boolean supportsJoinedLock() { return true; }
 
+    /**
+     * Prices a random page read at 1.1 sequential reads, as on SSD storage, so the claim walks the
+     * ready index in claim order and stops at its last match rather than reading every ready row
+     * to sort them when the planner under-estimates how many tasks a criteria predicate matches.
+     * {@code wiggle.pg.randomPageCost} / {@code WIGGLE_PG_RANDOM_PAGE_COST} overrides the cost;
+     * {@code server} keeps the server's own.
+     */
+    @Override public String connectionInitSql() {
+        String v = System.getProperty("wiggle.pg.randomPageCost");
+        if (v == null || v.isBlank()) v = System.getenv("WIGGLE_PG_RANDOM_PAGE_COST");
+        if (v == null || v.isBlank()) v = "1.1";
+        if (v.trim().equalsIgnoreCase("server")) return null;
+        double cost;
+        try {
+            cost = Double.parseDouble(v.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("WIGGLE_PG_RANDOM_PAGE_COST is not a number or 'server': " + v);
+        }
+        if (!(cost > 0)) throw new IllegalArgumentException("WIGGLE_PG_RANDOM_PAGE_COST must be positive: " + v);
+        return "SET random_page_cost = " + cost;
+    }
+
     @Override public void acquireMigrationLock(Connection c) throws SQLException {
         try (Statement st = c.createStatement()) {
             st.execute("SELECT pg_advisory_xact_lock(7420398115703004)");

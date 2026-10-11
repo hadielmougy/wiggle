@@ -85,6 +85,7 @@ public final class JdbcStorage implements Storage {
         // stays in manual-commit, read-committed mode.
         cfg.setAutoCommit(false);
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
+        if (dialect.connectionInitSql() != null) cfg.setConnectionInitSql(dialect.connectionInitSql());
         cfg.setPoolName("wiggle-" + dialect.id() + (readOnly ? "-replica" : ""));
         if (readOnly) {
             cfg.setReadOnly(true);

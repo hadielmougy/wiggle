@@ -166,7 +166,10 @@ million ready tasks on one queue:
 
 - **Matches are common** (1% or more, spread through the queue): about 1 ms with task fields and
   3 ms with attributes, at any depth. The claim walks the queue oldest-first and stops after a few
-  thousand rows at most.
+  thousand rows at most. Wiggle's PostgreSQL connections price random reads at
+  `random_page_cost` 1.1 for this (`WIGGLE_PG_RANDOM_PAGE_COST`): at the server default of 4, a
+  common correlation-id prefix the planner judges rare makes it read and sort every ready task
+  instead, about 20 ms at 100,000.
 - **An attribute matches rarely or never**: under 1 ms when nothing matches. When only the newest
   tasks match, the cost grows with the number of matching tasks rather than the queue depth (22 ms
   for 10,000). The attribute value indexes let the claim start from the matching rows.

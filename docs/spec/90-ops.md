@@ -28,6 +28,7 @@ conventions, not the library's.
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | `wiggle.jdbc.user` / `.password` | *(unset)* | credentials |
 | `WIGGLE_JDBC_POOL_SIZE` | `wiggle.jdbc.poolSize` | `10` | HikariCP max pool size |
 | `WIGGLE_JDBC_TX_ATTEMPTS` | `wiggle.jdbc.txAttempts` | `3` | attempts for a transaction that rolled back on a momentary failure; `1` disables the replay |
+| `WIGGLE_PG_RANDOM_PAGE_COST` | `wiggle.pg.randomPageCost` | `1.1` | PostgreSQL `random_page_cost` set on each pooled connection, as for SSD storage; `server` keeps the server's own |
 | `WIGGLE_JDBC_TX_RETRY_DELAY_MILLIS` | `wiggle.jdbc.txRetryDelayMillis` | `50` | pause before a replay, multiplied by the attempt |
 | `WIGGLE_SCHEMA_MODE` | — | `apply` | `apply` migrates on startup; `verify` applies nothing and fails fast if behind or drifted |
 | `WIGGLE_MIGRATE_ONLY` | — | `false` | apply migrations and exit (forces apply even when the env pins verify) |

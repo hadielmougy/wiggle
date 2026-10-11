@@ -502,6 +502,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MIGRATE_ONLY` | `false` | `true` = apply migrations and exit (a one-shot job; then run the app with `WIGGLE_SCHEMA_MODE=verify`) |
 | `WIGGLE_JDBC_POOL_SIZE` | `10` | HikariCP max pool size |
 | `WIGGLE_JDBC_TX_ATTEMPTS` | `3` | replays for a transaction that rolled back on a momentary database failure; `1` disables |
+| `WIGGLE_PG_RANDOM_PAGE_COST` | `1.1` | PostgreSQL `random_page_cost` on each connection; `server` keeps the server's own |
 | `WIGGLE_LEASE_MILLIS` | `30000` | task lease before a stalled step is reclaimed |
 | `WIGGLE_RECORD_STEP_IO` | `true` | record each step's input and output for the portal (`false` turns it off) |
 | `WIGGLE_STEP_IO_MAX_CHARS` | `65536` | cap per recorded input/output; longer ones keep their first 4096 characters |
