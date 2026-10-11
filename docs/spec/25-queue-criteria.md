@@ -4,8 +4,8 @@
 
 **Status: proposed.** Nothing in this chapter is implemented yet. Criteria over task metadata and
 the attributes of [§3](#3-attributes) are built in the two changes that follow this one; the
-portal's three coverage states ([WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog)) and the warning
-of [WGL-QC-045](#3-attributes) are not. The benchmark of [WGL-QC-100](#6-cost) has run. Every requirement here is
+portal's three coverage states ([WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog)) and the Backlog
+half of [WGL-QC-045](#3-attributes) are not. The benchmark of [WGL-QC-100](#6-cost) has run. Every requirement here is
 *unverified* ([WGL-GEN-001](00-index.md)) until the change that builds it names its test. Where this
 chapter and the rest of the suite disagree, the rest of the suite describes the code as it is today.
 
@@ -156,9 +156,11 @@ carries no attributes.
 **WGL-QC-044** (MUST) Only declared paths are copied out of the context. Undeclared data, and the
 context itself, MUST NOT be written to the attribute table.
 
-**WGL-QC-045** (SHOULD) A criteria that names an attribute none of its queues' current definitions
-declare SHOULD be logged once per worker and shown as a warning on the portal's Backlog tab. It is
-not rejected: the definition declaring it may be published later.
+**WGL-QC-045** (SHOULD) A criteria comparison that names an attribute none of its queues' bound
+definitions declare, or compares one with a literal of a type no declaration of it has (a `DECIMAL`
+with a String), SHOULD be logged once by the worker at start and shown as a warning on the portal's
+Backlog tab: it is false for every task. It is not rejected: the definition declaring it may be
+published later.
 
 ## 4. The poll
 
@@ -274,7 +276,9 @@ state to make this check.
 
 **WGL-QC-080** (MUST) Wake-ups stay per queue: a task becoming ready wakes the pollers of its queue,
 including those whose predicate will reject it. Such a poller claims nothing and waits again. This
-means spurious wake-ups, never missed ones.
+means spurious wake-ups, never missed ones. Parked polls with different criteria MUST wait in
+different lines, so a wake taken by a poll that rejects the task does not leave a poll that accepts
+it waiting for the fallback.
 
 **WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria. Until the portal shows the
 three states below, a slice counts as covered unless every live poller's predicate is false for it. The portal's Backlog tab
