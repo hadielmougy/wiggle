@@ -7,7 +7,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.ShardIds;
 import com.wiggle.core.TaskActivation;
-import com.wiggle.core.WorkflowVersion;
+import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
@@ -18,7 +18,6 @@ import com.wiggle.server.store.Tx;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.function.Predicate;
 
 
@@ -65,6 +64,7 @@ final class Tokens {
         t.attempt = 0;
         t.availableAt = now;
         t.instCreatedAt = inst.createdAt;
+        t.correlationId = inst.correlationId;
         t.joinStack = joinStack == null ? "" : joinStack;
         t.createdAt = now;
         t.updatedAt = now;
@@ -227,9 +227,8 @@ final class Tokens {
         throw EngineException.conflict("lease for task " + taskId + " changed while renewing it");
     }
 
-    List<TaskActivation> claim(Tx tx, String workerId, Set<String> queues, Set<WorkflowVersion> versions,
-                               int max, long now, long until) {
-        List<Token> claimed = tx.claimTasks(workerId, queues, versions, max, now, until);
+    List<TaskActivation> claim(Tx tx, String workerId, ClaimFilter filter, int max, long now, long until) {
+        List<Token> claimed = tx.claimTasks(workerId, filter, max, now, until);
         List<TaskActivation> activations = new ArrayList<>(claimed.size());
         for (Token t : claimed) {
             activationFor(tx, t, workerId, until).ifPresent(activations::add);
@@ -265,7 +264,7 @@ final class Tokens {
         return Optional.of(new TaskActivation(t.id, inst.id, inst.workflow, inst.version, node.id(), node.name(),
                 node.activity(), node.kind(), t.nextAttempt(), until, workerId, Scopes.dispatchContext(inst, t).raw(),
                 base == null ? null : base.raw(), itemIndex, itemMapKey, mode, node.collectKey(),
-                node.armNames()));
+                node.armNames(), inst.correlationId, inst.createdAt));
     }
 
 

@@ -8,17 +8,29 @@ import java.util.Map;
  * A unit of work leased by a worker from the server. For a forEach item step, {@code context} is the
  * ITEM's current value (any JSON value) and {@code baseContext} carries the frozen pre-forEach
  * context (read-only for items; null for every other step). {@code itemIndex}/{@code itemMapKey}
- * locate the element in its input collection.
+ * locate the element in its input collection. {@code correlationId} (null when the instance has
+ * none) and {@code instanceCreatedAt} are the instance's, for evaluating queue criteria.
  */
 public record TaskActivation(String taskId, String instanceId, String workflow, int version,
                              String nodeId, String stepName, String activity, NodeKind kind,
                              int attempt, long leaseExpiresAt, String leaseOwner, Object context,
                              Object baseContext, long itemIndex, String itemMapKey,
-                             ExecutionMode executionMode, String collectKey, List<String> armNames) {
+                             ExecutionMode executionMode, String collectKey, List<String> armNames,
+                             String correlationId, long instanceCreatedAt) {
 
     public TaskActivation {
         executionMode = executionMode == null ? ExecutionMode.SERVER : executionMode;
         armNames = armNames == null ? List.of() : List.copyOf(armNames);
+    }
+
+    public TaskActivation(String taskId, String instanceId, String workflow, int version,
+                          String nodeId, String stepName, String activity, NodeKind kind,
+                          int attempt, long leaseExpiresAt, String leaseOwner, Object context,
+                          Object baseContext, long itemIndex, String itemMapKey,
+                          ExecutionMode executionMode, String collectKey, List<String> armNames) {
+        this(taskId, instanceId, workflow, version, nodeId, stepName, activity, kind, attempt,
+                leaseExpiresAt, leaseOwner, context, baseContext, itemIndex, itemMapKey, executionMode,
+                collectKey, armNames, null, 0);
     }
 
     public TaskActivation(String taskId, String instanceId, String workflow, int version,
@@ -64,6 +76,8 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
         m.put("executionMode", executionMode.name());
         if (collectKey != null) m.put("collectKey", collectKey);
         if (!armNames.isEmpty()) m.put("armNames", armNames);
+        if (correlationId != null) m.put("correlationId", correlationId);
+        if (instanceCreatedAt != 0) m.put("instanceCreatedAt", instanceCreatedAt);
         return m;
     }
 
@@ -78,6 +92,7 @@ public record TaskActivation(String taskId, String instanceId, String workflow, 
                 m.get("baseContext"), Json.num(m, "itemIndex", 0), Json.str(m, "itemMapKey", null),
                 ExecutionMode.valueOf(Json.str(m, "executionMode", ExecutionMode.SERVER.name())),
                 Json.str(m, "collectKey", null),
-                Json.asArray(m.get("armNames")).stream().map(String::valueOf).toList());
+                Json.asArray(m.get("armNames")).stream().map(String::valueOf).toList(),
+                Json.str(m, "correlationId", null), Json.num(m, "instanceCreatedAt", 0));
     }
 }

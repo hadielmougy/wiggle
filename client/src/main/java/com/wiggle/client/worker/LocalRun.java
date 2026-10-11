@@ -24,6 +24,7 @@ final class LocalRun {
     private static final System.Logger LOG = System.getLogger(LocalRun.class.getName());
 
     private final Worker w;
+    private final TaskActivation task;
     private final WorkflowDefinition def;
     private final String leaseOwner;
     private final String instanceId;
@@ -42,6 +43,7 @@ final class LocalRun {
 
     LocalRun(Worker w, TaskActivation task, WorkflowDefinition def) {
         this.w = w;
+        this.task = task;
         this.def = def;
         this.leaseOwner = task.leaseOwner();
         this.instanceId = task.instanceId();
@@ -150,7 +152,8 @@ final class LocalRun {
         boolean isPredicate = node.kind() == NodeKind.PREDICATE;
         boolean predicateValue = isPredicate && (Boolean) result;
         Node next = def.node(GraphTraversal.successor(node, predicateValue));
-        boolean handback = !created.isEmpty() || GraphTraversal.classify(next, w.servedQueues()) != null;
+        boolean handback = !created.isEmpty() || GraphTraversal.classify(next, w.servedQueues()) != null
+                || !w.claims(task, next);
         buffer.add(isPredicate
                 ? new WiggleClient.StepReport(node.id(), null, predicateValue, startedAt, finishedAt, events, created)
                 : new WiggleClient.StepReport(node.id(), result, null, startedAt, finishedAt, events, created));
@@ -186,7 +189,7 @@ final class LocalRun {
         ReportResult advanced = w.outbox().deliverOrPark(lease, taskId,
                 () -> handback && maxBatch > 1 && w.options().crossInstanceBatching()
                         ? w.handbacks().handback(instanceId, taskId, leaseOwner, steps)
-                        : w.client().reportSteps(taskId, leaseOwner, steps, handback),
+                        : w.client().reportSteps(taskId, leaseOwner, steps, handback, w.options().criteria()),
                 () -> w.client().reportSteps(taskId, leaseOwner, steps, true));
         buffer.clear();
         if (advanced == null || !advanced.running() || handback || advanced.nextTaskId() == null) return false;
@@ -214,7 +217,7 @@ final class LocalRun {
         String taskId = serverTaskId;
         List<WiggleClient.StepReport> steps = List.copyOf(buffer);
         ReportResult advanced = w.outbox().deliverOrPark(lease, taskId,
-                () -> w.client().reportSteps(taskId, leaseOwner, steps, false),
+                () -> w.client().reportSteps(taskId, leaseOwner, steps, false, w.options().criteria()),
                 () -> w.client().reportSteps(taskId, leaseOwner, steps, true));
         buffer.clear();
         if (advanced == null) return false;

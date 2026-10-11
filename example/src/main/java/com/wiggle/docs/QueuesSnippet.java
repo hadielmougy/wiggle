@@ -5,6 +5,8 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.Task_;
 
 /** The code in {@code docs/queues.md}. See {@link SagaSnippet} for why these live as source. */
 public final class QueuesSnippet {
@@ -51,6 +53,22 @@ public final class QueuesSnippet {
                 .start();
         // docs:end specialised-worker
         gpu.close();
+    }
+
+    static void criteria(WiggleClient client) {
+        // docs:begin criteria-worker
+        // payments-eu: serves the "payments" queue, but only charges of orders keyed "eu-..."
+        QueueCriteria euCharges = QueueCriteria.from("payments")
+                .where(cb -> cb.and(
+                        cb.equal(Task_.STEP, "charge"),
+                        cb.like(Task_.CORRELATION_ID, "eu-%"),
+                        cb.lessThan(Task_.ATTEMPT, 4)));
+        Worker eu = new Worker(client, "payments-eu-1",
+                        WorkerOptions.defaults().withCriteria(euCharges))
+                .registerHandler(new OrderHandlers())
+                .start();
+        // docs:end criteria-worker
+        eu.close();
     }
 
     static void general(WiggleClient client) {

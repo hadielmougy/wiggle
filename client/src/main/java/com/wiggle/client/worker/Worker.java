@@ -2,6 +2,8 @@ package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.core.*;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.TaskFacts;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -68,9 +70,18 @@ public final class Worker implements AutoCloseable {
 
     public String workerId() { return workerId; }
 
-    /** The queues this worker actually serves: the explicit restriction, or everything registered. */
+    /** The queues this worker actually serves: its criteria's, the explicit restriction, or everything registered. */
     Set<String> servedQueues() {
+        if (options.criteria() != null) return new LinkedHashSet<>(options.criteria().queues());
         return options.queues().isEmpty() ? registrations.queues() : options.queues();
+    }
+
+    /** Whether this worker's poll would claim {@code next} as the continuation of {@code task}. */
+    boolean claims(TaskActivation task, Node next) {
+        QueueCriteria c = options.criteria();
+        if (c == null) return true;
+        return c.matches(new TaskFacts(task.workflow(), task.version(), next.queue(), next.name(), next.id(),
+                next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt()));
     }
 
     public int inFlight() { return inFlight.get(); }
@@ -137,6 +148,9 @@ public final class Worker implements AutoCloseable {
     }
 
     public Worker start() {
+        if (options.criteria() != null && !options.queues().isEmpty()) {
+            throw new IllegalStateException("worker " + workerId + ": set withQueues or withCriteria, not both");
+        }
         if (!running.compareAndSet(false, true)) return this;
         if (!registrations.isEmpty()) registrations.reconcile(client, options);
         executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -172,8 +186,11 @@ public final class Worker implements AutoCloseable {
         }
         int free = options.concurrency() - inFlight.get();
         long polledAt = System.currentTimeMillis();
-        PollResult result = client.poll(workerId, servedQueues(), registrations.claimedVersions(), free,
-                options.lease().toMillis(), options.longPollWait().toMillis());
+        PollResult result = options.criteria() != null
+                ? client.poll(workerId, options.criteria(), registrations.claimedVersions(), free,
+                        options.lease().toMillis(), options.longPollWait().toMillis())
+                : client.poll(workerId, servedQueues(), registrations.claimedVersions(), free,
+                        options.lease().toMillis(), options.longPollWait().toMillis());
         List<TaskActivation> tasks = result.tasks();
         if (tasks.isEmpty()) {
             long shedFor = result.retryAfterMillis();

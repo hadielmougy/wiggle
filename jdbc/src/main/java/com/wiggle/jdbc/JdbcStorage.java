@@ -10,6 +10,7 @@ import org.jdbi.v3.core.statement.SqlStatement;
 import org.jdbi.v3.core.statement.Update;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
+import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.PayloadCodec;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.TokenStatus;
@@ -640,6 +641,11 @@ public final class JdbcStorage implements Storage {
               body         TEXT         NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_dyn_node_instance ON wf_dyn_node (instance_id);
+            """),
+            // The instance's correlation id on each token, for queue criteria to test without a join.
+            // Null on rows written before this.
+            new Migration(34, "token-correlation-id", """
+            ALTER TABLE wf_token ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(200);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -1004,6 +1010,7 @@ public final class JdbcStorage implements Storage {
         t.attempt = rs.getInt("attempt");
         t.availableAt = rs.getLong("available_at");
         t.instCreatedAt = rs.getLong("inst_created_at");
+        t.correlationId = rs.getString("correlation_id");
         t.leaseOwner = rs.getString("lease_owner");
         t.leaseExpiresAt = rs.getLong("lease_expires");
         // Oracle stores the empty string as NULL, so the NOT-NULL '' sentinel comes back null;
@@ -2004,10 +2011,10 @@ public final class JdbcStorage implements Storage {
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
                 + "node_id,kind,status,activity,queue,attempt,available_at,lease_owner,lease_expires,join_stack,"
                 + "last_error,created_at,updated_at,payload,comp_seq,started_at,finished_at,inst_created_at,"
-                + "step_input,step_output) VALUES "
+                + "correlation_id,step_input,step_output) VALUES "
                 + "(:id,:instanceId,:workflow,:version,:nodeId,:kind,:status,:activity,:queue,:attempt,"
                 + ":availableAt,:leaseOwner,:leaseExpires,:joinStack,:lastError,:createdAt,:updatedAt,:payload,"
-                + ":compSeq,:startedAt,:finishedAt,:instCreatedAt,:stepInput,:stepOutput)";
+                + ":compSeq,:startedAt,:finishedAt,:instCreatedAt,:correlationId,:stepInput,:stepOutput)";
 
         @Override public void insertToken(Token t) {
             bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
@@ -2031,6 +2038,7 @@ public final class JdbcStorage implements Storage {
                     .bind("version", t.version)
                     .bind("createdAt", t.createdAt)
                     .bind("instCreatedAt", t.instCreatedAt)
+                    .bind("correlationId", t.correlationId)
                     .bind("payload", PayloadCodec.encode(t.payload));
         }
 
@@ -2197,21 +2205,22 @@ public final class JdbcStorage implements Storage {
                     .findFirst();
         }
 
-        @Override public List<Token> claimTasks(String workerId, Set<String> queues,
-                                                Set<WorkflowVersion> versions, int max, long now,
+        @Override public List<Token> claimTasks(String workerId, ClaimFilter filter, int max, long now,
                                                 long leaseUntil) {
+            Set<String> queues = filter.queues();
+            Set<WorkflowVersion> versions = filter.versions();
+            CriteriaSql where = filter.where() == null ? null : CriteriaSql.compile(filter.where(), dialect);
             // PostgreSQL claims in one statement; H2 has neither SKIP LOCKED nor RETURNING and
             // falls back to compare-and-set.
             return dialect.supportsSkipLocked() && dialect.supportsReturning()
-                    ? claimSkipLockedReturning(workerId, queues, versions, max, now, leaseUntil)
-                    : claimCompareAndSet(workerId, queues, versions, max, now, leaseUntil);
+                    ? claimSkipLockedReturning(workerId, queues, versions, where, max, now, leaseUntil)
+                    : claimCompareAndSet(workerId, queues, versions, where, max, now, leaseUntil);
         }
 
-        /**
-         * The (workflow, version) filter of a version-scoped worker. It only narrows the candidate
-         * set the dispatch index already found, so it costs a predicate and no join -- wf_token
-         * carries both columns.
-         */
+        private static String whereClause(CriteriaSql where) {
+            return where == null ? "" : " AND " + where.sql();
+        }
+
         /** The (workflow, version) filter: one OR-ed pair per version, each named by its position
          *  so the clause and its binds cannot drift apart. */
         private static String versionsClause(Set<WorkflowVersion> versions) {
@@ -2235,13 +2244,13 @@ public final class JdbcStorage implements Storage {
         }
 
         /** The claim candidate filter, shared by both dialect paths: ready task tokens that are due,
-         *  optionally narrowed to the worker's queues and its bound versions. {@code %s} is the
-         *  select list -- the ids alone where the update reads them back, whole rows otherwise. */
-        private static String claimFilter(Set<String> queues, Set<WorkflowVersion> versions) {
+         *  optionally narrowed to the worker's queues, its bound versions and its criteria. {@code %s}
+         *  is the select list -- the ids alone where the update reads them back, whole rows otherwise. */
+        private static String claimFilter(Set<String> queues, Set<WorkflowVersion> versions, CriteriaSql where) {
             return "SELECT %s FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
                     + " AND available_at<=:now"
                     + (queues != null && !queues.isEmpty() ? " AND queue IN (<queues>)" : "")
-                    + versionsClause(versions)
+                    + versionsClause(versions) + whereClause(where)
                     + " ORDER BY inst_created_at, available_at, id LIMIT :max";
         }
 
@@ -2253,12 +2262,12 @@ public final class JdbcStorage implements Storage {
          * many workers and nodes cannot deadlock, and none of them collide on a row.
          */
         private List<Token> claimSkipLockedReturning(String workerId, Set<String> queues,
-                                                     Set<WorkflowVersion> versions, int max,
-                                                     long now, long leaseUntil) {
+                                                     Set<WorkflowVersion> versions, CriteriaSql where,
+                                                     int max, long now, long leaseUntil) {
             boolean perQueue = queues != null && queues.size() > 1;
             String pick = perQueue
-                    ? perQueuePick(queues.size(), versions)
-                    : claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
+                    ? perQueuePick(queues.size(), versions, where)
+                    : claimFilter(queues, versions, where).formatted("id") + " FOR UPDATE SKIP LOCKED";
             Query q = h.createQuery("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                     + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                     + " WHERE id IN (" + pick + ") RETURNING *");
@@ -2274,6 +2283,7 @@ public final class JdbcStorage implements Storage {
                 q.bindList("queues", List.copyOf(queues));
             }
             bindVersions(q, versions);
+            if (where != null) where.bind(q);
             return q.mapTo(Token.class).list();
         }
 
@@ -2284,25 +2294,26 @@ public final class JdbcStorage implements Storage {
          * every claim. Rows locked here but not picked stay locked, and are skipped by other
          * claimers, until this claim commits.
          */
-        private static String perQueuePick(int queueCount, Set<WorkflowVersion> versions) {
+        private static String perQueuePick(int queueCount, Set<WorkflowVersion> versions, CriteriaSql where) {
             StringBuilder names = new StringBuilder();
             for (int i = 0; i < queueCount; i++) names.append(i == 0 ? "" : ",").append("(:q").append(i).append(")");
             return "SELECT c.id FROM (VALUES " + names + ") AS q(name) CROSS JOIN LATERAL ("
                     + "SELECT id, inst_created_at, available_at FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE')"
-                    + " AND available_at<=:now AND queue=q.name" + versionsClause(versions)
+                    + " AND available_at<=:now AND queue=q.name" + versionsClause(versions) + whereClause(where)
                     + " ORDER BY inst_created_at, available_at, id LIMIT :max FOR UPDATE SKIP LOCKED) c"
                     + " ORDER BY c.inst_created_at, c.available_at, c.id LIMIT :max";
         }
 
         /** Portable fallback (H2): over-fetch candidates, then compare-and-set each. */
         private List<Token> claimCompareAndSet(String workerId, Set<String> queues,
-                                               Set<WorkflowVersion> versions, int max,
-                                               long now, long leaseUntil) {
-            Query pick = h.createQuery(claimFilter(queues, versions).formatted("*"));
+                                               Set<WorkflowVersion> versions, CriteriaSql where,
+                                               int max, long now, long leaseUntil) {
+            Query pick = h.createQuery(claimFilter(queues, versions, where).formatted("*"));
             pick.bind("now", now)
                     .bind("max", max * 4);   // over-fetch: some candidates will lose the CAS race
             if (queues != null && !queues.isEmpty()) pick.bindList("queues", List.copyOf(queues));
             bindVersions(pick, versions);
+            if (where != null) where.bind(pick);
             List<Token> candidates = pick.mapTo(Token.class).list();
 
             List<Token> claimed = new ArrayList<>();

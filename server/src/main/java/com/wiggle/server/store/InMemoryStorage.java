@@ -521,17 +521,14 @@ public final class InMemoryStorage implements Storage {
             return out;
         }
 
-        @Override public List<Token> claimTasks(String workerId, Set<String> queues,
-                                                Set<WorkflowVersion> versions, int max, long now,
+        @Override public List<Token> claimTasks(String workerId, ClaimFilter filter, int max, long now,
                                                 long leaseUntil) {
             List<Token> claimed = new ArrayList<>();
             Iterator<Token> it = readyTasks.iterator();
             while (it.hasNext() && claimed.size() < max) {
                 Token live = it.next();
                 if (live.availableAt > now) continue;   // not due yet; older instances come first
-                if (queues != null && !queues.isEmpty() && !queues.contains(live.queue)) continue;
-                if (versions != null && !versions.isEmpty()
-                        && !versions.contains(new WorkflowVersion(live.workflow, live.version))) continue;
+                if (!filter.admits(live)) continue;
                 it.remove();                          // READY -> RUNNING leaves the claimable index
                 live.status = TokenStatus.RUNNING;
                 live.leaseOwner = workerId;
