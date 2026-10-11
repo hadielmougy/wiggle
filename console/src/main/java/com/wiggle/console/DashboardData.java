@@ -91,8 +91,18 @@ public interface DashboardData {
 
     record SignalView(String instanceId, String workflow, String signal, long deadline, long createdAt) {}
 
+    /** {@code coverage} is COVERED, CONDITIONAL or UNCOVERED; {@code claimable} how many of the
+     *  ready tasks a live worker would claim (null: not counted); {@code criteria} what a conditional
+     *  slice depends on. */
     record BacklogView(String workflow, int version, String queue, int readyCount,
-                       long oldestAvailableAt, boolean covered, int livePollers) {}
+                       long oldestAvailableAt, String coverage, Integer claimable, List<String> criteria,
+                       int livePollers) {
+
+        /** Whether any live worker polls the slice at all. */
+        public boolean covered() {
+            return !"UNCOVERED".equals(coverage);
+        }
+    }
 
     record ScheduleView(String id, String workflow, long everyMillis, String cron,
                         long nextFireAt, long createdAt) {}

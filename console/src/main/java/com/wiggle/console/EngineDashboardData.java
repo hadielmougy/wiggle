@@ -103,13 +103,16 @@ public final class EngineDashboardData implements DashboardData {
         int pollers = engine.livePollers().size();
         List<BacklogView> out = new ArrayList<>();
         for (Rows.BacklogSlice s : engine.backlog(limit)) {
+            WorkflowEngine.SliceCoverage c = engine.coverage(s);
             out.add(new BacklogView(s.workflow(), s.version(), s.queue(), s.readyCount(), s.oldestAvailableAt(),
-                    engine.covered(s.workflow(), s.version(), s.queue()), pollers));
+                    c.state().name(), c.claimable(), c.criteria(), pollers));
         }
-        out.sort((a, b) -> {
-            if (a.covered() != b.covered()) return a.covered() ? 1 : -1;
-            return Integer.compare(b.readyCount(), a.readyCount());
-        });
+        // Uncovered first, then conditional, then the rest; deepest first within each.
+        out.sort(Comparator.comparingInt((BacklogView v) -> switch (v.coverage()) {
+                    case "UNCOVERED" -> 0;
+                    case "CONDITIONAL" -> 1;
+                    default -> 2;
+                }).thenComparing(Comparator.comparingInt(BacklogView::readyCount).reversed()));
         return out;
     }
 

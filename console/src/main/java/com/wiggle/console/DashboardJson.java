@@ -65,6 +65,9 @@ final class DashboardJson {
         m.put("readyCount", b.readyCount());
         m.put("oldestAvailableAt", b.oldestAvailableAt());
         m.put("covered", b.covered());
+        m.put("coverage", b.coverage());
+        if (b.claimable() != null) m.put("claimable", b.claimable());
+        if (!b.criteria().isEmpty()) m.put("criteria", b.criteria());
         return m;
     }
 

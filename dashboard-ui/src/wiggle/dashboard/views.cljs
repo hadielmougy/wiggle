@@ -505,28 +505,45 @@
 
 ;; ---------------------------------------------------------------- backlog tab
 
+(defn- coverage-cell [b]
+  (case (:coverage b)
+    "UNCOVERED" [:span.bad "no worker"]
+    "CONDITIONAL"
+    [:div
+     [:span.partial "conditional"]
+     [:span.muted " · " (if-some [n (:claimable b)]
+                          (str n " of " (:readyCount b) " claimable")
+                          "too many to count")]
+     (into [:ul.criteria] (for [c (:criteria b)] ^{:key c} [:li [:code c]]))]
+    (if (false? (:covered b)) [:span.bad "no worker"] [:span.ok "covered"])))
+
 (defn backlog-row [b]
-  [:tr {:class (when-not (:covered b) "uncovered")}
+  [:tr {:class (case (:coverage b)
+                 "UNCOVERED" "uncovered"
+                 "CONDITIONAL" (if (= (:claimable b) (:readyCount b)) nil "conditional")
+                 (when-not (:covered b) "uncovered"))}
    [:td [:strong (:workflow b)]]
    [:td [:code (:version b)]]
    [:td (:queue b)]
    [:td (:readyCount b)]
    [:td.muted (if (pos? (:oldestAvailableAt b)) (u/ago (:oldestAvailableAt b)) "—")]
-   [:td (if (:covered b)
-          [:span.ok "covered"]
-          [:span.bad "no worker"])]])
+   [:td (coverage-cell b)]])
 
 (defn backlog-tab []
   (let [b (:backlog @db)
         slices (:slices b)
-        uncovered (:uncoveredSlices b 0)]
+        uncovered (:uncoveredSlices b 0)
+        conditional (:conditionalSlices b 0)]
     [:section.panel
      [:h2 "Backlog" [:span.count (count slices)]]
      [:p.muted
       "Work that is READY to dispatch, grouped by what decides who may claim it. A row marked "
       [:strong "no worker"] " is being served by nothing: either no worker polls that queue, or every"
       " worker has scoped itself to other versions. Those tokens sit dispatchable and unclaimed —"
-      " the instance still reads RUNNING, so nothing else in this console shows it."]
+      " the instance still reads RUNNING, so nothing else in this console shows it. A row marked "
+      [:strong "conditional"] " is polled only by workers whose queue criteria test something the row"
+      " does not fix (a step, a correlation id, an attribute); the count says how many of its tasks"
+      " those criteria match right now, and the rest wait for a worker that would take them."]
      (if-not (seq slices)
        [:div.empty "nothing is waiting to be dispatched"]
        [:<>
@@ -534,6 +551,10 @@
           [:div.warn
            (str uncovered " slice" (when (> uncovered 1) "s") " with no worker — "
                 (:strandedTasks b) " task(s) stranded")])
+        (when (pos? (:unclaimableTasks b 0))
+          [:div.warn
+           (str conditional " conditional slice" (when (> conditional 1) "s") " — "
+                (:unclaimableTasks b) " task(s) no live worker's criteria match")])
         [:table
          [:thead [:tr [:th "workflow"] [:th "version"] [:th "queue"] [:th "ready"]
                   [:th "oldest"] [:th "coverage"]]]

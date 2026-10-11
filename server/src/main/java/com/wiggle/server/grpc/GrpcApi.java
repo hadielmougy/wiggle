@@ -352,14 +352,18 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                     .setLivePollers(engine.livePollers().size());
             for (com.wiggle.server.store.Rows.BacklogSlice s : engine.backlog(max)) {
                 if (!readable.matches(s.workflow())) continue;
-                out.addSlices(BacklogSlice.newBuilder()
+                WorkflowEngine.SliceCoverage c = engine.coverage(s);
+                BacklogSlice.Builder slice = BacklogSlice.newBuilder()
                         .setWorkflow(s.workflow())
                         .setVersion(s.version())
                         .setQueue(s.queue() == null ? "" : s.queue())
                         .setReadyCount(s.readyCount())
                         .setOldestAvailableAt(s.oldestAvailableAt())
-                        .setCovered(engine.covered(s.workflow(), s.version(), s.queue()))
-                        .build());
+                        .setCovered(c.state() != com.wiggle.server.engine.PollerRegistry.Coverage.State.UNCOVERED)
+                        .setCoverage(c.state().name())
+                        .addAllCriteria(c.criteria());
+                if (c.claimable() != null) slice.setClaimable(c.claimable());
+                out.addSlices(slice.build());
             }
             return out.build();
         });

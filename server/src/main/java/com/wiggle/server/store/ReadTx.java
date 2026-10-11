@@ -132,6 +132,13 @@ public interface ReadTx extends GraphReads {
     List<Rows.BacklogSlice> backlogByVersion(long now, int max);
 
     /**
+     * How many due READY tasks of one backlog slice {@code where} admits, counting at most {@code cap}.
+     * Console-facing, like {@link #backlogByVersion}.
+     */
+    int countReady(String workflow, int version, String queue, com.wiggle.core.criteria.Predicate where,
+                   long now, int cap);
+
+    /**
      * Worker-dispatched tokens (TASK/PREDICATE) that finished (DONE) since {@code since} --
      * the throughput signal for lag monitoring. DB-driven rather than an in-process counter,
      * so it reflects consumption across every node in the cluster, not just this one.

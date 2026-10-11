@@ -481,15 +481,21 @@ public final class DashboardServlet extends HttpServlet {
         int limit = parseInt(req.getParameter("limit"), 100);
         List<DashboardData.BacklogView> slices = data.backlogCoverage(limit);
         List<Object> list = new ArrayList<>();
-        int uncovered = 0, stranded = 0;
+        int uncovered = 0, stranded = 0, conditional = 0, unclaimable = 0;
         for (DashboardData.BacklogView b : slices) {
             list.add(DashboardJson.backlog(b));
             if (!b.covered()) { uncovered++; stranded += b.readyCount(); }
+            if ("CONDITIONAL".equals(b.coverage())) {
+                conditional++;
+                if (b.claimable() != null) unclaimable += b.readyCount() - b.claimable();
+            }
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("slices", list);
         out.put("uncoveredSlices", uncovered);
         out.put("strandedTasks", stranded);
+        out.put("conditionalSlices", conditional);
+        out.put("unclaimableTasks", unclaimable);
         out.put("livePollers", slices.isEmpty() ? 0 : slices.get(0).livePollers());
         json(res, 200, out);
     }

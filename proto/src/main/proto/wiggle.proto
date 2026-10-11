@@ -166,8 +166,17 @@ message BacklogSlice {
     int32 ready_count = 4;
     int64 oldest_available_at = 5;
     // False = no worker polling this node serves this queue at this version, so these tokens sit
-    // dispatchable and unclaimed.
+    // dispatchable and unclaimed. True for both COVERED and CONDITIONAL.
     bool covered = 6;
+    // COVERED: a live worker takes every such task. CONDITIONAL: only workers whose queue criteria
+    // test properties the slice does not fix (a step, a correlation id, an attribute) poll it, so
+    // some tasks may wait for none. UNCOVERED: no live worker takes any.
+    string coverage = 7;
+    // Exactly how many of the slice's ready tasks some live worker would claim; unset for a
+    // conditional slice too large to count fully.
+    optional int32 claimable = 8;
+    // The criteria a conditional slice depends on, as an operator reads them.
+    repeated string criteria = 9;
 }
 
 message BacklogCoverage {

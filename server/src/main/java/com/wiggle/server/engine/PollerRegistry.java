@@ -27,8 +27,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class PollerRegistry {
 
-    /** What one worker last told us it serves. Empty {@code versions} means every version; a null
-     *  each of {@code queues} carries its criteria, and no queues means every queue. */
+    /** What one worker last told us it serves. Empty {@code versions} means every version; each of
+     *  {@code queues} carries its criteria, and no queues means every queue. */
     public record Poller(String workerId, List<QueueCriteria> queues, Set<WorkflowVersion> versions, long lastSeen) {}
 
     private final Map<String, Poller> pollers = new ConcurrentHashMap<>();
@@ -60,27 +60,50 @@ public final class PollerRegistry {
      * <p>Both halves must hold: the worker polls that queue, and either it is unscoped (serves every
      * version) or it named this one. That mirrors the claim exactly — a version-scoped worker filters
      * its claim by the same pairs — so this answers what the dispatcher would actually do. A worker
-     * polling with criteria covers the slice unless its predicate is false for every task in it; a
-     * predicate on other properties counts as covering.
+     * polling with criteria covers the slice unless its queue's predicate is false for every task in
+     * it; a predicate on other properties counts as covering.
      */
     public boolean covers(String workflow, int version, String queue, long now) {
+        return coverage(workflow, version, queue, now).state() != Coverage.State.UNCOVERED;
+    }
+
+    /**
+     * Who would claim a token on {@code queue} of this (workflow, version). COVERED: some live worker
+     * takes every such token. CONDITIONAL: none does, but some take the ones their criteria match on
+     * properties the slice does not fix (a step, a correlation id, an attribute); {@code conditions}
+     * are those criteria. UNCOVERED: no live worker takes any.
+     */
+    public Coverage coverage(String workflow, int version, String queue, long now) {
         WorkflowVersion wv = new WorkflowVersion(workflow, version);
+        Set<Predicate> conditions = new LinkedHashSet<>();
         for (Poller p : live(now)) {
             QueueCriteria forQueue = QueueCriteria.forQueue(p.queues(), queue);
             boolean servesQueue = p.queues().isEmpty() || forQueue != null;
             boolean servesVersion = p.versions().isEmpty() || p.versions().contains(wv);
+            if (!servesQueue || !servesVersion) continue;
             Predicate where = forQueue == null ? null : forQueue.where();
-            if (servesQueue && servesVersion && mayMatch(where, workflow, version)) return true;
+            switch (onSlice(where, workflow, version)) {
+                case TRUE -> { return new Coverage(Coverage.State.COVERED, List.of()); }
+                case UNKNOWN -> conditions.add(where);
+                case FALSE -> { }
+            }
         }
-        return false;
+        return conditions.isEmpty() ? new Coverage(Coverage.State.UNCOVERED, List.of())
+                : new Coverage(Coverage.State.CONDITIONAL, List.copyOf(conditions));
     }
 
-    private static boolean mayMatch(Predicate where, String workflow, int version) {
-        if (where == null) return true;
+    /** A slice's coverage; {@code conditions} are the criteria of a CONDITIONAL one, else empty. */
+    public record Coverage(State state, List<Predicate> conditions) {
+        public enum State { COVERED, CONDITIONAL, UNCOVERED }
+    }
+
+    /** {@code where}, the criteria of the slice's queue, on what the slice fixes: TRUE when null. */
+    private static Criteria.Truth onSlice(Predicate where, String workflow, int version) {
+        if (where == null) return Criteria.Truth.TRUE;
         return Criteria.evaluate(where, (f, attribute) -> switch (f) {
             case WORKFLOW -> workflow;
             case VERSION -> (long) version;
             default -> Criteria.UNKNOWN;
-        }) != Criteria.Truth.FALSE;
+        });
     }
 }

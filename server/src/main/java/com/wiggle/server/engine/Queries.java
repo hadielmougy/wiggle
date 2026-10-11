@@ -1,6 +1,8 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.InstanceView;
+import com.wiggle.core.criteria.Criteria;
+import com.wiggle.core.criteria.Predicate;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
@@ -44,6 +46,31 @@ final class Queries {
 
     boolean covered(String workflow, int version, String queue) {
         return pollers.covers(workflow, version, queue, System.currentTimeMillis());
+    }
+
+    /** A conditional slice is counted only up to this many ready tasks, and only this many are counted. */
+    static final int COUNT_SLICES_UP_TO = 100_000;
+    static final int COUNT_CAP = 10_000;
+
+    WorkflowEngine.SliceCoverage coverage(Rows.BacklogSlice s) {
+        long now = System.currentTimeMillis();
+        PollerRegistry.Coverage c = pollers.coverage(s.workflow(), s.version(), s.queue(), now);
+        List<String> criteria = c.conditions().stream().map(Criteria::describe).toList();
+        Integer claimable = switch (c.state()) {
+            case COVERED -> s.readyCount();
+            case UNCOVERED -> 0;
+            case CONDITIONAL -> {
+                if (s.readyCount() > COUNT_SLICES_UP_TO) yield null;
+                Predicate any = c.conditions().size() == 1 ? c.conditions().getFirst() : new Predicate.Or(c.conditions());
+                int n = 0;
+                for (int shard : storage.instanceShards()) {
+                    n += storage.readShard(shard, Freshness.REPLICA_OK,
+                            tx -> tx.countReady(s.workflow(), s.version(), s.queue(), any, now, COUNT_CAP));
+                }
+                yield n >= COUNT_CAP && s.readyCount() > COUNT_CAP ? null : n;
+            }
+        };
+        return new WorkflowEngine.SliceCoverage(c.state(), claimable, criteria);
     }
 
     Set<PollerRegistry.Poller> livePollers() {
