@@ -4,8 +4,8 @@
 
 **Status: proposed.** Nothing in this chapter is implemented yet. Criteria over task metadata and
 the attributes of [§3](#3-attributes) are built in the two changes that follow this one; the
-portal's three coverage states ([WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog)), the warning of
-[WGL-QC-045](#3-attributes) and the benchmark of [WGL-QC-100](#6-cost) are not. Every requirement here is
+portal's three coverage states ([WGL-QC-081](#44-long-poll-wake-ups-and-the-backlog)) and the warning
+of [WGL-QC-045](#3-attributes) are not. The benchmark of [WGL-QC-100](#6-cost) has run. Every requirement here is
 *unverified* ([WGL-GEN-001](00-index.md)) until the change that builds it names its test. Where this
 chapter and the rest of the suite disagree, the rest of the suite describes the code as it is today.
 
@@ -296,11 +296,13 @@ CREATE TABLE wf_token_attr (
     n_val     DECIMAL(38, 10),
     PRIMARY KEY (token_id, name)
 );
+CREATE INDEX ix_token_attr_s ON wf_token_attr (name, s_val);
+CREATE INDEX ix_token_attr_n ON wf_token_attr (name, n_val);
 ```
 
-The primary key serves the claim's probe of each candidate row. Indexes on `(name, value)` would only
-serve a claim driven from the attribute table ([§6](#6-cost)), and every attribute write would pay for
-them, so they are left out until that claim exists.
+The primary key serves the claim's probe of each candidate row as it walks the queue. The value
+indexes serve the plan PostgreSQL picks for a rare predicate: it starts from the matching attribute
+rows instead ([§6](#6-cost)).
 
 **WGL-QC-090** (MUST) A token's attribute rows MUST be written in the transaction that inserts or
 readies the token, through the buffered write path, as one batch. For a flow with no attributes no
@@ -321,21 +323,36 @@ match only `isNull`.
 
 ## 6. Cost
 
-The claim still walks the `ix_token_ready_age` index of each queue in age order. The predicate is
-checked on each row the walk reaches, with an index probe into `wf_token_attr` for each attribute
-comparison. A predicate that matches most of a queue costs about the same as today's `versions`
-filter. A predicate that matches a small part of a deep queue walks every older row that doesn't
-match, on every poll. For example, a worker for `region = "eu"` on a queue that is 99% `us`.
+The claim walks each queue's `ix_token_ready_age` index in age order and tests the predicate on
+each row it reaches, until it has `max` tasks. When the planner expects a predicate on an attribute
+to be rare, it starts from the attribute table's value index instead, then sorts the matches by age.
 
-**WGL-QC-100** (MUST) Before this chapter leaves *proposed*, a benchmark MUST measure the claim with a
-1%-selective attribute predicate on PostgreSQL, over queue backlogs of 10⁴, 10⁵ and 10⁶ rows, next
-to the queue-name form, and `StepStatementsTest` MUST show the per-step statement count for a flow
-with attributes and for one without.
+**WGL-QC-100** (MUST) `postgres/ClaimCriteriaBench` MUST measure the claim on PostgreSQL over queue
+backlogs of 10⁴, 10⁵ and 10⁶ rows: by queue name, with a 1% predicate spread evenly (task field and
+attribute), with an attribute only the newest 1% carry, and with predicates that match nothing.
+`StepStatementsTest` MUST show the per-step statement count unchanged for a flow without attributes.
 
-If the selective case is too slow, the fix is to drive the claim from the attribute index instead. The
-attribute row would copy `queue`, `inst_created_at`, `available_at` and a ready flag, with a partial
-index on `(name, s_val, queue, inst_created_at, available_at)`, and the claim would delete the row.
-That costs one statement per claim. It is left out until the benchmark says it is needed.
+Measured 2026-10-11 on PostgreSQL 17, default settings, on a laptop; a claim of 10, rolled back,
+p50 in ms, two runs agreeing:
+
+| Predicate | 10⁴ | 10⁵ | 10⁶ | 10⁶ without the value indexes |
+|---|---|---|---|---|
+| Queue name only | 0.8 | 0.7 | 0.7 | 0.8 |
+| Task field, 1% spread evenly | 0.9 | 0.8 | 0.9 | 0.9 |
+| Attribute, 1% spread evenly | 2.4 | 2.8 | 3.3 | 3.3 |
+| Attribute, only the newest 1% match | 1.0 | 2.7 | 22 | 70 |
+| Attribute, nothing matches | 0.7 | 0.6 | 0.7 | 79 |
+| Task field, nothing matches | 2.7 | 22 | 255 | 256 |
+
+A common predicate costs the same at any depth. A rare attribute predicate costs what its matches
+cost, not what the queue costs. A rare **task-field** predicate reads the whole queue on every poll,
+and an idle worker re-polls about every 100 ms. A version-scoped poll for a version with no ready
+tasks, which predates criteria, does the same (154 ms at 10⁶). A partial index such as
+`(queue, correlation_id text_pattern_ops) WHERE status='READY'` takes the no-match correlation case to
+0.09 ms, but every token entering `READY` would pay for it, criteria or not.
+
+**WGL-QC-101** (SHOULD) A value that is often absent from a deep queue SHOULD be routed on as an
+attribute, not a task field. Indexes on task fields are not added until a measured workload needs one.
 
 ## 7. Out of scope
 
