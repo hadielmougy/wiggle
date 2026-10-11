@@ -1,6 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.Predicate;
 
 import java.util.ArrayDeque;
 import java.util.HashMap;
@@ -30,12 +31,18 @@ import java.util.concurrent.locks.ReentrantLock;
 final class DispatchNotifier {
 
     /** What a poll can claim. Polls with equal interests are interchangeable to a signal. An empty
-     *  queue set claims every queue; an empty version set, every version. */
-    record Interest(Set<String> queues, Set<WorkflowVersion> versions) {
+     *  queue set claims every queue; an empty version set, every version; a null {@code where},
+     *  every task on them. Polls with different criteria wait in different lines, so a signal for a
+     *  task one poll's criteria reject still reaches a poll whose criteria accept it. */
+    record Interest(Set<String> queues, Set<WorkflowVersion> versions, Predicate where) {
 
         Interest {
             queues = queues == null ? Set.of() : Set.copyOf(queues);
             versions = versions == null ? Set.of() : Set.copyOf(versions);
+        }
+
+        Interest(Set<String> queues, Set<WorkflowVersion> versions) {
+            this(queues, versions, null);
         }
 
         boolean covers(String queue) {

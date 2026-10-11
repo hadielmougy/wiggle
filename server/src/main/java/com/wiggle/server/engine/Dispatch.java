@@ -22,8 +22,9 @@ final class Dispatch {
      *  when no local wake-on-produce arrives; the polls behind it wait for a wake (see
      *  {@link DispatchNotifier}). Same-node production wakes a poller immediately; this bounds the
      *  latency for cross-node production (and any missed signal). Overridable via
-     *  {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
-    private final long fallbackPollMillis = ServerEnv.envLong("WIGGLE_FALLBACK_POLL_MILLIS", 100);
+     *  {@code WIGGLE_FALLBACK_POLL_MILLIS} or {@code wiggle.fallback.pollMillis}. */
+    private final long fallbackPollMillis =
+            ServerEnv.envLong("wiggle.fallback.pollMillis", "WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
     /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
      *  10ms) and doubles its wait on every empty unsignaled round up to the configured interval.
@@ -75,7 +76,7 @@ final class Dispatch {
         pollers.seen(workerId, filter, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
-        DispatchNotifier.Interest interest = new DispatchNotifier.Interest(queues, filter.versions());
+        DispatchNotifier.Interest interest = new DispatchNotifier.Interest(queues, filter.versions(), filter.where());
         Map<String, Long> since = notifier.snapshot(queues);
         List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);

@@ -92,6 +92,42 @@ class QueueCriteriaTest {
     }
 
     @Test
+    @DisplayName("WGL-QC-080: a task reaches the worker whose criteria match it on the wake, not the fallback")
+    void wakeReachesTheMatchingWorker() throws Exception {
+        String wf = "qc-wake";
+        FlowSpec spec = flow(wf, ExecutionMode.SERVER);
+        QueueCriteria vip = QueueCriteria.from(wf).where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%"));
+        QueueCriteria rest = QueueCriteria.from(wf).where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%")));
+        // A missed wake costs the 3 s fallback; long polls outlast it, so nothing else hides one.
+        System.setProperty("wiggle.fallback.pollMillis", "3000");
+        ServerConfig longPolls = new ServerConfig(TestPorts.free(), "qc-node", null, null, null, 4,
+                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
+                Duration.ofSeconds(10), Duration.ofHours(1), 100, 0,
+                Duration.ofSeconds(5), Duration.ofSeconds(10));
+        try (WiggleServer server = new WiggleServer(longPolls).start();
+             WiggleClient client = new WiggleClient(server.baseUrl());
+             Worker v = new Worker(client, "vip", WorkerOptions.defaults().withConcurrency(1).withCriteria(vip))
+                     .registerHandler(wf, new H("vip", new ConcurrentHashMap<>()));
+             Worker r = new Worker(client, "rest", WorkerOptions.defaults().withConcurrency(1).withCriteria(rest))
+                     .registerHandler(wf, new H("rest", new ConcurrentHashMap<>()))) {
+            client.register(spec);
+            v.start();
+            r.start();
+            Thread.sleep(500);
+            for (int i = 0; i < 6; i++) {
+                String correlation = (i / 2 % 2 == 0 ? "vip-" : "std-") + i;   // two of each in turn
+                long t0 = System.nanoTime();
+                String id = client.start(wf, Map.of(), spec.version(), correlation);
+                assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status());
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                assertTrue(ms < 1_500, correlation + " took " + ms + " ms: its worker waited for the fallback");
+            }
+        } finally {
+            System.clearProperty("wiggle.fallback.pollMillis");
+        }
+    }
+
+    @Test
     @DisplayName("WGL-QC-070: a local chain hands back at a step its criteria do not match")
     void chainHandsBackOutsideCriteria() throws Exception {
         for (ExecutionMode mode : List.of(ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
