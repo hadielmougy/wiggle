@@ -7,6 +7,7 @@ import com.wiggle.server.store.StorageUnreachableException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -23,7 +24,20 @@ final class Dispatch {
      *  {@link DispatchNotifier}). Same-node production wakes a poller immediately; this bounds the
      *  latency for cross-node production (and any missed signal). Overridable via
      *  {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
-    private final long fallbackPollMillis = ServerEnv.envLong("WIGGLE_FALLBACK_POLL_MILLIS", 100);
+    private final long fallbackPollMillis =
+            ServerEnv.envLong("wiggle.fallback.pollMillis", "WIGGLE_FALLBACK_POLL_MILLIS", 100);
+
+    /** The longest a version-scoped poll waits between fallback claims. Each fallback claim that finds
+     *  nothing doubles its wait, up to this, and a claim that finds work resets it; the wait carries
+     *  over between a worker's polls. A same-node wake for its versions still claims at once, so
+     *  only work produced on another node can wait this long. Such a claim filters a queue's ready
+     *  rows by version, and for a version with none it reads them all. Overridable via
+     *  {@code WIGGLE_SCOPED_FALLBACK_MAX_MILLIS}. */
+    private final long scopedFallbackMaxMillis =
+            ServerEnv.envLong("wiggle.fallback.scopedMaxMillis", "WIGGLE_SCOPED_FALLBACK_MAX_MILLIS", 2_000);
+
+    /** The current fallback wait of each version-scoped worker whose fallback claims found nothing. */
+    private final Map<String, Long> scopedFallback = new ConcurrentHashMap<>();
 
     /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
      *  10ms) and doubles its wait on every empty unsignaled round up to the configured interval.
@@ -75,10 +89,12 @@ final class Dispatch {
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
         DispatchNotifier.Interest interest = new DispatchNotifier.Interest(queues, versions);
-        Map<String, Long> since = notifier.snapshot(queues);
+        Map<String, Long> since = notifier.snapshot(interest);
         List<TaskActivation> tasks = claimNow(workerId, queues, versions, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
-        long fallbackWait = adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
+        boolean scoped = versions != null && !versions.isEmpty();
+        long fallbackWait = scoped ? scopedFallback.getOrDefault(workerId, fallbackPollMillis)
+                : adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
         boolean signaled = false;
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
             signaled = notifier.await(interest, max, since, fallbackWait, deadline);
@@ -87,12 +103,15 @@ final class Dispatch {
                 if (signaled) notifier.passOn(interest);   // the wake was meant for a claim; hand it on
                 return List.of();                          // worker gone -- leave the work for a live one
             }
-            since = notifier.snapshot(queues);
+            since = notifier.snapshot(interest);
             tasks = claimNow(workerId, queues, versions, max, lease);
-            if (adaptiveFallbackPoll) {
+            if (scoped) {
+                if (tasks.isEmpty() && !signaled) fallbackWait = Math.min(fallbackWait * 2, scopedFallbackMaxMillis);
+            } else if (adaptiveFallbackPoll) {
                 fallbackWait = signaled ? fallbackPollMillis : Math.min(fallbackWait * 2, fallbackPollMillis);
             }
         }
+        if (scoped) rememberFallback(workerId, tasks.isEmpty() ? fallbackWait : 0);
         // A full claim nobody signalled for may have left more behind: wake the next poll to look.
         // A signal already woke polls enough to cover the tokens it announced.
         if (tasks.size() >= max && !signaled) notifier.passOn(interest);
@@ -131,6 +150,21 @@ final class Dispatch {
         }
         if (reached == 0 && unreachable != null) throw unreachable;
         return List.of();
+    }
+
+    /** Keeps {@code wait} as the worker's next fallback wait; 0 forgets it. Entries of workers that
+     *  stopped polling are dropped once there are many. */
+    private void rememberFallback(String workerId, long wait) {
+        if (wait <= fallbackPollMillis) {
+            scopedFallback.remove(workerId);
+            return;
+        }
+        scopedFallback.put(workerId, wait);
+        if (scopedFallback.size() > 1_024) {
+            Set<String> live = new java.util.HashSet<>();
+            for (PollerRegistry.Poller p : pollers.live(System.currentTimeMillis())) live.add(p.workerId());
+            scopedFallback.keySet().retainAll(live);
+        }
     }
 
     /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
