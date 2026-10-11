@@ -6,6 +6,7 @@ import com.wiggle.core.criteria.Predicate;
 import com.wiggle.server.store.ClaimFilter;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,22 +64,44 @@ public final class PollerRegistry {
      * predicate on other properties counts as covering.
      */
     public boolean covers(String workflow, int version, String queue, long now) {
+        return coverage(workflow, version, queue, now).state() != Coverage.State.UNCOVERED;
+    }
+
+    /**
+     * Who would claim a token on {@code queue} of this (workflow, version). COVERED: some live worker
+     * takes every such token. CONDITIONAL: none does, but some take the ones their criteria match on
+     * properties the slice does not fix (a step, a correlation id, an attribute); {@code conditions}
+     * are those criteria. UNCOVERED: no live worker takes any.
+     */
+    public Coverage coverage(String workflow, int version, String queue, long now) {
         WorkflowVersion wv = new WorkflowVersion(workflow, version);
+        Set<Predicate> conditions = new LinkedHashSet<>();
         for (Poller p : live(now)) {
             boolean servesQueue = p.queues().isEmpty() || p.queues().contains(queue);
             boolean servesVersion = p.versions().isEmpty() || p.versions().contains(wv);
-            if (servesQueue && servesVersion && mayMatch(p.where(), workflow, version, queue)) return true;
+            if (!servesQueue || !servesVersion) continue;
+            switch (onSlice(p.where(), workflow, version, queue)) {
+                case TRUE -> { return new Coverage(Coverage.State.COVERED, List.of()); }
+                case UNKNOWN -> conditions.add(p.where());
+                case FALSE -> { }
+            }
         }
-        return false;
+        return conditions.isEmpty() ? new Coverage(Coverage.State.UNCOVERED, List.of())
+                : new Coverage(Coverage.State.CONDITIONAL, List.copyOf(conditions));
     }
 
-    private static boolean mayMatch(Predicate where, String workflow, int version, String queue) {
-        if (where == null) return true;
+    /** A slice's coverage; {@code conditions} are the criteria of a CONDITIONAL one, else empty. */
+    public record Coverage(State state, List<Predicate> conditions) {
+        public enum State { COVERED, CONDITIONAL, UNCOVERED }
+    }
+
+    private static Criteria.Truth onSlice(Predicate where, String workflow, int version, String queue) {
+        if (where == null) return Criteria.Truth.TRUE;
         return Criteria.evaluate(where, (f, attribute) -> switch (f) {
             case WORKFLOW -> workflow;
             case VERSION -> (long) version;
             case QUEUE -> queue;
             default -> Criteria.UNKNOWN;
-        }) != Criteria.Truth.FALSE;
+        });
     }
 }

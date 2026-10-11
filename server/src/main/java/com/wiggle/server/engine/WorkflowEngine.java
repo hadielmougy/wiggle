@@ -122,6 +122,17 @@ public final class WorkflowEngine {
         return queries.covered(workflow, version, queue);
     }
 
+    /**
+     * A backlog slice's coverage on this node: its state, exactly how many of its ready tasks some live
+     * worker would claim (null when a conditional slice is too large to count fully), and the criteria
+     * a conditional slice depends on, as an operator reads them.
+     */
+    public record SliceCoverage(PollerRegistry.Coverage.State state, Integer claimable, List<String> criteria) { }
+
+    public SliceCoverage coverage(Rows.BacklogSlice slice) {
+        return queries.coverage(slice);
+    }
+
     /** The workers currently polling this node. */
     public Set<PollerRegistry.Poller> livePollers() {
         return queries.livePollers();

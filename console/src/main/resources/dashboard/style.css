@@ -130,6 +130,11 @@ dl.facts.summary { padding: 4px 14px 12px; }
 /* Backlog coverage: a slice nothing is polling for. The row is the alarm -- these tokens are
    dispatchable and unclaimed, which every other view renders as a perfectly healthy RUNNING. */
 tr.uncovered td { background: rgba(160, 60, 60, 0.10); }
+/* Polled only by workers whose criteria may not match every task: some of it may wait for none. */
+tr.conditional td { background: rgba(150, 120, 40, 0.08); }
+.panel .partial { color: var(--warn); font-weight: 600; }
+ul.criteria { margin: 4px 0 0; padding-left: 16px; }
+ul.criteria li { color: var(--muted); font-size: 12px; }
 
 /* performance tab: each step's p95 as a share of the slowest */
 .bar { display: block; height: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }

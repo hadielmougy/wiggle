@@ -148,6 +148,7 @@ class ConsoleWebTest {
                 String body = awaitBody(http, base + "/api/backlog", "nobody-polls-this");
                 assertTrue(body.contains("\"queue\":\"nobody-polls-this\""), "the orphan queue is listed");
                 assertTrue(body.contains("\"covered\":false"), "and reported as uncovered");
+                assertTrue(body.contains("\"coverage\":\"UNCOVERED\""), "with its coverage state");
                 assertTrue(body.contains("\"version\":" + stranded.version()),
                         "attributed to the version that produced it");
                 assertTrue(body.contains("\"uncoveredSlices\":1"), "the summary counts it");

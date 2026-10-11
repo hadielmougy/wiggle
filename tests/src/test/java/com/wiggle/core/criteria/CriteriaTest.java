@@ -86,4 +86,15 @@ class CriteriaTest {
         assertEquals(Criteria.Truth.FALSE,
                 Criteria.evaluate(p, (f, attribute) -> f == Field.WORKFLOW ? "billing" : Criteria.UNKNOWN));
     }
+
+    @Test
+    @DisplayName("describe renders criteria the way an operator reads them")
+    void describe() {
+        Predicate p = QueueCriteria.from("q").where(cb -> cb.and(
+                cb.equal(Task_.attr("region", String.class), "o'neil"),
+                cb.or(cb.lessThan(Task_.ATTEMPT, 3), cb.isNull(Task_.CORRELATION_ID)),
+                cb.not(cb.in(Task_.STEP, "a", "b")))).where();
+        assertEquals("region = 'o''neil' and (attempt < 3 or correlation_id is null) and not (step in ('a', 'b'))",
+                Criteria.describe(p));
+    }
 }

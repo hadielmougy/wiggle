@@ -174,6 +174,49 @@ public final class Criteria {
         return List.copyOf(out);
     }
 
+    /** {@code p} as an operator reads it: {@code region = 'eu' and not (correlation_id like 'vip-%')}. */
+    public static String describe(Predicate p) {
+        return switch (p) {
+            case Comparison c -> describe(c);
+            case And a -> join(a.terms(), " and ");
+            case Or o -> join(o.terms(), " or ");
+            case Not n -> "not (" + describe(n.term()) + ")";
+        };
+    }
+
+    private static String join(List<Predicate> terms, String op) {
+        StringBuilder out = new StringBuilder();
+        for (Predicate t : terms) {
+            if (!out.isEmpty()) out.append(op);
+            boolean nested = t instanceof And || t instanceof Or;
+            out.append(nested ? "(" : "").append(describe(t)).append(nested ? ")" : "");
+        }
+        return out.toString();
+    }
+
+    private static String describe(Comparison c) {
+        String name = c.field() == Field.ATTRIBUTE ? c.attribute() : c.field().name().toLowerCase(java.util.Locale.ROOT);
+        List<String> args = c.args().stream().map(Criteria::literal).toList();
+        return name + switch (c.op()) {
+            case EQUAL -> " = " + args.getFirst();
+            case NOT_EQUAL -> " <> " + args.getFirst();
+            case IN -> " in (" + String.join(", ", args) + ")";
+            case LESS_THAN -> " < " + args.getFirst();
+            case LESS_THAN_OR_EQUAL -> " <= " + args.getFirst();
+            case GREATER_THAN -> " > " + args.getFirst();
+            case GREATER_THAN_OR_EQUAL -> " >= " + args.getFirst();
+            case BETWEEN -> " between " + args.get(0) + " and " + args.get(1);
+            case LIKE -> " like " + args.getFirst();
+            case IS_NULL -> " is null";
+            case IS_NOT_NULL -> " is not null";
+        };
+    }
+
+    private static String literal(Object v) {
+        return v instanceof String s ? "'" + s.replace("'", "''") + "'"
+                : v instanceof BigDecimal d ? d.toPlainString() : String.valueOf(v);
+    }
+
     public static boolean matches(Predicate p, Facts task) {
         return evaluate(p, task) == Truth.TRUE;
     }

@@ -2495,6 +2495,18 @@ public final class JdbcStorage implements Storage {
                     .one();
         }
 
+        @Override public int countReady(String workflow, int version, String queue,
+                                        com.wiggle.core.criteria.Predicate where, long now, int cap) {
+            CriteriaSql sql = where == null ? null : CriteriaSql.compile(where, dialect);
+            Query q = h.createQuery("SELECT COUNT(*) FROM (SELECT 1 FROM wf_token WHERE status='READY'"
+                    + " AND kind IN ('TASK','PREDICATE') AND available_at<=:now AND queue=:queue"
+                    + " AND workflow=:workflow AND version=:version" + whereClause(sql) + " LIMIT :cap) slice")
+                    .bind("now", now).bind("queue", queue).bind("workflow", workflow)
+                    .bind("version", version).bind("cap", cap);
+            if (sql != null) sql.bind(q);
+            return q.mapTo(Integer.class).one();
+        }
+
         @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
             return h.createQuery("SELECT workflow, version, queue, COUNT(*) AS depth, "
                             + "COALESCE(MIN(available_at),0) AS oldest FROM wf_token "

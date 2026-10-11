@@ -98,7 +98,8 @@ final class Wire {
         List<WiggleClient.BacklogSlice> out = new ArrayList<>(res.getSlicesCount());
         for (BacklogSlice s : res.getSlicesList()) {
             out.add(new WiggleClient.BacklogSlice(s.getWorkflow(), s.getVersion(), s.getQueue(),
-                    s.getReadyCount(), s.getOldestAvailableAt(), s.getCovered(), res.getLivePollers()));
+                    s.getReadyCount(), s.getOldestAvailableAt(), s.getCovered(), res.getLivePollers(),
+                    s.getCoverage(), s.hasClaimable() ? s.getClaimable() : null, List.copyOf(s.getCriteriaList())));
         }
         return out;
     }

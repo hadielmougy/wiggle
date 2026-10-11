@@ -7,6 +7,8 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.Task_;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import org.junit.jupiter.api.DisplayName;
@@ -68,6 +70,10 @@ class BacklogCoverageTest {
         public Map<String, Object> orphan(Map<String, Object> c) { return put(c, "orphan", true); }
     }
 
+    public static final class ServedOnly {
+        public Map<String, Object> served(Map<String, Object> c) { return put(c, "served", true); }
+    }
+
     @ForFlow(VERSION_WF)
     public static final class VersionSteps {
         public Map<String, Object> served(Map<String, Object> c) { return put(c, "served", true); }
@@ -114,6 +120,37 @@ class BacklogCoverageTest {
                 WiggleClient.BacklogSlice served = slice(client, QUEUES_WF, QUEUES_WF + "-served");
                 assertTrue(served == null || served.covered(),
                         "while the queue that IS polled is either drained or covered");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("WGL-QC-081: a slice polled only through criteria is conditional, with what they match counted")
+    void criteriaMakeASliceConditional() throws Exception {
+        String wf = "bc-cond-" + Ids.next("x");
+        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+             WiggleClient client = new WiggleClient(server.baseUrl())) {
+            FlowSpec spec = FlowSpec.define(wf, 1, Map.class, OneStep.class, (f, s) -> f
+                    .attribute("region", com.wiggle.core.criteria.AttrType.STRING, "region")
+                    .thenApply(s::served));
+            client.register(spec);
+            QueueCriteria eu = QueueCriteria.from(wf).where(cb -> cb.equal(Task_.attr("region", String.class), "eu"));
+            try (Worker w = new Worker(client, "eu-" + Ids.next("x"), WorkerOptions.defaults().withCriteria(eu))
+                    .registerHandler(wf, new ServedOnly())) {
+                w.start();
+                String euId = client.start(spec, Map.of("region", "eu"));
+                for (int i = 0; i < 3; i++) client.start(spec, Map.of("region", "us"));
+                assertEquals("COMPLETED", client.awaitCompletion(euId, Duration.ofSeconds(20)).status());
+
+                waitUntil(() -> {
+                    WiggleClient.BacklogSlice s = slice(client, wf, wf);
+                    return s != null && s.readyCount() == 3;
+                });
+                WiggleClient.BacklogSlice s = slice(client, wf, wf);
+                assertEquals("CONDITIONAL", s.coverage(), "only the eu worker polls it");
+                assertTrue(s.covered(), "covered keeps meaning: something polls it");
+                assertEquals(0, s.claimable(), "none of the three us tasks match its criteria");
+                assertEquals(List.of("region = 'eu'"), s.criteria());
             }
         }
     }

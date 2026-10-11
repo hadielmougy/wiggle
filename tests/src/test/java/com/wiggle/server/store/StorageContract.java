@@ -1124,6 +1124,26 @@ abstract class StorageContract {
     }
 
     @Test
+    @DisplayName("WGL-QC-081: countReady counts a slice's due tasks a predicate admits, up to a cap")
+    void countReadyCountsWhatCriteriaAdmit() {
+        String q = id("q");
+        List<Token> fixture = attributeFixture(q);   // one instance of attr-wf v1 per task
+        Token later = fixture.get(1).clone();
+        later.id = id("tok");
+        later.availableAt = now + 60_000;
+        storage.inTxVoid(tx -> tx.insertToken(later));
+        var region = Task_.attr("region", String.class);
+        Predicate eu = QueueCriteria.from(q).where(cb -> cb.equal(region, "eu")).where();
+        Predicate notEu = QueueCriteria.from(q).where(cb -> cb.not(cb.equal(region, "eu"))).where();
+
+        assertEquals(1, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, eu, now, 100)));
+        assertEquals(4, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, notEu, now, 100)), "not due is not counted");
+        assertEquals(5, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, null, now, 100)));
+        assertEquals(2, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, null, now, 2)), "the cap");
+        assertEquals(0, (int) storage.inTx(tx -> tx.countReady("attr-wf", 2, q, null, now, 100)), "the version is the slice's");
+    }
+
+    @Test
     @DisplayName("WGL-QC-090: a token written again with new attributes is claimed by them alone")
     void attributesAreReplaced() {
         String q = id("q");

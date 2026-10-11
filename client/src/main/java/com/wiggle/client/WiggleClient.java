@@ -166,8 +166,18 @@ public final class WiggleClient implements AutoCloseable {
     public record SearchResult(List<SearchHit> hits, boolean partial, String model) {}
 
     /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
+    /** {@code coverage} is COVERED, CONDITIONAL or UNCOVERED (empty from a server that predates it);
+     *  {@code claimable} how many ready tasks a live worker would claim, null when not counted;
+     *  {@code criteria} the worker criteria a conditional slice depends on. */
     public record BacklogSlice(String workflow, int version, String queue, int readyCount,
-                               long oldestAvailableAt, boolean covered, int livePollers) {}
+                               long oldestAvailableAt, boolean covered, int livePollers,
+                               String coverage, Integer claimable, List<String> criteria) {
+
+        public BacklogSlice(String workflow, int version, String queue, int readyCount,
+                            long oldestAvailableAt, boolean covered, int livePollers) {
+            this(workflow, version, queue, readyCount, oldestAvailableAt, covered, livePollers, "", null, List.of());
+        }
+    }
 
     /**
      * Per-node duration statistics for one workflow version over its newest {@code sample} timed
