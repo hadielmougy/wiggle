@@ -59,7 +59,7 @@ class DocSnippetsTest {
         EXPECTED.put("SagaDocSnippet.java", List.of("contract", "topology"));
         EXPECTED.put("CapturePayment.java", List.of("activity"));
         EXPECTED.put("SagaDocHandlers.java", List.of("handlers"));
-        EXPECTED.put("QueuesSnippet.java", List.of("topology", "specialised-worker", "general-worker"));
+        EXPECTED.put("QueuesSnippet.java", List.of("topology", "specialised-worker", "criteria-worker", "general-worker"));
         EXPECTED.put("LocalExecutionSnippet.java", List.of("execution-mode"));
         EXPECTED.put("EventLogSnippet.java", List.of("consume", "emit"));
         EXPECTED.put("onboarding/OnboardingSnippet.java",
