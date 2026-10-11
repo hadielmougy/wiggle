@@ -73,14 +73,15 @@ public final class QueuesSnippet {
 
     static void criteria(WiggleClient client) {
         // docs:begin criteria-worker
-        // payments-eu: serves the "payments" queue, but only charges of orders keyed "eu-..."
+        // payments-eu: on "payments", only charges of orders keyed "eu-..."; on "refunds", everything
         QueueCriteria euCharges = QueueCriteria.from("payments")
                 .where(cb -> cb.and(
                         cb.equal(Task_.STEP, "charge"),
                         cb.like(Task_.CORRELATION_ID, "eu-%"),
                         cb.lessThan(Task_.ATTEMPT, 4)));
+        QueueCriteria refunds = QueueCriteria.from("refunds");
         Worker eu = new Worker(client, "payments-eu-1",
-                        WorkerOptions.defaults().withCriteria(euCharges))
+                        WorkerOptions.defaults().withCriteria(euCharges, refunds))
                 .registerHandler(new OrderHandlers())
                 .start();
         // docs:end criteria-worker

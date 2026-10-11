@@ -26,8 +26,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PollerRegistry {
 
     /** What one worker last told us it serves. Empty {@code versions} means every version; a null
-     *  {@code where} means every task on its queues. */
-    public record Poller(String workerId, Set<String> queues, Set<WorkflowVersion> versions, Predicate where,
+     *  {@code where} holds each queue's criteria; a queue without one takes every task. */
+    public record Poller(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
+                         Map<String, Predicate> where,
                          long lastSeen) {}
 
     private final Map<String, Poller> pollers = new ConcurrentHashMap<>();
@@ -67,17 +68,16 @@ public final class PollerRegistry {
         for (Poller p : live(now)) {
             boolean servesQueue = p.queues().isEmpty() || p.queues().contains(queue);
             boolean servesVersion = p.versions().isEmpty() || p.versions().contains(wv);
-            if (servesQueue && servesVersion && mayMatch(p.where(), workflow, version, queue)) return true;
+            if (servesQueue && servesVersion && mayMatch(p.where().get(queue), workflow, version)) return true;
         }
         return false;
     }
 
-    private static boolean mayMatch(Predicate where, String workflow, int version, String queue) {
+    private static boolean mayMatch(Predicate where, String workflow, int version) {
         if (where == null) return true;
         return Criteria.evaluate(where, (f, attribute) -> switch (f) {
             case WORKFLOW -> workflow;
             case VERSION -> (long) version;
-            case QUEUE -> queue;
             default -> Criteria.UNKNOWN;
         }) != Criteria.Truth.FALSE;
     }

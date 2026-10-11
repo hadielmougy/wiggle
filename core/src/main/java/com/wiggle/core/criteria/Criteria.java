@@ -48,13 +48,8 @@ public final class Criteria {
     private Criteria() { }
 
     /** @throws IllegalArgumentException naming the first limit or typing rule the criteria break */
-    public static void validate(List<String> queues, Predicate where) {
-        if (queues == null || queues.isEmpty()) {
-            throw new IllegalArgumentException("criteria need at least one queue");
-        }
-        for (String q : queues) {
-            if (q == null || q.isBlank()) throw new IllegalArgumentException("a criteria queue must not be blank");
-        }
+    public static void validate(String queue, Predicate where) {
+        if (queue == null || queue.isBlank()) throw new IllegalArgumentException("criteria need a queue");
         if (where == null) return;
         int[] nodes = {0};
         validate(where, 1, nodes);

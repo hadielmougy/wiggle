@@ -7,7 +7,6 @@ package com.wiggle.core.criteria;
 public enum Field {
     WORKFLOW(Type.TEXT),
     VERSION(Type.INTEGER),
-    QUEUE(Type.TEXT),
     /** The step's name as authored; compared by equality only. */
     STEP(Type.TEXT),
     NODE_ID(Type.TEXT),

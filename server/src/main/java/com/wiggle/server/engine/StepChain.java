@@ -138,7 +138,7 @@ final class StepChain {
      * each continuation is created, once its context is known.
      */
     private static void requireClaimable(LazyGraph def, Instance inst, Run run) {
-        if (run.criteria() == null) return;
+        if (run.criteria().isEmpty()) return;
         for (StepInput step : run.steps().subList(1, run.steps().size())) {
             Node node = def.find(step.nodeId()).orElse(null);
             if (node != null && excluded(run.criteria(), inst, node)) {
@@ -148,17 +148,21 @@ final class StepChain {
         }
     }
 
-    /** Whether a worker polling with {@code criteria} (null: by queue names) would claim {@code next}. */
-    private static boolean claims(QueueCriteria criteria, Instance inst, Node next, Map<String, Object> attributes) {
-        return criteria == null || criteria.matches(facts(inst, next, attributes));
+    /** Whether a worker polling with {@code criteria} (empty: by queue names) would claim {@code next}. */
+    private static boolean claims(List<QueueCriteria> criteria, Instance inst, Node next,
+                                  Map<String, Object> attributes) {
+        if (criteria.isEmpty()) return true;
+        QueueCriteria forQueue = QueueCriteria.forQueue(criteria, next.queue());
+        return forQueue != null && forQueue.matches(facts(inst, next, attributes));
     }
 
     /** Whether {@code criteria} exclude {@code next} for every value its attributes could take. */
-    private static boolean excluded(QueueCriteria criteria, Instance inst, Node next) {
-        if (!criteria.queues().contains(next.queue())) return true;
-        if (criteria.where() == null) return false;
+    private static boolean excluded(List<QueueCriteria> criteria, Instance inst, Node next) {
+        QueueCriteria forQueue = QueueCriteria.forQueue(criteria, next.queue());
+        if (forQueue == null) return true;
+        if (forQueue.where() == null) return false;
         TaskFacts known = facts(inst, next, null);
-        return Criteria.evaluate(criteria.where(), (f, attribute) ->
+        return Criteria.evaluate(forQueue.where(), (f, attribute) ->
                 f == Field.ATTRIBUTE ? Criteria.UNKNOWN : known.value(f, attribute)) == Criteria.Truth.FALSE;
     }
 

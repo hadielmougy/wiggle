@@ -18,10 +18,14 @@ class CriteriaTest {
             new TaskFacts("orders", 3, "payments", "charge", "n2", "TASK", 1, "ord-7", 1_000);
 
     @Test
-    @DisplayName("WGL-QC-010: criteria need a non-blank queue")
+    @DisplayName("WGL-QC-010: criteria name one non-blank queue, and a poll names each queue once")
     void needAQueue() {
-        assertThrows(IllegalArgumentException.class, QueueCriteria::from);
-        assertThrows(IllegalArgumentException.class, () -> QueueCriteria.from("payments", " "));
+        assertThrows(IllegalArgumentException.class, () -> QueueCriteria.from(" "));
+        assertThrows(IllegalArgumentException.class, () -> QueueCriteria.from(null));
+        assertThrows(IllegalArgumentException.class, () -> QueueCriteria.forPoll(java.util.List.of()));
+        assertThrows(IllegalArgumentException.class, () -> QueueCriteria.forPoll(java.util.List.of(
+                QueueCriteria.from("payments"),
+                QueueCriteria.from("payments").where(cb -> cb.equal(Task_.STEP, "charge")))));
     }
 
     @Test

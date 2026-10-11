@@ -74,7 +74,11 @@ public final class Worker implements AutoCloseable {
 
     /** The queues this worker actually serves: its criteria's, the explicit restriction, or everything registered. */
     Set<String> servedQueues() {
-        if (options.criteria() != null) return new LinkedHashSet<>(options.criteria().queues());
+        if (!options.criteria().isEmpty()) {
+            Set<String> out = new LinkedHashSet<>();
+            for (QueueCriteria c : options.criteria()) out.add(c.queue());
+            return out;
+        }
         return options.queues().isEmpty() ? registrations.queues() : options.queues();
     }
 
@@ -83,9 +87,10 @@ public final class Worker implements AutoCloseable {
      * {@code ctx} the context it would receive.
      */
     boolean claims(TaskActivation task, WorkflowDefinition def, Node next, Object ctx) {
-        QueueCriteria c = options.criteria();
-        if (c == null) return true;
-        Map<String, Object> attributes = def.attributes().isEmpty() ? Map.of()
+        if (options.criteria().isEmpty()) return true;
+        QueueCriteria c = QueueCriteria.forQueue(options.criteria(), next.queue());
+        if (c == null) return false;
+        Map<String, Object> attributes = c.where() == null || def.attributes().isEmpty() ? Map.of()
                 : DispatchAttribute.extractAll(def.attributes(), RecordMapper.toJson(ctx));
         return c.matches(new TaskFacts(task.workflow(), task.version(), next.queue(), next.name(), next.id(),
                 next.kind().name(), 1, task.correlationId(), task.instanceCreatedAt(), attributes));
@@ -155,7 +160,7 @@ public final class Worker implements AutoCloseable {
     }
 
     public Worker start() {
-        if (options.criteria() != null && !options.queues().isEmpty()) {
+        if (!options.criteria().isEmpty() && !options.queues().isEmpty()) {
             throw new IllegalStateException("worker " + workerId + ": set withQueues or withCriteria, not both");
         }
         if (!running.compareAndSet(false, true)) return this;
@@ -174,14 +179,17 @@ public final class Worker implements AutoCloseable {
 
     /** WGL-QC-045: logs, once, each attribute comparison the bound flows make impossible to satisfy. */
     private void warnAboutCriteria() {
-        QueueCriteria c = options.criteria();
-        if (c == null || c.where() == null || registrations.isEmpty()) return;
-        List<DispatchAttribute> declared = new ArrayList<>();
-        for (WorkflowDefinition def : registrations.graphs()) {
-            if (!Collections.disjoint(def.workerQueues(), c.queues())) declared.addAll(def.attributes());
-        }
-        for (String problem : Criteria.attributeProblems(c.where(), declared)) {
-            LOG.log(System.Logger.Level.WARNING, "worker " + workerId + " criteria: " + problem);
+        if (registrations.isEmpty()) return;
+        for (QueueCriteria c : options.criteria()) {
+            if (c.where() == null) continue;
+            List<DispatchAttribute> declared = new ArrayList<>();
+            for (WorkflowDefinition def : registrations.graphs()) {
+                if (def.workerQueues().contains(c.queue())) declared.addAll(def.attributes());
+            }
+            for (String problem : Criteria.attributeProblems(c.where(), declared)) {
+                LOG.log(System.Logger.Level.WARNING, "worker " + workerId + " criteria on queue '" + c.queue()
+                        + "': " + problem);
+            }
         }
     }
 
@@ -207,7 +215,7 @@ public final class Worker implements AutoCloseable {
         }
         int free = options.concurrency() - inFlight.get();
         long polledAt = System.currentTimeMillis();
-        PollResult result = options.criteria() != null
+        PollResult result = !options.criteria().isEmpty()
                 ? client.poll(workerId, options.criteria(), registrations.claimedVersions(), free,
                         options.lease().toMillis(), options.longPollWait().toMillis())
                 : client.poll(workerId, servedQueues(), registrations.claimedVersions(), free,
