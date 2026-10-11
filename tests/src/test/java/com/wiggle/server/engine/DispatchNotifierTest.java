@@ -1,6 +1,8 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.Task_;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -165,6 +167,26 @@ class DispatchNotifierTest {
             Thread.sleep(100);
             assertEquals(1, returned(first));
             assertEquals(1, returned(second));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("WGL-QC-080: polls with different criteria wait in different lines, so each is woken")
+    void eachCriteriaIsWoken() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        DispatchNotifier.Interest vip = new DispatchNotifier.Interest(Set.of("orders"), null,
+                QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%")).where());
+        DispatchNotifier.Interest rest = new DispatchNotifier.Interest(Set.of("orders"), null,
+                QueueCriteria.from("orders").where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%"))).where());
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            List<Future<Boolean>> first = park(pool, n, vip, 1, 1, LONG);
+            List<Future<Boolean>> second = park(pool, n, rest, 1, 1, LONG);
+            n.signal(Map.of("orders", 1));
+
+            assertTrue(first.get(0).get(2, TimeUnit.SECONDS), "vip's poll woke");
+            assertTrue(second.get(0).get(2, TimeUnit.SECONDS), "and so did rest's: only its criteria may accept the task");
         } finally {
             pool.shutdownNow();
         }
