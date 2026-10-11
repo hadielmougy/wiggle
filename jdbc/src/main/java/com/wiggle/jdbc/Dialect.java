@@ -117,4 +117,6 @@ public interface Dialect {
      */
     default void acquireMigrationLock(Connection c) throws SQLException { }
 
+    /** SQL run once on each new pooled connection before it is handed out, or null for none. */
+    default String connectionInitSql() { return null; }
 }

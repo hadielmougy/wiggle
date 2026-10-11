@@ -11,6 +11,8 @@ import java.sql.SQLException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -42,6 +44,24 @@ class DialectTest {
         assertEquals("INSERT INTO t VALUES (?) ON CONFLICT DO NOTHING", d.insertIgnore("INSERT INTO t VALUES (?)"));
         assertTrue(d.scheduleUpsert().contains("MERGE INTO wf_schedule"),
                 "ON CONFLICT stops at DO NOTHING here, so an upsert that updates is a MERGE");
+    }
+
+    @Test @DisplayName("PostgreSQL connections price random reads as on SSD unless told otherwise; H2 sets nothing")
+    void randomPageCost() {
+        try {
+            assertEquals("SET random_page_cost = 1.1", new PostgresDialect().connectionInitSql());
+            System.setProperty("wiggle.pg.randomPageCost", "2");
+            assertEquals("SET random_page_cost = 2.0", new PostgresDialect().connectionInitSql());
+            System.setProperty("wiggle.pg.randomPageCost", "server");
+            assertNull(new PostgresDialect().connectionInitSql());
+            System.setProperty("wiggle.pg.randomPageCost", "1; DROP TABLE wf_token");
+            assertThrows(IllegalArgumentException.class, () -> new PostgresDialect().connectionInitSql());
+            System.setProperty("wiggle.pg.randomPageCost", "0");
+            assertThrows(IllegalArgumentException.class, () -> new PostgresDialect().connectionInitSql());
+        } finally {
+            System.clearProperty("wiggle.pg.randomPageCost");
+        }
+        assertNull(new H2Dialect().connectionInitSql());
     }
 
     @Test @DisplayName("a momentary failure is recognised from the SQL state, whichever type the driver threw")

@@ -399,6 +399,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_JDBC_PASSWORD` | `wiggle.jdbc.password` | *(unset)* | database password |
 | `WIGGLE_JDBC_POOL_SIZE` | `wiggle.jdbc.poolSize` | `10` | JDBC connection pool size |
 | `WIGGLE_JDBC_TX_ATTEMPTS` | `wiggle.jdbc.txAttempts` | `3` | replays for a transaction the database could not serve momentarily |
+| `WIGGLE_PG_RANDOM_PAGE_COST` | `wiggle.pg.randomPageCost` | `1.1` | PostgreSQL `random_page_cost` set on each connection; `server` keeps the server's |
 
 ### 6.3 Server — engine, cluster & housekeeping
 
