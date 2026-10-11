@@ -203,8 +203,13 @@ public interface Tx extends ReadTx, GraphStore {
 
     boolean hasActiveTokens(String instanceId);
 
-    List<Token> claimTasks(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
-                           int max, long now, long leaseUntil);
+    /** Leases up to {@code max} due ready tasks that {@code filter} admits, oldest instance first. */
+    List<Token> claimTasks(String workerId, ClaimFilter filter, int max, long now, long leaseUntil);
+
+    default List<Token> claimTasks(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
+                                   int max, long now, long leaseUntil) {
+        return claimTasks(workerId, ClaimFilter.byName(queues, versions), max, now, leaseUntil);
+    }
 
     /** WAITING timer tokens whose fire time has passed. */
     List<Token> dueTimers(long now, int max);

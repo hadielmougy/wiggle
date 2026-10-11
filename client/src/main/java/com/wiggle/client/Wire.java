@@ -41,7 +41,41 @@ final class Wire {
                         ? com.wiggle.core.ExecutionMode.SERVER
                         : com.wiggle.core.ExecutionMode.valueOf(t.getExecutionMode()),
                 t.getCollectKey().isEmpty() ? null : t.getCollectKey(),
-                t.getArmNamesList());
+                t.getArmNamesList(),
+                t.getCorrelationId().isEmpty() ? null : t.getCorrelationId(),
+                t.getInstanceCreatedAt());
+    }
+
+    static com.wiggle.proto.QueueCriteria criteria(com.wiggle.core.criteria.QueueCriteria c) {
+        com.wiggle.proto.QueueCriteria.Builder b = com.wiggle.proto.QueueCriteria.newBuilder().setQueue(c.queue());
+        if (c.where() != null) b.setWhere(predicate(c.where()));
+        return b.build();
+    }
+
+    private static com.wiggle.proto.CriteriaPredicate predicate(com.wiggle.core.criteria.Predicate p) {
+        com.wiggle.proto.CriteriaPredicate.Builder b = com.wiggle.proto.CriteriaPredicate.newBuilder();
+        switch (p) {
+            case com.wiggle.core.criteria.Predicate.Comparison c -> {
+                com.wiggle.proto.CriteriaComparison.Builder cmp = com.wiggle.proto.CriteriaComparison.newBuilder()
+                        .setField(c.field().name()).setOp(c.op().name());
+                for (Object arg : c.args()) {
+                    cmp.addArgs(arg instanceof Long n
+                            ? com.wiggle.proto.CriteriaLiteral.newBuilder().setInteger(n)
+                            : com.wiggle.proto.CriteriaLiteral.newBuilder().setText((String) arg));
+                }
+                b.setCmp(cmp);
+            }
+            case com.wiggle.core.criteria.Predicate.And a -> b.setAllOf(junction(a.terms()));
+            case com.wiggle.core.criteria.Predicate.Or o -> b.setAnyOf(junction(o.terms()));
+            case com.wiggle.core.criteria.Predicate.Not n -> b.setNegated(predicate(n.term()));
+        }
+        return b.build();
+    }
+
+    private static com.wiggle.proto.CriteriaJunction junction(List<com.wiggle.core.criteria.Predicate> terms) {
+        com.wiggle.proto.CriteriaJunction.Builder j = com.wiggle.proto.CriteriaJunction.newBuilder();
+        for (com.wiggle.core.criteria.Predicate t : terms) j.addTerms(predicate(t));
+        return j.build();
     }
 
     static WiggleClient.TokenInfo tokenInfo(Token t) {

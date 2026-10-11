@@ -1,8 +1,13 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.Criteria;
+import com.wiggle.core.criteria.Predicate;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.server.store.ClaimFilter;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,8 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class PollerRegistry {
 
-    /** What one worker last told us it serves. Empty {@code versions} means every version. */
-    public record Poller(String workerId, Set<String> queues, Set<WorkflowVersion> versions, long lastSeen) {}
+    /** What one worker last told us it serves. Empty {@code versions} means every version; a null
+     *  each of {@code queues} carries its criteria, and no queues means every queue. */
+    public record Poller(String workerId, List<QueueCriteria> queues, Set<WorkflowVersion> versions, long lastSeen) {}
 
     private final Map<String, Poller> pollers = new ConcurrentHashMap<>();
     private final long ttlMillis;
@@ -37,12 +43,9 @@ public final class PollerRegistry {
     }
 
     /** Records a poll. Called once per {@code PollTasks}, so it does no more than a map write. */
-    public void seen(String workerId, Set<String> queues, Set<WorkflowVersion> versions, long now) {
+    public void seen(String workerId, ClaimFilter filter, long now) {
         if (workerId == null || workerId.isBlank()) return;
-        pollers.put(workerId, new Poller(workerId,
-                queues == null ? Set.of() : Set.copyOf(queues),
-                versions == null ? Set.of() : Set.copyOf(versions),
-                now));
+        pollers.put(workerId, new Poller(workerId, filter.queues(), filter.versions(), now));
     }
 
     /** The workers that have polled within the TTL, dropping the ones that have not. */
@@ -56,15 +59,28 @@ public final class PollerRegistry {
      *
      * <p>Both halves must hold: the worker polls that queue, and either it is unscoped (serves every
      * version) or it named this one. That mirrors the claim exactly — a version-scoped worker filters
-     * its claim by the same pairs — so this answers what the dispatcher would actually do.
+     * its claim by the same pairs — so this answers what the dispatcher would actually do. A worker
+     * polling with criteria covers the slice unless its predicate is false for every task in it; a
+     * predicate on other properties counts as covering.
      */
     public boolean covers(String workflow, int version, String queue, long now) {
         WorkflowVersion wv = new WorkflowVersion(workflow, version);
         for (Poller p : live(now)) {
-            boolean servesQueue = p.queues().isEmpty() || p.queues().contains(queue);
+            QueueCriteria forQueue = QueueCriteria.forQueue(p.queues(), queue);
+            boolean servesQueue = p.queues().isEmpty() || forQueue != null;
             boolean servesVersion = p.versions().isEmpty() || p.versions().contains(wv);
-            if (servesQueue && servesVersion) return true;
+            Predicate where = forQueue == null ? null : forQueue.where();
+            if (servesQueue && servesVersion && mayMatch(where, workflow, version)) return true;
         }
         return false;
+    }
+
+    private static boolean mayMatch(Predicate where, String workflow, int version) {
+        if (where == null) return true;
+        return Criteria.evaluate(where, f -> switch (f) {
+            case WORKFLOW -> workflow;
+            case VERSION -> (long) version;
+            default -> Criteria.UNKNOWN;
+        }) != Criteria.Truth.FALSE;
     }
 }

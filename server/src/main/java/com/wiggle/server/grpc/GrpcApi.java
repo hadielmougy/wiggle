@@ -23,7 +23,6 @@ import io.grpc.stub.StreamObserver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -371,8 +370,14 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                 + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
         run(resp, () -> {
-            if (req.getQueuesCount() == 0) authz.require(Permissions.TASK_POLL, null);   // every queue
-            for (String q : req.getQueuesList()) authz.require(Permissions.TASK_POLL, q);
+            if (req.getCriteriaCount() > 0 && req.getQueuesCount() > 0) {
+                throw EngineException.badRequest("a poll carries queues or criteria, not both");
+            }
+            List<com.wiggle.core.criteria.QueueCriteria> criteria = CriteriaWire.decode(req.getCriteriaList());
+            List<String> polled = criteria.isEmpty() ? req.getQueuesList()
+                    : criteria.stream().map(com.wiggle.core.criteria.QueueCriteria::queue).toList();
+            if (polled.isEmpty()) authz.require(Permissions.TASK_POLL, null);   // every queue
+            for (String q : polled) authz.require(Permissions.TASK_POLL, q);
             // Admission control: under memory pressure, reject a configured fraction of incoming
             // polls outright (empty + a jittered hold-off), before doing any work. The other polls
             // are served normally, so load eases gently instead of stopping dead.
@@ -385,15 +390,16 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 return TaskList.newBuilder().setRetryAfterMillis(retryAfter).build();
             }
 
-            Set<String> queues = new LinkedHashSet<>(req.getQueuesList());
+            com.wiggle.server.store.ClaimFilter filter = criteria.isEmpty()
+                    ? com.wiggle.server.store.ClaimFilter.byName(polled, versionFilter(req))
+                    : new com.wiggle.server.store.ClaimFilter(criteria, versionFilter(req));
             int max = req.getMax() > 0 ? req.getMax() : 1;
             long lease = req.getLeaseMillis();
             long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
             // A cancelled call means the worker is gone (closed/dead); don't claim work it can't run.
             io.grpc.Context ctx = io.grpc.Context.current();
             List<com.wiggle.core.TaskActivation> tasks =
-                    engine.poll(req.getWorkerId(), queues, versionFilter(req), max, lease, deadline,
-                            ctx::isCancelled);
+                    engine.poll(req.getWorkerId(), filter, max, lease, deadline, ctx::isCancelled);
             LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
                     + " returning " + tasks.size() + " task(s)");
             TaskList.Builder out = TaskList.newBuilder();
@@ -436,7 +442,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
                 for (WorkflowEngine.StepInput step : steps) {
                     for (com.wiggle.core.CreatedBranch b : step.branches()) requireSubFlowStarts(b.steps());
                 }
-                runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), steps, r.getFinal()));
+                runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), steps, r.getFinal(),
+                        CriteriaWire.decode(r.getCriteriaList())));
             }
             Map<String, WorkflowEngine.RunResult> results = engine.report(runs, servedQueues());
             ReportStepsResult.Builder out = ReportStepsResult.newBuilder();
@@ -730,6 +737,8 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
         }
         if (t.collectKey() != null) m.setCollectKey(t.collectKey());
         m.addAllArmNames(t.armNames());
+        if (t.correlationId() != null) m.setCorrelationId(t.correlationId());
+        m.setInstanceCreatedAt(t.instanceCreatedAt());
         return m.build();
     }
 

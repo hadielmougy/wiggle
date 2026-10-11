@@ -348,6 +348,32 @@ public final class WiggleClient implements AutoCloseable {
             b.addVersions(com.wiggle.proto.WorkflowVersion.newBuilder()
                     .setWorkflow(v.workflow()).setVersion(v.version()).build());
         }
+        return poll(b);
+    }
+
+    /**
+     * Polls with criteria instead of queue names: claims only tasks on the criteria's queues that the
+     * entry for their queue matches. {@code versions} scopes the claim as in the queue-name form.
+     */
+    public PollResult poll(String workerId, List<com.wiggle.core.criteria.QueueCriteria> criteria,
+                           Collection<com.wiggle.core.WorkflowVersion> versions, int max,
+                           long leaseMillis, long waitMillis) {
+        PollRequest.Builder b = PollRequest.newBuilder()
+                .setWorkerId(workerId)
+                .setMax(max)
+                .setLeaseMillis(leaseMillis)
+                .setWaitMillis(waitMillis);
+        for (com.wiggle.core.criteria.QueueCriteria c : com.wiggle.core.criteria.QueueCriteria.forPoll(criteria)) {
+            b.addCriteria(Wire.criteria(c));
+        }
+        for (com.wiggle.core.WorkflowVersion v : versions) {
+            b.addVersions(com.wiggle.proto.WorkflowVersion.newBuilder()
+                    .setWorkflow(v.workflow()).setVersion(v.version()).build());
+        }
+        return poll(b);
+    }
+
+    private PollResult poll(PollRequest.Builder b) {
         PollRequest req = b.build();
         TaskList res = call(() -> stub.pollTasks(req));
         List<com.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
@@ -420,7 +446,17 @@ public final class WiggleClient implements AutoCloseable {
      */
     public com.wiggle.core.ReportResult reportSteps(String taskId, String leaseOwner,
                                                     List<StepReport> steps, boolean finalHandback) {
-        RunSubmission run = new RunSubmission(taskId, leaseOwner, steps, finalHandback);
+        return reportSteps(taskId, leaseOwner, steps, finalHandback, List.of());
+    }
+
+    /**
+     * The same, from a worker that polled with {@code criteria}: the server leases the continuation
+     * back only when the entry for its queue matches it.
+     */
+    public com.wiggle.core.ReportResult reportSteps(String taskId, String leaseOwner, List<StepReport> steps,
+                                                    boolean finalHandback,
+                                                    List<com.wiggle.core.criteria.QueueCriteria> criteria) {
+        RunSubmission run = new RunSubmission(taskId, leaseOwner, steps, finalHandback, criteria);
         RunOutcome only = reportSteps(List.of(run)).get(taskId);
         if (only == null) throw new WiggleApiException(500, "no answer for run " + taskId, null);
         if (!only.ok()) throw new WiggleApiException(only.errorStatus(), only.error(), null);
@@ -455,7 +491,17 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     /** One instance's worth of a report: exactly the arguments of the single-run {@link #reportSteps}. */
-    public record RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback) {}
+    public record RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback,
+                                List<com.wiggle.core.criteria.QueueCriteria> criteria) {
+
+        public RunSubmission {
+            criteria = criteria == null ? List.of() : List.copyOf(criteria);
+        }
+
+        public RunSubmission(String taskId, String leaseOwner, List<StepReport> steps, boolean finalHandback) {
+            this(taskId, leaseOwner, steps, finalHandback, List.of());
+        }
+    }
 
     /** A run's fate: what it applied to, or the status and message it was refused under. A refused
      *  run wrote nothing and may be reported again in a call of its own. */
@@ -474,6 +520,7 @@ public final class WiggleClient implements AutoCloseable {
             ReportedRun.Builder one = ReportedRun.newBuilder()
                     .setTaskId(run.taskId()).setLeaseOwner(run.leaseOwner()).setFinal(run.finalHandback());
             for (StepReport s : run.steps()) one.addSteps(Wire.stepResult(s));
+            for (com.wiggle.core.criteria.QueueCriteria c : run.criteria()) one.addCriteria(Wire.criteria(c));
             req.addRuns(one);
         }
         ReportStepsResult res = call(() -> stub.reportSteps(req.build()));

@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.TaskActivation;
-import com.wiggle.core.WorkflowVersion;
+import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.StorageUnreachableException;
 
 import java.util.List;
@@ -23,7 +23,7 @@ final class Dispatch {
      *  when no local wake-on-produce arrives; the polls behind it wait for a wake (see
      *  {@link DispatchNotifier}). Same-node production wakes a poller immediately; this bounds the
      *  latency for cross-node production (and any missed signal). Overridable via
-     *  {@code WIGGLE_FALLBACK_POLL_MILLIS}. */
+     *  {@code WIGGLE_FALLBACK_POLL_MILLIS} or {@code wiggle.fallback.pollMillis}. */
     private final long fallbackPollMillis =
             ServerEnv.envLong("wiggle.fallback.pollMillis", "WIGGLE_FALLBACK_POLL_MILLIS", 100);
 
@@ -83,16 +83,17 @@ final class Dispatch {
      * matters with wake-on-produce: a signal can wake a parked poll the instant its worker is shutting
      * down, and the freshly-produced token should go to a live worker instead.
      */
-    List<TaskActivation> poll(String workerId, Set<String> queues, Set<WorkflowVersion> versions,
+    List<TaskActivation> poll(String workerId, ClaimFilter filter,
                               int max, Long leaseMillis, long deadline, Cancellation cancelled) {
-        pollers.seen(workerId, queues, versions, System.currentTimeMillis());
+        Set<String> queues = filter.queueNames();
+        pollers.seen(workerId, filter, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
-        DispatchNotifier.Interest interest = new DispatchNotifier.Interest(queues, versions);
+        DispatchNotifier.Interest interest = DispatchNotifier.Interest.of(filter);
         Map<String, Long> since = notifier.snapshot(interest);
-        List<TaskActivation> tasks = claimNow(workerId, queues, versions, max, lease);
+        List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
-        boolean scoped = versions != null && !versions.isEmpty();
+        boolean scoped = !filter.versions().isEmpty();
         long fallbackWait = scoped ? scopedFallback.getOrDefault(workerId, fallbackPollMillis)
                 : adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
         boolean signaled = false;
@@ -104,7 +105,7 @@ final class Dispatch {
                 return List.of();                          // worker gone -- leave the work for a live one
             }
             since = notifier.snapshot(interest);
-            tasks = claimNow(workerId, queues, versions, max, lease);
+            tasks = claimNow(workerId, filter, max, lease);
             if (scoped) {
                 if (tasks.isEmpty() && !signaled) fallbackWait = Math.min(fallbackWait * 2, scopedFallbackMaxMillis);
             } else if (adaptiveFallbackPoll) {
@@ -129,8 +130,7 @@ final class Dispatch {
      * time, from a rotating start, taking the first shard that has work. Each shard's claim is atomic.
      * An unreachable shard is passed over; only when every shard is unreachable does the claim fail.
      */
-    private List<TaskActivation> claimNow(String workerId, Set<String> queues,
-                                          Set<WorkflowVersion> versions, int max, long lease) {
+    private List<TaskActivation> claimNow(String workerId, ClaimFilter filter, int max, long lease) {
         List<Integer> shards = transactions.instanceShards();
         int start = Math.floorMod(nextShard.getAndIncrement(), shards.size());
         StorageUnreachableException unreachable = null;
@@ -140,7 +140,7 @@ final class Dispatch {
             List<TaskActivation> got;
             try {
                 got = transactions.readShard(shards.get((start + i) % shards.size()),
-                        tx -> tokens.claim(tx, workerId, queues, versions, max, now, now + lease));
+                        tx -> tokens.claim(tx, workerId, filter, max, now, now + lease));
             } catch (StorageUnreachableException e) {
                 unreachable = e;
                 continue;

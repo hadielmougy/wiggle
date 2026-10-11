@@ -45,6 +45,8 @@ public final class Rows {
         public long availableAt;
         /** When the token's instance started: dispatch serves older instances first. */
         public long instCreatedAt;
+        /** The instance's correlation id, or null; copied so queue criteria need no join. */
+        public String correlationId;
         public String leaseOwner;
         public long leaseExpiresAt;
         /** Comma separated stack of enclosing fork groups; last element is innermost. */

@@ -8,6 +8,11 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.Criteria;
+import com.wiggle.core.criteria.CriteriaBuilder;
+import com.wiggle.core.criteria.Predicate;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.Task_;
 import com.wiggle.server.auth.Scope;
 import com.wiggle.server.store.Rows.CompLog;
 import com.wiggle.server.store.Rows.Instance;
@@ -27,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -961,6 +967,114 @@ abstract class StorageContract {
         assertEquals(List.of(otherVersion.id),
                 idsOf(storage.inTx(tx -> tx.claimTasks("w3", Set.of(q), null, 10, now, now + 1_000))),
                 "and a null version set is no version filter");
+    }
+
+    /** Six ready tasks on {@code q}; {@link #claimAppliesCriteriaAlike} names them 1..6. */
+    private List<Token> criteriaFixture(String q) {
+        Object[][] rows = {
+                // workflow, version, step, node, kind, stored attempt, correlation id, instance created
+                {"crit-a", 1, "charge", "n1", NodeKind.TASK, 0, "ord-1", 100L},
+                {"crit-a", 2, "refund", "n2", NodeKind.TASK, 2, "ord_2", 200L},
+                {"crit-b", 1, "charge", "n1", NodeKind.PREDICATE, 0, null, 300L},
+                {"crit-b", 1, "ship", "n3", NodeKind.TASK, 1, "Ord-3", 400L},
+                {"crit-a", 1, "charge", "n1", NodeKind.TASK, 0, "\u00e9clair", 500L},
+                {"crit-b", 2, "email", "n4", NodeKind.TASK, 4, "a%b", 600L},
+        };
+        List<Token> out = new ArrayList<>();
+        for (Object[] r : rows) {
+            Instance i = instance((String) r[0]);
+            i.version = (Integer) r[1];
+            i.correlationId = (String) r[6];
+            i.createdAt = (Long) r[7];
+            Token t = token(i, (NodeKind) r[4], TokenStatus.READY, q);
+            t.activity = r[0] + "#" + r[2];
+            t.nodeId = (String) r[3];
+            t.attempt = (Integer) r[5];
+            t.correlationId = i.correlationId;
+            t.instCreatedAt = i.createdAt;
+            t.availableAt = ANCIENT;
+            store(i, t);
+            out.add(t);
+        }
+        return out;
+    }
+
+    @Test
+    @DisplayName("WGL-QC-064: every backend claims exactly the tasks the criteria match")
+    void claimAppliesCriteriaAlike() {
+        record Case(String name, Function<CriteriaBuilder, Predicate> where, Set<Integer> expected) { }
+        List<Case> cases = List.of(
+                new Case("no predicate", null, Set.of(1, 2, 3, 4, 5, 6)),
+                new Case("equal workflow", cb -> cb.equal(Task_.WORKFLOW, "crit-a"), Set.of(1, 2, 5)),
+                new Case("in version", cb -> cb.in(Task_.VERSION, 2), Set.of(2, 6)),
+                new Case("equal node", cb -> cb.equal(Task_.NODE_ID, "n1"), Set.of(1, 3, 5)),
+                new Case("equal kind", cb -> cb.equal(Task_.KIND, "PREDICATE"), Set.of(3)),
+                new Case("in step", cb -> cb.in(Task_.STEP, "charge", "ship"), Set.of(1, 3, 4, 5)),
+                new Case("notEqual step", cb -> cb.notEqual(Task_.STEP, "charge"), Set.of(2, 4, 6)),
+                new Case("attempt is 1-based", cb -> cb.lessThan(Task_.ATTEMPT, 2), Set.of(1, 3, 5)),
+                new Case("between instance ages", cb -> cb.between(Task_.INSTANCE_CREATED_AT,
+                        java.time.Instant.ofEpochMilli(200), java.time.Instant.ofEpochMilli(400)), Set.of(2, 3, 4)),
+                new Case("notEqual skips an absent value", cb -> cb.notEqual(Task_.CORRELATION_ID, "ord-1"),
+                        Set.of(2, 4, 5, 6)),
+                new Case("not() of a comparison on an absent value is true",
+                        cb -> cb.not(cb.equal(Task_.CORRELATION_ID, "ord-1")), Set.of(2, 3, 4, 5, 6)),
+                new Case("isNull", cb -> cb.isNull(Task_.CORRELATION_ID), Set.of(3)),
+                new Case("isNotNull", cb -> cb.isNotNull(Task_.CORRELATION_ID), Set.of(1, 2, 4, 5, 6)),
+                new Case("like is case-sensitive", cb -> cb.like(Task_.CORRELATION_ID, "ord%"), Set.of(1, 2)),
+                new Case("like _ is one character", cb -> cb.like(Task_.CORRELATION_ID, "ord_1"), Set.of(1)),
+                new Case("like escapes _", cb -> cb.like(Task_.CORRELATION_ID, "ord\\_%"), Set.of(2)),
+                new Case("like escapes %", cb -> cb.like(Task_.CORRELATION_ID, "a\\%b"), Set.of(6)),
+                new Case("text orders by code point", cb -> cb.greaterThan(Task_.CORRELATION_ID, "z"), Set.of(5)),
+                new Case("upper case orders first", cb -> cb.lessThan(Task_.CORRELATION_ID, "ord"), Set.of(4, 6)),
+                new Case("or of and", cb -> cb.or(
+                        cb.and(cb.equal(Task_.WORKFLOW, "crit-b"), cb.equal(Task_.VERSION, 1)),
+                        cb.equal(Task_.CORRELATION_ID, "a%b")), Set.of(3, 4, 6)),
+                new Case("not of and", cb -> cb.not(cb.and(
+                        cb.equal(Task_.WORKFLOW, "crit-a"), cb.lessThan(Task_.ATTEMPT, 2))), Set.of(2, 3, 4, 6)),
+                new Case("not of or with isNull", cb -> cb.not(cb.or(
+                        cb.isNull(Task_.CORRELATION_ID), cb.like(Task_.CORRELATION_ID, "ord%"))), Set.of(4, 5, 6)));
+
+        for (Case c : cases) {
+            String q = id("q");
+            List<Token> fixture = criteriaFixture(q);
+            QueueCriteria criteria = c.where() == null ? QueueCriteria.from(q) : QueueCriteria.from(q).where(c.where());
+            Set<Integer> reference = new TreeSet<>();
+            for (int k = 0; k < fixture.size(); k++) {
+                if (criteria.where() == null || Criteria.matches(criteria.where(), ClaimFilter.facts(fixture.get(k)))) {
+                    reference.add(k + 1);
+                }
+            }
+            assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
+
+            ClaimFilter filter = new ClaimFilter(List.of(criteria), null);
+            Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
+            Set<Integer> got = new TreeSet<>();
+            for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
+            assertEquals(new TreeSet<>(c.expected()), got, c.name() + ": the claim");
+        }
+    }
+
+    @Test
+    @DisplayName("WGL-QC-061: each queue's criteria narrow that queue's pick alone")
+    void claimAppliesCriteriaPerQueue() {
+        String q1 = id("q");
+        String q2 = id("q");
+        String q3 = id("q");
+        List<Token> first = criteriaFixture(q1);
+        List<Token> second = criteriaFixture(q2);
+        List<Token> third = criteriaFixture(q3);
+        ClaimFilter filter = new ClaimFilter(List.of(
+                QueueCriteria.from(q1).where(cb -> cb.equal(Task_.WORKFLOW, "crit-a")),
+                QueueCriteria.from(q2).where(cb -> cb.equal(Task_.WORKFLOW, "crit-b")),
+                QueueCriteria.from(q3)), null);
+
+        Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 20, now, now + 1_000))));
+        Set<String> expected = Stream.of(
+                        first.stream().filter(t -> t.workflow.equals("crit-a")),
+                        second.stream().filter(t -> t.workflow.equals("crit-b")),
+                        third.stream())
+                .flatMap(s -> s).map(t -> t.id).collect(java.util.stream.Collectors.toSet());
+        assertEquals(expected, claimed, "crit-a from the first queue, crit-b from the second, all of the third");
     }
 
     @Test

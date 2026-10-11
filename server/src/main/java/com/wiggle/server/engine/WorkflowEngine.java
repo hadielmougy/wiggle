@@ -1,6 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.*;
+import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.server.store.BufferedTx;
 import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
@@ -193,11 +194,16 @@ public final class WorkflowEngine {
         return poll(workerId, queues, null, max, leaseMillis, deadline, cancelled);
     }
 
-    /** Long-polls for work; see {@link Dispatch#poll}. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, Set<WorkflowVersion> versions, int max,
                                      Long leaseMillis, long deadline,
                                      Cancellation cancelled) {
-        return dispatch.poll(workerId, queues, versions, max, leaseMillis, deadline, cancelled);
+        return poll(workerId, ClaimFilter.byName(queues, versions), max, leaseMillis, deadline, cancelled);
+    }
+
+    /** Long-polls for work the filter admits; see {@link Dispatch#poll}. */
+    public List<TaskActivation> poll(String workerId, ClaimFilter filter, int max, Long leaseMillis, long deadline,
+                                     Cancellation cancelled) {
+        return dispatch.poll(workerId, filter, max, leaseMillis, deadline, cancelled);
     }
 
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
@@ -262,7 +268,19 @@ public final class WorkflowEngine {
     }
 
     /** One run of a cross-instance batch: exactly the arguments of {@link #report}. */
-    public record Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {}
+    /** {@code criteria}, when the worker polled with them (one per queue), bound which continuation it
+     *  may be leased; empty when it polled by queue names. */
+    public record Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback,
+                      List<QueueCriteria> criteria) {
+
+        public Run {
+            criteria = criteria == null ? List.of() : List.copyOf(criteria);
+        }
+
+        public Run(String startTaskId, String leaseOwner, List<StepInput> steps, boolean finalHandback) {
+            this(startTaskId, leaseOwner, steps, finalHandback, List.of());
+        }
+    }
 
     /**
      * A run's fate in a batch: the {@link ReportOutcome} the single-run path would have

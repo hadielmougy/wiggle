@@ -291,6 +291,42 @@ message PollRequest {
     // Empty = serve every version, which is the default and what an unversioned worker sends.
     // Non-empty = claim only these (workflow, version) pairs.
     repeated WorkflowVersion versions = 6;
+    // The alternative to `queues`: one entry per queue served, each with its own predicate. Set
+    // one or the other, never both; a queue named twice is rejected.
+    repeated QueueCriteria criteria = 7;
+}
+
+// One queue a poll serves, and a predicate over the properties of its tasks. A comparison's field
+// and op are names of com.wiggle.core.criteria.Field and Op; the server rejects any other.
+message QueueCriteria {
+    string queue = 1;                     // required
+    CriteriaPredicate where = 2;          // absent = every task on the queue
+}
+
+message CriteriaPredicate {
+    oneof p {
+        CriteriaComparison cmp = 1;
+        CriteriaJunction all_of = 2;
+        CriteriaJunction any_of = 3;
+        CriteriaPredicate negated = 4;
+    }
+}
+
+message CriteriaJunction {
+    repeated CriteriaPredicate terms = 1;
+}
+
+message CriteriaComparison {
+    string field = 1;
+    string op = 2;
+    repeated CriteriaLiteral args = 3;
+}
+
+message CriteriaLiteral {
+    oneof v {
+        string text = 1;
+        sint64 integer = 2;
+    }
 }
 
 message TaskActivation {
@@ -317,6 +353,8 @@ message TaskActivation {
     string collect_key = 17;
     // Set only for a fork's combine: the arms, in fork order, that it merges.
     repeated string arm_names = 18;
+    string correlation_id = 19;   // the instance's; empty when it has none
+    int64 instance_created_at = 20;
 }
 
 message TaskList {
@@ -395,6 +433,10 @@ message ReportedRun {
     // draining. A statement about this worker, not about the workflow -- a mode that never chains
     // hands back regardless.
     bool final = 4;
+    // The criteria the worker polled with. The server leases a continuation back only when the
+    // entry for its queue matches it, so a chain cannot run a step the worker's poll would not
+    // have claimed.
+    repeated QueueCriteria criteria = 5;
 }
 
 // One run, or several across different instances. Several are admitted only where batching is

@@ -4,6 +4,8 @@ import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.Doc;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.TaskFacts;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.server.store.Rows.Instance;
@@ -57,6 +59,7 @@ final class StepChain {
         Tokens.requireLease(current, run.leaseOwner());
         LazyGraph def = definitions.graph(tx, inst.workflow, inst.version);
         List<StepInput> steps = run.steps();
+        requireClaimable(def, inst, run);
         String nextTaskId = null;
         for (int i = 0; i < steps.size(); i++) {
             StepInput step = steps.get(i);
@@ -105,7 +108,8 @@ final class StepChain {
             Node nextNode = def.node(next);
             // The last step ends the run unless this worker both may and wants to carry on.
             boolean lastStep = i == steps.size() - 1;
-            if ((lastStep && (run.finalHandback() || !chainsBack)) || !nextNode.isWorkerDispatched()) {
+            boolean claimable = !nextNode.isWorkerDispatched() || claims(run.criteria(), inst, nextNode);
+            if ((lastStep && (run.finalHandback() || !chainsBack || !claimable)) || !nextNode.isWorkerDispatched()) {
                 Instances.touch(tx, inst, now);
                 handBack(tx, def, inst, cont, nextNode, now);
                 return new ReportOutcome(inst.status.name(), leaseExpiry, null);
@@ -118,6 +122,26 @@ final class StepChain {
         }
         Instances.touch(tx, inst, now);
         return new ReportOutcome(inst.status.name(), leaseExpiry, nextTaskId);
+    }
+
+    /** Refuses, before anything is written, a run that chained into a step its worker's criteria exclude. */
+    private static void requireClaimable(LazyGraph def, Instance inst, Run run) {
+        if (run.criteria().isEmpty()) return;
+        for (StepInput step : run.steps().subList(1, run.steps().size())) {
+            Node node = def.find(step.nodeId()).orElse(null);
+            if (node != null && !claims(run.criteria(), inst, node)) {
+                throw EngineException.badRequest("step '" + node.name() + "' does not match the criteria the "
+                        + "worker polled with, so it may not run in that worker's chain");
+            }
+        }
+    }
+
+    /** Whether a worker polling with {@code criteria} (empty: by queue names) would claim {@code next}. */
+    private static boolean claims(List<QueueCriteria> criteria, Instance inst, Node next) {
+        if (criteria.isEmpty()) return true;
+        QueueCriteria forQueue = QueueCriteria.forQueue(criteria, next.queue());
+        return forQueue != null && forQueue.matches(new TaskFacts(inst.workflow, inst.version, next.queue(),
+                next.name(), next.id(), next.kind().name(), 1, inst.correlationId, inst.createdAt));
     }
 
     /** Why a step's created branches cannot be accepted, or null. */

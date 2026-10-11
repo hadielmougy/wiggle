@@ -1,24 +1,36 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.core.criteria.QueueCriteria;
+
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 /** Worker tuning. Defaults are chosen for interactive workloads, not throughput benchmarks. */
 public record WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
                             Duration idleBackoff, Duration errorBackoff,
                             int localBatchSize, Set<String> queues, Duration awaitRegistration,
-                            boolean crossInstanceBatching) {
+                            boolean crossInstanceBatching, List<QueueCriteria> criteria) {
 
     public WorkerOptions {
         if (localBatchSize < 1) throw new IllegalArgumentException("localBatchSize must be >= 1");
         queues = queues == null ? Set.of() : Set.copyOf(queues);
         awaitRegistration = awaitRegistration == null ? Duration.ZERO : awaitRegistration;
+        criteria = criteria == null || criteria.isEmpty() ? List.of() : QueueCriteria.forPoll(criteria);
+    }
+
+    public WorkerOptions(int concurrency, Duration lease, Duration longPollWait,
+                         Duration idleBackoff, Duration errorBackoff,
+                         int localBatchSize, Set<String> queues, Duration awaitRegistration,
+                         boolean crossInstanceBatching) {
+        this(concurrency, lease, longPollWait, idleBackoff, errorBackoff, localBatchSize, queues,
+                awaitRegistration, crossInstanceBatching, null);
     }
 
     public static WorkerOptions defaults() {
         return new WorkerOptions(Runtime.getRuntime().availableProcessors(),
                 Duration.ofSeconds(30), Duration.ofSeconds(10),
-                Duration.ofMillis(200), Duration.ofSeconds(2), 64, Set.of(), Duration.ZERO, false);
+                Duration.ofMillis(200), Duration.ofSeconds(2), 64, Set.of(), Duration.ZERO, false, null);
     }
 
     /**
@@ -30,22 +42,22 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withCrossInstanceBatching(boolean on) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration, on);
+                localBatchSize, queues, awaitRegistration, on, criteria);
     }
 
     public WorkerOptions withConcurrency(int c) {
         return new WorkerOptions(c, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration, crossInstanceBatching);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching, criteria);
     }
 
     public WorkerOptions withLease(Duration d) {
         return new WorkerOptions(concurrency, d, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration, crossInstanceBatching);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching, criteria);
     }
 
     public WorkerOptions withLongPollWait(Duration d) {
         return new WorkerOptions(concurrency, lease, d, idleBackoff, errorBackoff,
-                localBatchSize, queues, awaitRegistration, crossInstanceBatching);
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching, criteria);
     }
 
     /**
@@ -55,7 +67,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withLocalBatchSize(int size) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                size, queues, awaitRegistration, crossInstanceBatching);
+                size, queues, awaitRegistration, crossInstanceBatching, criteria);
     }
 
     /**
@@ -65,7 +77,7 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withQueues(String... only) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, Set.of(only), awaitRegistration, crossInstanceBatching);
+                localBatchSize, Set.of(only), awaitRegistration, crossInstanceBatching, criteria);
     }
 
     /**
@@ -76,6 +88,17 @@ public record WorkerOptions(int concurrency, Duration lease, Duration longPollWa
      */
     public WorkerOptions withAwaitRegistration(Duration d) {
         return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
-                localBatchSize, queues, d, crossInstanceBatching);
+                localBatchSize, queues, d, crossInstanceBatching, criteria);
+    }
+
+    /**
+     * Polls with criteria instead of queue names, one per queue served: the worker serves those queues,
+     * claims only the tasks the entry for their queue matches, and a local-execution chain hands back
+     * at a step its queue's entry does not match. A queue named twice is refused. Exclusive with
+     * {@link #withQueues}.
+     */
+    public WorkerOptions withCriteria(QueueCriteria... perQueue) {
+        return new WorkerOptions(concurrency, lease, longPollWait, idleBackoff, errorBackoff,
+                localBatchSize, queues, awaitRegistration, crossInstanceBatching, List.of(perQueue));
     }
 }

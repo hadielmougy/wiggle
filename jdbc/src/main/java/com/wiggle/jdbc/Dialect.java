@@ -37,6 +37,9 @@ public interface Dialect {
     /** Whether the database has its own full-text search ({@code tsvector}); without it, matching runs in Java. */
     default boolean supportsFullText() { return false; }
 
+    /** {@code column} in an expression whose comparisons order text by code point. */
+    default String codePointOrder(String column) { return column; }
+
     /**
      * Wraps an {@code INSERT} so that a primary-key collision is silently ignored (idempotent
      * re-registration). Both dialects take PostgreSQL's {@code ON CONFLICT DO NOTHING}, so this is

@@ -98,6 +98,42 @@ The flip side of specialization is that a queue **no** worker serves is a queue 
 `(workflow, version, queue)` and flags any slice no live poller covers. Worth a look after changing
 a `withQueues(...)` set or retiring a service.
 
+### Narrowing a queue with criteria
+
+`withQueues(...)` decides *which queues* a worker serves. `withCriteria(...)` also decides *which
+tasks on each* it claims: one `QueueCriteria` per queue, each with its own predicate built like a
+JPA Criteria query, or none to take every task on that queue:
+
+<!-- snippet: queues/criteria-worker -->
+```java
+// payments-eu: on "payments", only charges of orders keyed "eu-..."; on "refunds", everything
+QueueCriteria euCharges = QueueCriteria.from("payments")
+        .where(cb -> cb.and(
+                cb.equal(Task_.STEP, "charge"),
+                cb.like(Task_.CORRELATION_ID, "eu-%"),
+                cb.lessThan(Task_.ATTEMPT, 4)));
+QueueCriteria refunds = QueueCriteria.from("refunds");
+Worker eu = new Worker(client, "payments-eu-1",
+                WorkerOptions.defaults().withCriteria(euCharges, refunds))
+        .registerHandler(new OrderHandlers())
+        .start();
+```
+
+A predicate can test the task's workflow, version, step name, node id, kind, attempt (1 on the
+first run), the instance's correlation id, and when the instance was created. Comparisons
+combine with `and`, `or` and `not`. A comparison on a value the task doesn't have (an instance with
+no correlation id, say) is false, and `not` of it is true. Text orders by code point and `like` is
+case-sensitive, the same on every store.
+
+The server applies the predicate in the claim itself, so a worker never receives a task it would
+have to refuse. A local-execution chain hands back at the first step whose queue's criteria don't
+match it. A worker names each queue once, and sets `withQueues` or `withCriteria`, not both. Tasks that no worker's criteria match stay
+`READY`, exactly like tasks on a queue nobody serves, so check the Backlog tab after changing them.
+
+The claim walks each queue oldest-instance-first and tests the predicate on each row it reaches. A
+predicate that matches only a small slice of a deep queue therefore reads past every older row that
+doesn't match on each poll. The full contract is in [the spec](spec/25-queue-criteria.md).
+
 ---
 
 ## 4. How the server routes a step to its queue

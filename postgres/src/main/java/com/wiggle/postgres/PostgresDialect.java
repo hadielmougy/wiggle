@@ -22,6 +22,8 @@ public final class PostgresDialect implements Dialect {
 
     @Override public boolean supportsPartialIndexes() { return true; }
 
+    @Override public String codePointOrder(String column) { return column + " COLLATE \"C\""; }
+
     @Override public boolean supportsFullText() { return true; }
 
     @Override public boolean supportsJoinedLock() { return true; }

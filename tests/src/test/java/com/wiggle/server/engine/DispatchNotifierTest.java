@@ -1,6 +1,8 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.core.criteria.Task_;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -25,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class DispatchNotifierTest {
 
-    private static final DispatchNotifier.Interest ORDERS = new DispatchNotifier.Interest(Set.of("orders"), null);
+    private static final DispatchNotifier.Interest ORDERS = DispatchNotifier.Interest.byName(Set.of("orders"), null);
     private static final long LONG = 10_000;
 
     private static long in(long millis) {
@@ -54,7 +56,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("a signal that advances a snapshotted queue makes await return immediately (no lost wakeup)")
     void signalPastSnapshotReturnsImmediately() {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());   // snapshot BEFORE the signal, as poll() does
+        Map<String, Long> since = n.snapshot(ORDERS.names());   // snapshot BEFORE the signal, as poll() does
         n.signal(Set.of("orders"));                               // work parked between snapshot and await
 
         long start = System.currentTimeMillis();
@@ -65,7 +67,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("a concurrent signal wakes a blocked waiter well before its timeout")
     void concurrentSignalWakesWaiter() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());
+        Map<String, Long> since = n.snapshot(ORDERS.names());
 
         AtomicBoolean returned = new AtomicBoolean(false);
         Thread waiter = new Thread(() -> {
@@ -83,7 +85,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("a signal for an unrelated queue does not wake the waiter")
     void unrelatedSignalDoesNotWake() {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());
+        Map<String, Long> since = n.snapshot(ORDERS.names());
         n.signal(Set.of("payments"));
 
         long start = System.currentTimeMillis();
@@ -94,7 +96,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("with no signal at all, the front of the line returns after its fallback")
     void noSignalFallsBack() {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());
+        Map<String, Long> since = n.snapshot(ORDERS.names());
 
         long start = System.currentTimeMillis();
         assertFalse(n.await(ORDERS, 1, since, 150, in(LONG)), "fell back, no signal");
@@ -107,7 +109,7 @@ class DispatchNotifierTest {
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             park(pool, n, ORDERS, 1, 1, LONG);   // holds the front, with a long fallback
-            Map<String, Long> since = n.snapshot(ORDERS.queues());
+            Map<String, Long> since = n.snapshot(ORDERS.names());
             long start = System.currentTimeMillis();
             assertFalse(n.await(ORDERS, 1, since, 50, in(150)));
             long waited = System.currentTimeMillis() - start;
@@ -152,8 +154,8 @@ class DispatchNotifierTest {
     @Test @DisplayName("each line covering the queue gets its own wake")
     void eachInterestIsWoken() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Interest v1 = new DispatchNotifier.Interest(Set.of("orders"), Set.of(new WorkflowVersion("w", 1)));
-        DispatchNotifier.Interest v2 = new DispatchNotifier.Interest(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
+        DispatchNotifier.Interest v1 = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 1)));
+        DispatchNotifier.Interest v2 = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             List<Future<Boolean>> first = park(pool, n, v1, 2, 1, LONG);
@@ -170,12 +172,32 @@ class DispatchNotifierTest {
         }
     }
 
+    @Test @DisplayName("WGL-QC-080: polls with different criteria wait in different lines, so each is woken")
+    void eachCriteriaIsWoken() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        DispatchNotifier.Interest vip = new DispatchNotifier.Interest(Set.of(
+                QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%"))), null);
+        DispatchNotifier.Interest rest = new DispatchNotifier.Interest(Set.of(
+                QueueCriteria.from("orders").where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%")))), null);
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            List<Future<Boolean>> first = park(pool, n, vip, 1, 1, LONG);
+            List<Future<Boolean>> second = park(pool, n, rest, 1, 1, LONG);
+            n.signal(Map.of("orders", 1));
+
+            assertTrue(first.get(0).get(2, TimeUnit.SECONDS), "vip's poll woke");
+            assertTrue(second.get(0).get(2, TimeUnit.SECONDS), "and so did rest's: only its criteria may accept the task");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     @Test @DisplayName("#293: a version-scoped line is woken by its own versions and by unknown ones, not by others")
     void scopedLinesWakeForTheirVersions() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
         WorkflowVersion v1 = new WorkflowVersion("w", 1);
         WorkflowVersion v2 = new WorkflowVersion("w", 2);
-        DispatchNotifier.Interest scoped = new DispatchNotifier.Interest(Set.of("orders"), Set.of(v2));
+        DispatchNotifier.Interest scoped = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(v2));
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             List<Future<Boolean>> parked = park(pool, n, scoped, 1, 1, LONG);
@@ -196,7 +218,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("#293: another version's signal between snapshot and await does not cut a scoped wait short")
     void scopedSnapshotIgnoresOtherVersions() {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Interest scoped = new DispatchNotifier.Interest(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
+        DispatchNotifier.Interest scoped = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
         Map<String, Long> since = n.snapshot(scoped);
         n.signalReady(Map.of(new DispatchNotifier.Ready("orders", new WorkflowVersion("w", 1)), 1));
         long start = System.currentTimeMillis();
