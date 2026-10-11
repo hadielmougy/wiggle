@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.WorkflowVersion;
+
 /**
  * Where a newly dispatchable queue is reported, so the poller waiting on it can be woken once the
  * producing transaction commits (Layer 1; see docs/archive/in-memory-dispatch.md).
@@ -11,6 +13,7 @@ package com.wiggle.server.engine;
 @FunctionalInterface
 interface QueueWake {
 
-    /** Marks {@code queue} as having gained work. A null queue is a no-op. */
-    void ready(String queue);
+    /** Marks {@code queue} as having gained work of {@code version} (null: not known). A null queue
+     *  is a no-op. */
+    void ready(String queue, WorkflowVersion version);
 }

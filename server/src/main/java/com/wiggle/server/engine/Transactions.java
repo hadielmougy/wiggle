@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.WorkflowVersion;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
@@ -41,8 +42,8 @@ final class Transactions {
     private final Storage storage;
     private final DispatchNotifier notifier;
 
-    /** How many tokens the in-flight transaction parked READY, by queue. */
-    private final ThreadLocal<Map<String, Integer>> readyQueues = new ThreadLocal<>();
+    /** How many tokens the in-flight transaction parked READY, by queue and version. */
+    private final ThreadLocal<Map<DispatchNotifier.Ready, Integer>> readyQueues = new ThreadLocal<>();
 
     Transactions(Storage storage, DispatchNotifier notifier) {
         this.storage = storage;
@@ -52,8 +53,13 @@ final class Transactions {
     /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op.
      *  Handed to producers as a {@link QueueWake}. */
     void wake(String queue) {
-        Map<String, Integer> ready = readyQueues.get();
-        if (ready != null && queue != null) ready.merge(queue, 1, Integer::sum);
+        wake(queue, null);
+    }
+
+    /** The same, for a token of {@code version} (null: not known). */
+    void wake(String queue, WorkflowVersion version) {
+        Map<DispatchNotifier.Ready, Integer> ready = readyQueues.get();
+        if (ready != null && queue != null) ready.merge(new DispatchNotifier.Ready(queue, version), 1, Integer::sum);
     }
 
     /** The shard the instance or token {@code id} lives on. */
@@ -97,7 +103,7 @@ final class Transactions {
                     + "inTx. A nested call would run on a second connection and deadlock against the "
                     + "instance lock the outer transaction holds. Pass the open Tx down instead.");
         }
-        Map<String, Integer> mine = new HashMap<>();
+        Map<DispatchNotifier.Ready, Integer> mine = new HashMap<>();
         readyQueues.set(mine);
         T result;
         try {
@@ -108,7 +114,7 @@ final class Transactions {
         } finally {
             readyQueues.remove();
         }
-        notifier.signal(mine);   // post-commit: an exception above never reaches here
+        notifier.signalReady(mine);   // post-commit: an exception above never reaches here
         return result;
     }
 

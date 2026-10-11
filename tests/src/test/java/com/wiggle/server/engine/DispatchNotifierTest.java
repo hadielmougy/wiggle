@@ -41,7 +41,7 @@ class DispatchNotifierTest {
                                               long fallbackMillis) throws Exception {
         List<Future<Boolean>> parked = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            Map<String, Long> since = n.snapshot(interest.names());
+            Map<String, Long> since = n.snapshot(interest);
             parked.add(pool.submit(() -> n.await(interest, capacity, since, fallbackMillis, in(LONG))));
             Thread.sleep(10);
         }
@@ -190,6 +190,44 @@ class DispatchNotifierTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test @DisplayName("#293: a version-scoped line is woken by its own versions and by unknown ones, not by others")
+    void scopedLinesWakeForTheirVersions() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        WorkflowVersion v1 = new WorkflowVersion("w", 1);
+        WorkflowVersion v2 = new WorkflowVersion("w", 2);
+        DispatchNotifier.Interest scoped = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(v2));
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            List<Future<Boolean>> parked = park(pool, n, scoped, 1, 1, LONG);
+            n.signalReady(Map.of(new DispatchNotifier.Ready("orders", v1), 5));
+            Thread.sleep(100);
+            assertEquals(0, returned(parked), "v1 work leaves the v2 poll parked");
+            n.signalReady(Map.of(new DispatchNotifier.Ready("orders", v2), 1));
+            assertTrue(parked.getFirst().get(2, TimeUnit.SECONDS), "v2 work wakes it");
+
+            parked = park(pool, n, scoped, 1, 1, LONG);
+            n.signal(Map.of("orders", 1));
+            assertTrue(parked.getFirst().get(2, TimeUnit.SECONDS), "work of unknown version wakes it too");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("#293: another version's signal between snapshot and await does not cut a scoped wait short")
+    void scopedSnapshotIgnoresOtherVersions() {
+        DispatchNotifier n = new DispatchNotifier();
+        DispatchNotifier.Interest scoped = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
+        Map<String, Long> since = n.snapshot(scoped);
+        n.signalReady(Map.of(new DispatchNotifier.Ready("orders", new WorkflowVersion("w", 1)), 1));
+        long start = System.currentTimeMillis();
+        assertFalse(n.await(scoped, 1, since, 150, in(LONG)), "it waited out its fallback");
+        assertTrue(System.currentTimeMillis() - start >= 140, "and was not returned early");
+
+        Map<String, Long> again = n.snapshot(scoped);
+        n.signalReady(Map.of(new DispatchNotifier.Ready("orders", new WorkflowVersion("w", 2)), 1));
+        assertTrue(n.await(scoped, 1, again, 5_000, in(LONG)), "its own version's signal is not lost");
     }
 
     @Test @DisplayName("only the front of a line runs the fallback; the next takes over when it leaves")
