@@ -90,6 +90,20 @@ final class Dispatch {
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
         DispatchNotifier.Interest interest = DispatchNotifier.Interest.of(filter);
+        PollResult result = claimUntilDeadline(workerId, filter, max, lease, deadline, cancelled, interest);
+        if (result.cancelled()) return List.of();
+
+        List<TaskActivation> tasks = result.tasks();
+        // A full claim nobody signalled for may have left more behind: wake the next poll to look.
+        // A signal already woke polls enough to cover the tokens it announced.
+        if (tasks.size() >= max && !result.signaled()) notifier.passOn(interest);
+        logClaim(workerId, queues, tasks);
+        return tasks;
+    }
+
+    private PollResult claimUntilDeadline(String workerId, ClaimFilter filter, int max, long lease,
+                                          long deadline, Cancellation cancelled,
+                                          DispatchNotifier.Interest interest) {
         Map<String, Long> since = notifier.snapshot(interest);
         List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
@@ -102,7 +116,7 @@ final class Dispatch {
             if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.cancelled()) {
                 if (signaled) notifier.passOn(interest);   // the wake was meant for a claim; hand it on
-                return List.of();                          // worker gone -- leave the work for a live one
+                return new PollResult(List.of(), signaled, true); // worker gone; leave work for a live one
             }
             since = notifier.snapshot(interest);
             tasks = claimNow(workerId, filter, max, lease);
@@ -113,17 +127,18 @@ final class Dispatch {
             }
         }
         if (scoped) rememberFallback(workerId, tasks.isEmpty() ? fallbackWait : 0);
-        // A full claim nobody signalled for may have left more behind: wake the next poll to look.
-        // A signal already woke polls enough to cover the tokens it announced.
-        if (tasks.size() >= max && !signaled) notifier.passOn(interest);
-        if (!tasks.isEmpty()) {
-            List<TaskActivation> claimed = tasks;
-            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
-                    + " claimed " + claimed.size() + " task(s): "
-                    + claimed.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
-        }
-        return tasks;
+        return new PollResult(tasks, signaled, false);
     }
+
+    private void logClaim(String workerId, Set<String> queues, List<TaskActivation> tasks) {
+        if (!tasks.isEmpty()) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
+                    + " claimed " + tasks.size() + " task(s): "
+                    + tasks.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
+        }
+    }
+
+    private record PollResult(List<TaskActivation> tasks, boolean signaled, boolean cancelled) {}
 
     /**
      * One claim attempt, with a lease that starts now (not at the poll's arrival): one shard at a
