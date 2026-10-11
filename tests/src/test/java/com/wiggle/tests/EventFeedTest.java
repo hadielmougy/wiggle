@@ -8,6 +8,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.EventView;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

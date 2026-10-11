@@ -7,6 +7,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +37,7 @@ class ConsoleWebTest {
     }
 
     private static ServerConfig config() {
-        return new ServerConfig(0, "console-node", null, null, null, 4,
+        return new ServerConfig(TestPorts.free(), "console-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
                 Duration.ofSeconds(5), Duration.ofSeconds(10));
@@ -65,7 +66,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);   // no password -> open
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, 0, Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -106,7 +107,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, 0, Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -141,7 +142,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, 0, Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -183,7 +184,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", "op-pass", "viewer", "view-pass", false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, 0, Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
                 String cancel = base + "/api/instances/" + id + "/cancel";
@@ -218,7 +219,7 @@ class ConsoleWebTest {
             conn.client().register(wf());
             ConsoleAuth auth = new ConsoleAuth("admin", "s3cret", false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, 0, Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
 
@@ -240,7 +241,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, 0, Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
