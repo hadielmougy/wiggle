@@ -2,7 +2,8 @@
 
 ← [Worker contract](20-worker.md) · [Index](00-index.md) · Next: [Engine semantics](30-engine.md)
 
-**Status: proposed.** Nothing in this chapter is implemented. Every requirement here is
+**Status: proposed.** Nothing in this chapter is implemented yet; criteria over task metadata
+(everything but [§3](#3-attributes)) are built in the change that follows this one. Every requirement here is
 *unverified* ([WGL-GEN-001](00-index.md)) until the change that builds it names its test. Where this
 chapter and the rest of the suite disagree, the rest of the suite describes the code as it is today.
 
@@ -80,7 +81,7 @@ instance first, then longest ready ([WGL-STOR-021](80-storage.md)).
 | `WORKFLOW` | `String` | `wf_token.workflow` |
 | `VERSION` | `Integer` | `wf_token.version` |
 | `QUEUE` | `String` | `wf_token.queue` (narrows within the criteria's queues) |
-| `STEP` | `String` | `wf_token.activity`, the step's name |
+| `STEP` | `String` | the step's name, the part of `wf_token.activity` after `workflow#`; `equal`, `notEqual` and `in` only |
 | `NODE_ID` | `String` | `wf_token.node_id` |
 | `KIND` | `String` | `TASK` or `PREDICATE` |
 | `ATTEMPT` | `Integer` | `wf_token.attempt` |
@@ -166,25 +167,34 @@ message PollRequest {
 
 message QueueCriteria {
     repeated string queues = 1;           // required, non-empty
-    Predicate where = 2;                  // absent = every task on those queues
+    CriteriaPredicate where = 2;          // absent = every task on those queues
 }
 
-message Predicate {
+message CriteriaPredicate {
     oneof p {
-        Comparison cmp = 1;
-        Junction and = 2;
-        Junction or = 3;
-        Predicate not = 4;
+        CriteriaComparison cmp = 1;
+        CriteriaJunction all_of = 2;      // and, or and not are Python keywords
+        CriteriaJunction any_of = 3;
+        CriteriaPredicate negated = 4;
     }
 }
 
-message Junction { repeated Predicate terms = 1; }
+message CriteriaJunction { repeated CriteriaPredicate terms = 1; }
 
-message Comparison {
-    Field field = 1;
-    string attribute = 2;                 // set iff field == ATTRIBUTE
-    Op op = 3;
-    repeated google.protobuf.Value args = 4;
+message CriteriaComparison {
+    string field = 1;                     // a Field name, like every enum-valued string on this wire
+    string op = 2;                        // an Op name
+    repeated CriteriaLiteral args = 3;
+    string attribute = 4;                 // set iff field == ATTRIBUTE (§3)
+}
+
+message CriteriaLiteral {                 // exact, unlike google.protobuf.Value's double
+    oneof v {
+        string text = 1;
+        sint64 integer = 2;
+        string decimal = 3;               // §3
+        bool flag = 4;                    // §3
+    }
 }
 ```
 
@@ -194,8 +204,10 @@ version-scoped registration ([WGL-WRK-024](20-worker.md)) keeps working.
 
 **WGL-QC-051** (MUST) The server MUST validate criteria before any claim and answer
 `INVALID_ARGUMENT` on any of the following: an empty queue list, a tree deeper than 8, more than 64
-nodes, an `in` with more than 256 arguments, an argument count wrong for its operator, an argument
-whose JSON type does not fit its field, or a `like` pattern longer than 256 characters.
+nodes, an `in` with more than 256 arguments, an empty `and`/`or`, an unknown field or operator, an argument
+count wrong for its operator, an argument whose literal type does not fit its field, an ordering or
+`like` on `STEP`, a text argument longer than 256 characters, or a `like` pattern ending in an
+escape.
 
 **WGL-QC-052** (MUST) Criteria can only narrow a poll. They MUST NOT let a worker claim a task its
 authorization ([gRPC authz](70-api.md)) would not let it claim by queue name.
@@ -226,18 +238,24 @@ Every backend MUST claim exactly the same task ids.
 
 ### 4.3 Local execution chains
 
-In `LOCAL_SYNC`/`LOCAL_ASYNC` the server leases a continuation straight back to the reporting worker
-when it serves the next step's queue (`Tokens.createLeased`), so that step is never polled.
+In `LOCAL_SYNC`/`LOCAL_ASYNC` the worker decides whether to run the next step itself
+(`LocalRun.advance`): it carries on when it serves the next step's queue, and the server leases it the
+continuation (`Tokens.createLeased`) without the step ever being polled.
+
+**WGL-QC-069** (MUST) A worker polling with criteria MUST hand back at a next step its criteria do not
+match, evaluated on what the activation carries. A `TaskActivation` therefore carries the instance's
+`correlation_id` and `instance_created_at`.
 
 **WGL-QC-070** (MUST) When the reporting worker polled with criteria, the server MUST lease it a
 continuation only if the continuation's queue is in the criteria's queues **and** the predicate holds
 for the continuation, with its attributes freshly extracted ([WGL-QC-042](#3-attributes)). Otherwise
-the continuation is parked `READY` for whoever matches. This extends
-[WGL-WRK-031](20-worker.md): a worker cannot run, through a chain, a step its criteria would not
-claim.
+the continuation is parked `READY` for whoever matches. A run that reports a step after a
+continuation its criteria do not match MUST be refused (400) before any of it is written. This
+extends [WGL-WRK-031](20-worker.md): a worker cannot run, through a chain, a step its criteria would
+not claim.
 
-**WGL-QC-071** (MUST) A report and the poll before it may reach different server nodes, so
-`ReportStepsRequest` MUST carry the worker's criteria. The server MUST NOT depend on per-node poller
+**WGL-QC-071** (MUST) A report and the poll before it may reach different server nodes, so each
+`ReportedRun` MUST carry the worker's criteria (`criteria = 5`). The server MUST NOT depend on per-node poller
 state to make this check.
 
 ### 4.4 Long-poll wake-ups and the backlog
@@ -246,7 +264,8 @@ state to make this check.
 including those whose predicate will reject it. Such a poller claims nothing and waits again. This
 means spurious wake-ups, never missed ones.
 
-**WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria. The portal's Backlog tab
+**WGL-QC-081** (MUST) `PollerRegistry` MUST record each poller's criteria. Until the portal shows the
+three states below, a slice counts as covered unless every live poller's predicate is false for it. The portal's Backlog tab
 MUST evaluate them against each `(workflow, version, queue, step)` slice and show the slice as
 *covered*, *conditionally covered* (only an attribute predicate stands between a poller and the
 slice, and the slice's attribute values are not known) or *uncovered*. A task that no poller's
