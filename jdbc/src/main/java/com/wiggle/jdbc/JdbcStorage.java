@@ -2292,11 +2292,11 @@ public final class JdbcStorage implements Storage {
         private record QueueSql(List<String> queues, List<CriteriaSql> where) {
 
             static QueueSql of(ClaimFilter filter, Dialect dialect) {
-                List<String> queues = List.copyOf(filter.queues());
-                List<CriteriaSql> where = new ArrayList<>(queues.size());
-                for (int i = 0; i < queues.size(); i++) {
-                    com.wiggle.core.criteria.Predicate p = filter.where().get(queues.get(i));
-                    where.add(p == null ? null : CriteriaSql.compile(p, dialect, "c" + i + "_"));
+                List<String> queues = new ArrayList<>(filter.queues().size());
+                List<CriteriaSql> where = new ArrayList<>(filter.queues().size());
+                for (com.wiggle.core.criteria.QueueCriteria c : filter.queues()) {
+                    queues.add(c.queue());
+                    where.add(c.where() == null ? null : CriteriaSql.compile(c.where(), dialect, "c" + where.size() + "_"));
                 }
                 return new QueueSql(queues, java.util.Collections.unmodifiableList(where));
             }

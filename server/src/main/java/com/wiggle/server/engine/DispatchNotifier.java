@@ -1,10 +1,12 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
-import com.wiggle.core.criteria.Predicate;
+import com.wiggle.core.criteria.QueueCriteria;
+import com.wiggle.server.store.ClaimFilter;
 
 import java.util.ArrayDeque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -30,24 +32,34 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 final class DispatchNotifier {
 
-    /** What a poll can claim. Polls with equal interests are interchangeable to a signal. An empty
-     *  queue set claims every queue; an empty version set, every version; {@code where} holds the
-     *  criteria of the queues that have one. Polls with different criteria wait in different lines,
-     *  so a signal for a task one poll's criteria reject still reaches a poll whose criteria accept it. */
-    record Interest(Set<String> queues, Set<WorkflowVersion> versions, Map<String, Predicate> where) {
+    /** What a poll can claim: its queues, each with its criteria, and its versions. Polls with equal
+     *  interests are interchangeable to a signal. No queues claims every queue; no versions, every
+     *  version. Polls with different criteria wait in different lines, so a signal for a task one
+     *  poll's criteria reject still reaches a poll whose criteria accept it. */
+    record Interest(Set<QueueCriteria> queues, Set<WorkflowVersion> versions) {
 
         Interest {
             queues = queues == null ? Set.of() : Set.copyOf(queues);
             versions = versions == null ? Set.of() : Set.copyOf(versions);
-            where = where == null ? Map.of() : Map.copyOf(where);
         }
 
-        Interest(Set<String> queues, Set<WorkflowVersion> versions) {
-            this(queues, versions, null);
+        static Interest of(ClaimFilter filter) {
+            return new Interest(Set.copyOf(filter.queues()), filter.versions());
+        }
+
+        /** A poll by queue names. */
+        static Interest byName(Set<String> names, Set<WorkflowVersion> versions) {
+            return of(ClaimFilter.byName(names, versions));
+        }
+
+        Set<String> names() {
+            Set<String> out = new HashSet<>();
+            for (QueueCriteria c : queues) out.add(c.queue());
+            return out;
         }
 
         boolean covers(String queue) {
-            return queues.isEmpty() || queues.contains(queue);
+            return queues.isEmpty() || queues.stream().anyMatch(c -> c.queue().equals(queue));
         }
     }
 
@@ -139,7 +151,7 @@ final class DispatchNotifier {
     boolean await(Interest interest, int capacity, Map<String, Long> since, long fallbackMillis, long deadline) {
         lock.lock();
         try {
-            if (advanced(interest.queues(), since)) return true;
+            if (advanced(interest.names(), since)) return true;
             ArrayDeque<Waiter> line = lines.computeIfAbsent(interest, k -> new ArrayDeque<>());
             Waiter me = new Waiter(lock.newCondition(), Math.max(1, capacity));
             line.addLast(me);

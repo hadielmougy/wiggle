@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class DispatchNotifierTest {
 
-    private static final DispatchNotifier.Interest ORDERS = new DispatchNotifier.Interest(Set.of("orders"), null);
+    private static final DispatchNotifier.Interest ORDERS = DispatchNotifier.Interest.byName(Set.of("orders"), null);
     private static final long LONG = 10_000;
 
     private static long in(long millis) {
@@ -41,7 +41,7 @@ class DispatchNotifierTest {
                                               long fallbackMillis) throws Exception {
         List<Future<Boolean>> parked = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            Map<String, Long> since = n.snapshot(interest.queues());
+            Map<String, Long> since = n.snapshot(interest.names());
             parked.add(pool.submit(() -> n.await(interest, capacity, since, fallbackMillis, in(LONG))));
             Thread.sleep(10);
         }
@@ -56,7 +56,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("a signal that advances a snapshotted queue makes await return immediately (no lost wakeup)")
     void signalPastSnapshotReturnsImmediately() {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());   // snapshot BEFORE the signal, as poll() does
+        Map<String, Long> since = n.snapshot(ORDERS.names());   // snapshot BEFORE the signal, as poll() does
         n.signal(Set.of("orders"));                               // work parked between snapshot and await
 
         long start = System.currentTimeMillis();
@@ -67,7 +67,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("a concurrent signal wakes a blocked waiter well before its timeout")
     void concurrentSignalWakesWaiter() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());
+        Map<String, Long> since = n.snapshot(ORDERS.names());
 
         AtomicBoolean returned = new AtomicBoolean(false);
         Thread waiter = new Thread(() -> {
@@ -85,7 +85,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("a signal for an unrelated queue does not wake the waiter")
     void unrelatedSignalDoesNotWake() {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());
+        Map<String, Long> since = n.snapshot(ORDERS.names());
         n.signal(Set.of("payments"));
 
         long start = System.currentTimeMillis();
@@ -96,7 +96,7 @@ class DispatchNotifierTest {
     @Test @DisplayName("with no signal at all, the front of the line returns after its fallback")
     void noSignalFallsBack() {
         DispatchNotifier n = new DispatchNotifier();
-        Map<String, Long> since = n.snapshot(ORDERS.queues());
+        Map<String, Long> since = n.snapshot(ORDERS.names());
 
         long start = System.currentTimeMillis();
         assertFalse(n.await(ORDERS, 1, since, 150, in(LONG)), "fell back, no signal");
@@ -109,7 +109,7 @@ class DispatchNotifierTest {
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             park(pool, n, ORDERS, 1, 1, LONG);   // holds the front, with a long fallback
-            Map<String, Long> since = n.snapshot(ORDERS.queues());
+            Map<String, Long> since = n.snapshot(ORDERS.names());
             long start = System.currentTimeMillis();
             assertFalse(n.await(ORDERS, 1, since, 50, in(150)));
             long waited = System.currentTimeMillis() - start;
@@ -154,8 +154,8 @@ class DispatchNotifierTest {
     @Test @DisplayName("each line covering the queue gets its own wake")
     void eachInterestIsWoken() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Interest v1 = new DispatchNotifier.Interest(Set.of("orders"), Set.of(new WorkflowVersion("w", 1)));
-        DispatchNotifier.Interest v2 = new DispatchNotifier.Interest(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
+        DispatchNotifier.Interest v1 = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 1)));
+        DispatchNotifier.Interest v2 = DispatchNotifier.Interest.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             List<Future<Boolean>> first = park(pool, n, v1, 2, 1, LONG);
@@ -175,10 +175,10 @@ class DispatchNotifierTest {
     @Test @DisplayName("WGL-QC-080: polls with different criteria wait in different lines, so each is woken")
     void eachCriteriaIsWoken() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Interest vip = new DispatchNotifier.Interest(Set.of("orders"), null, Map.of("orders",
-                QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%")).where()));
-        DispatchNotifier.Interest rest = new DispatchNotifier.Interest(Set.of("orders"), null, Map.of("orders",
-                QueueCriteria.from("orders").where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%"))).where()));
+        DispatchNotifier.Interest vip = new DispatchNotifier.Interest(Set.of(
+                QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%"))), null);
+        DispatchNotifier.Interest rest = new DispatchNotifier.Interest(Set.of(
+                QueueCriteria.from("orders").where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%")))), null);
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             List<Future<Boolean>> first = park(pool, n, vip, 1, 1, LONG);

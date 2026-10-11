@@ -1046,7 +1046,7 @@ abstract class StorageContract {
             }
             assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
 
-            ClaimFilter filter = ClaimFilter.of(List.of(criteria), null);
+            ClaimFilter filter = new ClaimFilter(List.of(criteria), null);
             Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
             Set<Integer> got = new TreeSet<>();
             for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
@@ -1154,7 +1154,7 @@ abstract class StorageContract {
         List<Token> first = criteriaFixture(q1);
         List<Token> second = criteriaFixture(q2);
         List<Token> third = criteriaFixture(q3);
-        ClaimFilter filter = ClaimFilter.of(List.of(
+        ClaimFilter filter = new ClaimFilter(List.of(
                 QueueCriteria.from(q1).where(cb -> cb.equal(Task_.WORKFLOW, "crit-a")),
                 QueueCriteria.from(q2).where(cb -> cb.equal(Task_.WORKFLOW, "crit-b")),
                 QueueCriteria.from(q3)), null);
