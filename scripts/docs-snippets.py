@@ -68,6 +68,7 @@ SOURCES = {
     "agents-model": FIXTURES / "agents/Model.java",
     "agents-demo": FIXTURES / "agents/AgentsDemo.java",
     "agents-claude": ROOT / "example-claude/src/main/java/com/wiggle/agents/claude/ClaudeModel.java",
+    "agents-openai": ROOT / "example-openai/src/main/java/com/wiggle/agents/openai/OpenAiModel.java",
 }
 
 MARKER = re.compile(r"^(?P<indent>[ \t]*)<!-- snippet: (?P<source>[\w-]+)/(?P<regions>[\w,-]+) -->$")

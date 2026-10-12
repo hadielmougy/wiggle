@@ -10,10 +10,16 @@ alongside this page; run it end to end, offline, with:
 ./gradlew :example:runAgents --args="vector databases"
 ```
 
-and against Claude with:
+against Claude with:
 
 ```bash
 ANTHROPIC_API_KEY=... ./gradlew :example-claude:runAgents --args="vector databases"
+```
+
+and against OpenAI with:
+
+```bash
+OPENAI_API_KEY=... ./gradlew :example-openai:runAgents --args="vector databases"
 ```
 
 Nothing here is an agent framework. The team is an ordinary workflow over operators the
@@ -230,6 +236,44 @@ retries is the adapter's call:
 | any other 4xx | `PermanentActivityException` | fails the instance, no retry |
 
 The model defaults to `claude-opus-5-5`; set `WIGGLE_CLAUDE_MODEL` to change it.
+
+- **`OpenAiModel`**, in the unpublished `:example-openai` module, calls the OpenAI Responses API.
+
+<!-- snippet: agents-openai/complete -->
+```java
+@Override
+public String complete(Prompt p) {
+    ResponseCreateParams params = ResponseCreateParams.builder()
+            .model(model)
+            .maxOutputTokens(16000L)
+            .instructions(p.system())
+            .input(p.user())
+            .build();
+    Response reply;
+    try {
+        reply = client.responses().create(params);
+    } catch (OpenAIServiceException e) {
+        int status = e.statusCode();
+        if (status == 408 || status == 409 || status == 429 || status >= 500) throw e;
+        throw new PermanentActivityException(p.agent() + ": " + e.getMessage(), e);
+    }
+    List<ResponseOutputMessage.Content> content = reply.output().stream()
+            .flatMap(item -> item.message().stream())
+            .flatMap(message -> message.content().stream())
+            .toList();
+    if (content.stream().anyMatch(part -> part.refusal().isPresent())) {
+        throw new PermanentActivityException(p.agent() + ": the model declined this turn");
+    }
+    return content.stream()
+            .flatMap(part -> part.outputText().stream())
+            .map(text -> text.text())
+            .collect(Collectors.joining());
+}
+```
+
+It maps failures the same way, except that OpenAI has no server-side fallback: a refusal part in the
+reply fails the instance with `PermanentActivityException`. The model defaults to `gpt-5.5`; set
+`WIGGLE_OPENAI_MODEL` to change it, and `OPENAI_BASE_URL` to point it at a compatible endpoint.
 
 ## What durability buys an agent team
 

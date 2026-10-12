@@ -13,6 +13,7 @@ include(
     "dist",
     "example",
     "example-claude",
+    "example-openai",
     "tests",
     "console",
     "test-fixtures"
