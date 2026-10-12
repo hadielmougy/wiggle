@@ -17,7 +17,8 @@ import java.util.Map;
  *
  * <pre>./gradlew :example:runAgents</pre>
  *
- * <p>{@code :example-claude:runAgents} runs the same team against Claude.
+ * <p>{@code :example-claude:runAgents} and {@code :example-openai:runAgents} run the same team against
+ * Claude and OpenAI.
  */
 public final class AgentsDemo {
 

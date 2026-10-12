@@ -294,7 +294,9 @@ class DocSnippetsTest {
             Map.entry("agents-model", "agents/Model.java"),
             Map.entry("agents-demo", "agents/AgentsDemo.java"),
             Map.entry("agents-claude",
-                    "../example-claude/src/main/java/com/wiggle/agents/claude/ClaudeModel.java"));
+                    "../example-claude/src/main/java/com/wiggle/agents/claude/ClaudeModel.java"),
+            Map.entry("agents-openai",
+                    "../example-openai/src/main/java/com/wiggle/agents/openai/OpenAiModel.java"));
 
     private static Path sourcePath(String source) {
         String path = SOURCE_FILES.get(source);
