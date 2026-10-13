@@ -44,20 +44,14 @@ final class Dispatch {
                               int max, Long leaseMillis, long deadline, Cancellation cancelled) {
         pollers.seen(workerId, filter, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
-        PollSession.Result result = pollSession.poll(workerId, filter, max, deadline, cancelled,
-                () -> claimNow(workerId, filter, max, lease));
-        if (result.cancelled()) return List.of();
-        List<TaskActivation> tasks = result.tasks();
-        logClaim(workerId, filter.queueNames(), tasks);
-        return tasks;
-    }
+        PollRequest request = new PollRequest(workerId, filter, max, deadline, cancelled);
 
-    private void logClaim(String workerId, Set<String> queues, List<TaskActivation> tasks) {
-        if (!tasks.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
-                    + " claimed " + tasks.size() + " task(s): "
-                    + tasks.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
+        PollSession.Result result = pollSession.poll(request, () -> claimNow(workerId, filter, max, lease));
+        if (result.cancelled()) {
+            return List.of();
         }
+
+        return result.tasks();
     }
 
     /**

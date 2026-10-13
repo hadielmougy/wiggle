@@ -1,7 +1,6 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.TaskActivation;
-import com.wiggle.server.store.ClaimFilter;
 
 import java.util.List;
 import java.util.function.Predicate;
@@ -28,28 +27,51 @@ final class PollSession {
         this.fallbackPolicy = fallbackPolicy;
     }
 
-    /** Runs {@code claim} until it finds work, {@code deadline} passes, or {@code cancelled} says the
-     *  worker is gone. A claim that throws ends the poll with its exception. */
-    Result poll(String workerId, ClaimFilter filter, int max, long deadline,
-                Cancellation cancelled, Supplier<List<TaskActivation>> claim) {
-        if (cancelled.cancelled()) return new Result(List.of(), true);
-        try (DispatchNotifier.Watch watch = notifier.watch(filter, max)) {
-            Predicate<List<TaskActivation>> full = got -> !got.isEmpty() && got.size() >= max;
-            List<TaskActivation> tasks = watch.claim(claim, full);
-            FallbackPollPolicy.Schedule fallback = fallbackPolicy.schedule(workerId, filter);
-            while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-                boolean signaled = watch.await(fallback.waitMillis(), deadline);
-                if (signaled && max > 1) lingerForBatch(deadline);
-                if (cancelled.cancelled()) {
-                    watch.forgo();   // a wake meant for a claim goes to another poll
-                    return new Result(List.of(), true); // worker gone; leave work for a live one
-                }
-                tasks = watch.claim(claim, full);
-                fallback.afterClaim(signaled);
-            }
-            fallback.finish(!tasks.isEmpty());
-            return new Result(tasks, false);
+    /** Runs {@code claim} until it finds work, the request deadline passes, or the worker is gone. */
+    Result poll(PollRequest request, Supplier<List<TaskActivation>> claim) {
+        if (request.cancelled().cancelled()) {
+            return new Result(List.of(), true);
         }
+
+        try (DispatchNotifier.Watch watch = notifier.watch(request.filter(), request.max())) {
+            FallbackPollPolicy.Schedule fallback =
+                    fallbackPolicy.schedule(request.workerId(), request.filter());
+
+            Result result = claimUntilWork(request, watch, claim, fallback);
+            if (!result.cancelled()) {
+                fallback.finish(!result.tasks().isEmpty());
+            }
+            return result;
+        }
+    }
+
+    private Result claimUntilWork(
+            PollRequest request,
+            DispatchNotifier.Watch watch,
+            Supplier<List<TaskActivation>> claim,
+            FallbackPollPolicy.Schedule fallback
+    ) {
+        Predicate<List<TaskActivation>> isFull =
+                tasks -> !tasks.isEmpty() && tasks.size() >= request.max();
+        List<TaskActivation> tasks = watch.claim(claim, isFull);
+
+        while (tasks.isEmpty() && System.currentTimeMillis() < request.deadline()) {
+            boolean signaled = watch.await(fallback.waitMillis(), request.deadline());
+
+            if (signaled && request.max() > 1) {
+                lingerForBatch(request.deadline());
+            }
+
+            if (request.cancelled().cancelled()) {
+                watch.forgo();
+                return new Result(List.of(), true);
+            }
+
+            tasks = watch.claim(claim, isFull);
+            fallback.afterClaim(signaled);
+        }
+
+        return new Result(tasks, false);
     }
 
     /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
