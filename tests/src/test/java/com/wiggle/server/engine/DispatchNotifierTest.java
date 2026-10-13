@@ -35,6 +35,11 @@ class DispatchNotifierTest {
         return System.currentTimeMillis() + millis;
     }
 
+    /** A schedule whose fallback wait is always {@code millis}. */
+    private static FallbackPollPolicy.Schedule every(long millis) {
+        return new FallbackPollPolicy(new PollerRegistry(60_000), millis, millis, false).schedule("w", ORDERS);
+    }
+
     /** {@code count} polls parked on {@code interest}, each taking {@code capacity}; each future
      *  answers what its await returned. Parked one at a time, so they line up in submission order. */
     private static List<Future<Boolean>> park(ExecutorService pool, DispatchNotifier n,
@@ -42,8 +47,8 @@ class DispatchNotifierTest {
                                               long fallbackMillis) throws Exception {
         List<Future<Boolean>> parked = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            DispatchNotifier.Watch watch = n.watch(interest, capacity);
-            parked.add(pool.submit(() -> watch.await(fallbackMillis, in(LONG))));
+            DispatchNotifier.Watch watch = n.watch(interest, capacity, every(fallbackMillis));
+            parked.add(pool.submit(() -> watch.await(in(LONG))));
             Thread.sleep(10);
         }
         Thread.sleep(50);
@@ -64,22 +69,22 @@ class DispatchNotifierTest {
     @Test @DisplayName("a signal that lands after the watch opens makes await return immediately (no lost wakeup)")
     void signalPastSnapshotReturnsImmediately() {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Watch watch = n.watch(ORDERS, 1);   // watch BEFORE the signal, as poll() does
+        DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(5_000));   // watch BEFORE the signal, as poll() does
         signal(n, "orders", null, null, 1);   // work produced before the poll parks
 
         long start = System.currentTimeMillis();
-        assertTrue(watch.await(5_000, in(5_000)), "reported a signal, not a timeout");
+        assertTrue(watch.await(in(5_000)), "reported a signal, not a timeout");
         assertTrue(System.currentTimeMillis() - start < 1_000, "returned promptly, did not block on the timeout");
     }
 
     @Test @DisplayName("a concurrent signal wakes a blocked waiter well before its timeout")
     void concurrentSignalWakesWaiter() throws Exception {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+        DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(LONG));
 
         AtomicBoolean returned = new AtomicBoolean(false);
         Thread waiter = new Thread(() -> {
-            watch.await(LONG, in(LONG));
+            watch.await(in(LONG));
             returned.set(true);
         });
         waiter.start();
@@ -93,21 +98,21 @@ class DispatchNotifierTest {
     @Test @DisplayName("a signal for an unrelated queue does not wake the waiter")
     void unrelatedSignalDoesNotWake() {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+        DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(150));
         signal(n, "payments", null, null, 1);
 
         long start = System.currentTimeMillis();
-        assertFalse(watch.await(150, in(LONG)), "reported a fallback, not a signal");
+        assertFalse(watch.await(in(LONG)), "reported a fallback, not a signal");
         assertTrue(System.currentTimeMillis() - start >= 120, "waited the fallback rather than returning early");
     }
 
     @Test @DisplayName("with no signal at all, the front of the line returns after its fallback")
     void noSignalFallsBack() {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+        DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(150));
 
         long start = System.currentTimeMillis();
-        assertFalse(watch.await(150, in(LONG)), "fell back, no signal");
+        assertFalse(watch.await(in(LONG)), "fell back, no signal");
         assertTrue(System.currentTimeMillis() - start >= 120, "waited ~the fallback");
     }
 
@@ -117,9 +122,9 @@ class DispatchNotifierTest {
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             park(pool, n, ORDERS, 1, 1, LONG);   // holds the front, with a long fallback
-            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(50));
             long start = System.currentTimeMillis();
-            assertFalse(watch.await(50, in(150)));
+            assertFalse(watch.await(in(150)));
             long waited = System.currentTimeMillis() - start;
             assertTrue(waited >= 120, "behind the front its own fallback does not run: waited " + waited);
         } finally {
@@ -227,14 +232,14 @@ class DispatchNotifierTest {
     void scopedSnapshotIgnoresOtherVersions() {
         DispatchNotifier n = new DispatchNotifier();
         ClaimFilter scoped = ClaimFilter.byName(Set.of("orders"), Set.of(new WorkflowVersion("w", 2)));
-        DispatchNotifier.Watch watch = n.watch(scoped, 1);
+        DispatchNotifier.Watch watch = n.watch(scoped, 1, every(150));
         signal(n, "orders", new WorkflowVersion("w", 1), null, 1);
         long start = System.currentTimeMillis();
-        assertFalse(watch.await(150, in(LONG)), "it waited out its fallback");
+        assertFalse(watch.await(in(LONG)), "it waited out its fallback");
         assertTrue(System.currentTimeMillis() - start >= 140, "and was not returned early");
 
         signal(n, "orders", new WorkflowVersion("w", 2), null, 1);
-        assertTrue(watch.await(5_000, in(LONG)), "its own version's signal is not lost");
+        assertTrue(watch.await(in(LONG)), "its own version's signal is not lost");
     }
 
     @Test @DisplayName("only the front of a line runs the fallback; the next takes over when it leaves")
@@ -258,7 +263,7 @@ class DispatchNotifierTest {
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
             List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
-            n.watch(ORDERS, 1).passOn();
+            n.watch(ORDERS, 1, every(LONG)).passOn();
             assertTrue(parked.get(0).get(2, TimeUnit.SECONDS));
             Thread.sleep(100);
             assertEquals(1, returned(parked));
@@ -272,7 +277,7 @@ class DispatchNotifierTest {
         DispatchNotifier n = new DispatchNotifier();
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
-            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(LONG));
             List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
 
             assertEquals("got", watch.claim(() -> "got", got -> true));
@@ -289,9 +294,9 @@ class DispatchNotifierTest {
         DispatchNotifier n = new DispatchNotifier();
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
-            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(LONG));
             signal(n, "orders", null, null, 1);
-            assertTrue(watch.await(LONG, in(LONG)));
+            assertTrue(watch.await(in(LONG)));
             List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
 
             watch.claim(() -> "got", got -> true);
@@ -310,9 +315,9 @@ class DispatchNotifierTest {
         DispatchNotifier n = new DispatchNotifier();
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
-            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(LONG));
             signal(n, "orders", null, null, 1);
-            assertTrue(watch.await(LONG, in(LONG)));
+            assertTrue(watch.await(in(LONG)));
             List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
 
             watch.forgo();
@@ -330,7 +335,7 @@ class DispatchNotifierTest {
         DispatchNotifier n = new DispatchNotifier();
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
-            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(LONG));
             List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
             IllegalStateException down = new IllegalStateException("store down");
 
@@ -338,7 +343,7 @@ class DispatchNotifierTest {
                     () -> watch.claim(() -> { throw down; }, got -> true)));
             signal(n, "orders", null, null, 1);
             assertTrue(parked.get(0).get(2, TimeUnit.SECONDS));
-            assertTrue(watch.await(LONG, in(LONG)));
+            assertTrue(watch.await(in(LONG)));
             assertThrows(IllegalStateException.class, () -> watch.claim(() -> { throw down; }, got -> true));
             watch.forgo();
             Thread.sleep(100);
@@ -353,8 +358,8 @@ class DispatchNotifierTest {
         DispatchNotifier n = new DispatchNotifier();
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
-            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
-            assertFalse(watch.await(20, in(LONG)), "fell back");
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1, every(20));
+            assertFalse(watch.await(in(LONG)), "fell back");
             List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
             watch.forgo();
             watch.claim(() -> "short", got -> false);
@@ -363,7 +368,7 @@ class DispatchNotifierTest {
 
             signal(n, "orders", null, null, 1);
             assertTrue(parked.get(0).get(2, TimeUnit.SECONDS), "the signal woke the front poll");
-            assertTrue(watch.await(LONG, in(LONG)), "and this poll saw it land");
+            assertTrue(watch.await(in(LONG)), "and this poll saw it land");
             watch.forgo();
             assertTrue(parked.get(1).get(2, TimeUnit.SECONDS), "its unused wake went to the next poll");
             Thread.sleep(100);
@@ -371,6 +376,26 @@ class DispatchNotifierTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test @DisplayName("a claim after an await adjusts the schedule, signaled or not; the first claim does not")
+    void claimsAfterAnAwaitPaceTheSchedule() {
+        DispatchNotifier n = new DispatchNotifier();
+        FallbackPollPolicy.Schedule fallback =
+                new FallbackPollPolicy(new PollerRegistry(60_000), 100, 100, true).schedule("w", ORDERS);
+        DispatchNotifier.Watch watch = n.watch(ORDERS, 1, fallback);
+
+        watch.claim(() -> "none", got -> false);
+        assertEquals(25, fallback.waitMillis(), "the first claim followed no await");
+
+        assertFalse(watch.await(in(LONG)), "fell back");
+        watch.claim(() -> "none", got -> false);
+        assertEquals(50, fallback.waitMillis(), "an unsignaled claim ramps the wait");
+
+        signal(n, "orders", null, null, 1);
+        assertTrue(watch.await(in(LONG)));
+        watch.claim(() -> "got", got -> true);
+        assertEquals(100, fallback.waitMillis(), "a signaled claim jumps it to the interval");
     }
 
     private static final ClaimFilter VIP = new ClaimFilter(List.of(
@@ -407,13 +432,13 @@ class DispatchNotifierTest {
     @Test @DisplayName("a task the criteria reject, while not parked, does not cut the wait short")
     void criteriaSnapshotIgnoresRejectedTasks() {
         DispatchNotifier n = new DispatchNotifier();
-        DispatchNotifier.Watch watch = n.watch(VIP, 1);
+        DispatchNotifier.Watch watch = n.watch(VIP, 1, every(150));
         signal(n, task("std-1"), 1);
         long start = System.currentTimeMillis();
-        assertFalse(watch.await(150, in(LONG)), "it waited out its fallback");
+        assertFalse(watch.await(in(LONG)), "it waited out its fallback");
         assertTrue(System.currentTimeMillis() - start >= 140, "and was not returned early");
 
         signal(n, task("vip-1"), 1);
-        assertTrue(watch.await(5_000, in(LONG)), "a task it admits is not lost");
+        assertTrue(watch.await(in(LONG)), "a task it admits is not lost");
     }
 }

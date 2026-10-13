@@ -27,6 +27,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WakeOnProduceTest {
 
     private static final String QUEUE = "q";
+    private static final ClaimFilter QUEUE_FILTER = ClaimFilter.byName(Set.of(QUEUE), null);
+    private static final FallbackPollPolicy FALLBACK =
+            new FallbackPollPolicy(new PollerRegistry(60_000), 100, 100, false);
 
     @Test
     @DisplayName("parking a token READY signals its queue after the transaction commits")
@@ -38,7 +41,7 @@ class WakeOnProduceTest {
             Tokens tokens = new Tokens(new DefinitionRegistry(storage), transactions::wake);
             Node node = Node.task("one", "one", "one", QUEUE, null);
 
-            DispatchNotifier.Watch watch = notifier.watch(ClaimFilter.byName(Set.of(QUEUE), null), 1);
+            DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
             transactions.inTxVoid("wfi_1", tx -> {
                 long now = 1_000L;
                 Instance inst = Instances.create(tx, "wfi_1", "w", 1, Map.of(), null, null, now);
@@ -47,7 +50,7 @@ class WakeOnProduceTest {
                 tokens.markReady(tx, inst, t, node, now);
             });
 
-            assertTrue(watch.await(0, System.currentTimeMillis()),
+            assertTrue(watch.await(System.currentTimeMillis()),
                     "a token parked READY on '" + QUEUE + "' did not signal its queue; every poll for it "
                             + "now waits out the fallback interval instead of being woken");
         }
@@ -84,9 +87,9 @@ class WakeOnProduceTest {
             assertThrows(IllegalStateException.class,
                     () -> transactions.inTxVoid("wfi_1", outer -> transactions.inTxVoid("wfi_1", inner -> { })));
 
-            DispatchNotifier.Watch watch = notifier.watch(ClaimFilter.byName(Set.of(QUEUE), null), 1);
+            DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
             transactions.inTxVoid("wfi_1", tx -> transactions.wake(QUEUE, null, null));
-            assertTrue(watch.await(0, System.currentTimeMillis()),
+            assertTrue(watch.await(System.currentTimeMillis()),
                     "the failed scope must not have left this thread's state stuck");
         }
     }
