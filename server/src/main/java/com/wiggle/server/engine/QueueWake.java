@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.TaskFacts;
 
 /**
  * Where a newly dispatchable queue is reported, so the poller waiting on it can be woken once the
@@ -12,6 +14,7 @@ package com.wiggle.server.engine;
 @FunctionalInterface
 interface QueueWake {
 
-    /** Marks a queue as having gained the work {@code ready} describes. A null queue is a no-op. */
-    void ready(DispatchNotifier.Ready ready);
+    /** Marks {@code queue} as having gained a token of {@code version} with {@code facts} (each null
+     *  when not known). A null queue is a no-op. */
+    void ready(String queue, WorkflowVersion version, TaskFacts facts);
 }

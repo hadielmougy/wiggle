@@ -1,13 +1,12 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.TaskFacts;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * The engine's transaction scope: a storage transaction plus the wake-on-produce signal that must
@@ -42,28 +41,20 @@ final class Transactions {
     private final Storage storage;
     private final DispatchNotifier notifier;
 
-    /** How many tokens the in-flight transaction parked READY, by queue and version. */
-    private final ThreadLocal<Map<DispatchNotifier.Ready, Integer>> readyQueues = new ThreadLocal<>();
+    /** The tokens the in-flight transaction parked READY. */
+    private final ThreadLocal<DispatchNotifier.Batch> pending = new ThreadLocal<>();
 
     Transactions(Storage storage, DispatchNotifier notifier) {
         this.storage = storage;
         this.notifier = notifier;
     }
 
-    /** Marks {@code queue} for the post-commit wake-on-produce notification; null is a no-op. */
-    void wake(String queue) {
-        wake(queue, null);
-    }
-
-    /** The same, for a token of {@code version} (null: not known). */
-    void wake(String queue, WorkflowVersion version) {
-        wake(new DispatchNotifier.Ready(queue, version));
-    }
-
-    /** The same, for a token {@code ready} describes. Handed to producers as a {@link QueueWake}. */
-    void wake(DispatchNotifier.Ready ready) {
-        Map<DispatchNotifier.Ready, Integer> marked = readyQueues.get();
-        if (marked != null && ready.queue() != null) marked.merge(ready, 1, Integer::sum);
+    /** Marks {@code queue} for the post-commit wake-on-produce notification, for a token of
+     *  {@code version} with {@code facts} (each null when not known); a null queue is a no-op. Handed
+     *  to producers as a {@link QueueWake}. */
+    void wake(String queue, WorkflowVersion version, TaskFacts facts) {
+        DispatchNotifier.Batch marked = pending.get();
+        if (marked != null) marked.ready(queue, version, facts);
     }
 
     /** The shard the instance or token {@code id} lives on. */
@@ -102,13 +93,13 @@ final class Transactions {
 
     /** Runs {@code body} on {@code shard}, then (post-commit) wakes pollers for any queue it marked. */
     <T> T inShard(int shard, TxBody<T> body) {
-        if (readyQueues.get() != null) {
+        if (pending.get() != null) {
             throw new IllegalStateException("nested transaction scope: this thread is already inside "
                     + "inTx. A nested call would run on a second connection and deadlock against the "
                     + "instance lock the outer transaction holds. Pass the open Tx down instead.");
         }
-        Map<DispatchNotifier.Ready, Integer> mine = new HashMap<>();
-        readyQueues.set(mine);
+        DispatchNotifier.Batch mine = notifier.batch();
+        pending.set(mine);
         T result;
         try {
             result = storage.inShard(shard, tx -> {
@@ -116,9 +107,9 @@ final class Transactions {
                 return body.run(tx);
             });
         } finally {
-            readyQueues.remove();
+            pending.remove();
         }
-        notifier.signalReady(mine);   // post-commit: an exception above never reaches here
+        mine.signal();   // post-commit: an exception above never reaches here
         return result;
     }
 
