@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /**
  * Handing work to workers: the long poll's pacing around {@link Tokens#claim}. Nothing
@@ -92,7 +93,6 @@ final class Dispatch {
             PollResult result = claimUntilDeadline(workerId, filter, max, lease, deadline, cancelled, watch);
             if (result.cancelled()) return List.of();
             List<TaskActivation> tasks = result.tasks();
-            if (tasks.size() >= max && !result.signaled()) watch.passOn();
             logClaim(workerId, filter.queueNames(), tasks);
             return tasks;
         }
@@ -101,7 +101,8 @@ final class Dispatch {
     private PollResult claimUntilDeadline(String workerId, ClaimFilter filter, int max, long lease,
                                           long deadline, Cancellation cancelled,
                                           DispatchNotifier.Watch watch) {
-        List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
+        Predicate<List<TaskActivation>> full = got -> !got.isEmpty() && got.size() >= max;
+        List<TaskActivation> tasks = watch.claim(() -> claimNow(workerId, filter, max, lease), full);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
         boolean scoped   = !filter.versions().isEmpty() || filter.queues().stream().anyMatch(c -> c.where() != null);
         boolean adaptive = !scoped && adaptiveFallbackPoll;
@@ -113,10 +114,10 @@ final class Dispatch {
             signaled = watch.await(fallbackWait, deadline);
             if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.cancelled()) {
-                if (signaled) watch.passOn();   // the wake was meant for a claim; hand it on
-                return new PollResult(List.of(), signaled, true); // worker gone; leave work for a live one
+                watch.forgo();   // a wake meant for a claim goes to another poll
+                return new PollResult(List.of(), true); // worker gone; leave work for a live one
             }
-            tasks = claimNow(workerId, filter, max, lease);
+            tasks = watch.claim(() -> claimNow(workerId, filter, max, lease), full);
             if (!signaled && (scoped || adaptive)) {
                 fallbackWait = Math.min(fallbackWait * 2, waitCap);
             } else if (signaled && adaptive) {
@@ -124,7 +125,7 @@ final class Dispatch {
             }
         }
         if (scoped) rememberFallback(workerId, tasks.isEmpty() ? fallbackWait : 0);
-        return new PollResult(tasks, signaled, false);
+        return new PollResult(tasks, false);
     }
 
     private void logClaim(String workerId, Set<String> queues, List<TaskActivation> tasks) {
@@ -135,7 +136,7 @@ final class Dispatch {
         }
     }
 
-    private record PollResult(List<TaskActivation> tasks, boolean signaled, boolean cancelled) {}
+    private record PollResult(List<TaskActivation> tasks, boolean cancelled) {}
 
     /**
      * One claim attempt, with a lease that starts now (not at the poll's arrival): one shard at a

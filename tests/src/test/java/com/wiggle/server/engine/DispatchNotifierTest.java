@@ -267,6 +267,112 @@ class DispatchNotifierTest {
         }
     }
 
+    @Test @DisplayName("a full claim no signal preceded wakes the next parked poll, once")
+    void fullUnsignaledClaimHandsOn() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
+
+            assertEquals("got", watch.claim(() -> "got", got -> true));
+            assertTrue(parked.get(0).get(2, TimeUnit.SECONDS), "more work may wait: the next poll was woken");
+            Thread.sleep(100);
+            assertEquals(1, returned(parked), "one hand-off per full claim");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("a full claim a signal preceded hands nothing on; the next unsignaled one does")
+    void signaledClaimDoesNotHandOn() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            signal(n, "orders", null, null, 1);
+            assertTrue(watch.await(LONG, in(LONG)));
+            List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
+
+            watch.claim(() -> "got", got -> true);
+            Thread.sleep(100);
+            assertEquals(0, returned(parked), "the signal already woke as many polls as it had tokens");
+
+            watch.claim(() -> "got", got -> true);
+            assertTrue(parked.get(0).get(2, TimeUnit.SECONDS), "a claim spends the signal; the next one is unsignaled");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("a poll cancelled after a signal hands the wake on, once")
+    void cancelledAfterSignalHandsOn() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            signal(n, "orders", null, null, 1);
+            assertTrue(watch.await(LONG, in(LONG)));
+            List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
+
+            watch.forgo();
+            watch.forgo();
+            assertTrue(parked.get(0).get(2, TimeUnit.SECONDS), "the wake went to the next poll");
+            Thread.sleep(100);
+            assertEquals(1, returned(parked), "and only one");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("a claim that throws propagates and hands nothing on, signaled or not")
+    void failedClaimHandsNothingOn() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
+            IllegalStateException down = new IllegalStateException("store down");
+
+            assertSame(down, assertThrows(IllegalStateException.class,
+                    () -> watch.claim(() -> { throw down; }, got -> true)));
+            signal(n, "orders", null, null, 1);
+            assertTrue(parked.get(0).get(2, TimeUnit.SECONDS));
+            assertTrue(watch.await(LONG, in(LONG)));
+            assertThrows(IllegalStateException.class, () -> watch.claim(() -> { throw down; }, got -> true));
+            watch.forgo();
+            Thread.sleep(100);
+            assertEquals(1, returned(parked), "only the signal's own wake; the failed claims spent theirs");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test @DisplayName("only a wake that went unused is forwarded: not a fallback's, nor a short claim's")
+    void forwardsOnlyAnUnusedWake() throws Exception {
+        DispatchNotifier n = new DispatchNotifier();
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            DispatchNotifier.Watch watch = n.watch(ORDERS, 1);
+            assertFalse(watch.await(20, in(LONG)), "fell back");
+            List<Future<Boolean>> parked = park(pool, n, ORDERS, 3, 1, LONG);
+            watch.forgo();
+            watch.claim(() -> "short", got -> false);
+            Thread.sleep(100);
+            assertEquals(0, returned(parked), "no signal to forward, and a short claim found all there was");
+
+            signal(n, "orders", null, null, 1);
+            assertTrue(parked.get(0).get(2, TimeUnit.SECONDS), "the signal woke the front poll");
+            assertTrue(watch.await(LONG, in(LONG)), "and this poll saw it land");
+            watch.forgo();
+            assertTrue(parked.get(1).get(2, TimeUnit.SECONDS), "its unused wake went to the next poll");
+            Thread.sleep(100);
+            assertEquals(2, returned(parked));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private static final ClaimFilter VIP = new ClaimFilter(List.of(
             QueueCriteria.from("orders").where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%"))), null);
 
