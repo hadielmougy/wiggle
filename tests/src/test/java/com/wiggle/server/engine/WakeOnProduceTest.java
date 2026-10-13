@@ -1,6 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.Node;
+import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
@@ -37,7 +38,7 @@ class WakeOnProduceTest {
             Tokens tokens = new Tokens(new DefinitionRegistry(storage), transactions::wake);
             Node node = Node.task("one", "one", "one", QUEUE, null);
 
-            Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
+            DispatchNotifier.Watch watch = notifier.watch(ClaimFilter.byName(Set.of(QUEUE), null), 1);
             transactions.inTxVoid("wfi_1", tx -> {
                 long now = 1_000L;
                 Instance inst = Instances.create(tx, "wfi_1", "w", 1, Map.of(), null, null, now);
@@ -45,9 +46,8 @@ class WakeOnProduceTest {
                 tx.insertToken(t);
                 tokens.markReady(tx, inst, t, node, now);
             });
-            Map<String, Long> after = notifier.snapshot(Set.of(QUEUE));
 
-            assertTrue(after.getOrDefault(QUEUE, 0L) > before.getOrDefault(QUEUE, 0L),
+            assertTrue(watch.await(0, System.currentTimeMillis()),
                     "a token parked READY on '" + QUEUE + "' did not signal its queue; every poll for it "
                             + "now waits out the fallback interval instead of being woken");
         }
@@ -84,10 +84,9 @@ class WakeOnProduceTest {
             assertThrows(IllegalStateException.class,
                     () -> transactions.inTxVoid("wfi_1", outer -> transactions.inTxVoid("wfi_1", inner -> { })));
 
-            Map<String, Long> before = notifier.snapshot(Set.of(QUEUE));
-            transactions.inTxVoid("wfi_1", tx -> transactions.wake(QUEUE));
-            assertTrue(notifier.snapshot(Set.of(QUEUE)).getOrDefault(QUEUE, 0L)
-                            > before.getOrDefault(QUEUE, 0L),
+            DispatchNotifier.Watch watch = notifier.watch(ClaimFilter.byName(Set.of(QUEUE), null), 1);
+            transactions.inTxVoid("wfi_1", tx -> transactions.wake(QUEUE, null, null));
+            assertTrue(watch.await(0, System.currentTimeMillis()),
                     "the failed scope must not have left this thread's state stuck");
         }
     }

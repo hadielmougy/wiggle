@@ -49,8 +49,7 @@ final class Tokens {
      */
     void wake(Tx tx, Token t) {
         boolean factsKnown = t.attributes != null || definitions.attributes(tx, t.workflow, t.version).isEmpty();
-        queueWake.ready(new DispatchNotifier.Ready(t.queue, new WorkflowVersion(t.workflow, t.version),
-                factsKnown ? ClaimFilter.facts(t) : null));
+        queueWake.ready(t.queue, new WorkflowVersion(t.workflow, t.version), factsKnown ? ClaimFilter.facts(t) : null);
     }
 
     /** The one place a token's status is written. */
@@ -166,11 +165,6 @@ final class Tokens {
         move(tx, t, TokenStatus.FAILED, now);
     }
 
-    static void cancel(Tx tx, Token t, long now) {
-        TokenState.of(t.status).releaseLease(t);
-        move(tx, t, TokenStatus.CANCELLED, now);
-    }
-
     /** What a failed token means beyond the token itself. */
     sealed interface Outcome {
         record Retried() implements Outcome {}
@@ -208,8 +202,6 @@ final class Tokens {
         wake(tx, t);
     }
 
-    /** Cancels every still-active token of an instance in one statement. The per-token
-     *  {@link #cancel} path stays for the callers that hold a token already. */
     static void cancelAll(Tx tx, String instanceId, long now) {
         tx.cancelActiveTokens(instanceId, now);
     }

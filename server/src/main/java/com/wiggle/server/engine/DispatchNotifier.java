@@ -7,10 +7,7 @@ import com.wiggle.core.criteria.TaskFacts;
 import com.wiggle.server.store.ClaimFilter;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -18,114 +15,47 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Per-node wake-on-produce for long-polling workers (in-memory dispatch, Layer 1 — see
- * {@code docs/in-memory-dispatch.md}). When tokens are parked {@code READY} on a queue, the engine
- * {@link #signal signals} how many; parked polls wake to re-run the atomic DB claim instead of
- * discovering the work on a later fallback claim.
+ * Per-node wake-on-produce for long-polling workers (in-memory dispatch, Layer 1). When tokens are
+ * parked {@code READY}, the engine signals them through a {@link Batch}; parked polls wake to re-run the
+ * atomic DB claim instead of discovering the work on a later fallback claim.
  *
  * <p>This is a pure latency/QPS optimisation and never the source of truth. It matches producers
  * and consumers <em>on the same node</em>; work produced on another node is found by a fallback
  * claim.
  *
- * <p>Parked polls queue in one line per {@link Interest} -- the queues and versions they can claim
- * -- and a signal wakes from the front of each line that covers a signalled queue, only until the
- * woken polls' capacity covers the tokens produced. Of each line only the poll at its front runs
+ * <p>A poll {@link #watch watches} its claim filter for as long as it lasts. Watches of equal
+ * filters share one line, and a signal wakes from the front of each line whose filter covers a
+ * signalled token -- its queue, its version where known, and its facts where known -- only until
+ * the woken polls' capacity covers the tokens produced. Of each line only the poll at its front runs
  * the timed fallback claim; the rest wait for a wake or their deadline, so an idle line costs one
- * claim per fallback interval however many polls are in it. Signals are also counted per queue, so
- * a signal that lands between a poll's {@link #snapshot} and its {@link #await} is not lost.
- *
- * <p>A signal names the version of each token it announces, where it is known. A version-scoped line
- * is woken, and counts as signalled, only by its own versions or by a signal of unknown version;
- * a line for every version is woken by any.
- *
- * <p>A signal also carries each token's facts where they are known, and a line whose criteria test
- * them is woken, and counts as signalled, only by tokens its queue's criteria admit (or whose facts
- * are unknown). Such a line's count is kept per interest, from its first snapshot.
+ * claim per fallback interval however many polls are in it. Each line also counts the signals
+ * that cover it, so a signal that lands while a poll is claiming rather than parked is not lost.
  */
 final class DispatchNotifier {
 
-    /** What a poll can claim: its queues, each with its criteria, and its versions. Polls with equal
-     *  interests are interchangeable to a signal. No queues claims every queue; no versions, every
-     *  version. Polls with different criteria wait in different lines, so a signal for a task one
-     *  poll's criteria reject still reaches a poll whose criteria accept it. */
-    record Interest(Set<QueueCriteria> queues, Set<WorkflowVersion> versions) {
-
-        Interest {
-            queues = queues == null ? Set.of() : Set.copyOf(queues);
-            versions = versions == null ? Set.of() : Set.copyOf(versions);
-        }
+    /** What a poll can claim, as a line key: its filter's queues, each with its criteria, and its
+     *  versions, in any order. Polls with equal interests are interchangeable to a signal. Polls with
+     *  different criteria wait in different lines, so a signal for a task one poll's criteria reject
+     *  still reaches a poll whose criteria accept it. */
+    private record Interest(Set<QueueCriteria> queues, Set<WorkflowVersion> versions) {
 
         static Interest of(ClaimFilter filter) {
             return new Interest(Set.copyOf(filter.queues()), filter.versions());
         }
 
-        /** A poll by queue names. */
-        static Interest byName(Set<String> names, Set<WorkflowVersion> versions) {
-            return of(ClaimFilter.byName(names, versions));
-        }
-
-        Set<String> names() {
-            Set<String> out = new HashSet<>();
-            for (QueueCriteria c : queues) out.add(c.queue());
-            return out;
-        }
-
-        boolean covers(String queue) {
-            return queues.isEmpty() || queues.stream().anyMatch(c -> c.queue().equals(queue));
-        }
-
+        /** Whether a poll of this interest could claim a token {@code ready} describes. */
         boolean covers(Ready ready) {
-            if (!covers(ready.queue())) return false;
+            if (!queues.isEmpty() && queues.stream().noneMatch(c -> c.queue().equals(ready.queue()))) return false;
             if (!versions.isEmpty() && ready.version() != null && !versions.contains(ready.version())) return false;
             if (ready.facts() == null || queues.isEmpty()) return true;
             QueueCriteria c = QueueCriteria.forQueue(queues, ready.queue());
             return c.where() == null || Criteria.matches(c.where(), ready.facts());
         }
-
-        /** Whether some queue's criteria test the tasks themselves, beyond their queue and version. */
-        boolean filtersTasks() {
-            return queues.stream().anyMatch(c -> c.where() != null);
-        }
-
-        /** The signal counters a poll of this interest watches: its queues, or for a version-scoped
-         *  poll, its versions on its queues and the unknown-version count of each. A poll whose
-         *  criteria test the tasks watches its own count instead ({@link #MATCHED}). */
-        List<String> counters() {
-            if (filtersTasks()) return List.of(MATCHED);
-            if (versions.isEmpty()) return List.copyOf(names());
-            List<String> keys = new ArrayList<>();
-            for (String q : names()) {
-                keys.add(versionCounter(q, null));
-                for (WorkflowVersion v : versions) keys.add(versionCounter(q, v));
-            }
-            return keys;
-        }
     }
 
     /** Tokens made ready on {@code queue}, of {@code version} and with {@code facts} (each null when
      *  not known). */
-    record Ready(String queue, WorkflowVersion version, TaskFacts facts) {
-
-        Ready(String queue, WorkflowVersion version) {
-            this(queue, version, null);
-        }
-    }
-
-    /** The key of an interest's own count of the signals its criteria admit, in a snapshot. */
-    private static final String MATCHED = "\u0001matched";
-
-    /** How long an interest's own count outlives its last snapshot. */
-    private static final long MATCHED_TTL_MILLIS = 10 * 60_000;
-
-    /** An interest's count of admitted signals, and when a poll last snapshotted it. */
-    private static final class Matched {
-        long count;
-        long lastUsed;
-    }
-
-    private static String versionCounter(String queue, WorkflowVersion version) {
-        return queue + '\u0000' + (version == null ? "?" : version.key());
-    }
+    private record Ready(String queue, WorkflowVersion version, TaskFacts facts) {}
 
     private static final class Waiter {
         final Condition wake;
@@ -138,165 +68,170 @@ final class DispatchNotifier {
         }
     }
 
-    private final ReentrantLock lock = new ReentrantLock();
-    private final Map<String, Long> versions = new HashMap<>();                 // counter -> signal count
-    private final Map<Interest, ArrayDeque<Waiter>> lines = new HashMap<>();   // all three guarded by lock
-    private final Map<Interest, Matched> matched = new HashMap<>();
-
-    /** One token parked on each of {@code queues}. */
-    void signal(Set<String> queues) {
-        if (queues == null || queues.isEmpty()) return;
-        Map<String, Integer> produced = new HashMap<>();
-        for (String q : queues) produced.put(q, 1);
-        signal(produced);
+    /** One interest's state: the signals that covered it, its parked polls, and its open watches. */
+    private static final class Line {
+        long signals;
+        final ArrayDeque<Waiter> parked = new ArrayDeque<>();
+        int watches;
     }
 
-    /** {@code produced.get(q)} tokens of unknown version parked on queue {@code q}. */
-    void signal(Map<String, Integer> produced) {
-        if (produced == null || produced.isEmpty()) return;
-        Map<Ready, Integer> ready = new HashMap<>();
-        produced.forEach((q, n) -> ready.put(new Ready(q, null), n));
-        signalReady(ready);
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Map<Interest, Line> lines = new HashMap<>();   // guarded by lock
+
+    /** Opens a batch to collect the tokens one transaction makes ready, for signalling once it commits. */
+    Batch batch() {
+        return new Batch();
     }
 
     /** {@code produced.get(r)} tokens parked as {@code r} describes: wakes enough parked polls to claim them. */
-    void signalReady(Map<Ready, Integer> produced) {
-        if (produced == null || produced.isEmpty()) return;
+    private void signal(Map<Ready, Integer> produced) {
+        if (produced.isEmpty()) return;
         lock.lock();
         try {
-            Set<String> counted = new HashSet<>();
-            for (Ready r : produced.keySet()) {
-                if (counted.add(r.queue())) versions.merge(r.queue(), 1L, Long::sum);
-                if (counted.add(versionCounter(r.queue(), r.version()))) {
-                    versions.merge(versionCounter(r.queue(), r.version()), 1L, Long::sum);
-                }
-            }
-            long now = System.currentTimeMillis();
-            matched.values().removeIf(m -> now - m.lastUsed > MATCHED_TTL_MILLIS);
-            for (Map.Entry<Interest, Matched> m : matched.entrySet()) {
-                if (produced.keySet().stream().anyMatch(r -> m.getKey().covers(r))) m.getValue().count++;
-            }
-            for (Map.Entry<Interest, ArrayDeque<Waiter>> line : lines.entrySet()) {
+            for (Map.Entry<Interest, Line> e : lines.entrySet()) {
                 int tokens = 0;
                 for (Map.Entry<Ready, Integer> p : produced.entrySet()) {
-                    if (line.getKey().covers(p.getKey())) tokens += p.getValue();
+                    if (e.getKey().covers(p.getKey())) tokens += p.getValue();
                 }
-                wake(line.getValue(), tokens);
+                if (tokens <= 0) continue;
+                e.getValue().signals++;
+                wake(e.getValue().parked, tokens);
             }
         } finally {
             lock.unlock();
         }
     }
 
-    /** Wakes one more parked poll of {@code interest}: a claim came back full, so more may be waiting. */
-    void passOn(Interest interest) {
+    /** Opens a watch for one poll that can take {@code capacity} tokens {@code filter} admits. Open it
+     *  before the poll's first claim, so no signal from then on is missed. */
+    Watch watch(ClaimFilter filter, int capacity) {
+        Interest interest = Interest.of(filter);
         lock.lock();
         try {
-            wake(lines.get(interest), 1);
+            Line line = lines.computeIfAbsent(interest, k -> new Line());
+            line.watches++;
+            return new Watch(interest, line, Math.max(1, capacity));
         } finally {
             lock.unlock();
         }
     }
 
-    /** Wakes polls from the front of {@code line} until their capacity covers {@code tokens}, then
+    /** Wakes polls from the front of {@code parked} until their capacity covers {@code tokens}, then
      *  nudges the new front so it starts its fallback clock. Caller holds the lock. */
-    private static void wake(ArrayDeque<Waiter> line, int tokens) {
-        if (line == null || tokens <= 0) return;
+    private static void wake(ArrayDeque<Waiter> parked, int tokens) {
         int left = tokens;
-        while (left > 0 && !line.isEmpty()) {
-            Waiter w = line.pollFirst();
+        while (left > 0 && !parked.isEmpty()) {
+            Waiter w = parked.pollFirst();
             w.woken = true;
             w.wake.signal();
             left -= w.capacity;
         }
-        Waiter front = line.peekFirst();
+        Waiter front = parked.peekFirst();
         if (front != null) front.wake.signal();
     }
 
-    /** The current signal count for each queue, taken before a claim so no signal is lost. */
-    Map<String, Long> snapshot(Set<String> queues) {
-        return snapshot(queues == null ? List.of() : List.copyOf(queues));
-    }
+    /** The tokens one transaction made ready, tallied until {@link #signal} wakes polls for them. Not
+     *  thread-safe: it belongs to the transaction that opened it. */
+    final class Batch {
 
-    /** The current count of every signal {@code interest} watches, taken before a claim. */
-    Map<String, Long> snapshot(Interest interest) {
-        if (!interest.filtersTasks()) return snapshot(interest.counters());
-        lock.lock();
-        try {
-            Matched m = matched.computeIfAbsent(interest, k -> new Matched());
-            m.lastUsed = System.currentTimeMillis();
-            return Map.of(MATCHED, m.count);
-        } finally {
-            lock.unlock();
+        private final Map<Ready, Integer> produced = new HashMap<>();
+
+        private Batch() {}
+
+        /** One token made ready on {@code queue}, of {@code version} and with {@code facts} (each null
+         *  when not known). A null queue is a no-op. */
+        void ready(String queue, WorkflowVersion version, TaskFacts facts) {
+            if (queue != null) produced.merge(new Ready(queue, version, facts), 1, Integer::sum);
+        }
+
+        /** Forgets every token collected, for a transaction attempt that rolled back and is replayed. */
+        void clear() {
+            produced.clear();
+        }
+
+        /** Wakes enough parked polls to claim the tokens collected. */
+        void signal() {
+            DispatchNotifier.this.signal(produced);
         }
     }
 
-    private Map<String, Long> snapshot(List<String> counters) {
-        Map<String, Long> s = new HashMap<>();
-        if (counters.isEmpty()) return s;
-        lock.lock();
-        try {
-            for (String c : counters) s.put(c, versions.getOrDefault(c, 0L));
-        } finally {
-            lock.unlock();
-        }
-        return s;
-    }
+    /** One poll's watch of its line. Not thread-safe: it belongs to the poll that opened it. */
+    final class Watch implements AutoCloseable {
 
-    /**
-     * Parks a poll that can take {@code capacity} tokens of {@code interest}. Returns true when a
-     * signal woke it, or at once when one of its queues was signalled past {@code since}; false
-     * when it should claim anyway -- it has been at the front of its line for
-     * {@code fallbackMillis} -- or {@code deadline} has passed.
-     */
-    boolean await(Interest interest, int capacity, Map<String, Long> since, long fallbackMillis, long deadline) {
-        lock.lock();
-        try {
-            if (advanced(interest, since)) return true;
-            ArrayDeque<Waiter> line = lines.computeIfAbsent(interest, k -> new ArrayDeque<>());
-            Waiter me = new Waiter(lock.newCondition(), Math.max(1, capacity));
-            line.addLast(me);
-            long frontSince = -1;
+        private final Interest interest;
+        private final Line line;
+        private final int capacity;
+        private long seen;
+        private boolean closed;
+
+        private Watch(Interest interest, Line line, int capacity) {
+            this.interest = interest;
+            this.line = line;
+            this.capacity = capacity;
+            this.seen = line.signals;
+        }
+
+        /**
+         * Parks the poll until it should claim. Returns true when a signal woke it, or at once when one
+         * landed since the watch opened or the last await returned; false when it should claim anyway
+         * -- it has been at the front of its line for {@code fallbackMillis} -- or {@code deadline}
+         * has passed.
+         */
+        boolean await(long fallbackMillis, long deadline) {
+            lock.lock();
             try {
-                while (!me.woken) {
-                    long now = System.currentTimeMillis();
-                    long wait = deadline - now;
-                    if (wait <= 0) return false;
-                    if (line.peekFirst() == me) {
-                        if (frontSince < 0) frontSince = now;
-                        long fallbackIn = frontSince + fallbackMillis - now;
-                        if (fallbackIn <= 0) return false;
-                        wait = Math.min(wait, fallbackIn);
+                if (line.signals > seen) return true;
+                Waiter me = new Waiter(lock.newCondition(), capacity);
+                line.parked.addLast(me);
+                long frontSince = -1;
+                try {
+                    while (!me.woken) {
+                        long now = System.currentTimeMillis();
+                        long waitMillis = deadline - now;
+                        if (line.parked.peekFirst() == me) {
+                            if (frontSince < 0) frontSince = now;
+                            waitMillis = Math.min(waitMillis, frontSince + fallbackMillis - now);
+                        }
+                        if (waitMillis <= 0) return false;
+                        me.wake.await(waitMillis, TimeUnit.MILLISECONDS);
                     }
-                    me.wake.await(wait, TimeUnit.MILLISECONDS);
+                    return true;
+                } finally {
+                    if (!me.woken) {
+                        boolean wasFront = line.parked.peekFirst() == me;
+                        line.parked.remove(me);
+                        if (wasFront && !line.parked.isEmpty()) line.parked.peekFirst().wake.signal();
+                    }
                 }
-                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
             } finally {
-                if (!me.woken) {
-                    boolean wasFront = line.peekFirst() == me;
-                    line.remove(me);
-                    if (wasFront && !line.isEmpty()) line.peekFirst().wake.signal();
-                }
-                if (line.isEmpty()) lines.remove(interest, line);
+                seen = line.signals;
+                lock.unlock();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        } finally {
-            lock.unlock();
         }
-    }
 
-    /** True if any count {@code interest} watches is now higher than it was in {@code since}. Caller
-     *  holds the lock. */
-    private boolean advanced(Interest interest, Map<String, Long> since) {
-        if (interest.filtersTasks()) {
-            Matched m = matched.get(interest);
-            return m != null && m.count > since.getOrDefault(MATCHED, 0L);
+        /** Wakes one more parked poll of this line: a claim came back full, or a wake went unused. */
+        void passOn() {
+            lock.lock();
+            try {
+                wake(line.parked, 1);
+            } finally {
+                lock.unlock();
+            }
         }
-        for (String q : interest.counters()) {
-            if (versions.getOrDefault(q, 0L) > since.getOrDefault(q, 0L)) return true;
+
+        @Override
+        public void close() {
+            lock.lock();
+            try {
+                if (closed) return;
+                closed = true;
+                if (--line.watches == 0) lines.remove(interest, line);
+            } finally {
+                lock.unlock();
+            }
         }
-        return false;
     }
 }

@@ -29,7 +29,7 @@ public final class PollerRegistry {
 
     /** What one worker last told us it serves. Empty {@code versions} means every version; each of
      *  {@code queues} carries its criteria, and no queues means every queue. */
-    public record Poller(String workerId, List<QueueCriteria> queues, Set<WorkflowVersion> versions, long lastSeen) {}
+    public record Poller(String workerId, ClaimFilter filter, long lastSeen) {}
 
     private final Map<String, Poller> pollers = new ConcurrentHashMap<>();
     private final long ttlMillis;
@@ -45,7 +45,7 @@ public final class PollerRegistry {
     /** Records a poll. Called once per {@code PollTasks}, so it does no more than a map write. */
     public void seen(String workerId, ClaimFilter filter, long now) {
         if (workerId == null || workerId.isBlank()) return;
-        pollers.put(workerId, new Poller(workerId, filter.queues(), filter.versions(), now));
+        pollers.put(workerId, new Poller(workerId, filter, now));
     }
 
     /** The workers that have polled within the TTL, dropping the ones that have not. */
@@ -54,35 +54,17 @@ public final class PollerRegistry {
         return new LinkedHashSet<>(pollers.values());
     }
 
-    /**
-     * Whether some live worker would claim a token on {@code queue} of this (workflow, version).
-     *
-     * <p>Both halves must hold: the worker polls that queue, and either it is unscoped (serves every
-     * version) or it named this one. That mirrors the claim exactly — a version-scoped worker filters
-     * its claim by the same pairs — so this answers what the dispatcher would actually do. A worker
-     * polling with criteria covers the slice unless its queue's predicate is false for every task in
-     * it; a predicate on other properties counts as covering.
-     */
-    public boolean covers(String workflow, int version, String queue, long now) {
-        return coverage(workflow, version, queue, now).state() != Coverage.State.UNCOVERED;
-    }
-
-    /**
-     * Who would claim a token on {@code queue} of this (workflow, version). COVERED: some live worker
-     * takes every such token. CONDITIONAL: none does, but some take the ones their criteria match on
-     * properties the slice does not fix (a step, a correlation id, an attribute); {@code conditions}
-     * are those criteria. UNCOVERED: no live worker takes any.
-     */
-    public Coverage coverage(String workflow, int version, String queue, long now) {
-        WorkflowVersion wv = new WorkflowVersion(workflow, version);
+    public Coverage coverage(WorkflowVersion wv, String queue, long now) {
         Set<Predicate> conditions = new LinkedHashSet<>();
         for (Poller p : live(now)) {
-            QueueCriteria forQueue = QueueCriteria.forQueue(p.queues(), queue);
-            boolean servesQueue = p.queues().isEmpty() || forQueue != null;
-            boolean servesVersion = p.versions().isEmpty() || p.versions().contains(wv);
+            List<QueueCriteria> queues = p.filter().queues();
+            Set<WorkflowVersion> versions = p.filter().versions();
+            QueueCriteria forQueue = QueueCriteria.forQueue(queues, queue);
+            boolean servesQueue = queues.isEmpty() || forQueue != null;
+            boolean servesVersion = versions.isEmpty() || versions.contains(wv);
             if (!servesQueue || !servesVersion) continue;
             Predicate where = forQueue == null ? null : forQueue.where();
-            switch (onSlice(where, workflow, version)) {
+            switch (onSlice(where, wv)) {
                 case TRUE -> { return new Coverage(Coverage.State.COVERED, List.of()); }
                 case UNKNOWN -> conditions.add(where);
                 case FALSE -> { }
@@ -98,11 +80,11 @@ public final class PollerRegistry {
     }
 
     /** {@code where}, the criteria of the slice's queue, on what the slice fixes: TRUE when null. */
-    private static Criteria.Truth onSlice(Predicate where, String workflow, int version) {
+    private static Criteria.Truth onSlice(Predicate where, WorkflowVersion wv) {
         if (where == null) return Criteria.Truth.TRUE;
         return Criteria.evaluate(where, (f, attribute) -> switch (f) {
-            case WORKFLOW -> workflow;
-            case VERSION -> (long) version;
+            case WORKFLOW -> wv.workflow();
+            case VERSION -> (long) wv.version();
             default -> Criteria.UNKNOWN;
         });
     }

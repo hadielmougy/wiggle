@@ -1,6 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.InstanceView;
+import com.wiggle.core.WorkflowVersion;
 import com.wiggle.core.criteria.Criteria;
 import com.wiggle.core.criteria.Predicate;
 import com.wiggle.server.store.Rows;
@@ -44,17 +45,14 @@ final class Queries {
                 .sorted(Comparator.comparingInt(Rows.BacklogSlice::readyCount).reversed()).limit(max).toList();
     }
 
-    boolean covered(String workflow, int version, String queue) {
-        return pollers.covers(workflow, version, queue, System.currentTimeMillis());
-    }
-
     /** A conditional slice is counted only up to this many ready tasks, and only this many are counted. */
     static final int COUNT_SLICES_UP_TO = 100_000;
     static final int COUNT_CAP = 10_000;
 
     WorkflowEngine.SliceCoverage coverage(Rows.BacklogSlice s) {
         long now = System.currentTimeMillis();
-        PollerRegistry.Coverage c = pollers.coverage(s.workflow(), s.version(), s.queue(), now);
+        WorkflowVersion wv = new WorkflowVersion(s.workflow(), s.version());
+        PollerRegistry.Coverage c = pollers.coverage(wv, s.queue(), now);
         List<String> criteria = c.conditions().stream().map(Criteria::describe).toList();
         Integer claimable = switch (c.state()) {
             case COVERED -> s.readyCount();

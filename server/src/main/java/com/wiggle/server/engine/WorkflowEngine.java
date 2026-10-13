@@ -117,11 +117,6 @@ public final class WorkflowEngine {
         return queries.backlog(max);
     }
 
-    /** Whether a live poller on this node would claim this slice. See {@link PollerRegistry}. */
-    public boolean covered(String workflow, int version, String queue) {
-        return queries.covered(workflow, version, queue);
-    }
-
     /**
      * A backlog slice's coverage on this node: its state, exactly how many of its ready tasks some live
      * worker would claim (null when a conditional slice is too large to count fully), and the criteria

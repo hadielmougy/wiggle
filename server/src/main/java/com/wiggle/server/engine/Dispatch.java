@@ -85,45 +85,42 @@ final class Dispatch {
      */
     List<TaskActivation> poll(String workerId, ClaimFilter filter,
                               int max, Long leaseMillis, long deadline, Cancellation cancelled) {
-        Set<String> queues = filter.queueNames();
         pollers.seen(workerId, filter, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
         if (cancelled.cancelled()) return List.of();
-        DispatchNotifier.Interest interest = DispatchNotifier.Interest.of(filter);
-        PollResult result = claimUntilDeadline(workerId, filter, max, lease, deadline, cancelled, interest);
-        if (result.cancelled()) return List.of();
-
-        List<TaskActivation> tasks = result.tasks();
-        // A full claim nobody signalled for may have left more behind: wake the next poll to look.
-        // A signal already woke polls enough to cover the tokens it announced.
-        if (tasks.size() >= max && !result.signaled()) notifier.passOn(interest);
-        logClaim(workerId, queues, tasks);
-        return tasks;
+        try (DispatchNotifier.Watch watch = notifier.watch(filter, max)) {
+            PollResult result = claimUntilDeadline(workerId, filter, max, lease, deadline, cancelled, watch);
+            if (result.cancelled()) return List.of();
+            List<TaskActivation> tasks = result.tasks();
+            if (tasks.size() >= max && !result.signaled()) watch.passOn();
+            logClaim(workerId, filter.queueNames(), tasks);
+            return tasks;
+        }
     }
 
     private PollResult claimUntilDeadline(String workerId, ClaimFilter filter, int max, long lease,
                                           long deadline, Cancellation cancelled,
-                                          DispatchNotifier.Interest interest) {
-        Map<String, Long> since = notifier.snapshot(interest);
+                                          DispatchNotifier.Watch watch) {
         List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
         long rampStart = Math.max(10, fallbackPollMillis / 4);
-        boolean scoped = !filter.versions().isEmpty() || filter.queues().stream().anyMatch(c -> c.where() != null);
+        boolean scoped   = !filter.versions().isEmpty() || filter.queues().stream().anyMatch(c -> c.where() != null);
+        boolean adaptive = !scoped && adaptiveFallbackPoll;
         long fallbackWait = scoped ? scopedFallback.getOrDefault(workerId, fallbackPollMillis)
-                : adaptiveFallbackPoll ? rampStart : fallbackPollMillis;
+                : adaptive ? rampStart : fallbackPollMillis;
+        long waitCap = scoped ? scopedFallbackMaxMillis : fallbackPollMillis;
         boolean signaled = false;
         while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-            signaled = notifier.await(interest, max, since, fallbackWait, deadline);
+            signaled = watch.await(fallbackWait, deadline);
             if (signaled && max > 1) lingerForBatch(deadline);
             if (cancelled.cancelled()) {
-                if (signaled) notifier.passOn(interest);   // the wake was meant for a claim; hand it on
+                if (signaled) watch.passOn();   // the wake was meant for a claim; hand it on
                 return new PollResult(List.of(), signaled, true); // worker gone; leave work for a live one
             }
-            since = notifier.snapshot(interest);
             tasks = claimNow(workerId, filter, max, lease);
-            if (scoped) {
-                if (tasks.isEmpty() && !signaled) fallbackWait = Math.min(fallbackWait * 2, scopedFallbackMaxMillis);
-            } else if (adaptiveFallbackPoll) {
-                fallbackWait = signaled ? fallbackPollMillis : Math.min(fallbackWait * 2, fallbackPollMillis);
+            if (!signaled && (scoped || adaptive)) {
+                fallbackWait = Math.min(fallbackWait * 2, waitCap);
+            } else if (signaled && adaptive) {
+                fallbackWait = fallbackPollMillis;
             }
         }
         if (scoped) rememberFallback(workerId, tasks.isEmpty() ? fallbackWait : 0);
