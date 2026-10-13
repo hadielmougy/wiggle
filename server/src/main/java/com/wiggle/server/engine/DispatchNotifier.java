@@ -13,6 +13,8 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * Per-node wake-on-produce for long-polling workers (in-memory dispatch, Layer 1). When tokens are
@@ -162,6 +164,8 @@ final class DispatchNotifier {
         private final Line line;
         private final int capacity;
         private long seen;
+        /** Whether the last await returned on a signal that no claim has spent and no forgo handed on. */
+        private boolean signaled;
         private boolean closed;
 
         private Watch(Interest interest, Line line, int capacity) {
@@ -178,6 +182,32 @@ final class DispatchNotifier {
          * has passed.
          */
         boolean await(long fallbackMillis, long deadline) {
+            signaled = awaitSignal(fallbackMillis, deadline);
+            return signaled;
+        }
+
+        /**
+         * Runs one of the poll's claims and returns what it got. When {@code full} accepts the result
+         * and no signal preceded the claim -- it is the poll's first claim or a fallback one -- wakes one
+         * more parked poll, since more work may wait that no signal announced. A claim that throws
+         * hands nothing on.
+         */
+        <T> T claim(Supplier<T> claim, Predicate<? super T> full) {
+            boolean wasSignaled = signaled;
+            signaled = false;
+            T got = claim.get();
+            if (!wasSignaled && full.test(got)) passOn();
+            return got;
+        }
+
+        /** The poll will not claim after all: hands on the wake that last woke it, if one did. */
+        void forgo() {
+            if (!signaled) return;
+            signaled = false;
+            passOn();
+        }
+
+        private boolean awaitSignal(long fallbackMillis, long deadline) {
             lock.lock();
             try {
                 if (line.signals > seen) return true;

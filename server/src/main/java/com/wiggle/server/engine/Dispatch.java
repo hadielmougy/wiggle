@@ -5,64 +5,21 @@ import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.StorageUnreachableException;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Handing work to workers: the long poll's pacing around {@link Tokens#claim}. Nothing
- * here decides a token's fate -- it decides only WHEN to go look for one, trading claims against
- * discovery latency (see docs/in-memory-dispatch.md).
+ * Handing work to workers: one claim across the instance shards via {@link Tokens#claim}, run by a
+ * {@link PollSession} that decides WHEN to claim. Nothing here decides a token's fate.
  */
 final class Dispatch {
 
     private static final System.Logger LOG = System.getLogger(Dispatch.class.getName());
 
-    /** How long the poll at the front of a line of parked polls waits between fallback DB claims
-     *  when no local wake-on-produce arrives; the polls behind it wait for a wake (see
-     *  {@link DispatchNotifier}). Same-node production wakes a poller immediately; this bounds the
-     *  latency for cross-node production (and any missed signal). Overridable via
-     *  {@code WIGGLE_FALLBACK_POLL_MILLIS} or {@code wiggle.fallback.pollMillis}. */
-    private final long fallbackPollMillis =
-            ServerEnv.envLong("wiggle.fallback.pollMillis", "WIGGLE_FALLBACK_POLL_MILLIS", 100);
-
-    /** The longest a narrowed poll -- one scoped to versions, or with criteria that test its tasks --
-     *  waits between fallback claims. Each fallback claim that finds nothing doubles its wait, up to
-     *  this, and a claim that finds work resets it; the wait carries over between a worker's polls.
-     *  A same-node wake for work it would take still claims at once, so only work produced on
-     *  another node can wait this long. Such a claim filters a queue's ready rows, and when few or
-     *  none match it can read them all. Overridable via {@code WIGGLE_SCOPED_FALLBACK_MAX_MILLIS}. */
-    private final long scopedFallbackMaxMillis =
-            ServerEnv.envLong("wiggle.fallback.scopedMaxMillis", "WIGGLE_SCOPED_FALLBACK_MAX_MILLIS", 2_000);
-
-    /** The current fallback wait of each narrowed poll's worker whose fallback claims found nothing. */
-    private final Map<String, Long> scopedFallback = new ConcurrentHashMap<>();
-
-    /** Adaptive fallback ramp (opt-in): a freshly-parked poll re-claims quickly (fallback÷4, floor
-     *  10ms) and doubles its wait on every empty unsignaled round up to the configured interval.
-     *  Work produced on ANOTHER node shortly after this one parks — the common case under steady
-     *  load, where a poller re-parks right before the next task lands — is discovered in the fast
-     *  window instead of a uniform [0, fallback) delay. A notifier signal jumps the wait straight to
-     *  the configured interval: a signal proves the LOCAL wake path is covering this node, so fast
-     *  re-claims add DB load without adding discovery (an earlier reset-to-fast-on-signal kept polls
-     *  in fast mode on busy nodes and measurably cost ceiling throughput). Extra cost is therefore
-     *  ≤2 claims per park, independent of load. */
-    private final boolean adaptiveFallbackPoll = Boolean.parseBoolean(
-            System.getProperty("wiggle.adaptive.fallback",
-                    System.getenv().getOrDefault("WIGGLE_ADAPTIVE_FALLBACK_POLL", "false")));
-
-    /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
-     *  is drained in one batched claim instead of a round trip per token. Trades up to this much
-     *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
-     *  applies when the worker asked for more than one task (it has spare capacity to batch).
-     *  Overridable via {@code WIGGLE_DISPATCH_LINGER_MILLIS}. */
-    private final long dispatchLingerMillis = ServerEnv.envLong("WIGGLE_DISPATCH_LINGER_MILLIS", 5);
-
     private final Transactions transactions;
     private final Tokens tokens;
-    private final DispatchNotifier notifier;
     private final PollerRegistry pollers;
+    private final PollSession pollSession;
     private final long defaultLeaseMillis;
     /** Where the next claim starts, so polls spread over the instance shards. */
     private final AtomicInteger nextShard = new AtomicInteger();
@@ -71,8 +28,8 @@ final class Dispatch {
              PollerRegistry pollers, long defaultLeaseMillis) {
         this.transactions = transactions;
         this.tokens = tokens;
-        this.notifier = notifier;
         this.pollers = pollers;
+        this.pollSession = new PollSession(notifier, new FallbackPollPolicy(pollers));
         this.defaultLeaseMillis = defaultLeaseMillis;
     }
 
@@ -87,55 +44,15 @@ final class Dispatch {
                               int max, Long leaseMillis, long deadline, Cancellation cancelled) {
         pollers.seen(workerId, filter, System.currentTimeMillis());
         long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
-        if (cancelled.cancelled()) return List.of();
-        try (DispatchNotifier.Watch watch = notifier.watch(filter, max)) {
-            PollResult result = claimUntilDeadline(workerId, filter, max, lease, deadline, cancelled, watch);
-            if (result.cancelled()) return List.of();
-            List<TaskActivation> tasks = result.tasks();
-            if (tasks.size() >= max && !result.signaled()) watch.passOn();
-            logClaim(workerId, filter.queueNames(), tasks);
-            return tasks;
-        }
-    }
+        PollRequest request = new PollRequest(workerId, filter, max, deadline, cancelled);
 
-    private PollResult claimUntilDeadline(String workerId, ClaimFilter filter, int max, long lease,
-                                          long deadline, Cancellation cancelled,
-                                          DispatchNotifier.Watch watch) {
-        List<TaskActivation> tasks = claimNow(workerId, filter, max, lease);
-        long rampStart = Math.max(10, fallbackPollMillis / 4);
-        boolean scoped   = !filter.versions().isEmpty() || filter.queues().stream().anyMatch(c -> c.where() != null);
-        boolean adaptive = !scoped && adaptiveFallbackPoll;
-        long fallbackWait = scoped ? scopedFallback.getOrDefault(workerId, fallbackPollMillis)
-                : adaptive ? rampStart : fallbackPollMillis;
-        long waitCap = scoped ? scopedFallbackMaxMillis : fallbackPollMillis;
-        boolean signaled = false;
-        while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
-            signaled = watch.await(fallbackWait, deadline);
-            if (signaled && max > 1) lingerForBatch(deadline);
-            if (cancelled.cancelled()) {
-                if (signaled) watch.passOn();   // the wake was meant for a claim; hand it on
-                return new PollResult(List.of(), signaled, true); // worker gone; leave work for a live one
-            }
-            tasks = claimNow(workerId, filter, max, lease);
-            if (!signaled && (scoped || adaptive)) {
-                fallbackWait = Math.min(fallbackWait * 2, waitCap);
-            } else if (signaled && adaptive) {
-                fallbackWait = fallbackPollMillis;
-            }
+        PollSession.Result result = pollSession.poll(request, () -> claimNow(workerId, filter, max, lease));
+        if (result.cancelled()) {
+            return List.of();
         }
-        if (scoped) rememberFallback(workerId, tasks.isEmpty() ? fallbackWait : 0);
-        return new PollResult(tasks, signaled, false);
-    }
 
-    private void logClaim(String workerId, Set<String> queues, List<TaskActivation> tasks) {
-        if (!tasks.isEmpty()) {
-            LOG.log(System.Logger.Level.DEBUG, () -> "poll: worker " + workerId + " queues=" + queues
-                    + " claimed " + tasks.size() + " task(s): "
-                    + tasks.stream().map(a -> a.taskId() + "@" + a.stepName()).toList());
-        }
+        return result.tasks();
     }
-
-    private record PollResult(List<TaskActivation> tasks, boolean signaled, boolean cancelled) {}
 
     /**
      * One claim attempt, with a lease that starts now (not at the poll's arrival): one shard at a
@@ -162,33 +79,5 @@ final class Dispatch {
         }
         if (reached == 0 && unreachable != null) throw unreachable;
         return List.of();
-    }
-
-    /** Keeps {@code wait} as the worker's next fallback wait; 0 forgets it. Entries of workers that
-     *  stopped polling are dropped once there are many. */
-    private void rememberFallback(String workerId, long wait) {
-        if (wait <= fallbackPollMillis) {
-            scopedFallback.remove(workerId);
-            return;
-        }
-        scopedFallback.put(workerId, wait);
-        if (scopedFallback.size() > 1_024) {
-            Set<String> live = new java.util.HashSet<>();
-            for (PollerRegistry.Poller p : pollers.live(System.currentTimeMillis())) live.add(p.workerId());
-            scopedFallback.keySet().retainAll(live);
-        }
-    }
-
-    /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
-     *  concurrently-produced tokens are claimed together instead of one per round trip. */
-    private void lingerForBatch(long deadline) {
-        if (dispatchLingerMillis <= 0) return;
-        long budget = Math.min(dispatchLingerMillis, deadline - System.currentTimeMillis());
-        if (budget <= 0) return;
-        try {
-            Thread.sleep(budget);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 }
