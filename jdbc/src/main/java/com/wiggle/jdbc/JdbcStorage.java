@@ -732,8 +732,10 @@ public final class JdbcStorage implements Storage {
                     return;
                 }
                 h.execute("CREATE EXTENSION IF NOT EXISTS vector");
-                h.execute("ALTER TABLE wf_search_vec ADD COLUMN IF NOT EXISTS vec vector");
+                String schema = vectorSchema(h);
+                h.execute("ALTER TABLE wf_search_vec ADD COLUMN IF NOT EXISTS vec " + schema + ".vector");
                 c.commit();
+                vectorSchema = schema;
                 pgvector = true;
             } catch (SQLException | RuntimeException e) {
                 rollback(c);
@@ -746,14 +748,30 @@ public final class JdbcStorage implements Storage {
     /** Whether {@code wf_search_vec} has the native vector column; asked of the database once. */
     private volatile Boolean pgvector;
 
+    /** The quoted schema pgvector is installed in, which need not be on the search path; set when
+     *  {@link #pgvector} is true. */
+    private volatile String vectorSchema;
+
     boolean pgvector(Handle h) {
         Boolean known = pgvector;
         if (known != null) return known;
         boolean has = dialect.supportsFullText() && h.createQuery("SELECT COUNT(*) FROM information_schema.columns "
-                        + "WHERE table_name='wf_search_vec' AND column_name='vec'")
+                        + "WHERE table_schema=current_schema() AND table_name='wf_search_vec' AND column_name='vec'")
                 .mapTo(Long.class).one() > 0;
+        if (has) vectorSchema = vectorSchema(h);
         pgvector = has;
         return has;
+    }
+
+    /** {@code name}, a type, operator class or operator of pgvector, qualified by its schema. */
+    String pgvectorName(String name) {
+        return vectorSchema + "." + name;
+    }
+
+    private static String vectorSchema(Handle h) {
+        return h.createQuery("SELECT quote_ident(n.nspname) FROM pg_extension e "
+                        + "JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='vector'")
+                .mapTo(String.class).one();
     }
 
     private static MigrationMode modeFromEnv() {
@@ -1694,13 +1712,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public void upsertSearchVectors(List<Rows.SearchVector> vectors) {
             boolean native_ = owner.pgvector(h);
-            String set = native_ ? "vec=CAST(:vec AS vector),embedding=NULL" : "embedding=:embedding";
+            String vector = native_ ? owner.pgvectorName("vector") : null;
+            String set = native_ ? "vec=CAST(:vec AS " + vector + "),embedding=NULL" : "embedding=:embedding";
             for (Rows.SearchVector v : vectors) {
                 Update update = bindVector(h.createUpdate("UPDATE wf_search_vec SET " + set + ",updated_at=:updated "
                         + "WHERE instance_id=:id AND model=:model AND updated_at<=:updated"), v, native_);
                 if (update.execute() > 0) continue;
                 String insert = native_
-                        ? "INSERT INTO wf_search_vec (instance_id,model,vec,updated_at) VALUES (:id,:model,CAST(:vec AS vector),:updated)"
+                        ? "INSERT INTO wf_search_vec (instance_id,model,vec,updated_at) VALUES (:id,:model,CAST(:vec AS " + vector + "),:updated)"
                         : "INSERT INTO wf_search_vec (instance_id,model,embedding,updated_at) VALUES (:id,:model,:embedding,:updated)";
                 if (bindVector(h.createUpdate(dialect.insertIgnore(insert)), v, native_).execute() > 0) continue;
                 bindVector(h.createUpdate("UPDATE wf_search_vec SET " + set + ",updated_at=:updated "
@@ -1730,7 +1749,8 @@ public final class JdbcStorage implements Storage {
         @Override public void ensureVectorIndex(String model, int dimension) {
             if (!owner.pgvector(h)) return;
             h.execute("CREATE INDEX IF NOT EXISTS " + vectorIndexName(model) + " ON wf_search_vec USING hnsw "
-                    + "((vec::vector(" + dimension + ")) vector_cosine_ops) WHERE model=" + sqlString(model));
+                    + "((vec::" + owner.pgvectorName("vector") + "(" + dimension + ")) "
+                    + owner.pgvectorName("vector_cosine_ops") + ") WHERE model=" + sqlString(model));
         }
 
         private static String sqlString(String value) {
@@ -1792,7 +1812,9 @@ public final class JdbcStorage implements Storage {
             if (owner.pgvector(h)) {
                 int dim = q.vector().length;
                 h.execute("SET LOCAL hnsw.ef_search = " + Math.max(40, Math.min(1000, q.limit() * 4)));
-                String distance = "(v.vec::vector(" + dim + ") <=> CAST(:q AS vector(" + dim + ")))";
+                String vector = owner.pgvectorName("vector") + "(" + dim + ")";
+                String distance = "(v.vec::" + vector + " OPERATOR(" + owner.pgvectorName("<=>") + ") CAST(:q AS "
+                        + vector + "))";
                 Query query = h.createQuery("SELECT " + docCols + ", 1 - " + distance + " AS score "
                                 + "FROM wf_search_vec v JOIN wf_search_doc d ON d.instance_id=v.instance_id "
                                 // The model is a literal, as in the index predicate, so even a generic plan
