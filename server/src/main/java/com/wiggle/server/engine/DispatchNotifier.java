@@ -104,15 +104,15 @@ final class DispatchNotifier {
         }
     }
 
-    /** Opens a watch for one poll that can take {@code capacity} tokens {@code filter} admits. Open it
-     *  before the poll's first claim, so no signal from then on is missed. */
-    Watch watch(ClaimFilter filter, int capacity) {
+    /** Opens a watch for one poll that can take {@code capacity} tokens {@code filter} admits, paced
+     *  by {@code fallback}. Open it before the poll's first claim, so no signal from then on is missed. */
+    Watch watch(ClaimFilter filter, int capacity, FallbackPollPolicy.Schedule fallback) {
         Interest interest = Interest.of(filter);
         lock.lock();
         try {
             Line line = lines.computeIfAbsent(interest, k -> new Line());
             line.watches++;
-            return new Watch(interest, line, Math.max(1, capacity));
+            return new Watch(interest, line, Math.max(1, capacity), fallback);
         } finally {
             lock.unlock();
         }
@@ -163,39 +163,47 @@ final class DispatchNotifier {
         private final Interest interest;
         private final Line line;
         private final int capacity;
+        private final FallbackPollPolicy.Schedule fallback;
         private long seen;
+        /** Whether an await returned since the last claim. */
+        private boolean awaited;
         /** Whether the last await returned on a signal that no claim has spent and no forgo handed on. */
         private boolean signaled;
         private boolean closed;
 
-        private Watch(Interest interest, Line line, int capacity) {
+        private Watch(Interest interest, Line line, int capacity, FallbackPollPolicy.Schedule fallback) {
             this.interest = interest;
             this.line = line;
             this.capacity = capacity;
+            this.fallback = fallback;
             this.seen = line.signals;
         }
 
         /**
          * Parks the poll until it should claim. Returns true when a signal woke it, or at once when one
          * landed since the watch opened or the last await returned; false when it should claim anyway
-         * -- it has been at the front of its line for {@code fallbackMillis} -- or {@code deadline}
-         * has passed.
+         * -- it has been at the front of its line for its schedule's wait -- or {@code deadline} has
+         * passed.
          */
-        boolean await(long fallbackMillis, long deadline) {
-            signaled = awaitSignal(fallbackMillis, deadline);
+        boolean await(long deadline) {
+            signaled = awaitSignal(fallback.waitMillis(), deadline);
+            awaited = true;
             return signaled;
         }
 
         /**
          * Runs one of the poll's claims and returns what it got. When {@code full} accepts the result
          * and no signal preceded the claim -- it is the poll's first claim or a fallback one -- wakes one
-         * more parked poll, since more work may wait that no signal announced. A claim that throws
-         * hands nothing on.
+         * more parked poll, since more work may wait that no signal announced. A claim that followed an
+         * await adjusts the schedule's wait. A claim that throws hands nothing on and adjusts nothing.
          */
         <T> T claim(Supplier<T> claim, Predicate<? super T> full) {
             boolean wasSignaled = signaled;
+            boolean wasAwaited = awaited;
             signaled = false;
+            awaited = false;
             T got = claim.get();
+            if (wasAwaited) fallback.afterClaim(wasSignaled);
             if (!wasSignaled && full.test(got)) passOn();
             return got;
         }

@@ -33,11 +33,9 @@ final class PollSession {
             return new Result(List.of(), true);
         }
 
-        try (DispatchNotifier.Watch watch = notifier.watch(request.filter(), request.max())) {
-            FallbackPollPolicy.Schedule fallback =
-                    fallbackPolicy.schedule(request.workerId(), request.filter());
-
-            Result result = claimUntilWork(request, watch, claim, fallback);
+        FallbackPollPolicy.Schedule fallback = fallbackPolicy.schedule(request.workerId(), request.filter());
+        try (DispatchNotifier.Watch watch = notifier.watch(request.filter(), request.max(), fallback)) {
+            Result result = claimUntilWork(request, watch, claim);
             if (!result.cancelled()) {
                 fallback.finish(!result.tasks().isEmpty());
             }
@@ -48,15 +46,14 @@ final class PollSession {
     private Result claimUntilWork(
             PollRequest request,
             DispatchNotifier.Watch watch,
-            Supplier<List<TaskActivation>> claim,
-            FallbackPollPolicy.Schedule fallback
+            Supplier<List<TaskActivation>> claim
     ) {
         Predicate<List<TaskActivation>> isFull =
                 tasks -> !tasks.isEmpty() && tasks.size() >= request.max();
         List<TaskActivation> tasks = watch.claim(claim, isFull);
 
         while (tasks.isEmpty() && System.currentTimeMillis() < request.deadline()) {
-            boolean signaled = watch.await(fallback.waitMillis(), request.deadline());
+            boolean signaled = watch.await(request.deadline());
 
             if (signaled && request.max() > 1) {
                 lingerForBatch(request.deadline());
@@ -68,7 +65,6 @@ final class PollSession {
             }
 
             tasks = watch.claim(claim, isFull);
-            fallback.afterClaim(signaled);
         }
 
         return new Result(tasks, false);
