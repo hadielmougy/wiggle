@@ -17,7 +17,6 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                            int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                            int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                            Duration retention, int housekeepingBatch, int dashboardPort,
-                           Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                            String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory,
                            Topology topology, Auth auth, Search search) {
 
@@ -128,11 +127,10 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     public ServerConfig(int port, String nodeName, String jdbcUrl, String jdbcUser, String jdbcPassword,
                         int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                         int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
-                        Duration retention, int housekeepingBatch, int dashboardPort,
-                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold) {
+                        Duration retention, int housekeepingBatch, int dashboardPort) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
                 missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, "admin", null);
+                "admin", null);
     }
 
     /** Constructor with dashboard auth but no TLS (plaintext). */
@@ -140,11 +138,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                         int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                         int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                         Duration retention, int housekeepingBatch, int dashboardPort,
-                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                         String dashboardUser, String dashboardPassword) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
-                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, Tls.Options.DISABLED);
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, Tls.Options.DISABLED);
     }
 
     /** Constructor for one database (or none): no storage topology. */
@@ -152,11 +148,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                         int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                         int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                         Duration retention, int housekeepingBatch, int dashboardPort,
-                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                         String dashboardUser, String dashboardPassword, Tls.Options tls, Memory memory) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
-                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, memory, null, null, null);
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, null, null, null);
     }
 
     /** Back-compat constructor: TLS but default (disabled) memory shedding. */
@@ -164,11 +158,9 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                         int jdbcPoolSize, Duration pollInterval, Duration heartbeatInterval,
                         int missedHeartbeatsBeforeDead, Duration defaultLease, Duration maxLongPoll,
                         Duration retention, int housekeepingBatch, int dashboardPort,
-                        Duration queueLagCheckInterval, Duration queueLagWarnThreshold,
                         String dashboardUser, String dashboardPassword, Tls.Options tls) {
         this(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval, heartbeatInterval,
-                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort,
-                queueLagCheckInterval, queueLagWarnThreshold, dashboardUser, dashboardPassword, tls, Memory.DISABLED);
+                missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention, housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, Memory.DISABLED);
     }
 
     public ServerConfig {
@@ -182,8 +174,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     public ServerConfig withSearch(Search search) {
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
-                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
+                housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** Whether search runs: a search shard in the topology, or search enabled on the one database. */
@@ -195,32 +186,28 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     public ServerConfig withAuth(Auth auth) {
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
-                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
+                housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** A copy of this config on the given storage topology (null ⇒ the JDBC url, or in-memory). */
     public ServerConfig withTopology(Topology topology) {
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
-                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
+                housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** A copy of this config on the given storage (null/blank url ⇒ in-memory). */
     public ServerConfig withStorage(String jdbcUrl, String jdbcUser, String jdbcPassword, int jdbcPoolSize) {
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
-                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
+                housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     /** A copy of this config bound to a different gRPC port. */
     public ServerConfig withPort(int port) {
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
-                housekeepingBatch, dashboardPort, queueLagCheckInterval, queueLagWarnThreshold,
-                dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
+                housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
     public static ServerConfig fromEnvironment() {
@@ -240,10 +227,6 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 intProp("wiggle.housekeeping.batch", "WIGGLE_HOUSEKEEPING_BATCH", 100),
                 // The read-only web dashboard. 0 = off; set a port to enable it.
                 intProp("wiggle.dashboard.port", "WIGGLE_DASHBOARD_PORT", 0),
-                Duration.ofMillis(intProp("wiggle.queueLag.checkIntervalMillis",
-                        "WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS", 5_000)),
-                Duration.ofMillis(intProp("wiggle.queueLag.warnThresholdMillis",
-                        "WIGGLE_QUEUE_LAG_WARN_MILLIS", 10_000)),
                 // HTTP Basic credentials for the dashboard/API; no password => unauthenticated.
                 strProp("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
                 strProp("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),

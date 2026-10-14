@@ -42,8 +42,7 @@ class RpcRetryFailoverTest {
     private static ServerConfig config(int port) {
         return new ServerConfig(port, "failover", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
-                Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(200), Duration.ofHours(1), 100, 0);
     }
 
     @Test @Timeout(30)

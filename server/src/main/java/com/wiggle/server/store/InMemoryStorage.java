@@ -674,14 +674,6 @@ public final class InMemoryStorage implements Storage {
                     .toList();
         }
 
-        @Override public int countProcessedSince(long since) {
-            return (int) tokens.values().stream()
-                    .filter(t -> t.kind == NodeKind.TASK || t.kind == NodeKind.PREDICATE)
-                    .filter(t -> t.status == TokenStatus.DONE)
-                    .filter(t -> t.updatedAt > since)
-                    .count();
-        }
-
         @Override public void upsertNode(ServerNode n) {
             ServerNode existing = nodes.get(n.id);
             if (existing != null) n.firstHeartbeat = existing.firstHeartbeat;

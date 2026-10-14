@@ -297,7 +297,7 @@ a write through a replica does not compile.
 
 **WGL-SHARD-081** (MUST) `ReadTx` MUST contain at least: `findInstance`, `findToken`, `tokensOf`,
 `listInstances`, `findByCorrelation`, `countInstances`, `pendingSignals`, `backlogByVersion`,
-`queueDepth`, `countProcessedSince`, `childInstanceIds`, `schedules`, `nodes`,
+`queueDepth`, `childInstanceIds`, `schedules`, `nodes`,
 `compensationLog`, `stepDurations`, the event-log reads, and the graph reads (`GraphReads`, split
 out of `GraphStore`). Locking reads (`lockInstance`, `lockTask`, `definitionFingerprint`) stay on
 `Tx`.
@@ -320,7 +320,7 @@ console.
 | event feed poll | every shard, merged ([§10](#10-event-log)) | primary |
 | portal: instance lists, search, correlation lookup, counts, backlog, step table | fan out with `readShard` | `REPLICA_OK` |
 | portal: the view right after an action (cancel, retry, signal) | `readFor(id)` | `PRIMARY` |
-| queue-lag monitor, `StabilityController` backlog | each shard | `PRIMARY` |
+| `StabilityController` backlog | each shard | `PRIMARY` |
 | sign-in, credential and session checks on a cache miss; user and role writes | auth shard ([§13](#13-users-and-authorization)) | `PRIMARY` |
 | user and role listings in the portal | auth shard | `REPLICA_OK` |
 | search indexing | search shards ([§14](#14-search-shards)) | primary |

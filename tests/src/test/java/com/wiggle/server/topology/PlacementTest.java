@@ -79,8 +79,7 @@ class PlacementTest {
                 .replace("2026-11-01T00:00:00Z", "2999-01-01T00:00:00Z"), Map.of());
         ServerConfig config = new ServerConfig(TestPorts.free(), "topo-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
         FlowSpec flow = FlowSpec.define("topo", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
 
         try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();

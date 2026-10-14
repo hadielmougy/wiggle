@@ -61,8 +61,7 @@ class BacklogCoverageTest {
         return new ServerConfig(TestPorts.free(), "bc-node", TestStorage.url("backlog"), TestStorage.user(),
                 TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     @ForFlow(QUEUES_WF)

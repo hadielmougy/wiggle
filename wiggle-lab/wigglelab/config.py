@@ -84,10 +84,6 @@ CELL_TUNABLES = [
      "help": "Upper bound the server holds a worker long-poll open."},
     {"key": "WIGGLE_RETENTION_MILLIS", "kind": "int", "default": 86_400_000,
      "help": "How long terminal instances are kept before purge."},
-    {"key": "WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS", "kind": "int", "default": 5000,
-     "help": "How often queue lag is sampled."},
-    {"key": "WIGGLE_QUEUE_LAG_WARN_MILLIS", "kind": "int", "default": 10000,
-     "help": "Queue lag above this logs a warning."},
     {"key": "WIGGLE_JDBC_POOL_SIZE", "kind": "int", "default": 10,
      "help": "Max DB connections in the cell's pool."},
     # Memory-pressure load shedding (ServerConfig.Memory).

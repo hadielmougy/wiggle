@@ -54,8 +54,7 @@ class QueueCriteriaTest {
         return new ServerConfig(TestPorts.free(), "qc-node", TestStorage.url("qcrit"), TestStorage.user(),
                 TestStorage.password(), 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     /** A workflow name no earlier run used, so a shared database never sees one redefined. */
@@ -176,8 +175,7 @@ class QueueCriteriaTest {
         System.setProperty("wiggle.fallback.pollMillis", "3000");
         ServerConfig longPolls = new ServerConfig(TestPorts.free(), "qc-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofSeconds(10), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofSeconds(10), Duration.ofHours(1), 100, 0);
         try (WiggleServer server = new WiggleServer(longPolls).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker v = new Worker(client, "vip", WorkerOptions.defaults().withConcurrency(1).withCriteria(vip))

@@ -150,8 +150,7 @@ class TlsTest {
     private static ServerConfig serverConfig(Tls.Options tls, int dashboardPort, String dashboardPassword) {
         return new ServerConfig(TestPorts.free(), "tls-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort,
-                Duration.ofSeconds(5), Duration.ofSeconds(10), "admin", dashboardPassword, tls);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort, "admin", dashboardPassword, tls);
     }
 
     private static SSLContext clientSsl() {

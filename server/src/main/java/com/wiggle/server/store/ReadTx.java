@@ -138,13 +138,6 @@ public interface ReadTx extends GraphReads {
     int countReady(String workflow, int version, String queue, com.wiggle.core.criteria.Predicate where,
                    long now, int cap);
 
-    /**
-     * Worker-dispatched tokens (TASK/PREDICATE) that finished (DONE) since {@code since} --
-     * the throughput signal for lag monitoring. DB-driven rather than an in-process counter,
-     * so it reflects consumption across every node in the cluster, not just this one.
-     */
-    int countProcessedSince(long since);
-
     List<ServerNode> nodes();
 
     /** The instance's compensation log, ordered by seq ascending. */

@@ -89,8 +89,7 @@ class PostgresTopologyTest {
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
         ServerConfig config = new ServerConfig(TestPorts.free(), "pg-topo", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
         FlowSpec flow = FlowSpec.define("pg-topo", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
 
         Map<Integer, Integer> minted = new HashMap<>();
@@ -136,8 +135,7 @@ class PostgresTopologyTest {
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
         ServerConfig config = new ServerConfig(TestPorts.free(), "pg-auth", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
         try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
             server.accounts().create(null, "dana", "dana-password", List.of("admin"), java.util.Set.of(), true);
             server.accounts().openSession("dana", 60_000);
@@ -171,8 +169,7 @@ class PostgresTopologyTest {
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
         ServerConfig config = new ServerConfig(TestPorts.free(), "pg-search", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
         FlowSpec flow = FlowSpec.define("pg-search", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
         try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
@@ -214,8 +211,7 @@ class PostgresTopologyTest {
                 Map.of("U", TestDb.user("PG"), "P", TestDb.password("PG")));
         ServerConfig config = new ServerConfig(TestPorts.free(), "pg-vector", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t)
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t)
                 .withSearch(new ServerConfig.Search(false, Duration.ofDays(30), java.util.Set.of(), Duration.ofMillis(300)));
         FlowSpec flow = FlowSpec.define("pg-vector", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
         try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory(),

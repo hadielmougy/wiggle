@@ -35,8 +35,7 @@ class MemoryPollTest {
                 true, threshold, rejectRatio, Duration.ofMillis(200), Duration.ofMillis(100));
         return new ServerConfig(TestPorts.free(), "mem-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                /*maxLongPoll*/ Duration.ofMillis(2_000), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10), "admin", null, Tls.Options.DISABLED, memory);
+                /*maxLongPoll*/ Duration.ofMillis(2_000), Duration.ofHours(1), 100, 0, "admin", null, Tls.Options.DISABLED, memory);
     }
 
     @Test @DisplayName("over the memory threshold, a rejected poll returns empty + hold-off even when work exists")

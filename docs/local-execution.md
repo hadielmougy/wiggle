@@ -273,8 +273,8 @@ step-level idempotency key, or after a `.checkpoint()`. Documented in the DSL ja
 
 ## 12. Observability impact
 
-In `LOCAL_ASYNC`, intermediate steps aren't in the DB until the batch lands, so the dashboard and
-`QueueLagMonitor` see the instance "parked" mid-run. `LOCAL_SYNC` preserves near-real-time
+In `LOCAL_ASYNC`, intermediate steps aren't in the DB until the batch lands, so the dashboard sees
+the instance "parked" mid-run. `LOCAL_SYNC` preserves near-real-time
 visibility. Mitigations: document it; optionally have the worker emit a lightweight "in local run"
 marker on the parked token; keep the default `SERVER` for anyone who needs step-level visibility.
 

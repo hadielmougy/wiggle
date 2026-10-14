@@ -58,8 +58,7 @@ class GrpcAuthTest {
     private static ServerConfig config(ServerConfig.GrpcAuth mode) {
         return new ServerConfig(TestPorts.free(), "authz-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10))
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0)
                 .withAuth(new ServerConfig.Auth(mode, Duration.ofSeconds(30)));
     }
 

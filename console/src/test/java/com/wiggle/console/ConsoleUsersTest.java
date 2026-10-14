@@ -31,8 +31,7 @@ class ConsoleUsersTest {
     private static ServerConfig config() {
         return new ServerConfig(TestPorts.free(), "users-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     private static HttpResponse<String> send(HttpClient http, String method, String url, String basic, String body)

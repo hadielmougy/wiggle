@@ -26,8 +26,7 @@ class HealthzTest {
 
         ServerConfig config = new ServerConfig(TestPorts.free(), "health-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, port,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, port);
 
         try (WiggleServer server = new WiggleServer(config).start()) {
             HttpResponse<String> r = HttpClient.newHttpClient().send(

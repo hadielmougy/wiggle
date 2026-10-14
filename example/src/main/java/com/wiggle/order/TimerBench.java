@@ -63,8 +63,7 @@ public final class TimerBench {
         ServerConfig config = new ServerConfig(0, "timer-bench", jdbcUrl,
                 env("WIGGLE_JDBC_USER", null), env("WIGGLE_JDBC_PASSWORD", null), 16,
                 Duration.ofMillis(tickMillis), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
-                Duration.ofMillis(200), Duration.ofHours(1), batch, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(200), Duration.ofHours(1), batch, 0);
 
         System.out.printf("timer bench: count=%d sleep=%dms tick=%dms batch=%d adaptive=%s parallelism=%s store=%s%n",
                 count, sleepMillis, tickMillis, batch, adaptive, parallelism, jdbcUrl == null ? "memory" : jdbcUrl);

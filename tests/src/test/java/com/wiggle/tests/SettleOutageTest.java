@@ -87,8 +87,7 @@ class SettleOutageTest {
     private WiggleServer startServer(Duration defaultLease) throws java.io.IOException {
         return new WiggleServer(new ServerConfig(port, "settle-outage", jdbcUrl, "sa", "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, defaultLease,
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)), new WiggleStorageFactory()).start();
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0), new WiggleStorageFactory()).start();
     }
 
     private static FlowSpec flow(String name, String mode) {

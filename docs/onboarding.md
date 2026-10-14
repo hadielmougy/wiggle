@@ -60,7 +60,7 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `core` | JSON, the compiled graph model, retry policy, execution mode, wire records | `wiggle-core` |
 | `proto` | the `WiggleControlPlane` gRPC service + generated stubs | `wiggle-proto` |
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
-| `server` | engine, cluster manager, housekeeper, queue-lag monitor, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
+| `server` | engine, cluster manager, housekeeper, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
 | `postgres` | PostgreSQL dialect, plus H2 for tests and local runs, and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
 | `election` | leader election by announce-and-heartbeat, used for intra-cluster leadership | *(not published)* |
@@ -421,8 +421,6 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | `WIGGLE_RETRY_TIMER_MIN_MILLIS` | `wiggle.retry.timerMinMillis` | `1000` | a retry backing off at least this long waits off the dispatch queue (WAITING) and is made dispatchable by the housekeeper once due, so it can land up to one housekeeping tick late; a shorter backoff waits READY. Keep it at or above `WIGGLE_POLL_INTERVAL_MILLIS` |
 | `WIGGLE_ADAPTIVE_FALLBACK_POLL` | `wiggle.adaptive.fallback` | `false` | freshly-parked long-polls re-claim quickly (fallback÷4) and decay to the configured interval — cuts cross-node dispatch latency in a multi-node cluster (measured: p50 105 → 30 ms); idle DB cost bounded |
 | `WIGGLE_LOOP_MAX_ITERATIONS` | `wiggle.loop.max.iterations` | `10000` | default `repeatWhile` budget — a loop guard may evaluate true at most this many times before the instance FAILS with a clear error; per-loop override via `repeatWhile(guard, maxIterations, body)` |
-| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | how often the leader checks the backlog ([§7.6](#76-queue-lag-monitoring)) |
-| `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN once the backlog isn't draining within this budget |
 
 ### 6.4 Execution modes
 
@@ -798,13 +796,7 @@ The registry behind it is in memory and deliberately not durable — it is writt
 and must cost a map write — so it knows only its own node's pollers, and coverage is therefore
 reported per node. A worker that stops polling stops counting as cover once its entry times out.
 
-### 7.6 Queue-lag monitoring
-
-The leader watches whether the dispatchable backlog is draining fast enough (backlog vs
-cluster-wide completion rate) and logs a `WARNING` when it isn't — a sign of too few workers, a
-stuck worker pool, or a slow step. Tune with the two `WIGGLE_QUEUE_LAG_*` knobs ([§6.3](#63-server--engine-cluster--housekeeping)).
-
-### 7.7 Benchmarking
+### 7.6 Benchmarking
 
 ```bash
 # in-memory (async ≈ sync, commits are free):

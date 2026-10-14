@@ -691,6 +691,11 @@ public final class JdbcStorage implements Storage {
             CREATE INDEX IF NOT EXISTS ix_instance_created ON wf_instance (created_at);
             CREATE INDEX IF NOT EXISTS ix_instance_workflow ON wf_instance (workflow, created_at);
             CREATE INDEX IF NOT EXISTS ix_auth_audit_action ON wf_auth_audit (action);
+            """),
+            // The finished-steps index, full (migration 2) or partial (32): nothing reads it.
+            new Migration(37, "drop-token-throughput", """
+            DROP INDEX IF EXISTS ix_token_throughput;
+            DROP INDEX IF EXISTS ix_token_done_steps;
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -2644,14 +2649,6 @@ public final class JdbcStorage implements Storage {
                     .map((rs, ctx) -> new Rows.BacklogSlice(rs.getString("workflow"), rs.getInt("version"),
                             rs.getString("queue"), rs.getInt("depth"), rs.getLong("oldest")))
                     .list();
-        }
-
-        @Override public int countProcessedSince(long since) {
-            return h.createQuery("SELECT COUNT(*) FROM wf_token "
-                            + "WHERE kind IN ('TASK','PREDICATE') AND status='DONE' AND updated_at>:since")
-                    .bind("since", since)
-                    .mapTo(Integer.class)
-                    .one();
         }
 
         /** The token sweeps: one bound time and a cap, in that order. */

@@ -92,7 +92,7 @@ inspected, traced and versioned like any other row in your database.
   process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
 - 🖥 **Operable from day one** — a web **portal** served by the server (every instance step by step — each
   step's input, output, retries and timing — cancel, deliver signals, schedules, search by
-  instance or correlation id, full text or meaning, per-step latency and queue wait), `/healthz` probes, queue-lag monitoring, memory admission control.
+  instance or correlation id, full text or meaning, per-step latency and queue wait), `/healthz` probes, memory admission control.
 
 In one picture — a single `orders` instance whose steps run on **different microservices**,
 routed by each step's **queue**. The server keeps the durable state; each service just pulls the
@@ -518,7 +518,6 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
 | `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint |
 | `WIGGLE_PORTAL_PORT` | `8070` | port for the web **portal** (below); `0` turns it off |
-| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` / `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `5000` / `10000` | backlog-drain monitoring; logs a WARNING when the queue isn't draining |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | *(unset)* | keystore ⇒ TLS on; **unset = plaintext** |

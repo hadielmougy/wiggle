@@ -10,7 +10,6 @@ import com.wiggle.server.topology.Topology;
 import com.wiggle.server.grpc.Authorizer;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
-import com.wiggle.server.cluster.QueueLagMonitor;
 import com.wiggle.server.cluster.ReplicaMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.InstanceIds;
@@ -35,7 +34,6 @@ final class ServerBundle {
     private final WorkflowEngine engine;
     private final Housekeeper housekeeper;
     private final ReplicaMonitor replicaMonitor;
-    private final QueueLagMonitor queueLagMonitor;
     private final GrpcApi api;
     private final Search search;
     private final SearchIndexer indexer;
@@ -53,8 +51,6 @@ final class ServerBundle {
         this.housekeeper = new Housekeeper(engine, cluster, config.pollInterval(),
                 config.retention(), config.housekeepingBatch(), Housekeeper.adaptiveByDefault(),
                 config.defaultLease());
-        this.queueLagMonitor = new QueueLagMonitor(engine, cluster,
-                config.queueLagCheckInterval(), config.queueLagWarnThreshold());
         if (config.searchEnabled()) {
             SearchIndex index = new SearchIndex(storage, searchTargets(config, storage));
             this.search = new Search(index, engine, storage, embedders);
@@ -94,7 +90,6 @@ final class ServerBundle {
         if (indexer != null) indexer.start(250, upkeepMillis);
         housekeeper.start();
         replicaMonitor.start();
-        queueLagMonitor.start();
         api.start();
         if (health != null) health.start();
     }
@@ -103,7 +98,6 @@ final class ServerBundle {
         if (health != null) health.close();
         api.close();
         if (indexer != null) indexer.close();
-        queueLagMonitor.close();
         housekeeper.close();
         replicaMonitor.close();
     }

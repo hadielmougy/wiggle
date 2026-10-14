@@ -105,14 +105,6 @@ final class Queries {
         return new Rows.QueueDepth(count, oldest);
     }
 
-    int tasksProcessedSince(long since) {
-        int total = 0;
-        for (int shard : storage.instanceShards()) {
-            total += storage.readShard(shard, Freshness.PRIMARY, tx -> tx.countProcessedSince(since));
-        }
-        return total;
-    }
-
     List<Token> pendingSignals(int max) {
         return readEach(tx -> tx.pendingSignals(max)).stream()
                 .sorted(Comparator.comparingLong((Token t) -> t.createdAt)).limit(max).toList();
