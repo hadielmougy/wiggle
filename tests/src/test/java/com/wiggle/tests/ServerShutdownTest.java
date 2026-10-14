@@ -42,8 +42,7 @@ class ServerShutdownTest {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 // maxLongPoll 30s: comfortably longer than close()'s graceful wait, so the poll is
                 // still parked when the wait expires -- the case that used to leak the server.
-                Duration.ofSeconds(30), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofSeconds(30), Duration.ofHours(1), 100, 0);
     }
 
     @Test

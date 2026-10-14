@@ -282,8 +282,6 @@ even inside a local chain, a step on another queue crosses to another service. E
 - **Backpressure & fairness:** a worker only polls for `concurrency − in-flight` slots, and the server
   leases oldest-`READY`-first, so a queue's work is shared across its replicas without a step running
   twice.
-- **Queue lag monitoring:** the server can warn when a queue accumulates a backlog with no throughput —
-  see README → *Queue lag monitoring*.
 
 ---
 

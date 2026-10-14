@@ -27,7 +27,7 @@ public final class TypedBindingDemo {
     public static void main(String[] args) throws Exception {
         ServerConfig config = new ServerConfig(8080, "typed-binding-node", null, null, null, 4,
                 Duration.ofMillis(200), Duration.ofSeconds(2), 3, Duration.ofSeconds(30),
-                Duration.ofSeconds(2), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofSeconds(2), Duration.ofHours(1), 100, 0);
 
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {

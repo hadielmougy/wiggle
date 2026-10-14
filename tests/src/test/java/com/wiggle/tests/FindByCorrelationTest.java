@@ -42,8 +42,7 @@ class FindByCorrelationTest {
         return new ServerConfig(TestPorts.free(), "corr-node", jdbcUrl, jdbcUrl == null ? null : "sa",
                 jdbcUrl == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     private void run(String jdbcUrl) throws Exception {

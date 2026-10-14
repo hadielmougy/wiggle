@@ -271,7 +271,6 @@ class NoTableScanTest {
         tx.dueRetries(now, 10);
         tx.dueSignals(now, 10);
         tx.expiredLeases(now, 10);
-        tx.countProcessedSince(now - 60_000);
         tx.stepDurations(WF, 1, now - 60_000, 10);
 
         Rows.CompLog comp = new Rows.CompLog();

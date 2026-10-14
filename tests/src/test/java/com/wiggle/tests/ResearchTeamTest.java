@@ -36,8 +36,7 @@ class ResearchTeamTest {
         String url = "jdbc:h2:mem:agents-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         return new ServerConfig(TestPorts.free(), "node-0", url, "sa", "", 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     /** Starts a brief on a fresh server with {@code model} behind every agent and hands both to {@code body}. */

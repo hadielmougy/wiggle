@@ -56,8 +56,7 @@ public final class Benchmark {
 
         ServerConfig config = new ServerConfig(0, "bench", jdbcUrl, jdbcUser, jdbcPassword, 16,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
-                Duration.ofMillis(200), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(200), Duration.ofHours(1), 100, 0);
 
         try (WiggleServer server = open(config, jdbcUrl);
              WiggleClient client = new WiggleClient(server.baseUrl())) {

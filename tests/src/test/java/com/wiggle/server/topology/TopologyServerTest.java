@@ -23,8 +23,7 @@ class TopologyServerTest {
     private static ServerConfig config(Topology t) {
         return new ServerConfig(TestPorts.free(), "topo-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(200), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10)).withTopology(t);
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
     }
 
     private static Topology topology() {

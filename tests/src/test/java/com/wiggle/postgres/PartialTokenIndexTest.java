@@ -21,14 +21,15 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Migrations 19 and 32: on PostgreSQL wf_token is indexed per status, and every status-filtered query
  * the store runs can use its partial index; on H2, which has no partial indexes, the migrations are
- * recorded and the full indexes stay.
+ * recorded and the full indexes stay. Migration 37 drops the finished-steps index on both.
  */
 class PartialTokenIndexTest {
 
     private static final Set<String> PARTIAL = Set.of("ix_token_ready_age", "ix_token_waiting", "ix_token_awaiting",
-            "ix_token_running", "ix_token_done_steps", "ix_token_step_timed", "ix_token_joined");
+            "ix_token_running", "ix_token_step_timed", "ix_token_joined");
     private static final Set<String> REPLACED = Set.of("ix_token_dispatch", "ix_token_lease",
-            "ix_token_throughput", "ix_token_timed", "ix_token_barrier");
+            "ix_token_timed", "ix_token_barrier");
+    private static final Set<String> DROPPED = Set.of("ix_token_throughput", "ix_token_done_steps");
     private static final Set<String> NARROWED = Set.of("ix_token_done", "ix_token_done_timed");
 
     private static Set<String> tokenIndexes(Connection c) throws Exception {
@@ -62,6 +63,7 @@ class PartialTokenIndexTest {
                 Set<String> indexes = tokenIndexes(c);
                 assertTrue(indexes.containsAll(REPLACED), "full indexes kept: " + indexes);
                 assertTrue(indexes.stream().noneMatch(PARTIAL::contains), "no partial index created: " + indexes);
+                assertTrue(indexes.stream().noneMatch(DROPPED::contains), "unread indexes dropped: " + indexes);
             }
         }
     }
@@ -84,8 +86,6 @@ class PartialTokenIndexTest {
                 + " AND available_at<=1000 ORDER BY available_at LIMIT 10", Set.of("ix_token_awaiting"));
         PLANS.put("SELECT * FROM wf_token WHERE status='RUNNING' AND lease_expires>0 AND lease_expires<1000"
                 + " ORDER BY lease_expires LIMIT 10", Set.of("ix_token_running"));
-        PLANS.put("SELECT COUNT(*) FROM wf_token WHERE kind IN ('TASK','PREDICATE') AND status='DONE'"
-                + " AND updated_at>1000", Set.of("ix_token_done_steps"));
         PLANS.put("SELECT node_id, started_at, finished_at, available_at FROM wf_token WHERE workflow='w'"
                 + " AND version=1 AND status='DONE' AND finished_at > 1000 AND started_at IS NOT NULL"
                 + " ORDER BY finished_at DESC LIMIT 10", Set.of("ix_token_step_timed"));
@@ -110,6 +110,7 @@ class PartialTokenIndexTest {
             assertTrue(indexes.containsAll(PARTIAL), "partial indexes created: " + indexes);
             assertTrue(indexes.stream().noneMatch(REPLACED::contains), "full indexes dropped: " + indexes);
             assertTrue(indexes.stream().noneMatch(NARROWED::contains), "wider partial indexes dropped: " + indexes);
+            assertTrue(indexes.stream().noneMatch(DROPPED::contains), "unread indexes dropped: " + indexes);
 
             try (Statement st = c.createStatement()) {
                 // A test table is small enough that a sequential scan always wins; take it off the

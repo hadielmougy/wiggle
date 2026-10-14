@@ -39,8 +39,7 @@ class ShardedEventFeedTest {
     private static WiggleServer server() throws Exception {
         ServerConfig config = new ServerConfig(TestPorts.free(), "feed-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
         return new WiggleServer(config, c -> {
             Map<Integer, Storage> shards = new LinkedHashMap<>();
             shards.put(1, new InMemoryStorage());

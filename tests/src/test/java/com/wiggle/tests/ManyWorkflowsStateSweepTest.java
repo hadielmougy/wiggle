@@ -106,8 +106,7 @@ class ManyWorkflowsStateSweepTest {
         return new ServerConfig(TestPorts.free(), "sweep-node", TestStorage.url("sweep"), TestStorage.user(),
                 TestStorage.password(), 16,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 200, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 200, 0);
     }
 
 

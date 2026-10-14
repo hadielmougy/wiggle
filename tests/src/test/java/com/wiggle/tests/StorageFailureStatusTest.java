@@ -45,8 +45,7 @@ class StorageFailureStatusTest {
     private static ServerConfig config(String url) {
         return new ServerConfig(TestPorts.free(), "node-0", url, TestStorage.user(), TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0,
-                Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     /** Fails every transaction with {@code failWith}, once a test has set it. */

@@ -68,8 +68,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * keep that honest: every row is named per run and per call ({@link #id}), and every read with a
  * global reach is pinned to a timestamp no other test writes. The due-work sweeps, the backlog and
  * the retention pass all filter on a time, so this suite backdates its own rows to the epoch's
- * first seconds ({@link #ANCIENT}) or forward past any real clock ({@link #FUTURE}) and asks the
- * sweep about that window. Where the contract offers no such filter -- {@code countInstances} --
+ * first seconds ({@link #ANCIENT}) and asks the sweep about that window. Where the contract offers no such filter -- {@code countInstances} --
  * the assertion is a delta.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -81,10 +80,6 @@ abstract class StorageContract {
     /** A time no other test's rows occupy: before any real clock, so a sweep asked about this
      *  window sees only what this suite backdated into it. */
     private static final long ANCIENT = 1_000L;
-
-    /** The same trick the other way, for the one sweep whose filter is a lower bound
-     *  ({@code countProcessedSince}): past any clock a concurrent test could stamp. */
-    private static final long FUTURE = 4_000_000_000_000L;
 
     private Storage storage;
 
@@ -1481,29 +1476,6 @@ abstract class StorageContract {
         assertEquals(1, mine.getFirst().version());
         assertEquals(3, mine.getFirst().readyCount());
         assertEquals(ANCIENT, mine.getFirst().oldestAvailableAt());
-    }
-
-    @Test
-    @DisplayName("countProcessedSince counts the worker steps that settled after the mark")
-    void countProcessedSinceCountsSettledWorkerSteps() {
-        long since = FUTURE - 1;
-        int before = inTxInt(tx -> tx.countProcessedSince(since));
-
-        Instance i = instance(id("wf"));
-        Token done = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
-        done.updatedAt = FUTURE;
-        Token predicateDone = token(i, NodeKind.PREDICATE, TokenStatus.DONE, id("q"));
-        predicateDone.updatedAt = FUTURE;
-        Token stillRunning = token(i, NodeKind.TASK, TokenStatus.RUNNING, id("q"));
-        stillRunning.updatedAt = FUTURE;
-        Token serverSide = token(i, NodeKind.SLEEP, TokenStatus.DONE, null);
-        serverSide.updatedAt = FUTURE;
-        Token beforeTheMark = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
-        beforeTheMark.updatedAt = since;
-        store(i, done, predicateDone, stillRunning, serverSide, beforeTheMark);
-
-        assertEquals(before + 2, inTxInt(tx -> tx.countProcessedSince(since)),
-                "worker-dispatched kinds only, DONE only, and strictly after the mark");
     }
 
     @Test

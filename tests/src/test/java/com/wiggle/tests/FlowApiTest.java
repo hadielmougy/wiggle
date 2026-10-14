@@ -167,7 +167,7 @@ class FlowApiTest {
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
                 0, "node-0", TestStorage.url("flowapi"), TestStorage.user(), TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
         try (com.wiggle.server.WiggleServer server =
                      new com.wiggle.server.WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {

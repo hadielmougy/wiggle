@@ -178,14 +178,6 @@ public final class WorkflowEngine {
         return queries.queueDepth();
     }
 
-    /**
-     * Worker-dispatched tasks completed since {@code since}, across every node in the cluster --
-     * the consumption-rate signal for lag monitoring.
-     */
-    public int tasksProcessedSince(long since) {
-        return queries.tasksProcessedSince(since);
-    }
-
     /** Leases up to {@code max} tasks for a worker. Returns immediately; long-polling lives in the HTTP layer. */
     public List<TaskActivation> poll(String workerId, Set<String> queues, int max, Long leaseMillis) {
         return poll(workerId, queues, max, leaseMillis, 0);

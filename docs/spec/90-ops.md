@@ -52,8 +52,6 @@ conventions, not the library's.
 | `WIGGLE_RETENTION_MILLIS` | `wiggle.retention.millis` | `86400000` | how long finished instances are kept |
 | `WIGGLE_EVENTS_RETENTION_MILLIS` | `wiggle.events.retentionMillis` | `604800000` | how long an acknowledged event is kept |
 | `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed |
-| `WIGGLE_QUEUE_LAG_CHECK_INTERVAL_MILLIS` | `wiggle.queueLag.checkIntervalMillis` | `5000` | backlog check cadence |
-| `WIGGLE_QUEUE_LAG_WARN_MILLIS` | `wiggle.queueLag.warnThresholdMillis` | `10000` | WARN when the backlog will not drain within this budget |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `wiggle.allowGraphReplace` | `false` | development only: honour a forced re-registration |
 | `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | port for the `/healthz` probe on a server node |
 | `WIGGLE_PORTAL_PORT` | — | `8070` | port the node serves the portal on, `0` for none ([§4](#4-the-portal)) |
@@ -257,9 +255,7 @@ dispatcher would actually do.
 **WGL-OPS-072** (MUST) Coverage MUST be reported per node, because the poller registry is in memory; a
 worker that stops polling MUST stop counting as cover once its entry times out.
 
-**WGL-OPS-073** (MUST) **Queue-lag monitoring** MUST have the leader compare the dispatchable backlog
-against the cluster-wide completion rate and log a `WARNING` when it is not draining within the
-configured budget.
+**WGL-OPS-073** *Withdrawn: queue-lag monitoring was removed. The id is kept so it is never reused.*
 
 **WGL-OPS-074** (MUST) **Memory admission control**, when enabled, MUST reject a configured fraction of
 incoming polls before doing any work whenever heap utilisation crosses the threshold, answering each
@@ -270,8 +266,7 @@ serialised bytes held by in-flight request/response cycles.
 
 **WGL-OPS-076** (MUST) A shed poll MUST NOT be an error: the worker holds off and retries.
 
-*Verified by:* `tests/BacklogCoverageTest`, `server/cluster/QueueLagMonitorTest`,
-`server/grpc/MemoryGuardTest`, `tests/MemoryPollTest`.
+*Verified by:* `tests/BacklogCoverageTest`, `server/grpc/MemoryGuardTest`, `tests/MemoryPollTest`.
 
 ## 7. Deployment postures
 

@@ -81,7 +81,7 @@ class ForkJoinContextMergeTest {
             for (int i = 0; i < 3; i++) {
                 ServerConfig config = new ServerConfig(TestPorts.free(), "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                        Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
+                        Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
                 WiggleServer server = new WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
                 servers.add(server);
                 WiggleClient client = new WiggleClient(server.baseUrl());
@@ -166,7 +166,7 @@ class ForkJoinContextMergeTest {
             for (int i = 0; i < 3; i++) {
                 ServerConfig config = new ServerConfig(TestPorts.free(), "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                        Duration.ofMillis(500), Duration.ofHours(1), 100, 0, Duration.ofSeconds(5), Duration.ofSeconds(10));
+                        Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
                 WiggleServer server = new WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
                 servers.add(server);
                 WiggleClient client = new WiggleClient(server.baseUrl());

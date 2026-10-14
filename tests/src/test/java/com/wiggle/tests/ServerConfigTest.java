@@ -22,7 +22,7 @@ class ServerConfigTest {
 
     private static final List<String> PROPS = List.of(
             "wiggle.port", "wiggle.node.name", "wiggle.jdbc.url", "wiggle.jdbc.poolSize",
-            "wiggle.lease.millis", "wiggle.dashboard.port", "wiggle.queueLag.warnThresholdMillis");
+            "wiggle.lease.millis", "wiggle.dashboard.port");
 
     @AfterEach
     void clearProperties() {
@@ -39,7 +39,6 @@ class ServerConfigTest {
         assertEquals(Duration.ofSeconds(30), c.defaultLease());
         assertEquals(Duration.ofSeconds(20), c.maxLongPoll());
         assertEquals(0, c.dashboardPort(), "dashboard is off by default");
-        assertEquals(Duration.ofSeconds(10), c.queueLagWarnThreshold());
     }
 
     @Test @DisplayName("system properties override the defaults")
@@ -50,7 +49,6 @@ class ServerConfigTest {
         System.setProperty("wiggle.jdbc.poolSize", "3");
         System.setProperty("wiggle.lease.millis", "1234");
         System.setProperty("wiggle.dashboard.port", "18081");
-        System.setProperty("wiggle.queueLag.warnThresholdMillis", "555");
 
         ServerConfig c = ServerConfig.fromEnvironment();
         assertEquals(19099, c.port());
@@ -60,7 +58,6 @@ class ServerConfigTest {
         assertEquals(3, c.jdbcPoolSize());
         assertEquals(Duration.ofMillis(1234), c.defaultLease());
         assertEquals(18081, c.dashboardPort());
-        assertEquals(Duration.ofMillis(555), c.queueLagWarnThreshold());
     }
 
     @Test @DisplayName("a blank property falls back to the default")
