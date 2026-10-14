@@ -5,12 +5,14 @@ import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.StorageUnreachableException;
 
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /**
- * Handing work to workers: one claim across the instance shards via {@link Tokens#claim}, run by a
- * {@link PollSession} that decides WHEN to claim. Nothing here decides a token's fate.
+ * Handing work to workers: one long poll's pacing through the notifier's {@link DispatchNotifier.Watch}
+ * -- when to claim, when to wait for a wake or a fallback, when to give up -- around one claim across
+ * the instance shards via {@link Tokens#claim}. Nothing here decides a token's fate (see
+ * docs/archive/in-memory-dispatch.md).
  */
 final class Dispatch {
 
@@ -19,8 +21,15 @@ final class Dispatch {
     private final Transactions transactions;
     private final Tokens tokens;
     private final PollerRegistry pollers;
-    private final PollSession pollSession;
+    private final DispatchNotifier notifier;
+    private final FallbackPollPolicy fallbackPolicy;
     private final long defaultLeaseMillis;
+    /** After a wake-on-produce signal, briefly let more tokens accumulate before claiming, so a burst
+     *  is drained in one batched claim instead of a round trip per token. Trades up to this much
+     *  first-token latency for fewer, larger claims under load; 0 disables (claim immediately). Only
+     *  applies when the worker asked for more than one task. Overridable via
+     *  {@code WIGGLE_DISPATCH_LINGER_MILLIS}. */
+    private final long dispatchLingerMillis = ServerEnv.envLong("WIGGLE_DISPATCH_LINGER_MILLIS", 5);
     /** Where the next claim starts, so polls spread over the instance shards. */
     private final AtomicInteger nextShard = new AtomicInteger();
 
@@ -29,7 +38,8 @@ final class Dispatch {
         this.transactions = transactions;
         this.tokens = tokens;
         this.pollers = pollers;
-        this.pollSession = new PollSession(notifier, new FallbackPollPolicy(pollers));
+        this.notifier = notifier;
+        this.fallbackPolicy = new FallbackPollPolicy(pollers);
         this.defaultLeaseMillis = defaultLeaseMillis;
     }
 
@@ -43,15 +53,47 @@ final class Dispatch {
     List<TaskActivation> poll(String workerId, ClaimFilter filter,
                               int max, Long leaseMillis, long deadline, Cancellation cancelled) {
         pollers.seen(workerId, filter, System.currentTimeMillis());
-        long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
-        PollRequest request = new PollRequest(workerId, filter, max, deadline, cancelled);
-
-        PollSession.Result result = pollSession.poll(request, () -> claimNow(workerId, filter, max, lease));
-        if (result.cancelled()) {
+        if (cancelled.cancelled()) {
             return List.of();
         }
+        long lease = leaseMillis == null || leaseMillis <= 0 ? defaultLeaseMillis : leaseMillis;
+        Predicate<List<TaskActivation>> isFull = tasks -> !tasks.isEmpty() && tasks.size() >= max;
 
-        return result.tasks();
+        FallbackPollPolicy.Schedule fallback = fallbackPolicy.schedule(workerId, filter);
+        try (DispatchNotifier.Watch watch = notifier.watch(filter, max, fallback)) {
+            List<TaskActivation> tasks = watch.claim(() -> claimNow(workerId, filter, max, lease), isFull);
+
+            while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {
+                boolean signaled = watch.await(deadline);
+
+                if (signaled && max > 1) {
+                    lingerForBatch(deadline);
+                }
+
+                if (cancelled.cancelled()) {
+                    watch.forgo();
+                    return List.of();
+                }
+
+                tasks = watch.claim(() -> claimNow(workerId, filter, max, lease), isFull);
+            }
+
+            fallback.finish(!tasks.isEmpty());
+            return tasks;
+        }
+    }
+
+    /** Coalesce a burst: wait up to {@link #dispatchLingerMillis} (bounded by the poll deadline) so
+     *  concurrently-produced tokens are claimed together instead of one per round trip. */
+    private void lingerForBatch(long deadline) {
+        if (dispatchLingerMillis <= 0) return;
+        long budget = Math.min(dispatchLingerMillis, deadline - System.currentTimeMillis());
+        if (budget <= 0) return;
+        try {
+            Thread.sleep(budget);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
