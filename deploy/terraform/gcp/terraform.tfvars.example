@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and edit. `project` is required; everything else has a default.
+
+project = "my-gcp-project"
+region  = "europe-west1"
+name    = "wiggle"
+
+# --- sizing (defaults are production-ish; shrink for a trial) ---
+# node_machine_type = "e2-standard-4"
+# node_count        = 1            # per zone -> x3 across a regional cluster
+# db_tier           = "db-custom-2-8192"
+# db_ha             = true         # REGIONAL Cloud SQL
+# wiggle_replicas   = 3
+
+# --- image (defaults to the public GHCR image) ---
+# wiggle_image_repository = "hadielmougy/wiggle"
+# wiggle_image_tag        = "0.0.2"
