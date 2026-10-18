@@ -1,0 +1,15 @@
+apiVersion: v2
+name: wiggle-coordinator
+description: >-
+  The Wiggle coordinator — the cellular control plane that places namespaces onto cells and resolves
+  routing. Runs the same image as the server with WIGGLE_ROLE=coordinator. Two store backends: JDBC
+  (point it at its own small database; stateless, HA via a durable leader lease) or embedded
+  Ratis+RocksDB (self-contained, single-member here).
+type: application
+version: 0.1.0
+appVersion: "0.0.2"
+home: https://wiggle.sh
+sources:
+  - https://github.com/hadielmougy/wiggle
+maintainers:
+  - name: Hadi Elmougy

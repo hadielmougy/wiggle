@@ -1,0 +1,15 @@
+Wiggle coordinator {{ include "wiggle-coordinator.fullname" . }} deployed.
+
+Backend: {{ .Values.store.backend }}{{ if eq .Values.store.backend "ratis" }} (single-member Ratis on a {{ .Values.store.ratis.persistence.size }} volume){{ end }}
+gRPC:    {{ include "wiggle-coordinator.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+
+Point cells and clients at it:
+  WIGGLE_COORDINATOR_URL={{ include "wiggle-coordinator.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+
+{{- if eq .Values.store.backend "jdbc" }}
+{{- if not (or .Values.store.jdbc.url .Values.store.jdbc.existingSecret) }}
+
+WARNING: store.backend=jdbc but no database configured. Set store.jdbc.url (its OWN database, not a
+tenant cell's) + store.jdbc.user/password, or store.jdbc.existingSecret (keys url/user/password).
+{{- end }}
+{{- end }}
