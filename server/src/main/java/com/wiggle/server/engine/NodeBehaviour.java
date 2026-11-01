@@ -4,7 +4,6 @@ import com.wiggle.server.store.Repositories;
 import com.wiggle.core.*;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
 
 import java.util.*;
 
@@ -30,7 +29,7 @@ abstract class NodeBehaviour {
 
 
         @Override boolean advance(Step s) {
-            tokens.markReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
+            tokens.markReady(s.inst(), s.token(), s.node(), s.now());
             return true;
         }
 
@@ -50,7 +49,7 @@ abstract class NodeBehaviour {
         }
 
         @Override boolean advance(Step s) {
-            tokens.markReady(s.tx(), s.inst(), s.token(), s.node(), s.now());
+            tokens.markReady(s.inst(), s.token(), s.node(), s.now());
             return true;
         }
 
@@ -79,7 +78,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tokens.markWaiting(s.tx(), s.token(), s.now() + s.node().sleepMillis(), s.now());
+            Tokens.markWaiting(s.token(), s.now() + s.node().sleepMillis(), s.now());
             return true;
         }
     }
@@ -88,7 +87,7 @@ abstract class NodeBehaviour {
     static final class ForkNodeBehaviour extends NodeBehaviour {
 
         @Override boolean advance(Step s) {
-            Tokens.spend(s.tx(), s.token(), NodeKind.FORK, s.now());
+            Tokens.spend(s.token(), NodeKind.FORK, s.now());
             String group = s.token().id;
             String childStack = s.token().pushJoinStack(group);
             List<String> starts = s.node().branches();
@@ -96,7 +95,7 @@ abstract class NodeBehaviour {
             for (int i = 0; i < starts.size(); i++) {
                 Rows.Token child = Tokens.create(s.inst(), starts.get(i), childStack,
                         s.token().payload.push(TokenPayload.FrameKind.ARM, i, null, parentView), s.now());
-                s.tx().insertToken(child);
+                Repositories.tokens().insertToken(child);
                 s.work().push(child);
             }
             return true;
@@ -115,7 +114,7 @@ abstract class NodeBehaviour {
         boolean advance(Step s) {
             Object items = Scopes.currentView(s.inst(), s.token()).get(s.node().itemsKey());
             if (items != null && !(items instanceof List) && !(items instanceof Map)) {
-                instances.fail(s.tx(), s.inst(), "forEach '" + s.node().name() + "': context key '" + s.node().itemsKey()
+                instances.fail(s.inst(), "forEach '" + s.node().name() + "': context key '" + s.node().itemsKey()
                         + "' holds " + items.getClass().getSimpleName() + ", not a list or map", s.now());
                 return false;
             }
@@ -129,13 +128,13 @@ abstract class NodeBehaviour {
             } else {
                 elements = items == null ? List.of() : (List<?>) items;
             }
-            Tokens.spend(s.tx(), s.token(), NodeKind.DYN_FORK, s.now());
+            Tokens.spend(s.token(), NodeKind.DYN_FORK, s.now());
             if (elements.isEmpty()) {
                 LazyGraph def = s.def();
                 Node join = def.node(s.node().next());
                 Node after = def.node(join.next());
                 String next = Scopes.isCombineNode(after) ? after.next() : join.next();
-                Rows.Token cont = Tokens.continueAt(s.tx(), s.inst(), s.token(), next,
+                Rows.Token cont = Tokens.continueAt(s.inst(), s.token(), next,
                         s.token().payload, s.now());
                 s.work().push(cont);
                 return true;
@@ -145,7 +144,7 @@ abstract class NodeBehaviour {
             for (int i = 0; i < elements.size(); i++) {
                 fanned.add(new FanOut.Item(branchStart, mapKeys == null ? null : mapKeys.get(i), elements.get(i)));
             }
-            FanOut.items(s.tx(), s.inst(), s.token(), fanned, s.now()).forEach(s.work()::push);
+            FanOut.items(s.inst(), s.token(), fanned, s.now()).forEach(s.work()::push);
             return true;
         }
     }
@@ -156,22 +155,22 @@ abstract class NodeBehaviour {
         boolean advance(Step s) {
             String group = s.token().currentJoinGroup();
             int expected = expectedAt(s.node(), group);
-            Tokens.markJoined(s.tx(), s.token(), s.now());
-            long arrived = s.tx().joinStacksAt(s.inst().id, s.node().id()).stream()
+            Tokens.markJoined(s.token(), s.now());
+            long arrived = Repositories.tokens().joinStacksAt(s.inst().id, s.node().id()).stream()
                     // TODO: evaluate postgres expression to count on the server side rather than pulling all the rows and counting here
                     .filter(stack -> group.equals(Rows.Token.innermostJoinGroup(stack)))
                     .count();
             if (arrived < expected) return true;
-            List<Rows.Token> atBarrier = joinedAtBarrier(s.tx(), s.inst(), s.node(), group);
-            Tokens.settleAll(s.tx(), atBarrier, s.now());
-            TokenPayload contPayload = combinePayload(s.def(), s.node(), atBarrier, forkPayload(s.tx(), group));
+            List<Rows.Token> atBarrier = joinedAtBarrier(s.inst(), s.node(), group);
+            Tokens.settleAll(atBarrier, s.now());
+            TokenPayload contPayload = combinePayload(s.def(), s.node(), atBarrier, forkPayload(group));
             Rows.Token cont = Tokens.create(s.inst(), s.node().next(), s.token().popJoinStack(), contPayload, s.now());
-            s.tx().insertToken(cont);
+            Repositories.tokens().insertToken(cont);
             s.work().push(cont);
             return true;
         }
 
-        private static List<Rows.Token> joinedAtBarrier(Tx tx, Rows.Instance inst, Node node, String group) {
+        private static List<Rows.Token> joinedAtBarrier(Rows.Instance inst, Node node, String group) {
             return Repositories.tokens().joinedAt(inst.id, node.id()).stream()
                     .filter(x -> Objects.equals(group, x.currentJoinGroup()))
                     .toList();
@@ -233,7 +232,7 @@ abstract class NodeBehaviour {
 
         /** The payload the fork token had when it spawned this group -- restoring it is how the join
          *  pops the children's frame. Empty for a group whose fork token is gone. */
-        private static TokenPayload forkPayload(Tx tx, String group) {
+        private static TokenPayload forkPayload(String group) {
             if (group == null) return TokenPayload.EMPTY;
             int hash = group.lastIndexOf('#');
             String forkTokenId = hash < 0 ? group : group.substring(0, hash);
@@ -245,7 +244,7 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tokens.markAwaiting(s.tx(), s.token(), NodeKind.SIGNAL, s.node().name(), s.node().sleepMillis() > 0 ? s.now() + s.node().sleepMillis() : 0, s.now());
+            Tokens.markAwaiting(s.token(), NodeKind.SIGNAL, s.node().name(), s.node().sleepMillis() > 0 ? s.now() + s.node().sleepMillis() : 0, s.now());
             return true;
         }
     }
@@ -260,12 +259,12 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tokens.markAwaiting(s.tx(), s.token(), NodeKind.SUB_WORKFLOW,
+            Tokens.markAwaiting(s.token(), NodeKind.SUB_WORKFLOW,
                     s.node().activity(), 0, s.now());
             try {
-                instances.start(s.tx(), s.node().activity(), null, Scopes.dispatchContext(s.inst(), s.token()), "sub:" + s.token().id, s.token().id);
+                instances.start(s.node().activity(), null, Scopes.dispatchContext(s.inst(), s.token()), "sub:" + s.token().id, s.token().id);
             } catch (EngineException ex) {
-                instances.fail(s.tx(), s.inst(), "sub-workflow '" + s.node().activity() + "': " + ex.getMessage(), s.now());
+                instances.fail(s.inst(), "sub-workflow '" + s.node().activity() + "': " + ex.getMessage(), s.now());
                 return false;
             }
             return true;
@@ -282,16 +281,16 @@ abstract class NodeBehaviour {
 
         @Override
         boolean advance(Step s) {
-            Tokens.spend(s.tx(), s.token(), NodeKind.END, s.now());
+            Tokens.spend(s.token(), NodeKind.END, s.now());
             if (!s.node().success()) {
-                instances.fail(s.tx(), s.inst(), s.node().reason() == null ? "terminated" : s.node().reason(), s.now());
+                instances.fail(s.inst(), s.node().reason() == null ? "terminated" : s.node().reason(), s.now());
                 return false;
             }
-            boolean anyActive = Tokens.anyActive(s.tx(), s.inst().id);
+            boolean anyActive = Tokens.anyActive(s.inst().id);
             if (anyActive || !s.work().isEmpty()) {
                 return true;
             }
-            instances.complete(s.tx(), s.inst(), s.node().reason(), s.now());
+            instances.complete(s.inst(), s.node().reason(), s.now());
             return true;
         }
     }

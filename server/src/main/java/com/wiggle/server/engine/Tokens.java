@@ -16,7 +16,6 @@ import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +29,7 @@ import java.util.function.Predicate;
  * which refuses a transition no state declares.
  *
  * <p>The split is by responsibility, not by whether a method happens to need a field:
- * <em>state answers, lifecycle writes</em>. Anything here that takes a {@code Tx} belongs here;
+ * <em>state answers, lifecycle writes</em>. Anything here that writes through the repositories belongs here;
  * anything that only inspects a token belongs next door.
  */
 final class Tokens {
@@ -48,13 +47,13 @@ final class Tokens {
      * polls' criteria. The facts are left unknown when the flow declares attributes this token's
      * copy does not carry (a token read back from a store that does not load them).
      */
-    void wake(Tx tx, Token t) {
-        boolean factsKnown = t.attributes != null || definitions.attributes(tx, t.workflow, t.version).isEmpty();
+    void wake(Token t) {
+        boolean factsKnown = t.attributes != null || definitions.attributes(t.workflow, t.version).isEmpty();
         queueWake.ready(t.queue, new WorkflowVersion(t.workflow, t.version), factsKnown ? ClaimFilter.facts(t) : null);
     }
 
     /** The one place a token's status is written. */
-    private static void move(Tx tx, Token t, TokenStatus target, long now) {
+    private static void move(Token t, TokenStatus target, long now) {
         t.status = TokenState.of(t.status).moveTo(target);
         t.updatedAt = now;
         Repositories.tokens().updateToken(t);
@@ -88,13 +87,13 @@ final class Tokens {
      * instance's first token belongs to no group, a join's continuation pops the group it just
      * satisfied, and a locally-chained run leases its continuation back ({@link #createLeased}).
      */
-    static Token continueAt(Tx tx, Instance inst, Token t, String nextNodeId, TokenPayload payload, long now) {
+    static Token continueAt(Instance inst, Token t, String nextNodeId, TokenPayload payload, long now) {
         Token cont = create(inst, nextNodeId, t.joinStack, payload, now);
         Repositories.tokens().insertToken(cont);
         return cont;
     }
 
-    static void createLeased(Tx tx, Token cont, Node nextNode, String leaseOwner, long lease, long now) {
+    static void createLeased(Token cont, Node nextNode, String leaseOwner, long lease, long now) {
         cont.status = TokenStatus.RUNNING;
         cont.kind = nextNode.kind();
         cont.activity = nextNode.activity();
@@ -107,63 +106,63 @@ final class Tokens {
         Repositories.tokens().insertToken(cont);
     }
 
-    void markReady(Tx tx, Instance inst, Token t, Node node, long now) {
+    void markReady(Instance inst, Token t, Node node, long now) {
         t.kind = node.kind();
         t.activity = node.activity();
         t.queue = node.queue();
         t.availableAt = now;
-        stampAttributes(definitions, tx, inst, t);
-        move(tx, t, TokenStatus.READY, now);
-        wake(tx, t);
+        stampAttributes(definitions, inst, t);
+        move(t, TokenStatus.READY, now);
+        wake(t);
     }
 
     /**
      * Reads the flow's declared attributes from the context {@code t}'s step receives, to be written
      * with the token. A flow that declares none costs a cache lookup and writes nothing.
      */
-    static void stampAttributes(DefinitionRegistry definitions, Tx tx, Instance inst, Token t) {
-        List<DispatchAttribute> declared = definitions.attributes(tx, t.workflow, t.version);
+    static void stampAttributes(DefinitionRegistry definitions, Instance inst, Token t) {
+        List<DispatchAttribute> declared = definitions.attributes(t.workflow, t.version);
         if (declared.isEmpty()) return;
         t.attributes = DispatchAttribute.extractAll(declared, Scopes.dispatchContext(inst, t).raw());
         t.attributesChanged = true;
     }
 
-    static void markWaiting(Tx tx, Token t, long availableAt, long now) {
+    static void markWaiting(Token t, long availableAt, long now) {
         t.kind = NodeKind.SLEEP;
         t.availableAt = availableAt;
-        move(tx, t, TokenStatus.WAITING, now);
+        move(t, TokenStatus.WAITING, now);
     }
 
-    static void markAwaiting(Tx tx, Token t, NodeKind kind, String activity, long deadline, long now) {
+    static void markAwaiting(Token t, NodeKind kind, String activity, long deadline, long now) {
         t.kind = kind;
         t.activity = activity;
         t.availableAt = deadline;
-        move(tx, t, TokenStatus.AWAITING, now);
+        move(t, TokenStatus.AWAITING, now);
     }
 
-    static void markJoined(Tx tx, Token t, long now) {
+    static void markJoined(Token t, long now) {
         t.kind = NodeKind.JOIN;
-        move(tx, t, TokenStatus.JOINED, now);
+        move(t, TokenStatus.JOINED, now);
     }
 
-    static void settle(Tx tx, Token t, long now) {
+    static void settle(Token t, long now) {
         TokenState.of(t.status).releaseLease(t);
         if (t.startedAt != null && t.finishedAt == null) t.finishedAt = now;   // a clock the server started, it closes
-        move(tx, t, TokenStatus.DONE, now);
+        move(t, TokenStatus.DONE, now);
     }
 
-    static void settleAll(Tx tx, List<Token> tokens, long now) {
-        for (Token t : tokens) settle(tx, t, now);
+    static void settleAll(List<Token> tokens, long now) {
+        for (Token t : tokens) settle(t, now);
     }
 
-    static void spend(Tx tx, Token t, NodeKind kind, long now) {
+    static void spend(Token t, NodeKind kind, long now) {
         t.kind = kind;
-        settle(tx, t, now);
+        settle(t, now);
     }
 
-    static void failParked(Tx tx, Token t, long now) {
+    static void failParked(Token t, long now) {
         TokenState.of(t.status).releaseLease(t);
-        move(tx, t, TokenStatus.FAILED, now);
+        move(t, TokenStatus.FAILED, now);
     }
 
     /** What a failed token means beyond the token itself. */
@@ -179,7 +178,7 @@ final class Tokens {
      * caller's call. A retry whose backoff is at least {@code parkFromMillis} waits WAITING, out of
      * the dispatch index, until {@link #promote} makes it READY; a shorter one waits READY.
      */
-    static Outcome reportFailure(Tx tx, Token t, Node node, String lastError,
+    static Outcome reportFailure(Token t, Node node, String lastError,
                                  String failReason, boolean retryable, long parkFromMillis, long now) {
         TokenState state = TokenState.of(t.status);
         state.requireLeasedBy(t, null);
@@ -190,29 +189,29 @@ final class Tokens {
         if (retryable && t.attempt < policy.maxAttempts()) {
             long backoff = policy.backoffMillis(t.attempt);
             t.availableAt = now + backoff;
-            move(tx, t, backoff >= parkFromMillis ? TokenStatus.WAITING : TokenStatus.READY, now);
+            move(t, backoff >= parkFromMillis ? TokenStatus.WAITING : TokenStatus.READY, now);
             return new Outcome.Retried();
         }
-        move(tx, t, TokenStatus.FAILED, now);
+        move(t, TokenStatus.FAILED, now);
         return new Outcome.Exhausted(failReason, Sagas.seqOf(t));
     }
 
     /** A parked retry whose backoff has run out becomes dispatchable, and its queue is woken. */
-    void promote(Tx tx, Token t, long now) {
-        move(tx, t, TokenStatus.READY, now);
-        wake(tx, t);
+    void promote(Token t, long now) {
+        move(t, TokenStatus.READY, now);
+        wake(t);
     }
 
-    static void cancelAll(Tx tx, String instanceId, long now) {
+    static void cancelAll(String instanceId, long now) {
         Repositories.tokens().cancelActiveTokens(instanceId, now);
     }
 
-    static boolean anyActive(Tx tx, String instanceId) {
+    static boolean anyActive(String instanceId) {
         return Repositories.tokens().hasActiveTokens(instanceId);
     }
 
     /** The task's instance, locked, and the task as it stands under that lock. */
-    static LockedTask lock(Tx tx, String taskId) {
+    static LockedTask lock(String taskId) {
         return Repositories.locks().lockTask(taskId).orElseThrow(() -> Repositories.locks().findToken(taskId).isPresent()
                 ? EngineException.notFound("instance") : EngineException.notFound("task"));
     }
@@ -230,7 +229,7 @@ final class Tokens {
      * Renews in one write; only a refused renewal reads the token, to say why it was refused. A
      * caller limited to some {@code queues} reads it first, to check the task is on one of them.
      */
-    static long extendLease(Tx tx, String taskId, String leaseOwner, long extraMillis, Predicate<String> queues) {
+    static long extendLease(String taskId, String leaseOwner, long extraMillis, Predicate<String> queues) {
         if (queues != null) requireQueue(Repositories.locks().findToken(taskId).orElseThrow(() -> EngineException.notFound("task")), queues);
         long now = System.currentTimeMillis();
         long until = now + extraMillis;
@@ -241,26 +240,26 @@ final class Tokens {
         throw EngineException.conflict("lease for task " + taskId + " changed while renewing it");
     }
 
-    List<TaskActivation> claim(Tx tx, String workerId, ClaimFilter filter, int max, long now, long until) {
+    List<TaskActivation> claim(String workerId, ClaimFilter filter, int max, long now, long until) {
         List<Token> claimed = Repositories.tokens().claimTasks(workerId, filter, max, now, until);
         List<TaskActivation> activations = new ArrayList<>(claimed.size());
         for (Token t : claimed) {
-            activationFor(tx, t, workerId, until).ifPresent(activations::add);
+            activationFor(t, workerId, until).ifPresent(activations::add);
         }
         return activations;
     }
 
-    private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
+    private Optional<TaskActivation> activationFor(Token t, String workerId, long until) {
         Instance inst = Repositories.instances().findInstance(t.instanceId).orElse(null);
         boolean comp = Sagas.isCompensation(t);
         if (inst == null || !InstanceState.of(inst.status).dispatches(comp)) {
             return Optional.empty();
         }
         if (comp) return Optional.of(Sagas.activation(inst, t, workerId, until));
-        Node node = definitions.graph(tx, t.workflow, t.version).node(t.nodeId);
+        Node node = definitions.graph(t.workflow, t.version).node(t.nodeId);
         // A created node is in no worker's compiled graph, so it runs one step at a time.
         ExecutionMode mode = Spawns.isCreated(node.id()) ? ExecutionMode.SERVER
-                : ExecutionModes.resolve(definitions.executionMode(tx, t.workflow, t.version));
+                : ExecutionModes.resolve(definitions.executionMode(t.workflow, t.version));
         Doc base = null;
         long itemIndex = 0;
         String itemMapKey = null;

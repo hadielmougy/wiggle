@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
+import com.wiggle.server.store.DynamicNodeRepository;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
@@ -129,12 +131,22 @@ public final class DefinitionRegistry {
     }
 
     /**
-     * {@link #graph(GraphStore, String, int)} for an engine transaction, which also resolves the
-     * nodes an instance created at run time ({@link Spawns}); they live beside the instance, not in
-     * the definition.
+     * {@link #graph(GraphStore, String, int)} in the transaction open on the calling thread, which
+     * also resolves the nodes an instance created at run time ({@link Spawns}); they live beside the
+     * instance, not in the definition.
      */
-    public LazyGraph graph(Tx tx, String name, int version) {
-        return new WithCreatedNodes(graph((GraphStore) tx, name, version), tx);
+    public LazyGraph graph(String name, int version) {
+        return new WithCreatedNodes(graph(Repositories.graph(), name, version), Repositories.dynamicNodes());
+    }
+
+    /** {@link #executionMode(GraphStore, String, int)} in the transaction open on the calling thread. */
+    public ExecutionMode executionMode(String name, int version) {
+        return executionMode(Repositories.graph(), name, version);
+    }
+
+    /** {@link #attributes(GraphStore, String, int)} in the transaction open on the calling thread. */
+    public List<DispatchAttribute> attributes(String name, int version) {
+        return attributes(Repositories.graph(), name, version);
     }
 
     /**
@@ -220,12 +232,12 @@ public final class DefinitionRegistry {
     private static final class WithCreatedNodes implements LazyGraph {
 
         private final LazyGraph graph;
-        private final Tx tx;
+        private final DynamicNodeRepository nodes;
         private final Map<String, Node> created = new HashMap<>();
 
-        WithCreatedNodes(LazyGraph graph, Tx tx) {
+        WithCreatedNodes(LazyGraph graph, DynamicNodeRepository nodes) {
             this.graph = graph;
-            this.tx = tx;
+            this.nodes = nodes;
         }
 
         @Override public String name() { return graph.name(); }
@@ -245,7 +257,7 @@ public final class DefinitionRegistry {
             if (!Spawns.isCreated(id)) return graph.find(id);
             Node n = created.get(id);
             if (n == null) {
-                n = tx.dynNode(id).orElse(null);
+                n = nodes.dynNode(id).orElse(null);
                 if (n != null) created.put(id, n);
             }
             return Optional.ofNullable(n);

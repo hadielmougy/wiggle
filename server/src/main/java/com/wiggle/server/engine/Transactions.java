@@ -2,12 +2,9 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.core.criteria.TaskFacts;
-import com.wiggle.server.store.CurrentTx;
 import com.wiggle.server.store.ShardTransactions;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -19,25 +16,12 @@ import java.util.function.Supplier;
  *
  * <p>Every transaction is routed: to the shard an instance or token id carries, to one shard, to the
  * home shard, or to each instance shard in turn. The transaction is bound to the calling thread, so a
- * body works through {@link com.wiggle.server.store.Repositories}; a body that still takes a
- * {@link Tx} is handed the bound one.
+ * body works through {@link com.wiggle.server.store.Repositories}.
  *
  * <p>A write scope opened inside another on the same shard joins it, and its queues are woken with
  * the outer's; one on another shard is refused (see {@link ShardTransactions}).
  */
 final class Transactions {
-
-    /** A transaction body that produces a value. */
-    @FunctionalInterface
-    interface TxBody<T> {
-        T run(Tx tx);
-    }
-
-    /** A transaction body that produces nothing. */
-    @FunctionalInterface
-    interface TxWork {
-        void run(Tx tx);
-    }
 
     private final ShardTransactions shards;
     private final DispatchNotifier notifier;
@@ -84,10 +68,6 @@ final class Transactions {
         return inShard(shards.shardOf(id), body);
     }
 
-    <T> T inTx(String id, TxBody<T> body) {
-        return inShard(shards.shardOf(id), body);
-    }
-
     void inTxVoid(String id, Runnable body) {
         inTx(id, () -> {
             body.run();
@@ -95,19 +75,8 @@ final class Transactions {
         });
     }
 
-    void inTxVoid(String id, TxWork body) {
-        inTx(id, tx -> {
-            body.run(tx);
-            return null;
-        });
-    }
-
     /** {@link #inTx(String, Supplier)} on the home shard. */
     <T> T inHome(Supplier<T> body) {
-        return inShard(shards.home(), body);
-    }
-
-    <T> T inHome(TxBody<T> body) {
         return inShard(shards.home(), body);
     }
 
@@ -129,17 +98,9 @@ final class Transactions {
         return result;
     }
 
-    <T> T inShard(int shard, TxBody<T> body) {
-        return inShard(shard, () -> body.run(CurrentTx.requireWrite()));
-    }
-
     /** A transaction with no wake-on-produce scope -- reads, and claims that park nothing READY -- on
      *  the shard holding {@code id}. */
     <T> T read(String id, Supplier<T> body) {
-        return readShard(shards.shardOf(id), body);
-    }
-
-    <T> T read(String id, TxBody<T> body) {
         return readShard(shards.shardOf(id), body);
     }
 
@@ -148,16 +109,8 @@ final class Transactions {
         return shards.read(shard, body);
     }
 
-    <T> T readShard(int shard, TxBody<T> body) {
-        return shards.read(shard, () -> body.run((Tx) CurrentTx.require()));
-    }
-
     /** {@link #read} on the home shard. */
     <T> T readHome(Supplier<T> body) {
-        return readShard(shards.home(), body);
-    }
-
-    <T> T readHome(TxBody<T> body) {
         return readShard(shards.home(), body);
     }
 
@@ -168,22 +121,9 @@ final class Transactions {
         });
     }
 
-    void readHomeVoid(TxWork body) {
-        readHome(tx -> {
-            body.run(tx);
-            return null;
-        });
-    }
-
     /** {@link #read} on every instance shard in turn, the lists concatenated in shard order. */
     <T> List<T> readEach(Supplier<List<T>> body) {
         return shards.readEach(body);
-    }
-
-    <T> List<T> readEach(TxBody<List<T>> body) {
-        List<T> out = new ArrayList<>();
-        for (int shard : shards.instanceShards()) out.addAll(readShard(shard, body));
-        return out;
     }
 
     /** {@link #read} on every instance shard in turn, the counts summed. */
@@ -193,9 +133,4 @@ final class Transactions {
         return total;
     }
 
-    int sumEach(TxBody<Integer> body) {
-        int total = 0;
-        for (int shard : shards.instanceShards()) total += readShard(shard, body);
-        return total;
-    }
 }

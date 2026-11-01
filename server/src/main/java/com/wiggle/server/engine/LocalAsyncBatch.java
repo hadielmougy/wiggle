@@ -38,7 +38,7 @@ final class LocalAsyncBatch {
     }
 
     /** @param queues the queues the caller serves, null for every one; a run on another is refused as not found */
-    Map<String, RunResult> apply(Tx tx, List<Run> runs, Predicate<String> queues) {
+    Map<String, RunResult> apply(List<Run> runs, Predicate<String> queues) {
         Map<String, RunResult> results = new LinkedHashMap<>();
 
         Map<String, Token> probes = byId(Repositories.tokens().findTokens(
@@ -72,7 +72,7 @@ final class LocalAsyncBatch {
         for (Run run : probed) {
             Instance inst = locked.get(instanceOf.get(run.startTaskId()));
             Token t = inst == null ? null : tokens.get(run.startTaskId());
-            RunResult refusal = validate(tx, inst, t, run, queues);
+            RunResult refusal = validate(inst, t, run, queues);
             if (refusal != null) {
                 results.put(run.startTaskId(), refusal);
             } else {
@@ -80,11 +80,12 @@ final class LocalAsyncBatch {
                 survivors.add(run);
             }
         }
-        Tx applyTx = tx.transactional() ? BufferedTx.of(tx) : tx;
+        Tx current = CurrentTx.requireWrite();
+        Tx applyTx = current.transactional() ? BufferedTx.of(current) : current;
         CurrentTx.rebind(applyTx, () -> {
             for (Run run : survivors) {
                 results.put(run.startTaskId(), RunResult.of(
-                        chain.apply(applyTx, tasks.get(run.startTaskId()), run, CHAINS_BACK)));
+                        chain.apply(tasks.get(run.startTaskId()), run, CHAINS_BACK)));
             }
             return null;
         });
@@ -98,7 +99,7 @@ final class LocalAsyncBatch {
         return out;
     }
 
-    private RunResult validate(Tx tx, Instance inst, Token t, Run run, Predicate<String> queues) {
+    private RunResult validate(Instance inst, Token t, Run run, Predicate<String> queues) {
         if (inst == null) {
             return RunResult.reject(EngineException.conflict("instance of task " + run.startTaskId()
                     + " is held by a concurrent operation or gone -- report this run singly"));
@@ -120,7 +121,7 @@ final class LocalAsyncBatch {
                     + " is a sub-workflow of another instance -- report this run singly"));
         }
         ExecutionMode mode = ExecutionModes.resolve(
-                definitions.executionMode(tx, inst.workflow, inst.version));
+                definitions.executionMode(inst.workflow, inst.version));
         if (mode != ExecutionMode.LOCAL_ASYNC) {
             return RunResult.reject(EngineException.conflict("definition " + inst.workflow
                     + ":" + inst.version + " runs " + mode

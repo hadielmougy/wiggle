@@ -111,7 +111,7 @@ final class Dispatch {
             List<TaskActivation> got;
             try {
                 got = transactions.readShard(shards.get((start + i) % shards.size()),
-                        tx -> tokens.claim(tx, workerId, filter, max, now, now + lease));
+                        () -> tokens.claim(workerId, filter, max, now, now + lease));
             } catch (StorageUnreachableException e) {
                 unreachable = e;
                 continue;

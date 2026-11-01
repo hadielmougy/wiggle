@@ -58,7 +58,7 @@ final class Schedules {
      * row's cadence/context in place instead of piling up duplicate firers.
      */
     private String put(String workflow, Object context, Rows.Schedule s, String cadence) {
-        return transactions.readHome(tx -> {
+        return transactions.readHome(() -> {
             Repositories.graph().latestVersion(workflow).orElseThrow(
                     () -> EngineException.notFound("workflow '" + workflow + "'"));
             Optional<Rows.Schedule> existing = Repositories.schedules().scheduleByWorkflow(workflow);
@@ -75,11 +75,11 @@ final class Schedules {
     }
 
     void delete(String id) {
-        transactions.readHomeVoid(tx -> Repositories.schedules().deleteSchedule(id));
+        transactions.readHomeVoid(() -> Repositories.schedules().deleteSchedule(id));
     }
 
     List<Rows.Schedule> all() {
-        return transactions.readHome(tx -> Repositories.schedules().schedules());
+        return transactions.readHome(() -> Repositories.schedules().schedules());
     }
 
     /**
@@ -89,14 +89,14 @@ final class Schedules {
      */
     int fireDue(int max) {
         long now = System.currentTimeMillis();
-        List<Rows.Schedule> due = transactions.readHome(tx -> Repositories.schedules().dueSchedules(now, max));
+        List<Rows.Schedule> due = transactions.readHome(() -> Repositories.schedules().dueSchedules(now, max));
         return sweeper.run(due, sched -> "schedule " + sched.id + " firing", sched -> fire(sched, now));
     }
 
     private boolean fire(Rows.Schedule sched, long now) {
-        return transactions.inHome(tx -> {
+        return transactions.inHome(() -> {
             if (!Repositories.schedules().claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
-            String id = instances.start(tx, ShardIds.next("wfi", transactions.home()), sched.workflow, null,
+            String id = instances.start(ShardIds.next("wfi", transactions.home()), sched.workflow, null,
                     sched.context.raw(), "schedule:" + sched.id, null);
             LOG.log(System.Logger.Level.DEBUG, () -> "schedule " + sched.id + " fired -> instance " + id);
             return true;
