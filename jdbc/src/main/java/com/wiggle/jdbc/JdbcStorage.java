@@ -1024,29 +1024,48 @@ public final class JdbcStorage implements Storage {
     }
 
     /**
-     * The JDBI handle of the transaction open on this store on the calling thread, opened on the
-     * connection Spring bound for it at first use and closed when the transaction completes. A
-     * transaction suspended by a nested one keeps its handle out of the nested one's sight.
+     * What this store keeps for the transaction open on it on the calling thread, created at first use
+     * and released when the transaction completes. A transaction suspended by a nested one keeps its
+     * scope out of the nested one's sight.
      */
-    private Handle handle() {
-        if (TransactionSynchronizationManager.getResource(this) instanceof BoundHandle bound) return bound.handle;
+    private TxScope scope() {
+        if (TransactionSynchronizationManager.getResource(this) instanceof TxScope scope) return scope;
         requireTransaction();
-        Handle h;
-        try {
-            h = jdbi.open();
-        } catch (RuntimeException e) {
-            throw connectionFailure(e);
-        }
-        h.registerRowMapper(Token.class, (rs, ctx) -> tx.recorded(readToken(rs)));
-        BoundHandle bound = new BoundHandle(h);
-        TransactionSynchronizationManager.bindResource(this, bound);
+        TxScope scope = new TxScope();
+        TransactionSynchronizationManager.bindResource(this, scope);
         TransactionSynchronizationManager.registerSynchronization(
-                new ResourceHolderSynchronization<BoundHandle, JdbcStorage>(bound, this) {
-                    @Override protected void releaseResource(BoundHandle holder, JdbcStorage key) {
-                        holder.handle.close();
+                new ResourceHolderSynchronization<TxScope, JdbcStorage>(scope, this) {
+                    @Override protected void releaseResource(TxScope holder, JdbcStorage key) {
+                        if (holder.handle != null) holder.handle.close();
                     }
                 });
-        return h;
+        return scope;
+    }
+
+    /** The JDBI handle of the current transaction, opened on the connection Spring bound for it at first use. */
+    private Handle handle() {
+        TxScope scope = scope();
+        if (scope.handle == null) {
+            try {
+                scope.handle = jdbi.open();
+            } catch (RuntimeException e) {
+                throw connectionFailure(e);
+            }
+            scope.handle.registerRowMapper(Token.class, (rs, ctx) -> recorded(readToken(rs)));
+        }
+        return scope.handle;
+    }
+
+    /** Identifies the transaction open on this store on the calling thread. */
+    Object transactionMark() {
+        return scope();
+    }
+
+    /** Notes that the row's stored payload is {@code t.payload}, as of the current transaction. */
+    Token recorded(Token t) {
+        t.storedPayload = t.payload;
+        t.storedIn = transactionMark();
+        return t;
     }
 
     /** Refuses to go on unless a transaction is open on this store on the calling thread. */
@@ -1060,13 +1079,9 @@ public final class JdbcStorage implements Storage {
 
     Dialect dialect() { return dialect; }
 
-    /** One transaction's JDBI handle, as a Spring transaction resource. */
-    private static final class BoundHandle extends ResourceHolderSupport {
-        final Handle handle;
-
-        BoundHandle(Handle handle) {
-            this.handle = handle;
-        }
+    /** One transaction's resources in this store, as a Spring transaction resource; it is also the transaction's identity. */
+    private static final class TxScope extends ResourceHolderSupport {
+        Handle handle;
     }
 
     /** A transient statement failure, re-raised as a {@link StorageException} the replay above can
@@ -1124,7 +1139,7 @@ public final class JdbcStorage implements Storage {
     }
 
     /** Every column {@link #readInstance} reads. */
-    private static final List<String> INSTANCE_COLUMNS = List.of("id", "workflow", "version", "correlation_id",
+    static final List<String> INSTANCE_COLUMNS = List.of("id", "workflow", "version", "correlation_id",
             "status", "term_reason", "error", "context", "parent_token_id", "created_at", "updated_at",
             "revision");
 
@@ -1214,9 +1229,11 @@ public final class JdbcStorage implements Storage {
         private final JdbcDynamicNodeRepository dynamicNodes;
         private final JdbcEventRepository events;
         private final JdbcGraphRepository graph;
+        private final JdbcInstanceRepository instances;
         JdbcTx(Dialect dialect, JdbcStorage owner) {
             this.dialect = dialect;
             this.owner = owner;
+            this.instances = new JdbcInstanceRepository(owner);
             this.graph = new JdbcGraphRepository(owner);
             this.events = new JdbcEventRepository(owner);
             this.dynamicNodes = new JdbcDynamicNodeRepository(owner);
@@ -1227,6 +1244,19 @@ public final class JdbcStorage implements Storage {
             this.cluster = new JdbcClusterRepository(owner);
             this.shards = new JdbcShardRepository(owner);
         }
+
+        @Override public void insertInstance(Instance i) { instances.insertInstance(i); }
+        @Override public Optional<Instance> lockInstance(String id) { return instances.lockInstance(id); }
+        @Override public Optional<Instance> findInstance(String id) { return instances.findInstance(id); }
+        @Override public Optional<Instance> lockInstanceOf(String tokenId) { return instances.lockInstanceOf(tokenId); }
+        @Override public void updateInstance(Instance i) { instances.updateInstance(i); }
+        @Override public List<Instance> lockInstances(List<String> ids) { return instances.lockInstances(ids); }
+        @Override public void updateInstances(List<Instance> instances) { this.instances.updateInstances(instances); }
+        @Override public List<Instance> findByCorrelation(String correlationId, int limit) { return instances.findByCorrelation(correlationId, limit); }
+        @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) { return instances.listInstances(workflow, status, limit); }
+        @Override public int countInstances(InstanceStatus status) { return instances.countInstances(status); }
+        @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) { return instances.deleteTerminalInstancesBefore(updatedBefore, limit); }
+        @Override public List<String> childInstanceIds(String parentInstanceId) { return instances.childInstanceIds(parentInstanceId); }
 
         @Override public void putDefinition(String name, int version, String json,
                                             String fingerprint, String fingerprintAlgo) { graph.putDefinition(name, version, json, fingerprint, fingerprintAlgo); }
@@ -1315,12 +1345,7 @@ public final class JdbcStorage implements Storage {
         /** The current transaction's handle; it also identifies the transaction. */
         private Handle h() { return owner.handle(); }
 
-        /** Notes that the row's stored payload is {@code t.payload}, as of the current transaction. */
-        private Token recorded(Token t) {
-            t.storedPayload = t.payload;
-            t.storedIn = h();
-            return t;
-        }
+        private Token recorded(Token t) { return owner.recorded(t); }
 
         private PreparedStatement ps(String sql) throws SQLException { return h().getConnection().prepareStatement(sql); }
 
@@ -1338,132 +1363,8 @@ public final class JdbcStorage implements Storage {
             return false;
         }
 
-        private static final String INSERT_INSTANCE = "INSERT INTO wf_instance "
-                + "(id,workflow,version,correlation_id,status,term_reason,error,context,created_at,updated_at,"
-                + "revision,parent_token_id) VALUES "
-                + "(:id,:workflow,:version,:correlationId,:status,:termReason,:error,:context,:createdAt,"
-                + ":updatedAt,:revision,:parentTokenId)";
-
-        @Override public void insertInstance(Instance i) {
-            bindInstance(h().createUpdate(INSERT_INSTANCE), i).execute();
-        }
-
-        private static <S extends SqlStatement<S>> S bindInstance(S s, Instance i) {
-            return s.bind("id", i.id)
-                    .bind("workflow", i.workflow)
-                    .bind("version", i.version)
-                    .bind("correlationId", i.correlationId)
-                    .bind("status", i.status.name())
-                    .bind("termReason", i.terminationReason)
-                    .bind("error", i.error)
-                    .bind("context", i.context.json())
-                    .bind("createdAt", i.createdAt)
-                    .bind("updatedAt", i.updatedAt)
-                    .bind("revision", i.revision)
-                    .bind("parentTokenId", i.parentTokenId);
-        }
-
-        @Override public Optional<Instance> lockInstance(String id) { return loadInstance(id, true); }
-
-        @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
-
-        @Override public Optional<Instance> lockInstanceOf(String tokenId) {
-            return h().createQuery("SELECT * FROM wf_instance WHERE id=(SELECT instance_id FROM wf_token WHERE id=:id)"
-                            + " FOR UPDATE")
-                    .bind("id", tokenId)
-                    .mapTo(Instance.class)
-                    .findFirst();
-        }
-
-        /** The token and its instance in one statement, both locked, instance first, so each is read
-         *  as it stands under its lock. */
-        private static final String LOCK_TASK = "SELECT t.*, "
-                + INSTANCE_COLUMNS.stream().map(c -> "i." + c + " AS i_" + c).collect(Collectors.joining(","))
-                + " FROM wf_instance i JOIN wf_token t ON t.instance_id=i.id WHERE t.id=:id FOR UPDATE OF i, t";
-
         @Override public Optional<Rows.LockedTask> lockTask(String tokenId) {
-            if (!dialect.supportsJoinedLock()) return Tx.super.lockTask(tokenId);
-            return h().createQuery(LOCK_TASK)
-                    .bind("id", tokenId)
-                    .map((rs, ctx) -> new Rows.LockedTask(readInstance(rs, "i_"), recorded(readToken(rs))))
-                    .findFirst();
-        }
-
-        private Optional<Instance> loadInstance(String id, boolean forUpdate) {
-            String sql = forUpdate
-                    ? "SELECT * FROM wf_instance WHERE id=:id FOR UPDATE"
-                    : "SELECT * FROM wf_instance WHERE id=:id";
-            return h().createQuery(sql).bind("id", id).mapTo(Instance.class).findFirst();
-        }
-
-        private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=:status,"
-                + "term_reason=:termReason,error=:error,context=:context,updated_at=:updatedAt,"
-                + "revision=revision+1 WHERE id=:id";
-
-        @Override public void updateInstance(Instance i) {
-            bindInstanceUpdate(h().createUpdate(UPDATE_INSTANCE), i).execute();
-            i.revision++;
-        }
-
-        @Override public List<Instance> lockInstances(List<String> ids) {
-            if (ids.isEmpty()) return List.of();
-            // ORDER BY id keeps lock acquisition in id order on a btree PK scan; see Tx.lockInstances.
-            // SKIP LOCKED where the dialect has it: a batch must never WAIT on an instance another
-            // batch holds -- two workers whose batches share one instance (two arms of one fork)
-            // would otherwise convoy, each batch serialising behind the other's whole commit. A
-            // skipped instance is simply absent from the result; the caller answers its run as
-            // retryable and the worker reports it singly.
-            return h().createQuery("SELECT * FROM wf_instance WHERE id IN (<ids>) ORDER BY id FOR UPDATE"
-                            + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : ""))
-                    .bindList("ids", ids)
-                    .mapTo(Instance.class)
-                    .list();
-        }
-
-        @Override public void updateInstances(List<Instance> instances) {
-            if (instances.isEmpty()) return;
-            PreparedBatch b = h().prepareBatch(UPDATE_INSTANCE);
-            for (Instance i : instances) bindInstanceUpdate(b, i).add();
-            requireOneRowEach(b.execute(), "update wf_instance");
-            for (Instance i : instances) i.revision++;
-        }
-
-        private static <S extends SqlStatement<S>> S bindInstanceUpdate(S s, Instance i) {
-            return s.bind("status", i.status.name())
-                    .bind("termReason", i.terminationReason)
-                    .bind("error", i.error)
-                    .bind("context", i.context.json())
-                    .bind("updatedAt", i.updatedAt)
-                    .bind("id", i.id);
-        }
-
-        @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
-            return h().createQuery("SELECT * FROM wf_instance WHERE correlation_id=:cid "
-                            + "ORDER BY created_at DESC LIMIT :limit")
-                    .bind("cid", correlationId)
-                    .bind("limit", limit)
-                    .mapTo(Instance.class)
-                    .list();
-        }
-
-        @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
-            // Both filters are optional, so the clauses are conditional but the binds are not
-            // positional: a name binds where it appears, or nowhere, and cannot slide.
-            Query q = h().createQuery("SELECT * FROM wf_instance WHERE 1=1"
-                    + (workflow != null ? " AND workflow=:workflow" : "")
-                    + (status != null ? " AND status=:status" : "")
-                    + " ORDER BY created_at DESC LIMIT :limit");
-            q.bind("limit", limit);
-            if (workflow != null) q.bind("workflow", workflow);
-            if (status != null) q.bind("status", status.name());
-            return q.mapTo(Instance.class).list();
-        }
-
-        @Override public int countInstances(InstanceStatus status) {
-            return h().createQuery("SELECT COUNT(*) FROM wf_instance WHERE status=:status")
-                    .bind("status", status.name())
-                    .mapTo(Integer.class)
-                    .one();
+            return dialect.supportsJoinedLock() ? instances.lockTask(tokenId) : Tx.super.lockTask(tokenId);
         }
 
         private static final String INSERT_TOKEN = "INSERT INTO wf_token (id,instance_id,workflow,version,"
@@ -1605,7 +1506,7 @@ public final class JdbcStorage implements Storage {
         private static final String UPDATE_TOKEN_KEEP_PAYLOAD = UPDATE_TOKEN.replace("payload=:payload,", "");
 
         private boolean payloadUnchanged(Token t) {
-            return t.storedIn == h() && t.payload == t.storedPayload;
+            return t.storedIn == owner.transactionMark() && t.payload == t.storedPayload;
         }
 
         private static <S extends SqlStatement<S>> S bindTokenUpdate(S s, Token t, boolean keepPayload) {
@@ -1929,14 +1830,6 @@ public final class JdbcStorage implements Storage {
                     "AND available_at>0 AND available_at<=? ORDER BY available_at LIMIT ?", now, max);
         }
 
-        @Override public List<String> childInstanceIds(String parentInstanceId) {
-            return h().createQuery("SELECT id FROM wf_instance WHERE parent_token_id IN "
-                            + "(SELECT id FROM wf_token WHERE instance_id=:id) ORDER BY id")
-                    .bind("id", parentInstanceId)
-                    .mapTo(String.class)
-                    .list();
-        }
-
         @Override public Rows.QueueDepth queueDepth(long now) {
             return h().createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "
                             + "FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') "
@@ -1978,31 +1871,6 @@ public final class JdbcStorage implements Storage {
                     .bind(1, limit)
                     .mapTo(Token.class)
                     .list();
-        }
-
-        @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
-            List<String> ids = new ArrayList<>();
-            // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
-            // dialect a deterministic "oldest first" deletion order at no cost.
-            ids.addAll(h().createQuery("SELECT id FROM wf_instance "
-                            + "WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<:before "
-                            + "ORDER BY updated_at LIMIT :limit")
-                    .bind("before", updatedBefore)
-                    .bind("limit", limit)
-                    .mapTo(String.class)
-                    .list());
-            if (ids.isEmpty()) return 0;
-            // Children before parents: a token or comp-log row outliving its instance is a leak.
-            h().createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (SELECT id FROM wf_token WHERE instance_id IN (<ids>))")
-                    .bindList("ids", ids)
-                    .execute();
-            for (String table : List.of("wf_token", "wf_comp_log", "wf_dyn_node")) {
-                h().createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
-                        .bindList("ids", ids)
-                        .execute();
-            }
-            h().createUpdate("DELETE FROM wf_instance WHERE id IN (<ids>)").bindList("ids", ids).execute();
-            return ids.size();
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {

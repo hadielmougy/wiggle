@@ -37,6 +37,16 @@ abstract class JdbcRepository {
         return false;
     }
 
+    /** Refuses a batch in which any statement touched a number of rows other than one. */
+    static void requireOneRowEach(int[] counts, String what) {
+        for (int c : counts) {
+            if (c != 1 && c != java.sql.Statement.SUCCESS_NO_INFO) {
+                throw new IllegalStateException(what + ": batched statement touched " + c
+                        + " rows where exactly 1 was expected");
+            }
+        }
+    }
+
     static Params params() {
         return new Params();
     }
