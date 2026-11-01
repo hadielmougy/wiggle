@@ -29,6 +29,14 @@ abstract class JdbcRepository {
         return owner.named().getJdbcTemplate();
     }
 
+    /** Whether {@code e} is a duplicate-key failure, as the dialect recognises one anywhere in the cause chain. */
+    final boolean isDuplicateKey(RuntimeException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLException sql && dialect.isDuplicateKey(sql)) return true;
+        }
+        return false;
+    }
+
     static Params params() {
         return new Params();
     }
