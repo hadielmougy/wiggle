@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.Doc;
-import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.server.store.Rows.Instance;
@@ -9,7 +9,6 @@ import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -37,7 +36,7 @@ final class Instances {
     /** Advancing tokens over the graph until each parks -- {@link WorkflowEngine}'s drive loop,
      *  as the instance lifecycle needs it to continue a flow it has just resumed. */
     interface Pump {
-        void drive(Tx tx, LazyGraph def, Instance inst, Deque<Token> work, long now);
+        void drive(LazyGraph def, Instance inst, Deque<Token> work, long now);
     }
 
     private final DefinitionRegistry definitions;
@@ -57,27 +56,27 @@ final class Instances {
      * Starts an instance and drives it to its first parking place. {@code parentTokenId} links a
      * sub-workflow to the token awaiting it.
      */
-    String start(Tx tx, String workflow, Integer version, Object context,
+    String start(String workflow, Integer version, Object context,
                  String correlationId, String parentTokenId) {
         String id = parentTokenId == null ? idMinter.next() : idMinter.childOf(parentTokenId);
-        return start(tx, id, workflow, version, context, correlationId, parentTokenId);
+        return start(id, workflow, version, context, correlationId, parentTokenId);
     }
 
-    /** {@link #start(Tx, String, Integer, Object, String, String)} under an id the caller minted, so
+    /** {@link #start(String, Integer, Object, String, String)} under an id the caller minted, so
      *  the transaction could be opened on the shard it carries. */
-    String start(Tx tx, String id, String workflow, Integer version, Object context,
+    String start(String id, String workflow, Integer version, Object context,
                  String correlationId, String parentTokenId) {
-        int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
+        int v = version != null ? version : Repositories.graph().latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
-        LazyGraph def = definitions.graph(tx, workflow, v);
+        LazyGraph def = definitions.graph(workflow, v);
         long now = System.currentTimeMillis();
-        Instance inst = Instances.create(tx, id, def.name(), def.version(),
+        Instance inst = Instances.create(id, def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
         Token t = Tokens.create(inst, def.startNode(), "", null, now);
-        tx.insertToken(t);
+        Repositories.tokens().insertToken(t);
         LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
-        pump.drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
+        pump.drive(def, inst, new ArrayDeque<>(List.of(t)), now);
         return inst.id;
     }
 
@@ -86,63 +85,63 @@ final class Instances {
      * transactions -- cascading in-transaction would take the parent lock before the child's.
      * An instance that is no longer RUNNING is left alone, and has no children to report.
      */
-    List<String> cancel(Tx tx, String instanceId, String reason) {
-        Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+    List<String> cancel(String instanceId, String reason) {
+        Instance inst = Repositories.instances().lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
         if (!InstanceState.of(inst.status).cancellable()) {
             LOG.log(System.Logger.Level.DEBUG, () ->
                     "cancel: instance " + instanceId + " ignored, already " + inst.status);
             return List.of();
         }
         long now = System.currentTimeMillis();
-        Tokens.cancelAll(tx, inst.id, now);
+        Tokens.cancelAll(inst.id, now);
         inst.terminationReason = reason;
-        move(tx, inst, InstanceStatus.CANCELLED, now);
-        notifyParent(tx, inst, now);
+        move(inst, InstanceStatus.CANCELLED, now);
+        notifyParent(inst, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
-        return tx.childInstanceIds(instanceId);
+        return Repositories.instances().childInstanceIds(instanceId);
     }
 
     /** The instance ran out of flow at a successful END node with no token left anywhere. */
-    void complete(Tx tx, Instance inst, String reason, long now) {
+    void complete(Instance inst, String reason, long now) {
         inst.terminationReason = reason;
-        move(tx, inst, InstanceStatus.COMPLETED, now);
-        notifyParent(tx, inst, now);
+        move(inst, InstanceStatus.COMPLETED, now);
+        notifyParent(inst, now);
     }
 
     /** Fails the instance, unless there is something to undo -- then the saga reverse pass
      *  takes it over instead, and the outcome is not known until that pass lands. */
-    void fail(Tx tx, Instance inst, String error, long now) {
-        Tokens.cancelAll(tx, inst.id, now);
-        if (sagas.begin(tx, inst, error, now)) return;
+    void fail(Instance inst, String error, long now) {
+        Tokens.cancelAll(inst.id, now);
+        if (sagas.begin(inst, error, now)) return;
         inst.error = error;
-        move(tx, inst, InstanceStatus.FAILED, now);
+        move(inst, InstanceStatus.FAILED, now);
         LOG.log(System.Logger.Level.INFO, () -> "instance " + inst.id + " failed: " + error);
-        notifyParent(tx, inst, now);
+        notifyParent(inst, now);
     }
 
     /** The saga reverse pass has taken the instance over; its outcome is not known until the
      *  pass lands {@link #compensated} or {@link #compensationFailed}. */
-    void compensating(Tx tx, Instance inst, String error, long now) {
+    void compensating(Instance inst, String error, long now) {
         inst.error = error;
-        move(tx, inst, InstanceStatus.COMPENSATING, now);
+        move(inst, InstanceStatus.COMPENSATING, now);
     }
 
     /** The reverse pass undid everything it had recorded. */
-    void compensated(Tx tx, Instance inst, long now) {
-        move(tx, inst, InstanceStatus.COMPENSATED, now);
-        notifyParent(tx, inst, now);
+    void compensated(Instance inst, long now) {
+        move(inst, InstanceStatus.COMPENSATED, now);
+        notifyParent(inst, now);
     }
 
     /** The reverse pass could not finish: the instance is stuck and needs a human. */
-    void compensationFailed(Tx tx, Instance inst, String error, long now) {
+    void compensationFailed(Instance inst, String error, long now) {
         inst.error = (inst.error == null ? "" : inst.error + "; ") + error;
-        move(tx, inst, InstanceStatus.COMPENSATION_FAILED, now);
-        notifyParent(tx, inst, now);
+        move(inst, InstanceStatus.COMPENSATION_FAILED, now);
+        notifyParent(inst, now);
     }
 
-    static void touch(Tx tx, Instance inst, long now) {
+    static void touch(Instance inst, long now) {
         inst.updatedAt = now;
-        tx.updateInstance(inst);
+        Repositories.instances().updateInstance(inst);
     }
 
     static void requireRunning(Instance inst) {
@@ -154,57 +153,57 @@ final class Instances {
      * fail) the parent's waiting token. Lock ordering is always child -> parent, never the
      * reverse in one transaction, so parent/child completions cannot deadlock.
      */
-    void notifyParent(Tx tx, Instance child, long now) {
+    void notifyParent(Instance child, long now) {
         if (child.parentTokenId == null) return;
-        Token probe = tx.findToken(child.parentTokenId).orElse(null);
+        Token probe = Repositories.locks().findToken(child.parentTokenId).orElse(null);
         if (probe == null) return;
-        Instance parent = tx.lockInstance(probe.instanceId).orElse(null);
+        Instance parent = Repositories.instances().lockInstance(probe.instanceId).orElse(null);
         if (parent == null || !parent.status.running()) return;
-        Token t = tx.findToken(child.parentTokenId).orElse(null);   // re-read under the lock
+        Token t = Repositories.locks().findToken(child.parentTokenId).orElse(null);   // re-read under the lock
         if (t == null || t.status != TokenStatus.AWAITING || t.kind != NodeKind.SUB_WORKFLOW) return;
-        LazyGraph def = definitions.graph(tx, parent.workflow, parent.version);
+        LazyGraph def = definitions.graph(parent.workflow, parent.version);
         Node node = def.node(t.nodeId);
         if (child.status != InstanceStatus.COMPLETED) {
-            Tokens.failParked(tx, t, now);
-            fail(tx, parent, "sub-workflow '" + node.activity() + "' " + child.status
+            Tokens.failParked(t, now);
+            fail(parent, "sub-workflow '" + node.activity() + "' " + child.status
                     + (child.error == null ? "" : ": " + child.error), now);
             return;
         }
         TokenPayload contPayload = Scopes.mergeIntoScope(parent, t.payload, child.context.raw());
-        Tokens.settle(tx, t, now);
-        touch(tx, parent, now);
-        Token cont = Tokens.continueAt(tx, parent, t, node.next(), contPayload, now);
+        Tokens.settle(t, now);
+        touch(parent, now);
+        Token cont = Tokens.continueAt(parent, t, node.next(), contPayload, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "sub-workflow " + child.id + " completed -> resuming parent "
                 + parent.id + " at " + node.next());
-        pump.drive(tx, def, parent, new ArrayDeque<>(List.of(cont)), now);
+        pump.drive(def, parent, new ArrayDeque<>(List.of(cont)), now);
     }
 
     /** A compensator finished its undo: settle it and drive the reverse pass on. */
-    void compensatorCompleted(Tx tx, Instance inst, Token t, long seq, long now) {
-        sagas.complete(tx, inst, t, seq, now);
+    void compensatorCompleted(Instance inst, Token t, long seq, long now) {
+        sagas.complete(inst, t, seq, now);
     }
 
     /** A compensator is itself out of retries: the reverse pass cannot finish. */
-    void compensatorExhausted(Tx tx, Instance inst, Node node, long seq, String failReason, long now) {
-        sagas.compensatorExhausted(tx, inst, node, seq, failReason, now);
+    void compensatorExhausted(Instance inst, Node node, long seq, String failReason, long now) {
+        sagas.compensatorExhausted(inst, node, seq, failReason, now);
     }
 
     /** Drops terminal instances last touched before {@code cutoff}. */
-    static int purgeTerminalBefore(Tx tx, long cutoff, int max) {
-        return tx.deleteTerminalInstancesBefore(cutoff, max);
+    static int purgeTerminalBefore(long cutoff, int max) {
+        return Repositories.instances().deleteTerminalInstancesBefore(cutoff, max);
     }
 
     /** The one place an instance's status is written, and so the one place the event log hears of it. */
-    private static void move(Tx tx, Instance inst, InstanceStatus target, long now) {
+    private static void move(Instance inst, InstanceStatus target, long now) {
         inst.status = InstanceState.of(inst.status).moveTo(target);
         inst.updatedAt = now;
-        tx.updateInstance(inst);
-        Events.moved(tx, inst, now);
+        Repositories.instances().updateInstance(inst);
+        Events.moved(inst, now);
     }
 
     /** A new instance, born RUNNING. {@code parentTokenId} links a sub-workflow to the token
      *  awaiting it; null for a top-level start. */
-    static Instance create(Tx tx, String id, String workflow, int version, Object context,
+    static Instance create(String id, String workflow, int version, Object context,
                            String correlationId, String parentTokenId, long now) {
         Instance inst = new Instance();
         inst.id = id;
@@ -216,8 +215,8 @@ final class Instances {
         inst.context = Doc.of(context);
         inst.createdAt = now;
         inst.updatedAt = now;
-        tx.insertInstance(inst);
-        Events.started(tx, inst, now);
+        Repositories.instances().insertInstance(inst);
+        Events.started(inst, now);
         return inst;
     }
 }

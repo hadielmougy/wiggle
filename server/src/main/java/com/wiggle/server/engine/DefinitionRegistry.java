@@ -1,5 +1,8 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.ShardTransactions;
+import com.wiggle.server.store.Repositories;
+import com.wiggle.server.store.DynamicNodeRepository;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
@@ -7,7 +10,6 @@ import com.wiggle.core.criteria.DispatchAttribute;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.server.store.GraphStore;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
 
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -16,7 +18,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 
 /**
  * Owns workflow definitions. Registration stores two things: the raw submitted graph as a
@@ -39,6 +40,7 @@ public final class DefinitionRegistry {
     private static final int DEF_MAX_NODES = 40;
 
     private final Storage storage;
+    private final ShardTransactions shards;
     /** What the engine reads from a version's definition beyond its nodes, parsed from one read. */
     private record Meta(ExecutionMode mode, List<DispatchAttribute> attributes) { }
 
@@ -55,6 +57,7 @@ public final class DefinitionRegistry {
 
     public DefinitionRegistry(Storage storage) {
         this.storage = storage;
+        this.shards = new ShardTransactions(storage);
     }
 
     /** {@link #register(WorkflowDefinition, boolean)} without forcing. */
@@ -79,14 +82,9 @@ public final class DefinitionRegistry {
      */
     public WorkflowDefinition register(WorkflowDefinition def, boolean force) {
         Registration registration = new Registration(def, force);
-        Set<Integer> shards = new LinkedHashSet<>(storage.instanceShards());
-        shards.add(storage.home());
-        for (int shard : shards) {
-            storage.inShard(shard, tx -> {
-                registration.accept(tx);
-                return null;
-            });
-        }
+        Set<Integer> targets = new LinkedHashSet<>(shards.instanceShards());
+        targets.add(shards.home());
+        for (int shard : targets) shards.inShard(shard, registration);
         metaCache.put(def.key(), new Meta(def.executionMode(), def.attributes()));
         if (def.numberOfNodes() <= DEF_MAX_NODES) defCache.put(def.key(), def);
         else tooLarge.add(def.key());
@@ -129,12 +127,22 @@ public final class DefinitionRegistry {
     }
 
     /**
-     * {@link #graph(GraphStore, String, int)} for an engine transaction, which also resolves the
-     * nodes an instance created at run time ({@link Spawns}); they live beside the instance, not in
-     * the definition.
+     * {@link #graph(GraphStore, String, int)} in the transaction open on the calling thread, which
+     * also resolves the nodes an instance created at run time ({@link Spawns}); they live beside the
+     * instance, not in the definition.
      */
-    public LazyGraph graph(Tx tx, String name, int version) {
-        return new WithCreatedNodes(graph((GraphStore) tx, name, version), tx);
+    public LazyGraph graph(String name, int version) {
+        return new WithCreatedNodes(graph(Repositories.graph(), name, version), Repositories.dynamicNodes());
+    }
+
+    /** {@link #executionMode(GraphStore, String, int)} in the transaction open on the calling thread. */
+    public ExecutionMode executionMode(String name, int version) {
+        return executionMode(Repositories.graph(), name, version);
+    }
+
+    /** {@link #attributes(GraphStore, String, int)} in the transaction open on the calling thread. */
+    public List<DispatchAttribute> attributes(String name, int version) {
+        return attributes(Repositories.graph(), name, version);
     }
 
     /**
@@ -164,7 +172,7 @@ public final class DefinitionRegistry {
     }
 
     public Optional<WorkflowDefinition> lookup(String name, int version) {
-        return storage.inHome(tx -> load(tx, name, version));
+        return shards.readHome(() -> load(Repositories.graph(), name, version));
     }
 
     private Optional<WorkflowDefinition> load(GraphStore graphs, String name, int version) {
@@ -172,14 +180,16 @@ public final class DefinitionRegistry {
     }
 
     public Optional<WorkflowDefinition> latest(String name) {
-        return storage.inHome(tx -> tx.latestVersion(name).flatMap(v -> load(tx, name, v)));
+        return shards.readHome(() -> Repositories.graph().latestVersion(name)
+                .flatMap(v -> load(Repositories.graph(), name, v)));
     }
 
     public List<String> names() {
-        return storage.inHome(Tx::definitionNames);
+        return shards.readHome(() -> Repositories.graph().definitionNames());
     }
 
-    private static final class Registration implements Consumer<Tx> {
+    /** One shard's part of a registration, in the transaction open on it. */
+    private static final class Registration implements Runnable {
         private final String fingerprint;
         private final boolean force;
         private final WorkflowDefinition def;
@@ -191,8 +201,9 @@ public final class DefinitionRegistry {
         }
 
         @Override
-        public void accept(Tx tx) {
-            GraphStore.StoredFingerprint stored = tx.definitionFingerprint(def.name(), def.version()).orElse(null);
+        public void run() {
+            GraphStore graph = Repositories.graph();
+            GraphStore.StoredFingerprint stored = graph.definitionFingerprint(def.name(), def.version()).orElse(null);
             boolean comparable = stored != null && stored.value() != null
                     && WorkflowDefinition.FINGERPRINT_ALGO.equals(stored.algo());
             if (comparable && stored.value().equals(fingerprint)) return;   // same graph: nothing to do
@@ -204,14 +215,14 @@ public final class DefinitionRegistry {
                 LOG.log(System.Logger.Level.WARNING, () -> "replacing the registered graph of '" + def.key()
                         + "'" + (comparable ? " (forced)" : " (no comparable fingerprint stored)")
                         + "; instances already running on this version will see the new graph");
-                tx.deleteGraph(def.name(), def.version());
-                tx.replaceDefinition(def.name(), def.version(), Json.write(def.toJson()),
+                graph.deleteGraph(def.name(), def.version());
+                graph.replaceDefinition(def.name(), def.version(), Json.write(def.toJson()),
                         fingerprint, WorkflowDefinition.FINGERPRINT_ALGO);
             } else {
-                tx.putDefinition(def.name(), def.version(), Json.write(def.toJson()),
+                graph.putDefinition(def.name(), def.version(), Json.write(def.toJson()),
                         fingerprint, WorkflowDefinition.FINGERPRINT_ALGO);
             }
-            tx.putGraph(def);
+            graph.putGraph(def);
         }
 
     }
@@ -220,12 +231,12 @@ public final class DefinitionRegistry {
     private static final class WithCreatedNodes implements LazyGraph {
 
         private final LazyGraph graph;
-        private final Tx tx;
+        private final DynamicNodeRepository nodes;
         private final Map<String, Node> created = new HashMap<>();
 
-        WithCreatedNodes(LazyGraph graph, Tx tx) {
+        WithCreatedNodes(LazyGraph graph, DynamicNodeRepository nodes) {
             this.graph = graph;
-            this.tx = tx;
+            this.nodes = nodes;
         }
 
         @Override public String name() { return graph.name(); }
@@ -245,7 +256,7 @@ public final class DefinitionRegistry {
             if (!Spawns.isCreated(id)) return graph.find(id);
             Node n = created.get(id);
             if (n == null) {
-                n = tx.dynNode(id).orElse(null);
+                n = nodes.dynNode(id).orElse(null);
                 if (n != null) created.put(id, n);
             }
             return Optional.ofNullable(n);

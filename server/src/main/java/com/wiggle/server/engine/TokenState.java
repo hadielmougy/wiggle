@@ -11,7 +11,7 @@ import java.util.Set;
  * What a token in each state IS, and what it PERMITS. One constant per {@link TokenStatus},
  * matched by name.
  *
- * <p>This type answers questions; it never performs a write. Nothing here takes a {@code Tx}, so
+ * <p>This type answers questions; it never performs a write. Nothing here touches a repository, so
  * a state cannot advance a token -- it can only say whether a move is legal ({@link #moveTo}),
  * whether the token still counts as live ({@link #active}), and whether an operation that needs a
  * lease is allowed at all. {@link Tokens} does the writing, and asks here first. That division is

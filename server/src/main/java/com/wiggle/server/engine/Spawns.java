@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.CreatedBranch.BranchStep;
 import com.wiggle.core.GraphTraversal;
@@ -10,7 +11,6 @@ import com.wiggle.core.ScratchKeys;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.TokenPayload;
-import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -170,15 +170,15 @@ final class Spawns {
      * {@code joinId}, and mints one token per branch from {@code fork}, whose payload is the base the
      * join restores. Steps without their own queue or retry policy take {@code creator}'s.
      */
-    static List<Token> fanOut(Tx tx, Instance inst, Token fork, Node creator, String joinId,
+    static List<Token> fanOut(Instance inst, Token fork, Node creator, String joinId,
                               List<CreatedBranch> branches, List<Node> extraNodes, long now) {
         List<Node> nodes = new ArrayList<>(extraNodes);
         List<FanOut.Item> items = new ArrayList<>(branches.size());
         for (CreatedBranch b : branches) {
             items.add(new FanOut.Item(compileChain(inst, creator, b.steps(), joinId, joinId, nodes), b.key(), b.input()));
         }
-        tx.insertDynNodes(inst.id, nodes);
-        return FanOut.items(tx, inst, fork, items, now);
+        Repositories.dynamicNodes().insertDynNodes(inst.id, nodes);
+        return FanOut.items(inst, fork, items, now);
     }
 
     /**

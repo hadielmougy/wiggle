@@ -5,6 +5,10 @@ import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
+import com.wiggle.server.store.CurrentTx;
+import com.wiggle.server.store.ReadTx;
+import com.wiggle.server.store.Repositories;
+import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -42,12 +48,12 @@ class WakeOnProduceTest {
             Node node = Node.task("one", "one", "one", QUEUE, null);
 
             DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
-            transactions.inTxVoid("wfi_1", tx -> {
+            transactions.inTxVoid("wfi_1", () -> {
                 long now = 1_000L;
-                Instance inst = Instances.create(tx, "wfi_1", "w", 1, Map.of(), null, null, now);
+                Instance inst = Instances.create("wfi_1", "w", 1, Map.of(), null, null, now);
                 Token t = Tokens.create(inst, "one", "", null, now);
-                tx.insertToken(t);
-                tokens.markReady(tx, inst, t, node, now);
+                Repositories.tokens().insertToken(t);
+                tokens.markReady(inst, t, node, now);
             });
 
             assertTrue(watch.await(System.currentTimeMillis()),
@@ -57,40 +63,52 @@ class WakeOnProduceTest {
     }
 
     /**
-     * A storage transaction is a borrowed connection, so a nested one is an independent transaction
-     * on a second connection: it commits regardless of the outer, cannot see the outer's uncommitted
-     * writes, and blocks on the instance row lock the outer already holds -- a deadlock against
-     * itself. Nothing in the engine nests today; this keeps it that way by failing at the call
-     * rather than hanging at the lock.
+     * A scope opened inside another on the same shard joins it: one transaction, on one connection,
+     * so it cannot block on the instance lock the outer holds. Its queues are woken with the outer's,
+     * once the outer commits.
      */
     @Test
-    @DisplayName("opening a transaction inside a transaction is refused, not silently nested")
-    void nestedScopesAreRefused() {
-        try (Storage storage = new InMemoryStorage()) {
-            storage.migrate();
-            Transactions transactions = new Transactions(storage, new DispatchNotifier());
-
-            IllegalStateException nested = assertThrows(IllegalStateException.class,
-                    () -> transactions.inTxVoid("wfi_1", outer -> transactions.inTxVoid("wfi_1", inner -> { })));
-            assertTrue(nested.getMessage().contains("nested transaction scope"), nested.getMessage());
-        }
-    }
-
-    @Test
-    @DisplayName("a refused nested scope leaves the thread able to open a fresh one")
-    void aFailedScopeUnwindsCleanly() {
+    @DisplayName("a scope opened inside another on the same shard joins it, and wakes only after the outer commits")
+    void nestedScopeOnTheSameShardJoins() {
         try (Storage storage = new InMemoryStorage()) {
             storage.migrate();
             DispatchNotifier notifier = new DispatchNotifier();
             Transactions transactions = new Transactions(storage, notifier);
 
-            assertThrows(IllegalStateException.class,
-                    () -> transactions.inTxVoid("wfi_1", outer -> transactions.inTxVoid("wfi_1", inner -> { })));
+            DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
+            transactions.inTxVoid("wfi_1", () -> {
+                ReadTx outer = CurrentTx.require();
+                transactions.inTxVoid("wfi_1", () -> {
+                    assertSame(outer, CurrentTx.require(), "the nested scope runs in the outer transaction");
+                    transactions.wake(QUEUE, null, null);
+                });
+                assertFalse(watch.await(System.currentTimeMillis()), "nothing is woken before the outer commits");
+            });
+            assertTrue(watch.await(System.currentTimeMillis()), "the nested scope's queue is woken after the commit");
+        }
+    }
+
+    /**
+     * A write scope on another shard would be a second, independent transaction: it would commit
+     * whatever became of the outer one. It is refused at the call, and the thread can open a fresh
+     * scope afterwards.
+     */
+    @Test
+    @DisplayName("a write scope inside one on another shard is refused, and leaves the thread able to open a fresh one")
+    void nestedScopeOnAnotherShardIsRefused() {
+        try (InMemoryStorage seven = new InMemoryStorage(); InMemoryStorage two = new InMemoryStorage()) {
+            Storage storage = new ShardedStorage(Map.of(7, seven, 2, two), 2);
+            DispatchNotifier notifier = new DispatchNotifier();
+            Transactions transactions = new Transactions(storage, notifier);
+
+            IllegalStateException nested = assertThrows(IllegalStateException.class,
+                    () -> transactions.inTxVoid("wfi.s7.01k6abc", () -> transactions.inHome(() -> null)));
+            assertTrue(nested.getMessage().contains("would commit on its own"), nested.getMessage());
 
             DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
-            transactions.inTxVoid("wfi_1", tx -> transactions.wake(QUEUE, null, null));
+            transactions.inTxVoid("wfi.s7.01k6abc", () -> transactions.wake(QUEUE, null, null));
             assertTrue(watch.await(System.currentTimeMillis()),
-                    "the failed scope must not have left this thread's state stuck");
+                    "the refused scope must not have left this thread's state stuck");
         }
     }
 }

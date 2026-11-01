@@ -2,7 +2,6 @@ package com.wiggle.server.engine;
 
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.Tx;
 
 import java.util.Deque;
 
@@ -21,7 +20,7 @@ final class Drive {
      * single continuation grows the budget by one, so any fan-out width advances fine while a
      * runaway chain of server-side nodes still trips the cap.
      */
-    static void pump(NodeBehaviourFactory behaviours, Tx tx, LazyGraph def, Instance inst,
+    static void pump(NodeBehaviourFactory behaviours, LazyGraph def, Instance inst,
                      Deque<Token> work, long now) {
         long budget = 10_000;
         long guard = 0;
@@ -32,7 +31,7 @@ final class Drive {
             }
             Token t = work.pop();
             int before = work.size();
-            Step s = new Step(tx, def, inst, t, def.node(t.nodeId), work, now);
+            Step s = new Step(def, inst, t, def.node(t.nodeId), work, now);
             if (!behaviours.getNodeBehaviour(s.node().kind()).advance(s)) return;
             budget += Math.max(0, work.size() - before - 1);
         }
