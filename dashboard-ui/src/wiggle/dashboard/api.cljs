@@ -50,8 +50,16 @@
 
 (defn instance [id] (GET (str "/api/instances/" (enc id))))
 
-(defn search-instances [{:keys [workflow status limit search]}]
-  (GET (str "/api/search?partial=true&q=" (enc (str/trim search))
+(defn attribute-params
+  "attr=name:op:value for each filter that has a value."
+  [attrs]
+  (for [{:keys [name op value]} attrs
+        :when (and (seq name) (seq (str/trim (str value))))]
+    (str "&attr=" (enc (str name ":" op ":" (str/trim value))))))
+
+(defn search-instances [{:keys [workflow status limit search attrs]}]
+  (GET (str "/api/search?partial=true&q=" (enc (str/trim (or search "")))
+            (str/join (attribute-params attrs))
             (when (seq workflow) (str "&workflow=" (enc workflow)))
             (when (seq status) (str "&status=" (enc status)))
             (when limit (str "&limit=" limit)))))

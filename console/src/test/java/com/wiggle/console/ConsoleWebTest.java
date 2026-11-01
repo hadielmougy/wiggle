@@ -5,6 +5,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Tls;
+import com.wiggle.core.criteria.AttrType;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -251,6 +252,49 @@ class ConsoleWebTest {
                 assertTrue(more < work, "slowest p95 first: " + stats);
                 assertTrue(stats.contains("\"count\":2"), "each step ran twice: " + stats);
                 assertEquals(400, get(http, base + "/api/stats", null).statusCode(), "a workflow is required");
+            }
+        }
+    }
+
+    @Test @DisplayName("search: /api/search filters on the attributes the workflow declares, and the graph names them")
+    void searchByAttributes() throws Exception {
+        FlowSpec shipments = FlowSpec.define("shipments", 1, Map.class, Steps.class, (f, s) -> f
+                .searchAttribute("region", AttrType.STRING, "region")
+                .searchAttribute("total", AttrType.DECIMAL, "total")
+                .searchAttribute("rush", AttrType.BOOLEAN, "rush")
+                .thenApply(s::work));
+        ServerConfig config = config().withSearch(new ServerConfig.Search(true, Duration.ofDays(30), java.util.Set.of()));
+        try (WiggleServer server = new WiggleServer(config).start();
+             DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
+            WiggleClient c = conn.client();
+            c.register(shipments);
+            String eu = c.start("shipments", Map.of("region", "eu", "total", 12.5, "rush", true), null, null);
+            c.start("shipments", Map.of("region", "us", "total", 80, "rush", false), null, null);
+
+            try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster(),
+                    server.search().orElseThrow()), new ConsoleAuth("admin", null, false), TestPorts.free(),
+                    Tls.Options.DISABLED).start()) {
+                String base = "http://localhost:" + console.port();
+                HttpClient http = HttpClient.newHttpClient();
+
+                String graph = get(http, base + "/api/workflows/shipments", null).body();
+                assertTrue(graph.contains("\"searchAttributes\"") && graph.contains("\"region\""), graph);
+
+                String url = base + "/api/search?workflow=shipments&attr=";
+                long deadline = System.currentTimeMillis() + 10_000;
+                String hit;
+                while (!(hit = get(http, url + "region:eq:eu", null).body()).contains(eu)) {
+                    if (System.currentTimeMillis() > deadline) throw new AssertionError("not indexed: " + hit);
+                    Thread.sleep(100);
+                }
+                assertTrue(!hit.contains("\"us\""), hit);
+                assertTrue(get(http, url + "total:lt:20", null).body().contains(eu), "ordered comparison on a decimal");
+                assertTrue(!get(http, url + "total:gt:20", null).body().contains(eu));
+                assertTrue(get(http, url + "rush:eq:true", null).body().contains(eu), "boolean");
+                assertEquals(400, get(http, url + "nope:eq:x", null).statusCode(), "undeclared attribute");
+                assertEquals(400, get(http, url + "total:eq:abc", null).statusCode(), "value of the wrong type");
+                assertEquals(400, get(http, url + "region", null).statusCode(), "malformed filter");
+                assertEquals(400, get(http, base + "/api/search?attr=region:eq:eu", null).statusCode(), "needs a workflow");
             }
         }
     }

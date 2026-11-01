@@ -4,17 +4,23 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.NodeStats;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.core.criteria.AttrType;
+import com.wiggle.core.criteria.Op;
 import com.wiggle.server.auth.Scope;
 import com.wiggle.server.cluster.ClusterManager;
+import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.search.Search;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.TokenPayload;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -41,13 +47,54 @@ public final class EngineDashboardData implements DashboardData {
     }
 
     @Override public Optional<SearchView> search(String text, String workflow, String status, int limit,
-                                                 boolean partialOk, Scope readable) {
+                                                 boolean partialOk, Scope readable, List<AttributeFilter> attributes) {
         if (search == null) return Optional.empty();
-        Search.Result r = search.search(text, workflow, status, null, null, limit, partialOk, readable);
+        Search.Result r = search.search(text, workflow, status, null, null, limit, partialOk, readable,
+                attrFilters(workflow, attributes));
         return Optional.of(new SearchView(r.hits().stream()
                 .map(h -> new SearchHitView(h.instanceId(), h.workflow(), h.version(), h.status(), h.correlationId(),
                         h.updatedAt(), h.score(), h.purged()))
                 .toList(), r.partial()));
+    }
+
+    private List<Rows.AttrFilter> attrFilters(String workflow, List<AttributeFilter> filters) {
+        if (filters.isEmpty()) return List.of();
+        if (workflow == null) throw EngineException.badRequest("attribute filters need a workflow");
+        Map<String, AttrType> declared = new HashMap<>();
+        engine.latestDefinition(workflow).ifPresent(d -> d.searchAttributes().forEach(a -> declared.put(a.name(), a.type())));
+        List<Rows.AttrFilter> out = new ArrayList<>();
+        for (AttributeFilter f : filters) {
+            AttrType type = declared.get(f.name());
+            if (type == null) throw EngineException.badRequest(workflow + " declares no search attribute '" + f.name() + "'");
+            Op op = switch (f.op()) {
+                case "eq" -> Op.EQUAL;
+                case "lt" -> Op.LESS_THAN;
+                case "le" -> Op.LESS_THAN_OR_EQUAL;
+                case "gt" -> Op.GREATER_THAN;
+                case "ge" -> Op.GREATER_THAN_OR_EQUAL;
+                default -> throw EngineException.badRequest("unknown attribute operator '" + f.op() + "'");
+            };
+            try {
+                Object value = switch (type) {
+                    case STRING -> f.value();
+                    case LONG -> Long.parseLong(f.value().trim());
+                    case DECIMAL -> new BigDecimal(f.value().trim());
+                    case BOOLEAN -> parseFlag(f.value());
+                };
+                out.add(new Rows.AttrFilter(f.name(), op, value));
+            } catch (IllegalArgumentException e) {
+                throw EngineException.badRequest("attribute '" + f.name() + "': " + e.getMessage());
+            }
+        }
+        return out;
+    }
+
+    private static boolean parseFlag(String s) {
+        return switch (s.trim()) {
+            case "true" -> true;
+            case "false" -> false;
+            default -> throw new IllegalArgumentException("expected true or false, got '" + s + "'");
+        };
     }
 
     @Override public List<String> workflowNames() {

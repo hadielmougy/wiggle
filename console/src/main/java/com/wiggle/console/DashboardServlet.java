@@ -440,7 +440,7 @@ public final class DashboardServlet extends HttpServlet {
         DashboardData.SearchView found = data.search(trimToNull(req.getParameter("q")),
                 trimToNull(req.getParameter("workflow")), trimToNull(req.getParameter("status")),
                 parseInt(req.getParameter("limit"), 50), "true".equals(req.getParameter("partial")),
-                Permissions.readable(principal(req).permissions())).orElse(null);
+                Permissions.readable(principal(req).permissions()), attributeFilters(req)).orElse(null);
         if (found == null) { error(res, 404, "search is not enabled on this deployment"); return; }
         List<Object> hits = new ArrayList<>();
         for (DashboardData.SearchHitView h : found.hits()) {
@@ -456,6 +456,19 @@ public final class DashboardServlet extends HttpServlet {
             hits.add(m);
         }
         json(res, 200, Map.of("hits", hits, "partial", found.partial()));
+    }
+
+    /** The {@code attr=name:op:value} parameters, each a condition on an attribute the workflow declares. */
+    private static List<DashboardData.AttributeFilter> attributeFilters(HttpServletRequest req) {
+        String[] raw = req.getParameterValues("attr");
+        if (raw == null) return List.of();
+        List<DashboardData.AttributeFilter> out = new ArrayList<>();
+        for (String a : raw) {
+            String[] p = a.split(":", 3);
+            if (p.length != 3) throw EngineException.badRequest("attr must be name:op:value, got '" + a + "'");
+            out.add(new DashboardData.AttributeFilter(p[0], p[1], p[2]));
+        }
+        return out;
     }
 
     /** The workflow of instance {@code id}, which scopes what may be done to it. */

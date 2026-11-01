@@ -277,13 +277,62 @@
 
 ;; ---------------------------------------------------------------- instances tab
 
+(defn- attr-type [name]
+  (some #(when (= name (:name %)) (:type %)) (:filter-attrs @db)))
+
+(defn- set-attr! [i k v]
+  (swap! db assoc-in [:filter :attrs i k] v))
+
+(defn attribute-filters
+  "Conditions on the filtered workflow's declared search attributes; they run through search, so the
+  list shows only where search is enabled and the workflow declares some."
+  []
+  (let [declared (:filter-attrs @db)
+        attrs (get-in @db [:filter :attrs])]
+    (when (seq declared)
+      [:div.toolbar
+       [:span.muted "attributes"]
+       (for [[i {:keys [name op value]}] (map-indexed vector attrs)]
+         (let [type (attr-type name)
+               ordered? (contains? #{"LONG" "DECIMAL"} type)]
+           ^{:key i}
+           [:span {:style {:display "inline-flex" :gap 4}}
+            [:select {:value name :title "attribute"
+                      :on-change #(do (set-attr! i :name (.. % -target -value))
+                                      (set-attr! i :op "eq") (set-attr! i :value ""))}
+             (for [a declared] ^{:key (:name a)} [:option {:value (:name a)} (:name a)])]
+            [:select {:value op :title "comparison" :disabled (not ordered?)
+                      :on-change #(set-attr! i :op (.. % -target -value))}
+             (for [[o label] [["eq" "="] ["lt" "<"] ["le" "≤"] ["gt" ">"] ["ge" "≥"]]
+                   :when (or ordered? (= o "eq"))]
+               ^{:key o} [:option {:value o} label])]
+            (if (= type "BOOLEAN")
+              [:select {:value value :title "value"
+                        :on-change #(do (set-attr! i :value (.. % -target -value)) (act/load-instances!))}
+               [:option {:value ""} "any"] [:option {:value "true"} "true"] [:option {:value "false"} "false"]]
+              [:input {:type (if ordered? "number" "text") :step (when (= type "DECIMAL") "any")
+                       :style {:width 130} :placeholder "value…" :value value
+                       :on-change #(set-attr! i :value (.. % -target -value))
+                       :on-key-down #(when (= (.-key %) "Enter") (act/load-instances!))}])
+            [:button.ghost {:title "remove filter"
+                            :on-click #(do (swap! db update-in [:filter :attrs]
+                                                  (fn [v] (vec (concat (take i v) (drop (inc i) v)))))
+                                           (act/load-instances!))} "✕"]]))
+       [:button.ghost {:title "filter on another attribute"
+                       :on-click #(swap! db update-in [:filter :attrs] conj
+                                         {:name (:name (first declared)) :op "eq" :value ""})}
+        "+ attribute"]])))
+
 (defn instances-toolbar []
   (let [f (:filter @db)
         searching (seq (:search f))
         exact? (and searching (not= :text (:search-by f)))]
     [:div.toolbar
      [:select {:value (:workflow f) :disabled (boolean exact?)
-               :on-change #(do (st/set-filter! :workflow (.. % -target -value)) (act/load-instances!))}
+               :on-change #(do (st/set-filter! :workflow (.. % -target -value))
+                               (st/set-filter! :attrs [])
+                               (act/load-filter-attrs! (.. % -target -value))
+                               (act/load-instances!))}
       [:option {:value ""} "all workflows"]
       (for [w (:workflows @db)] ^{:key w} [:option {:value w} w])]
      [:select {:value (:status f) :disabled (boolean exact?)
@@ -335,6 +384,7 @@
    [:section.panel
     [:h2 "Instances" [:span.count (count (:instances @db))]]
     [instances-toolbar]
+    [attribute-filters]
     [instances-table]]
    (when (= :detail (get-in @db [:window :kind]))
      (let [i (get-in @db [:detail :instance])]

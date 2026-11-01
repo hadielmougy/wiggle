@@ -18,9 +18,13 @@
       (.then #(swap! db assoc :workflows (:workflows %)))
       (.catch (fn [_] nil))))
 
+(defn- attribute-filtering? [f]
+  (and (get-in @db [:auth :searchEnabled]) (seq (:workflow f)) (seq (api/attribute-params (:attrs f)))
+       (or (= :text (:search-by f)) (empty? (:search f)))))
+
 (defn load-instances! []
   (let [f (:filter @db)]
-    (if (and (= :text (:search-by f)) (seq (:search f)))
+    (if (or (attribute-filtering? f) (and (= :text (:search-by f)) (seq (:search f))))
       (-> (api/search-instances f)
           (.then #(swap! db assoc :instances (:hits %) :partial (:partial %)))
           (.catch st/on-error))
@@ -66,6 +70,16 @@
   (-> (api/workflow-graph name)
       (.then (fn [g] (swap! db assoc :graph g :graph-for name)))
       (.catch st/on-error)))
+
+(defn load-filter-attrs!
+  "The search attributes `workflow` declares, for the instances tab's attribute filters."
+  [workflow]
+  (swap! db assoc :filter-attrs [])
+  (when (and (seq workflow) (get-in @db [:auth :searchEnabled]))
+    (-> (api/workflow-graph workflow)
+        (.then (fn [g] (when (= workflow (get-in @db [:filter :workflow]))
+                         (swap! db assoc :filter-attrs (vec (:searchAttributes g))))))
+        (.catch (fn [_] nil)))))
 
 (defn load-detail! [id]
   (swap! db assoc :selected id)

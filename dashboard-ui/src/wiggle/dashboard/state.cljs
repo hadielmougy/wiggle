@@ -19,7 +19,9 @@
     :stats     nil                 ; {:workflow .. :nodes [..]} per-step durations, slowest p95 first
     :perf      {:workflow "" :window "1h"}   ; what the performance tab shows
     :filter    {:workflow "" :status "" :limit 100
-                :search "" :search-by :correlation}   ; free-text lookup by :correlation | :id
+                :search "" :search-by :correlation   ; free-text lookup by :correlation | :id
+                :attrs []}                     ; [{:name .. :op "eq" :value ".."}] on the workflow's search attributes
+    :filter-attrs []               ; the search attributes the filtered workflow declares: [{:name :type :path}]
     :selected  nil                 ; selected instance id
     :detail    nil                 ; {:instance .. :tokens ..}
     :graph     nil                 ; {:name .. :nodes .. } — step names and the workflows tab's step table
