@@ -59,6 +59,7 @@ SOURCES = {
     "saga-doc-activity": FIXTURES / "docs/CapturePayment.java",
     "saga-doc-handlers": FIXTURES / "docs/SagaDocHandlers.java",
     "onboarding": FIXTURES / "docs/onboarding/OnboardingSnippet.java",
+    "onboarding-quickstart": ROOT / "example/src/main/java/demo/Hello.java",
     "onboarding-handlers": FIXTURES / "docs/onboarding/OrderHandlers.java",
     "decode": FIXTURES / "docs/decode/OrderHandlers.java",
     "queues": FIXTURES / "docs/QueuesSnippet.java",

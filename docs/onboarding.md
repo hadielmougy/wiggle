@@ -82,12 +82,94 @@ clash with anything already on the classpath). See the README's install section 
 
 ## 4. Running it
 
-### 4.1 Single node (in-memory) — dev default
+### 4.1 Quickstart: Docker server + Java client
+
+Start a local server in a terminal. This uses the in-memory store, so stopping the container resets
+its data:
 
 ```bash
-./gradlew :dist:run                          # gRPC on :8080, in-memory store
-./gradlew :example:run                          # embedded server + worker + a few orders, one JVM
+docker run --rm --name wiggle -p 8080:8080 hadielmougy/wiggle:0.0.10
 ```
+
+In a second terminal, create a Java 21 Gradle project. Add this `build.gradle.kts`:
+
+```kotlin
+plugins {
+    application
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("sh.wiggle:wiggle-client:0.0.10")
+}
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+}
+
+application {
+    mainClass.set("demo.Hello")
+}
+```
+
+Save this as `src/main/java/demo/Hello.java`:
+
+<!-- snippet: onboarding-quickstart/quickstart -->
+```java
+package demo;
+
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.worker.Worker;
+import com.wiggle.core.InstanceView;
+
+import java.time.Duration;
+
+public final class Hello {
+    public record Greeting(String name, String message) {}
+
+    interface GreetingSteps {
+        Greeting greet(Greeting context);
+    }
+
+    static final class GreetingHandler implements GreetingSteps {
+        @Override
+        public Greeting greet(Greeting context) {
+            return new Greeting(context.name(), "Hello, " + context.name());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        FlowSpec hello = FlowSpec.define("hello", 1, Greeting.class, GreetingSteps.class,
+                (f, s) -> f.thenApply(s::greet));
+
+        try (WiggleClient client = new WiggleClient("localhost:8080");
+             Worker worker = new Worker(client, "hello-worker")
+                     .registerHandler("hello", new GreetingHandler())) {
+            client.register(hello);
+            worker.start();
+
+            String id = client.start(hello, new Greeting("Ada", ""));
+            InstanceView result = client.awaitCompletion(id, Duration.ofSeconds(10));
+
+            System.out.println(result.status());  // COMPLETED
+            System.out.println(result.context()); // {name=Ada, message=Hello, Ada}
+        }
+    }
+}
+```
+
+Run the app with `./gradlew run`. It registers a workflow, starts a worker that pulls its step,
+submits an instance, and waits for completion. You should see `COMPLETED` and a context containing
+`Greeting[name=Ada, message=Hello, Ada]`. Stop the server with Ctrl-C when finished.
+
+Prefer to run the server from source? `./gradlew :dist:run` starts the same in-memory server; the
+Java client still connects to `localhost:8080`.
 
 ### 4.2 Server + workers as separate processes
 
