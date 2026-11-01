@@ -25,6 +25,8 @@ dependencies {
         api("com.fasterxml.jackson.core:jackson-core:${property("jacksonVersion")}")
         api("io.github.hadielmougy:shield:${property("shieldVersion")}")
         api("com.zaxxer:HikariCP:${property("hikariVersion")}")
+        api("org.springframework:spring-jdbc:${property("springFrameworkVersion")}")
+        api("org.springframework:spring-tx:${property("springFrameworkVersion")}")
 
         // --- JDBC drivers wiggle-postgres brings in at runtime (H2 is for tests/local runs) ---
         api("org.postgresql:postgresql:${property("postgresVersion")}")
