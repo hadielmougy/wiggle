@@ -7,6 +7,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
+import com.wiggle.core.criteria.Op;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 import com.wiggle.jdbc.JdbcStorage;
@@ -351,6 +352,19 @@ class NoTableScanTest {
         tx.searchDocs(new Rows.SearchQuery("shipped", null, null, null, null, 10));
         tx.searchDocs(new Rows.SearchQuery(null, names, "RUNNING", now - 60_000, now + 60_000, 10));
         tx.searchDocs(new Rows.SearchQuery("shipped", prefixed, "RUNNING", now - 60_000, now + 60_000, 10));
+        tx.upsertSearchDoc(new Rows.SearchDoc(inst.id, WF, 1, "RUNNING", "corr", "order shipped", now, now,
+                Map.of("region", "EU", "total", 5L, "rate", new java.math.BigDecimal("0.5"), "vip", true)));
+        Scope wf = Scope.of(WF);
+        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+                new Rows.AttrFilter("region", Op.EQUAL, "EU"))));
+        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+                new Rows.AttrFilter("total", Op.GREATER_THAN_OR_EQUAL, 5L))));
+        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+                new Rows.AttrFilter("rate", Op.LESS_THAN, new java.math.BigDecimal("1")))));
+        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+                new Rows.AttrFilter("vip", Op.EQUAL, true))));
+        tx.searchDocs(new Rows.SearchQuery("shipped", wf, "RUNNING", now - 60_000, now + 60_000, 10, List.of(
+                new Rows.AttrFilter("region", Op.EQUAL, "EU"), new Rows.AttrFilter("total", Op.LESS_THAN, 9L))));
         tx.searchDocsAfter("", 10);
         tx.deleteSearchDocsBefore(now - 60_000, 10);
         tx.deleteSearchDoc(inst.id);

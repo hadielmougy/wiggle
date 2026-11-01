@@ -68,6 +68,17 @@ message SearchRequest {
     bool partial_ok = 7;
     reserved 8;
     reserved "semantic";
+    // Keep the instances whose declared search attributes satisfy every filter. Attributes are
+    // declared per flow, so these need `workflow`.
+    repeated SearchAttributeFilter attributes = 9;
+}
+
+// One condition on an attribute a flow declares for search: `op` is EQUAL, LESS_THAN,
+// LESS_THAN_OR_EQUAL, GREATER_THAN or GREATER_THAN_OR_EQUAL; text and boolean attributes take EQUAL only.
+message SearchAttributeFilter {
+    string name = 1;
+    string op = 2;
+    CriteriaLiteral value = 3;
 }
 
 message SearchHit {

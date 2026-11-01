@@ -1,6 +1,8 @@
 package com.wiggle.server.search;
 
 import com.wiggle.core.EventView;
+import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.core.criteria.SearchAttribute;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Freshness;
@@ -8,6 +10,7 @@ import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,9 +92,14 @@ public final class SearchIndexer implements AutoCloseable {
             Map<String, Long> latest = new LinkedHashMap<>();
             for (EventView e : events) latest.merge(e.instanceId(), e.createdAt(), Math::max);
             List<Rows.SearchDoc> docs = new ArrayList<>();
+            Map<String, List<SearchAttribute>> declared = new HashMap<>();
             latest.forEach((id, at) -> {
                 Rows.Instance inst = read(id, at);
-                if (inst != null && (workflows.isEmpty() || workflows.contains(inst.workflow))) docs.add(doc(inst));
+                if (inst != null && (workflows.isEmpty() || workflows.contains(inst.workflow))) {
+                    docs.add(doc(inst, declared.computeIfAbsent(inst.workflow + ":" + inst.version,
+                            k -> engine.definition(inst.workflow, inst.version)
+                                    .map(WorkflowDefinition::searchAttributes).orElse(List.of()))));
+                }
             });
             index.index(docs);
             engine.ackEvents(CONSUMER, events.getLast().cursor());
@@ -110,8 +118,11 @@ public final class SearchIndexer implements AutoCloseable {
         return storage.readFor(id, Freshness.PRIMARY, tx -> tx.findInstance(id)).orElse(null);
     }
 
-    /** The document for {@code inst}: its identity, and as text its correlation id, context, reason and error. */
-    static Rows.SearchDoc doc(Rows.Instance inst) {
+    /**
+     * The document for {@code inst}: its identity, as text its correlation id, context, reason and
+     * error, and the values of the search attributes its flow {@code declared}.
+     */
+    static Rows.SearchDoc doc(Rows.Instance inst, List<SearchAttribute> declared) {
         StringBuilder text = new StringBuilder();
         if (inst.correlationId != null) text.append(inst.correlationId).append('\n');
         if (inst.context != null) text.append(inst.context.json()).append('\n');
@@ -119,7 +130,8 @@ public final class SearchIndexer implements AutoCloseable {
         if (inst.error != null) text.append(inst.error);
         String t = text.length() > MAX_TEXT ? text.substring(0, MAX_TEXT) : text.toString();
         return new Rows.SearchDoc(inst.id, inst.workflow, inst.version, inst.status.name(), inst.correlationId, t,
-                inst.createdAt, inst.updatedAt);
+                inst.createdAt, inst.updatedAt,
+                declared.isEmpty() ? Map.of() : SearchAttribute.extractAll(declared, inst.context.raw()));
     }
 
     /** Deletes documents past retention and moves a batch of misplaced ones. */

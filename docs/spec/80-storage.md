@@ -99,6 +99,7 @@ store does with the answer is [section 9](#9-failure-classification-and-replay).
 | `wf_auth_session` · `wf_auth_audit` | sessions by token hash with their account and expiry, and every change to accounts, roles and sessions by a store-generated `seq` |
 | `wf_auth_credential` | machine credentials (API key hash or certificate subject) bound to a role |
 | `wf_search_doc` | one search document per instance on a search shard: identity, status, text, times, and on PostgreSQL a generated `tsvector` with a GIN index |
+| `wf_search_attr` | a search document's declared attributes, on its search shard: workflow, name, a type tag, and the text, flag or number, under indexes on `(workflow, name, value)` ([WGL-API-125](70-api.md#12-search)) |
 | `wf_schema_version` | applied migrations: version, name, time, source checksum |
 
 **WGL-STOR-031** (MUST) A graph MUST be stored **twice**: the raw submitted blob (write-once, the source

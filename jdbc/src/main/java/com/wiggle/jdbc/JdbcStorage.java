@@ -701,6 +701,23 @@ public final class JdbcStorage implements Storage {
             new Migration(38, "drop-search-vectors", """
             DROP TABLE IF EXISTS wf_search_vec;
             DROP TABLE IF EXISTS wf_search_model;
+            """),
+            // A flow's declared search attributes as the instance's context had them when it was last
+            // indexed, on the search shard beside the document. t is S (text in s_val), B ('true'/'false'
+            // in s_val) or N (n_val). The workflow is repeated here so a filter reads one range of the
+            // value index, not every flow's rows of that name.
+            new Migration(39, "search-attributes", """
+            CREATE TABLE IF NOT EXISTS wf_search_attr (
+              instance_id  VARCHAR(128)   NOT NULL,
+              workflow     VARCHAR(200)   NOT NULL,
+              name         VARCHAR(63)    NOT NULL,
+              t            CHAR(1)        NOT NULL,
+              s_val        VARCHAR(256),
+              n_val        DECIMAL(38,10),
+              PRIMARY KEY (instance_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS ix_search_attr_s ON wf_search_attr (workflow, name, s_val);
+            CREATE INDEX IF NOT EXISTS ix_search_attr_n ON wf_search_attr (workflow, name, n_val);
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -1632,13 +1649,30 @@ public final class JdbcStorage implements Storage {
             String update = "UPDATE wf_search_doc SET workflow=:workflow,version=:version,status=:status,"
                     + "correlation_id=:correlationId,text=:text,created_at=:created,updated_at=:updated "
                     + "WHERE instance_id=:id AND updated_at<=:updated";
-            if (bindSearchDoc(h.createUpdate(update), d).execute() > 0) return true;
-            if (bindSearchDoc(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
-                    + "(instance_id,workflow,version,status,correlation_id,text,created_at,updated_at) VALUES "
-                    + "(:id,:workflow,:version,:status,:correlationId,:text,:created,:updated)")), d).execute() > 0) {
-                return true;
+            boolean wrote = bindSearchDoc(h.createUpdate(update), d).execute() > 0
+                    || bindSearchDoc(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
+                            + "(instance_id,workflow,version,status,correlation_id,text,created_at,updated_at) VALUES "
+                            + "(:id,:workflow,:version,:status,:correlationId,:text,:created,:updated)")), d).execute() > 0
+                    || bindSearchDoc(h.createUpdate(update), d).execute() > 0;   // another writer inserted it first
+            if (wrote) writeSearchAttributes(d);
+            return wrote;
+        }
+
+        /** Replaces the document's attribute rows with its current ones. */
+        private void writeSearchAttributes(Rows.SearchDoc d) {
+            h.createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", d.instanceId()).execute();
+            if (d.attributes().isEmpty()) return;
+            PreparedBatch b = h.prepareBatch("INSERT INTO wf_search_attr (instance_id,workflow,name,t,s_val,n_val)"
+                    + " VALUES (:id,:workflow,:name,:t,:s,:n)");
+            for (Map.Entry<String, Object> a : d.attributes().entrySet()) {
+                Object v = a.getValue();
+                b.bind("id", d.instanceId()).bind("workflow", d.workflow()).bind("name", a.getKey())
+                        .bind("t", v instanceof Boolean ? "B" : v instanceof String ? "S" : "N")
+                        .bindByType("s", v instanceof Number ? null : String.valueOf(v), String.class)
+                        .bindByType("n", v instanceof Number n ? attributeNumber(n) : null, java.math.BigDecimal.class)
+                        .add();
             }
-            return bindSearchDoc(h.createUpdate(update), d).execute() > 0;   // another writer inserted it first
+            b.execute();
         }
 
         private static Update bindSearchDoc(Update u, Rows.SearchDoc d) {
@@ -1653,6 +1687,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void deleteSearchDoc(String instanceId) {
+            h.createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", instanceId).execute();
             h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
         }
 
@@ -1691,16 +1726,41 @@ public final class JdbcStorage implements Storage {
                     .mapTo(String.class)
                     .list();
             if (ids.isEmpty()) return 0;
+            h.createUpdate("DELETE FROM wf_search_attr WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
             return h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
         }
 
         @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
-            return h.createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc WHERE instance_id>:after "
-                            + "ORDER BY instance_id LIMIT :max")
+            List<Rows.SearchDoc> docs = h.createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc "
+                            + "WHERE instance_id>:after ORDER BY instance_id LIMIT :max")
                     .bind("after", afterId == null ? "" : afterId)
                     .bind("max", max)
                     .map((rs, ctx) -> searchDoc(rs))
                     .list();
+            if (docs.isEmpty()) return docs;
+            Map<String, Map<String, Object>> attributes = new HashMap<>();
+            h.createQuery("SELECT instance_id,name,t,s_val,n_val FROM wf_search_attr WHERE instance_id IN (<ids>)")
+                    .bindList("ids", docs.stream().map(Rows.SearchDoc::instanceId).toList())
+                    .map((rs, ctx) -> {
+                        String t = rs.getString("t");
+                        Object v = switch (t) {
+                            case "B" -> Boolean.parseBoolean(rs.getString("s_val"));
+                            case "S" -> rs.getString("s_val");
+                            default -> attributeValue(rs.getBigDecimal("n_val"));
+                        };
+                        attributes.computeIfAbsent(rs.getString("instance_id"), k -> new HashMap<>())
+                                .put(rs.getString("name"), v);
+                        return null;
+                    }).list();
+            return docs.stream().map(d -> new Rows.SearchDoc(d.instanceId(), d.workflow(), d.version(), d.status(),
+                    d.correlationId(), d.text(), d.createdAt(), d.updatedAt(),
+                    attributes.getOrDefault(d.instanceId(), Map.of()))).toList();
+        }
+
+        /** A stored number as the type it was declared with: a Long when it has no fraction, else the decimal. */
+        private static Object attributeValue(java.math.BigDecimal n) {
+            java.math.BigDecimal s = n.stripTrailingZeros();
+            return s.scale() <= 0 && s.precision() - s.scale() <= 18 ? (Object) s.longValueExact() : s;
         }
 
         private static final String SEARCH_COLUMNS =
@@ -1724,6 +1784,7 @@ public final class JdbcStorage implements Storage {
             if (q.status() != null) where.append(" AND status=:status");
             if (q.from() != null) where.append(" AND updated_at>=:from");
             if (q.to() != null) where.append(" AND updated_at<=:to");
+            for (int i = 0; i < q.attributes().size(); i++) where.append(attributeFilter(q.attributes().get(i), i));
             Query query;
             if (dialect.supportsFullText()) {
                 String sql = text
@@ -1742,10 +1803,33 @@ public final class JdbcStorage implements Storage {
             if (q.status() != null) query.bind("status", q.status());
             if (q.from() != null) query.bind("from", q.from());
             if (q.to() != null) query.bind("to", q.to());
+            if (!q.attributes().isEmpty()) query.bind("aw", q.attributeWorkflow());
+            for (int i = 0; i < q.attributes().size(); i++) {
+                Rows.AttrFilter f = q.attributes().get(i);
+                query.bind("an" + i, f.name());
+                query.bind("av" + i, f.value() instanceof Number n ? attributeNumber(n)
+                        : (Object) String.valueOf(f.value()));
+            }
             if (dialect.supportsFullText()) {
                 return query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list();
             }
             return com.wiggle.server.store.SearchText.match(query.map((rs, ctx) -> searchDoc(rs)).list(), q.text(), q.limit());
+        }
+
+        /** The condition that the document has attribute {@code f}, as a semi-join on the value index. */
+        private static String attributeFilter(Rows.AttrFilter f, int i) {
+            String test = f.value() instanceof Number
+                    ? "a.t='N' AND a.n_val" + switch (f.op()) {
+                        case EQUAL -> "=";
+                        case LESS_THAN -> "<";
+                        case LESS_THAN_OR_EQUAL -> "<=";
+                        case GREATER_THAN -> ">";
+                        case GREATER_THAN_OR_EQUAL -> ">=";
+                        default -> throw new IllegalStateException("unexpected operator " + f.op());
+                    } + ":av" + i
+                    : "a.t='" + (f.value() instanceof Boolean ? "B" : "S") + "' AND a.s_val=:av" + i;
+            return " AND EXISTS (SELECT 1 FROM wf_search_attr a WHERE a.instance_id=wf_search_doc.instance_id"
+                    + " AND a.workflow=:aw AND a.name=:an" + i + " AND " + test + ")";
         }
 
         @Override public void insertInstance(Instance i) {

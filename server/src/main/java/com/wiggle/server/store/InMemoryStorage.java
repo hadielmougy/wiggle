@@ -329,6 +329,7 @@ public final class InMemoryStorage implements Storage {
                     .filter(d -> q.status() == null || q.status().equals(d.status()))
                     .filter(d -> q.from() == null || d.updatedAt() >= q.from())
                     .filter(d -> q.to() == null || d.updatedAt() <= q.to())
+                    .filter(d -> SearchAttributes.matches(d.attributes(), q.attributes()))
                     .toList();
             return SearchText.match(filtered, q.text(), q.limit());
         }

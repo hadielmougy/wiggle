@@ -1,10 +1,14 @@
 package com.wiggle.server.store;
 
 import com.wiggle.core.Doc;
+import com.wiggle.core.criteria.Op;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.auth.Scope;
+
+import java.util.List;
+import java.util.Map;
 
 /** Mutable storage rows. Deliberately dumb structs -- all invariants live in the engine. */
 public final class Rows {
@@ -248,21 +252,77 @@ public final class Rows {
     /**
      * An instance as the search shards hold it: derived from its instance shard, never the source of
      * truth. {@code text} is what full-text queries match; {@code updatedAt} is the instance's own, so
-     * an older copy never replaces a newer one.
+     * an older copy never replaces a newer one. {@code attributes} are the values its flow declares
+     * for search, by name: a String, Long, BigDecimal or Boolean.
      */
     public record SearchDoc(String instanceId, String workflow, int version, String status, String correlationId,
-                            String text, long createdAt, long updatedAt) { }
+                            String text, long createdAt, long updatedAt, Map<String, Object> attributes) {
+        public SearchDoc {
+            attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+        }
+
+        public SearchDoc(String instanceId, String workflow, int version, String status, String correlationId,
+                         String text, long createdAt, long updatedAt) {
+            this(instanceId, workflow, version, status, correlationId, text, createdAt, updatedAt, Map.of());
+        }
+    }
+
+    /**
+     * A condition on a declared search attribute: {@code value} (a String, Long, BigDecimal or
+     * Boolean) compared with {@code op}, one of EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN or
+     * GREATER_THAN_OR_EQUAL. A text or boolean attribute is compared for equality only; an attribute
+     * of another type than {@code value}, or absent, does not match.
+     */
+    public record AttrFilter(String name, Op op, Object value) {
+        public AttrFilter {
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("an attribute filter needs a name");
+            if (op == null) throw new IllegalArgumentException("attribute '" + name + "' needs an operator");
+            if (!(value instanceof String || value instanceof Boolean || value instanceof Long
+                    || value instanceof java.math.BigDecimal)) {
+                throw new IllegalArgumentException("attribute '" + name + "' compares with a String, Long, BigDecimal "
+                        + "or Boolean, got " + (value == null ? "null" : value.getClass().getSimpleName()));
+            }
+            boolean ordered = op == Op.LESS_THAN || op == Op.LESS_THAN_OR_EQUAL
+                    || op == Op.GREATER_THAN || op == Op.GREATER_THAN_OR_EQUAL;
+            if (op != Op.EQUAL && !ordered) {
+                throw new IllegalArgumentException("attribute '" + name + "' cannot be compared with " + op);
+            }
+            if (ordered && !(value instanceof Long || value instanceof java.math.BigDecimal)) {
+                throw new IllegalArgumentException("attribute '" + name + "' is ordered only when numeric");
+            }
+        }
+    }
 
     /**
      * A search: the words {@code text} must all contain (blank: any document), and filters applied
      * inside each shard's query. {@code workflows} null means every workflow ({@link Scope#ALL}); {@code from}/{@code to}
-     * bound {@code updatedAt}, null for open.
+     * bound {@code updatedAt}, null for open. {@code attributes} must all hold; they are declared per
+     * flow, so they need {@code workflows} to be exactly one name.
      */
     public record SearchQuery(String text, Scope workflows, String status, Long from, Long to,
-                              int limit) {
+                              int limit, List<AttrFilter> attributes) {
+        public static final int MAX_ATTRIBUTE_FILTERS = 8;
+
         public SearchQuery {
             if (limit <= 0) throw new IllegalArgumentException("a search returns at least one hit: " + limit);
             if (workflows == null) workflows = Scope.ALL;
+            attributes = attributes == null ? List.of() : List.copyOf(attributes);
+            if (attributes.size() > MAX_ATTRIBUTE_FILTERS) {
+                throw new IllegalArgumentException("a search filters on at most " + MAX_ATTRIBUTE_FILTERS
+                        + " attributes, got " + attributes.size());
+            }
+            if (!attributes.isEmpty() && !(workflows.names().size() == 1 && workflows.prefixes().isEmpty())) {
+                throw new IllegalArgumentException("attribute filters need exactly one workflow");
+            }
+        }
+
+        public SearchQuery(String text, Scope workflows, String status, Long from, Long to, int limit) {
+            this(text, workflows, status, from, to, limit, List.of());
+        }
+
+        /** The one workflow the attribute filters apply to. */
+        public String attributeWorkflow() {
+            return workflows.names().iterator().next();
         }
     }
 

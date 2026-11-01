@@ -62,6 +62,7 @@ class DocSnippetsTest {
         EXPECTED.put("QueuesSnippet.java", List.of("topology", "specialised-worker", "criteria-worker", "attributes", "general-worker"));
         EXPECTED.put("LocalExecutionSnippet.java", List.of("execution-mode"));
         EXPECTED.put("EventLogSnippet.java", List.of("consume", "emit"));
+        EXPECTED.put("SearchAttributesSnippet.java", List.of("declare", "query"));
         EXPECTED.put("onboarding/OnboardingSnippet.java",
                 List.of("contract", "register-line", "topology", "client-lifecycle",
                         "start-by-name", "search", "version-pinning", "worker-options"));
@@ -290,6 +291,7 @@ class DocSnippetsTest {
             Map.entry("queues", "docs/QueuesSnippet.java"),
             Map.entry("local-execution", "docs/LocalExecutionSnippet.java"),
             Map.entry("event-log", "docs/EventLogSnippet.java"),
+            Map.entry("search-attributes", "docs/SearchAttributesSnippet.java"),
             Map.entry("agents", "agents/ResearchTeam.java"),
             Map.entry("agents-model", "agents/Model.java"),
             Map.entry("agents-demo", "agents/AgentsDemo.java"),
@@ -387,7 +389,7 @@ class DocSnippetsTest {
     @Test @DisplayName("the fixture set is not empty")
     void notEmpty() {
         assertFalse(EXPECTED.isEmpty());
-        assertEquals(28, EXPECTED.size(), "every wired page and doc should have a fixture");
+        assertEquals(29, EXPECTED.size(), "every wired page and doc should have a fixture");
         assertEquals(new LinkedHashSet<>(EXPECTED.keySet()).size(), EXPECTED.size());
     }
 }
