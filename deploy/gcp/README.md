@@ -5,8 +5,8 @@
 PostgreSQL.
 
 ```
-Cloud SQL PostgreSQL 16 ── private IP ── server VM ──┬── gRPC :8080 ── worker VM (N WorkerMain processes)
-(db-custom-8-32768, 250GB SSD)           (wiggle server) └── gRPC :8080 ── load VM   (RateCeilingBench)
+Cloud SQL PostgreSQL 16 ── private IP ── server VM ──┬── HTTP :8080 ── worker VM (N WorkerMain processes)
+(db-custom-8-32768, 250GB SSD)           (wiggle server) └── HTTP :8080 ── load VM   (RateCeilingBench)
 ```
 
 Workers and the load generator run on separate VMs, so neither takes CPU from the other.

@@ -36,7 +36,7 @@ class SearchEndToEndTest {
     private static final FlowSpec ORDERS = FlowSpec.define("orders", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     private static final FlowSpec BILLING = FlowSpec.define("billing", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
 
-    private static ServerConfig config(boolean search, ServerConfig.GrpcAuth auth) {
+    private static ServerConfig config(boolean search, ServerConfig.ApiAuth auth) {
         return new ServerConfig(TestPorts.free(), "search-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0)
@@ -60,7 +60,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("an instance is found by the words in its context, its correlation id, and its filters")
     void findsByContext() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.GrpcAuth.OFF)).start();
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.OFF)).start();
              WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
             c.register(ORDERS);
             c.register(BILLING);
@@ -90,7 +90,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("a caller sees only hits in the workflows its role may read")
     void scopedToReadableWorkflows() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.ENFORCE)).start()) {
             server.accounts().putRole("ops", "orders-reader", List.of("read:orders"), true);
             String adminKey = server.accounts().createApiKey("ops", "root", "admin", null);
             String ordersKey = server.accounts().createApiKey("ops", "orders", "orders-reader", null);
@@ -111,7 +111,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("with search off, a search fails as a precondition and nothing is indexed")
     void off() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(false, ServerConfig.GrpcAuth.OFF)).start();
+        try (WiggleServer server = new WiggleServer(config(false, ServerConfig.ApiAuth.OFF)).start();
              WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
             assertTrue(server.search().isEmpty());
             assertEquals(409, assertThrows(WiggleApiException.class,
@@ -127,7 +127,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("instances are found by the search attributes their flow declares, with or without words")
     void findsByDeclaredAttributes() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.GrpcAuth.OFF)).start();
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.OFF)).start();
              WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
             c.register(SHIPMENTS);
             c.register(ORDERS);

@@ -11,7 +11,7 @@ import java.time.Duration;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** A {@link WiggleServer} runs the engine and serves the control plane on a bound gRPC port. */
+/** A {@link WiggleServer} runs the engine and serves the control plane on a bound API port. */
 class ServerRoleTest {
 
     private static ServerConfig config() {
@@ -20,7 +20,7 @@ class ServerRoleTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
-    @Test @DisplayName("a server serves the engine on a bound gRPC port")
+    @Test @DisplayName("a server serves the engine on a bound API port")
     void cellServesEngine() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start()) {
             assertNotNull(server.engine(), "a server exposes the engine");

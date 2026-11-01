@@ -20,11 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The error contract over the wire: engine exceptions must surface to a real gRPC client with
+ * The error contract over the wire: engine exceptions must surface to a real client with
  * the right status (404 not-found, 409 conflict, 400 bad request), not as opaque internals.
- * This exercises {@code GrpcApi}'s status mapping and the client's reverse mapping together.
+ * This exercises {@code HttpApi}'s status mapping and the client's reverse mapping together.
  */
-class GrpcErrorMappingTest {
+class ApiErrorMappingTest {
 
     /** The step this spec names; a worker binds it by name. */
     interface OneStep {
@@ -39,7 +39,7 @@ class GrpcErrorMappingTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
-    @Test @DisplayName("unknown ids and workflows surface as 404 over gRPC")
+    @Test @DisplayName("unknown ids and workflows surface as 404 over the API")
     void notFound() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
@@ -55,7 +55,7 @@ class GrpcErrorMappingTest {
         }
     }
 
-    @Test @DisplayName("settling a task without its lease surfaces as 409 over gRPC")
+    @Test @DisplayName("settling a task without its lease surfaces as 409 over the API")
     void conflict() throws Exception {
         FlowSpec bp = FlowSpec.define("err-conflict", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -72,7 +72,7 @@ class GrpcErrorMappingTest {
         }
     }
 
-    @Test @DisplayName("a predicate step reported without a branch surfaces as 400 over gRPC")
+    @Test @DisplayName("a predicate step reported without a branch surfaces as 400 over the API")
     void badRequest() throws Exception {
         FlowSpec bp = FlowSpec.define("err-bad", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenFilter(s::check)

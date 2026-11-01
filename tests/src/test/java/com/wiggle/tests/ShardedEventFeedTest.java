@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The event feed over two shards, through gRPC: every shard keeps its own log, a poll merges them,
+ * The event feed over two shards, through the API: every shard keeps its own log, a poll merges them,
  * and a consumer acknowledges with the cursor an entry carries.
  */
 class ShardedEventFeedTest {

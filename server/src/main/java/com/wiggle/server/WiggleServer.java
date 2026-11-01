@@ -69,7 +69,7 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer start() {
-        if (config.auth().grpc() != ServerConfig.GrpcAuth.OFF) authCache.start(AUTH_POLL_MILLIS);
+        if (config.auth().api() != ServerConfig.ApiAuth.OFF) authCache.start(AUTH_POLL_MILLIS);
         cluster.start();
         bundle.start();
         LOG.log(System.Logger.Level.INFO, () -> "server node '" + config.nodeName()
@@ -80,7 +80,7 @@ public final class WiggleServer implements AutoCloseable {
 
     public int port() { return bundle.port(); }
 
-    /** This node's gRPC address on the loopback interface, for in-process clients and local runs. */
+    /** This node's API address on the loopback interface, for in-process clients and local runs. */
     public String baseUrl() { return "127.0.0.1:" + port(); }
 
     /** Full-text search over instances, when it is enabled. */
@@ -93,7 +93,7 @@ public final class WiggleServer implements AutoCloseable {
 
     public ClusterManager cluster() { return cluster; }
 
-    /** Portal accounts, roles and sessions on the auth shard. Not reachable over gRPC. */
+    /** Portal accounts, roles and sessions on the auth shard. Not reachable over the API. */
     public Accounts accounts() { return accounts; }
 
     /** This node's cache of accounts, sessions and credentials, polling the audit once started. */

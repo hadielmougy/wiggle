@@ -1,5 +1,5 @@
 """The lab's orchestration brain. The Streamlit app holds one Lab instance and calls these methods;
-all cluster/gRPC state lives here so the logic is usable without the UI.
+all cluster/API state lives here so the logic is usable without the UI.
 
 Cluster state (which servers exist, their pods) is discovered live from Kubernetes labels, so it
 survives app restarts. Each server's tunables are persisted to disk.
@@ -291,12 +291,12 @@ class Lab:
 
     def cell_client(self, cell: str) -> CellClient:
         target = self.pf.ensure(f"cell:{cell}", C.dns_name("cell", cell),
-                                C.CELL_GRPC_PORT, self._cell_local_port(cell))
+                                C.CELL_API_PORT, self._cell_local_port(cell))
         return CellClient(target)
 
-    # ---- port-forwards (so host-run workers/clients can reach in-cluster gRPC) ----
+    # ---- port-forwards (so host-run workers/clients can reach the in-cluster API) ----
     def forward_cell(self, cell: str) -> str:
-        self.pf.ensure(f"cell:{cell}", C.dns_name("cell", cell), C.CELL_GRPC_PORT,
+        self.pf.ensure(f"cell:{cell}", C.dns_name("cell", cell), C.CELL_API_PORT,
                        self._cell_local_port(cell))
         return self.pf.target(f"cell:{cell}") or ""
 
@@ -304,7 +304,7 @@ class Lab:
         self.pf.stop(f"cell:{cell}")
 
     # ---- per-pod forwards: a cell Service balances over its pods, so reaching ONE node (its
-    # health port, its gRPC as the leader or a follower specifically) needs a forward pinned to
+    # health port, its API as the leader or a follower specifically) needs a forward pinned to
     # the pod. Pod names churn on restart; a stale forward just dies with its pod, and the
     # status map only ever reports live pods.
     def _pod_local_port(self, pod: str) -> int:
@@ -313,7 +313,7 @@ class Lab:
         return C.POD_LOCAL_PORT_BASE + idx
 
     def forward_pod(self, pod: str) -> str:
-        self.pf.ensure(f"pod:{pod}", pod, C.CELL_GRPC_PORT, self._pod_local_port(pod),
+        self.pf.ensure(f"pod:{pod}", pod, C.CELL_API_PORT, self._pod_local_port(pod),
                        resource="pod")
         return self.pf.target(f"pod:{pod}") or ""
 

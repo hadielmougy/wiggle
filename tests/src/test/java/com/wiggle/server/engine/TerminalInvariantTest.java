@@ -118,9 +118,9 @@ class TerminalInvariantTest {
     }
 
     /**
-     * ReportStepsResult.instance_status is not limited to the terminal four: a concurrent failure
+     * RunApplied.instanceStatus is not limited to the terminal four: a concurrent failure
      * can leave the instance COMPENSATING between a worker's local steps, and the worker is told
-     * so. This is what {@code proto/src/main/proto/wiggle.proto} documents on that field.
+     * so. This is what chapter 70 of the spec documents on that field.
      */
     @Test @DisplayName("a report answers COMPENSATING when the saga took over mid-run")
     void reportAnswersANonTerminalNonRunningState() {

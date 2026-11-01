@@ -155,42 +155,30 @@ one polls it, the step waits `READY` like any step whose workers are down.
 
 ## 4. Wire
 
-**WGL-DYN-030** (MUST) `StepResult` MUST gain `repeated CreatedBranch branches = 8`, beside `merge`:
-
-```proto
-message CreatedBranch {
-    google.protobuf.Value input = 1;   // the branch's whole context
-    string key = 2;                    // optional; all-or-none across one report
-    repeated BranchStep steps = 3;     // at least one
-}
-message BranchStep {
-    string name = 1;                   // step name; blank for a sleep
-    string kind = 2;                   // TASK | PREDICATE | SLEEP
-    bool compensable = 3;
-    string queue = 4;                  // blank = the creating step's queue
-    google.protobuf.Value retry = 5;   // a retry policy as JSON; absent = the creating step's
-    int64 sleep_millis = 6;
-    string combine = 7;                // set: this task creates branches, collected by this combine
-}
-```
+**WGL-DYN-030** (MUST) `StepResult` MUST carry `branches`, a list of `CreatedBranch`, beside `merge`
+([chapter 70 §13](70-api.md#13-messages)). A `CreatedBranch` holds its whole context as `input`, an
+optional `key` (all or none across one report) and at least one `BranchStep` in `steps`. A
+`BranchStep` names its step (`name`, blank for a sleep), its `kind` (`TASK`, `PREDICATE` or `SLEEP`),
+whether it is `compensable`, its `queue` (blank = the creating step's), its `retry` policy as JSON
+(absent = the creating step's), its `sleepMillis`, and, for a task that creates branches, the
+`combine` that collects them.
 
 **WGL-DYN-031** (MUST) A step kind the server does not know MUST reach the engine as unknown and be
 refused there ([WGL-DYN-051](#6-validation-and-limits)), failing the step rather than the report.
 Definitions are unchanged on the wire, so a topology registers with the same fingerprint from a
 client library that does not know dynamic flows ([WGL-GEN-006](00-index.md)).
 
-**WGL-DYN-032** (MUST) `TaskActivation` MUST gain `string collect_key = 17`, set for the combine of a
-forEach or of created branches, and `repeated string arm_names = 18`, set for a fork's combine. A
+**WGL-DYN-032** (MUST) `TaskActivation` MUST carry `collectKey`, set for the combine of a
+forEach or of created branches, and `armNames`, a list of strings set for a fork's combine. A
 worker binds a created combine by them ([WGL-DYN-021](#3-worker-contract)): no graph it holds has the
 node.
 
-**WGL-DYN-033** (MUST) `BranchStep` MUST gain `string workflow = 8` (a sub-flow's child),
-`repeated BranchStep escalation = 9` (a wait's escalation) and `repeated BranchArm arms = 10` (a
-fork's arms, each `repeated BranchStep steps = 1`), with `kind` naming `SIGNAL`, `SUB_WORKFLOW` or
-`FORK` and `combine` naming a fork's combine. It MUST also gain `repeated BranchStep body = 11` and
-`int32 loop_budget = 12` (0 = the engine's default), which make a `PREDICATE` a loop over that body,
-and `repeated BranchCase cases = 13`, each `string guard = 1` (blank for the otherwise) and
-`repeated BranchStep steps = 2`, which make a `PREDICATE` a choice.
+**WGL-DYN-033** (MUST) `BranchStep` MUST also carry `workflow` (a sub-flow's child), `escalation`
+(a list of `BranchStep`, a wait's escalation) and `arms` (a fork's arms, each a `BranchArm` with its
+own `steps`), with `kind` naming `SIGNAL`, `SUB_WORKFLOW` or `FORK` and `combine` naming a fork's
+combine. It MUST also carry `body` (a list of `BranchStep`) and `loopBudget` (0 = the engine's
+default), which make a `PREDICATE` a loop over that body, and `cases`, each a `BranchCase` with a
+`guard` (blank for the otherwise) and its `steps`, which make a `PREDICATE` a choice.
 
 ## 5. Engine
 
@@ -448,5 +436,5 @@ step. `thenForEach` therefore stays a supported, non-deprecated construct: the D
   worker chain through a branch. It is worth doing only if dynamic flows turn out to be hot.
 - **Empty-round semantics.** [WGL-DYN-048](#53-fan-out-and-join) diverges from `thenForEach`. If the
   divergence surprises users, an opt-in `skipWhenEmpty()` would align them.
-- **Report size.** 10 000 branches with large inputs can exceed the gRPC message limit. The branch
+- **Report size.** 10 000 branches with large inputs can exceed the API's 4 MiB request limit. The branch
   limit may need to become a byte limit.

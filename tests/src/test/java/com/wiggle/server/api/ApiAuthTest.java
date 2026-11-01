@@ -1,4 +1,4 @@
-package com.wiggle.server.grpc;
+package com.wiggle.server.api;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
@@ -6,21 +6,13 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Tls;
-import com.wiggle.proto.WiggleControlPlaneGrpc;
+import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.core.wire.Msg;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.Accounts;
 import com.wiggle.testfixtures.TestPorts;
-import io.grpc.CallOptions;
-import io.grpc.Grpc;
-import io.grpc.InsecureChannelCredentials;
-import io.grpc.ManagedChannel;
-import io.grpc.Metadata;
-import io.grpc.MethodDescriptor;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
-import io.grpc.stub.ClientCalls;
-import io.grpc.stub.MetadataUtils;
+import com.wiggle.tests.RawApi;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Per-RPC authorization: who a call is (an API key), and what its role lets it do, with scopes,
  * revocation and expiry, and every RPC covered.
  */
-class GrpcAuthTest {
+class ApiAuthTest {
 
     interface Steps { Map<String, Object> work(Map<String, Object> ctx); }
 
@@ -55,7 +47,7 @@ class GrpcAuthTest {
     private static final FlowSpec ORDERS = FlowSpec.define("orders", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
     private static final FlowSpec BILLING = FlowSpec.define("billing", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
 
-    private static ServerConfig config(ServerConfig.GrpcAuth mode) {
+    private static ServerConfig config(ServerConfig.ApiAuth mode) {
         return new ServerConfig(TestPorts.free(), "authz-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0)
@@ -86,25 +78,21 @@ class GrpcAuthTest {
 
     @Test @DisplayName("enforce: no key or an unknown key is UNAUTHENTICATED; the health check needs none")
     void unauthenticated() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start();
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start();
              WiggleClient anonymous = client(server, null);
              WiggleClient forged = client(server, Accounts.KEY_PREFIX + "not-a-key")) {
             assertEquals(401, status(anonymous::workflowNames));
             assertEquals(401, status(forged::workflowNames));
-            ManagedChannel channel = Grpc.newChannelBuilder(server.baseUrl(), InsecureChannelCredentials.create()).build();
-            try {
-                assertEquals("UP", WiggleControlPlaneGrpc.newBlockingStub(channel)
-                        .healthCheck(com.wiggle.proto.Empty.getDefaultInstance()).getStatus(),
-                        "the health check stays open for probes");
-            } finally {
-                channel.shutdownNow();
-            }
+            RawApi.Answer health = RawApi.call(server.baseUrl(), ControlPlane.HEALTH_CHECK,
+                    Msg.create(), null);
+            assertEquals("UP", health.msg().str("status"),
+                    "the health check stays open for probes");
         }
     }
 
     @Test @DisplayName("a key's role decides what it may do, scoped to the workflows and queues it names")
     void scopedRoles() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start()) {
             Accounts accounts = server.accounts();
             accounts.putRole("ops", "orders-app", List.of("workflow.register:orders", "instance.start:orders",
                     "read:orders", "instance.cancel:orders"), true);
@@ -162,7 +150,7 @@ class GrpcAuthTest {
 
     @Test @DisplayName("two tenants on prefix scopes: listings are filtered, and neither can touch the other's work")
     void prefixTenants() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start()) {
             Accounts accounts = server.accounts();
             String adminKey = accounts.createApiKey("ops", "root", "admin", null);
             try (WiggleClient admin = client(server, adminKey);
@@ -215,7 +203,7 @@ class GrpcAuthTest {
 
     @Test @DisplayName("a branch's sub-flow needs the start permission on its workflow, as a direct start does")
     void createdSubFlowsAreScoped() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start()) {
             Accounts accounts = server.accounts();
             try (WiggleClient acme = client(server, tenantKey(accounts, "acme"));
                  WiggleClient globex = client(server, tenantKey(accounts, "globex"))) {
@@ -245,7 +233,7 @@ class GrpcAuthTest {
 
     @Test @DisplayName("a worker with a key runs its steps, and stops being let in once the key is deleted")
     void workerAndRevocation() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start()) {
             Accounts accounts = server.accounts();
             accounts.putRole("ops", "worker", List.of("task.poll", "read:orders"), true);
             String adminKey = accounts.createApiKey("ops", "root", "admin", null);
@@ -265,7 +253,7 @@ class GrpcAuthTest {
 
     @Test @DisplayName("an expired key is refused")
     void expiry() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start()) {
             String key = server.accounts().createApiKey("ops", "old", "admin", System.currentTimeMillis() - 1);
             try (WiggleClient c = client(server, key)) {
                 assertEquals(401, status(c::workflowNames));
@@ -275,7 +263,7 @@ class GrpcAuthTest {
 
     @Test @DisplayName("log mode serves every call, and off mode reads no credential at all")
     void logAndOff() throws Exception {
-        for (ServerConfig.GrpcAuth mode : List.of(ServerConfig.GrpcAuth.LOG, ServerConfig.GrpcAuth.OFF)) {
+        for (ServerConfig.ApiAuth mode : List.of(ServerConfig.ApiAuth.LOG, ServerConfig.ApiAuth.OFF)) {
             try (WiggleServer server = new WiggleServer(config(mode)).start();
                  WiggleClient anonymous = client(server, null)) {
                 anonymous.register(ORDERS);
@@ -291,37 +279,33 @@ class GrpcAuthTest {
      */
     @Test @DisplayName("every RPC except the health check is refused to a caller without its permission")
     void everyRpcIsChecked() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.GrpcAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE)).start()) {
             server.accounts().putRole("ops", "nothing", List.of("user.manage"), true);   // no RPC needs it
             String key = server.accounts().createApiKey("ops", "nobody", "nothing", null);
-            ManagedChannel channel = Grpc.newChannelBuilder(server.baseUrl(), InsecureChannelCredentials.create()).build();
-            try {
-                Metadata headers = new Metadata();
-                headers.put(Authorizer.AUTHORIZATION, "Bearer " + key);
-                io.grpc.Channel authed = io.grpc.ClientInterceptors.intercept(channel,
-                        MetadataUtils.newAttachHeadersInterceptor(headers));
-                List<String> unchecked = new ArrayList<>();
-                for (io.grpc.MethodDescriptor<?, ?> m : WiggleControlPlaneGrpc.getServiceDescriptor().getMethods()) {
-                    if (m.getBareMethodName().equals("HealthCheck")) continue;
-                    Status.Code code = call(authed, m);
-                    if (code != Status.Code.PERMISSION_DENIED) unchecked.add(m.getBareMethodName() + " -> " + code);
-                }
-                assertEquals(List.of(), unchecked);
-            } finally {
-                channel.shutdownNow();
+            List<String> unchecked = new ArrayList<>();
+            for (ControlPlane.Method m : ControlPlane.METHODS) {
+                if (m == ControlPlane.HEALTH_CHECK) continue;
+                RawApi.Answer answer = RawApi.call(server.baseUrl(), m, Msg.create(), key);
+                if (answer.status() != 403) unchecked.add(m.name() + " -> " + answer.status() + " " + answer.code());
             }
+            assertEquals(List.of(), unchecked);
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static <Q, R> Status.Code call(io.grpc.Channel channel, MethodDescriptor<?, ?> m) {
-        MethodDescriptor<Q, R> method = (MethodDescriptor<Q, R>) m;
-        Q request = (Q) ((MethodDescriptor.PrototypeMarshaller<?>) method.getRequestMarshaller()).getMessagePrototype();
+    @Test @DisplayName("the mode's old name is refused, so renaming it cannot leave authorization off")
+    void oldModeNameIsRefused() {
+        System.setProperty("wiggle.grpc.auth", "enforce");
         try {
-            ClientCalls.blockingUnaryCall(channel, method, CallOptions.DEFAULT.withDeadlineAfter(5, java.util.concurrent.TimeUnit.SECONDS), request);
-            return Status.Code.OK;
-        } catch (StatusRuntimeException e) {
-            return e.getStatus().getCode();
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class, ServerConfig.Auth::fromEnvironment);
+            assertTrue(e.getMessage().contains("WIGGLE_API_AUTH"), e.getMessage());
+        } finally {
+            System.clearProperty("wiggle.grpc.auth");
+        }
+        System.setProperty("wiggle.api.auth", "enforce");
+        try {
+            assertEquals(ServerConfig.ApiAuth.ENFORCE, ServerConfig.Auth.fromEnvironment().api());
+        } finally {
+            System.clearProperty("wiggle.api.auth");
         }
     }
 }

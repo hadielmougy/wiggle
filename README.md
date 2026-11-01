@@ -153,7 +153,7 @@ One codebase, three postures — start embedded, grow into a cluster, **without 
 | Mode | What it is |
 |---|---|
 | **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store |
-| **Standalone server** | one node, gRPC `:8080`, in-memory or a database |
+| **Standalone server** | one node, HTTP API `:8080`, in-memory or a database |
 | **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery |
 
 ### 2.1 Embedded — one JVM, zero infrastructure
@@ -170,7 +170,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).star
 ### 2.2 Standalone server & cluster
 
 ```bash
-./gradlew :dist:run        # single node, in-memory, gRPC on :8080
+./gradlew :dist:run        # single node, in-memory, API on :8080
 ```
 
 Or **download the pre-built distribution** from the [GitHub release](https://github.com/hadielmougy/wiggle/releases)
@@ -436,11 +436,11 @@ class per recipe where the other is a topology file plus a handlers file.
 
 ## 4. Architecture
 
-![Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; operators reach the portal each node can serve over HTTP.](docs/img/architecture.svg)
+![Wiggle architecture: clients and pull-based workers talk HTTP to a wiggle server cluster over one database; operators reach the portal each node can serve over HTTP.](docs/img/architecture.svg)
 
 | Component | Module | What it does |
 |---|---|---|
-| **Engine (server)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves gRPC `:8080` and a `/healthz` probe. |
+| **Engine (server)** | `server` | The durable state machine: compiles graphs, moves tokens, leases steps to workers, runs timers/signals/schedules, recovers dead workers. Clusters over a shared DB; leader-elected housekeeping. Serves the HTTP API on `:8080` and a `/healthz` probe. |
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
 | **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; accounts and permission-set roles on the auth shard. |
@@ -537,7 +537,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGLE_PORT` | `8080` | gRPC port (`0` picks a free one) |
+| `WIGGLE_PORT` | `8080` | API port (`0` picks a free one) |
 | `WIGGLE_JDBC_URL` | *(unset)* | **unset = in-memory, single node**; set to cluster on a DB. Scheme picks the backend: `jdbc:postgresql:` to deploy on, `jdbc:h2:` for tests and local runs |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | | database credentials |
 | `WIGGLE_SCHEMA_MODE` | `apply` | `apply` runs pending migrations on startup; `verify` applies nothing and fails fast if the schema is behind or has drifted (DBA/CI-owned schema) |
@@ -565,7 +565,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | *(unset)* | keystore ⇒ TLS on; **unset = plaintext** |
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_SEARCH_ENABLED` | `false` | **full-text search** over instances on the one database; a topology gets it from a `search` shard (`WIGGLE_SEARCH_RETENTION_MILLIS`, `WIGGLE_SEARCH_WORKFLOWS`) |
-| `WIGGLE_GRPC_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
+| `WIGGLE_API_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
 | `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
 
 ### Portal
@@ -580,7 +580,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_*` | *(unset)* | the same keystore serves the portal over HTTPS |
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
-> upgrades it to mTLS; `WIGGLE_GRPC_AUTH=enforce` checks every gRPC call against the caller's role,
+> upgrades it to mTLS; `WIGGLE_API_AUTH=enforce` checks every API call against the caller's role,
 > by API key or certificate; the portal has accounts with the same permission-set roles.
 
 ---
@@ -590,7 +590,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 Where it's going — the honest list:
 
 - [x] **Per-RPC authorization** — API keys and client certificates bound to permission-set roles,
-      scoped to a workflow or queue (`WIGGLE_GRPC_AUTH`).
+      scoped to a workflow or queue (`WIGGLE_API_AUTH`).
 - [ ] **SSO for the portal.**
 - [x] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
       stops; it does not roll back).
@@ -602,7 +602,7 @@ Where it's going — the honest list:
       emitted it.
 - [ ] **Buffered signals** — deliver-before-wait semantics as an option (today a signal is
       rejected unless the instance is already waiting on it).
-- [ ] **Richer wire tokens** — queue / lease-expiry / updated-at on the gRPC token detail.
+- [ ] **Richer wire tokens** — queue / lease-expiry / updated-at on the API token detail.
 
 Suggestions and PRs welcome — open an issue.
 
@@ -629,7 +629,7 @@ implementation("sh.wiggle:wiggle-server:0.0.10")     // only to embed the server
 implementation("sh.wiggle:wiggle-postgres:0.0.10")   // + your storage module
 ```
 
-Prefer the **BOM** so every wiggle module (and the shared gRPC/protobuf stack) stays version-aligned
+Prefer the **BOM** so every wiggle module stays version-aligned
 with no per-dependency pins:
 
 ```kotlin
@@ -638,7 +638,7 @@ implementation("sh.wiggle:wiggle-client")            // versions come from the B
 ```
 
 Behind a locked-down internal Artifactory? Use the **shaded** client — one self-contained jar with
-gRPC, protobuf and Guava relocated under `com.wiggle.shaded`, so it has **zero transitive
+its retry library relocated under `com.wiggle.shaded`, so it has **zero transitive
 dependencies** and cannot clash with anything already on the app's classpath:
 
 ```kotlin

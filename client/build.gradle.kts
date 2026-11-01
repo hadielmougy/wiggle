@@ -1,6 +1,5 @@
 dependencies {
     api(project(":core"))
-    api(project(":proto"))
 
     // Client-side fault tolerance: retry transient (UNAVAILABLE) RPCs so client/worker calls ride out
     // a server rescheduling / active-passive failover instead of failing the operation.

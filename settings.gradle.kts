@@ -2,7 +2,6 @@ rootProject.name = "wiggle"
 
 include(
     "core",
-    "proto",
     "election",
     "server",
     "jdbc",

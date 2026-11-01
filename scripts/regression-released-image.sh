@@ -6,7 +6,7 @@
 #
 #   scripts/regression-released-image.sh [order-count]   # default 10
 #
-# Requires Docker and free host ports 8080 (gRPC) + 8090 (dashboard).
+# Requires Docker and free host ports 8080 (API) + 8090 (dashboard).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

@@ -1,6 +1,6 @@
 # A complete, batteries-included Wiggle environment: the server backed by PostgreSQL, serving the
 # web portal with admin login, and durable storage.
-# TLS is intentionally left OFF -- plain HTTP/gRPC, meant for a trusted network or local use. To
+# TLS is intentionally left OFF -- plain HTTP, meant for a trusted network or local use. To
 # secure transport, add the WIGGLE_TLS_* variables and a mounted keystore (see the README
 # "Transport security" section).
 #
@@ -44,7 +44,7 @@ services:
       WIGGLE_JDBC_URL: jdbc:postgresql://postgres:5432/wiggle
       WIGGLE_JDBC_USER: wiggle
       WIGGLE_JDBC_PASSWORD: wiggle
-      # --- gRPC control plane ---
+      # --- HTTP control plane ---
       WIGGLE_PORT: "8080"
       # --- /healthz probe ---
       WIGGLE_DASHBOARD_PORT: "8090"
@@ -59,7 +59,7 @@ services:
       #   WIGGLE_TLS_KEYSTORE_PASSWORD: ...
       # and mount the keystore with a `volumes:` entry below.
     ports:
-      - "8080:8080"                            # gRPC: clients & workers connect here
+      - "8080:8080"                            # API: clients & workers connect here
       - "8070:8070"                            # the portal
     restart: unless-stopped
 

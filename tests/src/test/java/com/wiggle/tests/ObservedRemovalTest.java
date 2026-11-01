@@ -6,16 +6,9 @@ import com.wiggle.core.Json;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
-import com.wiggle.proto.ProtoJson;
-import com.wiggle.proto.WiggleControlPlaneGrpc;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
-import io.grpc.Grpc;
-import io.grpc.InsecureChannelCredentials;
-import io.grpc.ManagedChannel;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -61,17 +54,10 @@ class ObservedRemovalTest {
             // an older client's register call, with the mode as it would send it
             Map<String, Object> json = spec().definition().toJson();
             json.put("executionMode", "OBSERVED");
-            ManagedChannel channel = Grpc.newChannelBuilder(server.baseUrl(), InsecureChannelCredentials.create()).build();
-            try {
-                StatusRuntimeException e = assertThrows(StatusRuntimeException.class, () ->
-                        WiggleControlPlaneGrpc.newBlockingStub(channel).registerWorkflow(
-                                com.wiggle.proto.WorkflowDefinition.newBuilder()
-                                        .setDefinition(ProtoJson.toStruct(json)).build()));
-                assertEquals(Status.Code.INVALID_ARGUMENT, e.getStatus().getCode());
-                assertTrue(e.getStatus().getDescription().contains("OBSERVED"), e.getStatus().getDescription());
-            } finally {
-                channel.shutdownNow();
-            }
+            RawApi.Answer e = RawApi.call(server.baseUrl(), com.wiggle.core.wire.ControlPlane.REGISTER_WORKFLOW,
+                    com.wiggle.core.wire.Msg.create().put("definition", json), null);
+            assertEquals("INVALID_ARGUMENT", e.code());
+            assertTrue(e.message().contains("OBSERVED"), e.message());
         }
     }
 

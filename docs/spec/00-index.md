@@ -19,7 +19,7 @@ here first, and the requirement names the test that holds it.
 | 40 | [Execution modes](40-execution-modes.md) | `SERVER`, `LOCAL_SYNC`, `LOCAL_ASYNC`, step timing statistics; the withdrawn `OBSERVED` | `WGL-MODE`, `WGL-OBS` |
 | 50 | [Sagas](50-sagas.md) | compensable steps, the comp-log, the reverse pass, terminal states | `WGL-SAGA` |
 | 60 | [Event log](60-event-log.md) | lifecycle entries, handler-emitted events, the pull-and-ack feed | `WGL-EVT` |
-| 70 | [Control-plane API](70-api.md) | the gRPC contract, every RPC, error mapping, the portal's HTTP surface | `WGL-API` |
+| 70 | [Control-plane API](70-api.md) | the HTTP contract, every RPC, error mapping, the portal's HTTP surface | `WGL-API` |
 | 80 | [Storage](80-storage.md) | the schema, migrations, dialects, claim mechanics, retention | `WGL-STOR` |
 | 85 | [Sharding](85-sharding.md) *(proposed)* | shard-carrying ids, the topology and shard roles, read replicas, adding shards, the portal in the server, the auth shard, search shards, dropping the coordinator | `WGL-SHARD` |
 | 87 | [Partition ownership](87-partition-ownership.md) *(proposed, spike)* | one owner node applies every write of a partition's instances in fenced group commits; routing, ownership leases, sweeps per partition, the spike plan | `WGL-PART` |
@@ -28,7 +28,7 @@ here first, and the requirement names the test that holds it.
 ## 1. Scope
 
 **In scope.** The durable workflow engine (the `server` module), the authoring and worker library
-(`client`), the wire contract (`proto`), storage
+(`client`), the wire contract (`core`'s `wire` package), storage
 (`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the
 portal the server serves (`console`).
 
@@ -81,7 +81,7 @@ A workflow is compiled by the client into a graph and registered with the server
 as node and edge rows. Starting an instance writes an instance row and one token at the start node.
 The server drives tokens over the graph until each parks on something external: a worker step
 (`READY`), a timer (`WAITING`), a signal or child instance (`AWAITING`), or a join barrier
-(`JOINED`). Workers long-poll over gRPC, claim `READY` tokens for the queues they serve under a
+(`JOINED`). Workers long-poll over HTTP, claim `READY` tokens for the queues they serve under a
 lease, run the bound handler, and report the result; the server applies it and drives on. A single
 elected leader per cluster runs the clock-driven duties (timers, signal deadlines, schedules, lease
 reclaim, retention). Every mutation for one instance is serialised by an
@@ -90,7 +90,7 @@ instance write-lock, so any number of server nodes over one database may drive t
 ## 5. Conformance
 
 **WGL-GEN-003** (MUST) A conforming **server** implements every RPC of
-`com.wiggle.proto.WiggleControlPlane` with the semantics in [chapter 70](70-api.md), and the engine
+the control-plane API with the semantics in [chapter 70](70-api.md), and the engine
 semantics of [chapter 30](30-engine.md).
 
 **WGL-GEN-004** (MUST) A conforming **client library** may implement any subset of the RPCs, but
@@ -131,7 +131,7 @@ Stated so a reader does not look for them.
   be idempotent.
 - **No workflow-code determinism model.** The workflow is data the server walks, not code replayed
   to rebuild state, so there is no replay discipline, no history API, and no side-effect wrappers.
-- **No authorization unless asked for.** With `WIGGLE_GRPC_AUTH` unset, any peer that can connect
+- **No authorization unless asked for.** With `WIGGLE_API_AUTH` unset, any peer that can connect
   may call any control-plane RPC; set it to `enforce` for per-RPC authorization by API key or client
   certificate ([chapter 70 §11](70-api.md#11-per-rpc-authorization)).
 - **No rollback by default.** A failed instance stops where it is unless the topology declares

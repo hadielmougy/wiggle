@@ -1,9 +1,9 @@
 import com.vanniktech.maven.publish.SonatypeHost
 import org.gradle.plugins.signing.Sign
 
-// wiggle-client-all: the client, fully shaded into ONE self-contained jar. gRPC, protobuf, Guava
-// and friends are relocated under `com.wiggle.shaded`, and the published POM has NO dependencies —
-// so this jar drops onto any classpath (even one already using a different gRPC/protobuf) without a
+// wiggle-client-all: the client, fully shaded into ONE self-contained jar. Its one third-party
+// library, the retry library, is relocated under `com.wiggle.shaded`, and the published POM has NO
+// dependencies — so this jar drops onto any classpath without a
 // single version pin, exclusion, or resolutionStrategy hack. The public API is unchanged: consumers
 // use `com.wiggle.*` exactly as with wiggle-client.
 //
@@ -18,28 +18,18 @@ plugins {
 }
 
 dependencies {
-    // Swallowed whole into the shaded jar (client -> core, proto, grpc, protobuf, ...).
+    // Swallowed whole into the shaded jar (client -> core, shield).
     implementation(project(":client"))
 }
 
 tasks.shadowJar {
     archiveClassifier.set("")            // this IS the module's main artifact
-    mergeServiceFiles()                  // fold + rewrite META-INF/services (gRPC provider lookup)
+    mergeServiceFiles()
 
-    // Relocate every third-party package the client drags in (gRPC pulls protobuf, Guava, gson,
-    // perfmark, the proto-google-common-protos tree — com.google.api/rpc/type/... — and a few
-    // annotation libs). One com.google rule covers protobuf + guava + all the common-protos.
-    // Nothing under these prefixes is part of wiggle's public API (that's com.wiggle.*), so this is
-    // transparent to consumers. javax.annotation and android.annotation are left alone (harmless,
-    // duplicate-safe annotations that don't clash at runtime).
+    // Relocate every third-party package the client drags in. Nothing under these prefixes is part
+    // of wiggle's public API (that's com.wiggle.*), so this is transparent to consumers.
     val shaded = "com.wiggle.shaded"
-    relocate("com.google", "$shaded.com.google")
-    relocate("io.grpc", "$shaded.io.grpc")
-    relocate("io.perfmark", "$shaded.io.perfmark")
     relocate("io.github.shield", "$shaded.io.github.shield")   // client retry lib
-    relocate("net.jcip", "$shaded.net.jcip")
-    relocate("org.checkerframework", "$shaded.org.checkerframework")
-    relocate("org.codehaus.mojo", "$shaded.org.codehaus.mojo")
 
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "module-info.class")
 }
@@ -90,7 +80,7 @@ mavenPublishing {
 
     pom {
         name.set("Wiggle client (shaded)")
-        description.set("Wiggle client as one self-contained jar: gRPC/protobuf/Guava relocated " +
+        description.set("Wiggle client as one self-contained jar: its retry library relocated " +
                 "under com.wiggle.shaded, zero transitive dependencies.")
         url.set("https://github.com/hadielmougy/wiggle")
         inceptionYear.set("2026")

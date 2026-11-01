@@ -57,10 +57,9 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 
 | Module | What's in it | Published artifact |
 |---|---|---|
-| `core` | JSON, the compiled graph model, retry policy, execution mode, wire records | `wiggle-core` |
-| `proto` | the `WiggleControlPlane` gRPC service + generated stubs | `wiggle-proto` |
+| `core` | JSON, the compiled graph model, retry policy, execution mode, wire records, the API's methods and JSON messages | `wiggle-core` |
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
-| `server` | engine, cluster manager, housekeeper, gRPC API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
+| `server` | engine, cluster manager, housekeeper, HTTP API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
 | `postgres` | PostgreSQL dialect, plus H2 for tests and local runs, and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
 | `election` | leader election by announce-and-heartbeat, used for intra-cluster leadership | *(not published)* |
@@ -73,9 +72,9 @@ published). The server core is database-agnostic; it builds its store from an in
 `StorageFactory` and the backend is selected from the URL scheme ([§7.2](#72-storage-backends)).
 
 Two extras make wiggle painless behind a locked-down internal Artifactory: **`wiggle-bom`** (import
-it as a platform and every module — plus the shared gRPC/protobuf stack — is version-aligned with no
-per-artifact pins), and **`wiggle-client-all`** (the client shaded into one jar with gRPC, protobuf
-and Guava relocated under `com.wiggle.shaded`, so it has **zero transitive dependencies** and can't
+it as a platform and every module — and what it depends on — is version-aligned with no
+per-artifact pins), and **`wiggle-client-all`** (the client shaded into one jar with its retry library
+relocated under `com.wiggle.shaded`, so it has **zero transitive dependencies** and can't
 clash with anything already on the classpath). See the README's install section for snippets.
 
 ---
@@ -200,7 +199,7 @@ keystore. The signed, multi-arch image is published to **both** `hadielmougy/wig
 and `ghcr.io/hadielmougy/wiggle` (GHCR) — the two are the same image; use whichever you prefer.
 
 ```bash
-# run the released image: an in-memory server (gRPC :8080, /healthz probe optional)
+# run the released image: an in-memory server (API :8080, /healthz probe optional)
 docker run --rm -p 8080:8080 hadielmougy/wiggle:0.0.10            # Docker Hub
 # docker run --rm -p 8080:8080 ghcr.io/hadielmougy/wiggle:0.0.10  # …or GHCR
 
@@ -474,7 +473,7 @@ variables in [§6.7](#67-example-worker--benchmark-variables) are conventions of
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_ROLE` | — | `server` | which process this image runs: only `server`. `cell` is the old name for it and still works; `console` and `coordinator` were removed and are refused, as is any unrecognised value |
-| `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port (`0` = pick a free one) |
+| `WIGGLE_PORT` | `wiggle.port` | `8080` | API port (`0` = pick a free one) |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name shown in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | **unset = in-memory, single node**; set to cluster on a database |
 | `WIGGLE_JDBC_USER` | `wiggle.jdbc.user` | *(unset)* | database user |
@@ -544,10 +543,13 @@ new Worker(client, "worker-1", WorkerOptions.defaults()
 complete, fail, heartbeat) — retries on `UNAVAILABLE`, so an operation issued while a node is
 momentarily gone (a restart, or an active/passive failover taking over the address) rides out the
 outage instead of failing. Only `UNAVAILABLE` is retried (the RPC almost certainly never ran, so
-it's safe even for non-idempotent calls); permanent errors and `DEADLINE_EXCEEDED` are not. Tune per
+it's safe even for non-idempotent calls); permanent errors and timed-out calls are not. Tune per
 JVM: `-Dwiggle.rpc.maxAttempts` / `WIGGLE_RPC_MAX_ATTEMPTS` (default `5`; `1` disables retry) and
 `-Dwiggle.rpc.retryDelayMillis` / `WIGGLE_RPC_RETRY_DELAY_MILLIS` (default `200`, exponential
 backoff). For exactly-once starts across a retried failover, pass a `correlationId` to `start`.
+
+**Client connections.** A `WiggleClient` spreads its calls over several HTTP clients, each with its own
+I/O thread: `-Dwiggle.http.clients` / `WIGGLE_HTTP_CLIENTS` (default half the processors, at least 2).
 
 ### 6.6 Logging
 
@@ -570,7 +572,7 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 
 | Env var | Default | Read by | Meaning |
 |---|---|---|---|
-| `WIGGLE_URL` | `localhost:8080` | WorkerMain, SubmitOrders | server gRPC target (a leading `http(s)://` is stripped) |
+| `WIGGLE_URL` | `localhost:8080` | WorkerMain, SubmitOrders | server API target (a leading `http(s)://` is stripped) |
 | `WIGGLE_WORKER_ID` | `worker-<pid>` | WorkerMain | worker identity |
 | `WIGGLE_WORKER_CONCURRENCY` | `8` | WorkerMain | worker concurrency |
 | `WIGGLE_LOCAL_BATCH_SIZE` | `64` | WorkerMain, Benchmark | LOCAL_ASYNC batch size |
@@ -591,9 +593,9 @@ Conventions of the `example` module's `WorkerMain` / `Benchmark` (not the librar
 ### 7.1 The portal (web UI)
 
 The web UI is the **portal**, served by the server process itself on `WIGGLE_PORTAL_PORT`
-(default `8070`; `0` turns it off), separate from the gRPC port (the `console` module, embedded Tomcat +
+(default `8070`; `0` turns it off), separate from the API port (the `console` module, embedded Tomcat +
 servlets). It reads and acts through the engine in process, so any node with the portal on
-serves the whole cluster, and nothing it does goes over gRPC. A node's `WIGGLE_DASHBOARD_PORT`
+serves the whole cluster, and nothing it does goes over the API. A node's `WIGGLE_DASHBOARD_PORT`
 (default `0` = off) still serves only the **`/healthz`** probe for liveness/readiness checks.
 
 Several server nodes on one host each need their own `WIGGLE_PORTAL_PORT` (or `0`). To keep heavy
@@ -627,7 +629,7 @@ npx shadow-cljs watch app` (hot reload on :8280, proxying `/api` to a portal on 
 **Auth.** A role is a named set of permissions. Two are built in: **admin** (`*`, everything) and
 **viewer** (`read`, sees everything and is refused every write). The actions are
 `read`, `instance.cancel`, `instance.signal`, `schedule.write` and `user.manage` (plus
-`instance.start` and `task.poll`, reserved for gRPC authorization); the instance and schedule
+`instance.start` and `task.poll`, reserved for API authorization); the instance and schedule
 ones take a workflow scope, so `instance.cancel:orders` cancels only `orders` instances. Browsers get a
 `/login` form that sets an HttpOnly session cookie; programmatic clients can use HTTP Basic
 auth. Credentials travel cleartext over plain HTTP, so serve over TLS for anything exposed.
@@ -660,7 +662,7 @@ topology gives the `auth` role, or the one database of a single-database deploym
 caches what it has looked up for at most `WIGGLE_AUTH_CACHE_MILLIS` (30 s) and polls the audit
 every second, so a password change, a role change, a disable or a deletion takes effect on every
 node within about a second. With the auth shard down, people already signed in keep working,
-nobody new signs in (503), and the built-in admin still can. No gRPC RPC reads or writes accounts.
+nobody new signs in (503), and the built-in admin still can. No API RPC reads or writes accounts.
 
 A console users file from before (`WIGGLE_CONSOLE_USERS_FILE`, default `wiggle-users.json`) is
 imported once by the first node to start with it, hashes as they are; after that it is no longer
@@ -689,20 +691,20 @@ changing stays signed in. Deleting an account signs it out everywhere.
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `WIGGLE_DASHBOARD_VIEWER_PASSWORD` | `viewer` / *(unset)* | optional read-only account |
 | `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account or session before reading it again |
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | an old console users file, imported once ([§7.1a](#71a-users-an-admin-manages)) |
-| `WIGGLE_TLS_*` | *(unset)* | the server's keystore serves the portal over HTTPS too; with a truststore, the portal requires client certificates as gRPC does |
+| `WIGGLE_TLS_*` | *(unset)* | the server's keystore serves the portal over HTTPS too; with a truststore, the portal requires client certificates as the API does |
 
-### 7.1b Authorizing gRPC calls
+### 7.1b Authorizing API calls
 
-Off by default: any peer that can reach the gRPC port may call any RPC. To decide per call:
+Off by default: any peer that can reach the API port may call any RPC. To decide per call:
 
 1. In the portal's **Users** tab, define a role for each kind of caller, then create an **API
    credential** holding it: an API key (shown once, starting `wgk_`) or a client certificate
    subject such as `CN=orders-worker,O=Example` for an mTLS deployment.
 2. Give each worker and service its key as `WIGGLE_API_KEY` (or `-Dwiggle.api.key`; the Go and
-   Python clients send it as `authorization: Bearer <key>` metadata). Over plaintext the key is
+   Python clients send it as an `Authorization: Bearer <key>` header). Over plaintext the key is
    readable on the wire, so use TLS.
-3. Start the servers with `WIGGLE_GRPC_AUTH=log` and watch for `gRPC auth (log mode)` warnings: each
-   is a call `enforce` would refuse. When there are none, switch to `WIGGLE_GRPC_AUTH=enforce`.
+3. Start the servers with `WIGGLE_API_AUTH=log` and watch for `API auth (log mode)` warnings: each
+   is a call `enforce` would refuse. When there are none, switch to `WIGGLE_API_AUTH=enforce`.
 
 Typical roles:
 
@@ -714,24 +716,24 @@ Typical roles:
 | operations tooling | `read` and whatever it changes |
 
 Every RPC's permission is listed in [chapter 70 §11 of the spec](spec/70-api.md#11-per-rpc-authorization).
-A call without a known credential fails `UNAUTHENTICATED` (401 in the Java client), one its role does
-not allow `PERMISSION_DENIED` (403). `HealthCheck` stays open for probes. Deleting a credential, or
+A call without a known credential fails `401 UNAUTHENTICATED`, one its role does
+not allow `403 PERMISSION_DENIED`. `HealthCheck` stays open for probes. Deleting a credential, or
 changing its role, takes effect on every node within about a second, for the next call: a worker's
 open long poll ends as it began, at most `WIGGLE_LONGPOLL_MAX_MILLIS` later.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `WIGGLE_GRPC_AUTH` | `off` | `off`, `log` (check and log, serve anyway) or `enforce` |
+| `WIGGLE_API_AUTH` | `off` | `off`, `log` (check and log, serve anyway) or `enforce` |
 | `WIGGLE_API_KEY` | *(unset)* | on a client or worker: the key it presents |
 
 ### 7.1a Transport security (TLS / mTLS)
 
-Opt-in and shared by the gRPC API and the portal's HTTP. A **keystore** turns TLS on for both;
+Opt-in and shared by the API and the portal. A **keystore** turns TLS on for both;
 a **truststore** additionally requires client certificates (mTLS on the server) and presents a
 client certificate (on a worker/client). Unset ⇒ plaintext for both. Stores are PKCS12 by default;
 a `.jks` path is loaded as JKS. Clients/workers read the same variables. TLS secures the channel
 and (with mTLS) authenticates the peer, but it is **not authorization**: what a peer may call is
-decided by per-RPC authorization ([§7.1b](#71b-authorizing-grpc-calls)), off unless you turn it on.
+decided by per-RPC authorization ([§7.1b](#71b-authorizing-api-calls)), off unless you turn it on.
 
 | Env var | System property | Default | Meaning |
 |---|---|---|---|
@@ -830,7 +832,7 @@ loses.
 ### 7.3 Signals, sub-workflows and schedules
 
 `thenAwait(name)` parks an instance until the named signal arrives; no worker is held. Deliver
-via `client.signal(instanceId, name, payload)` (gRPC), the portal's Signals tab, or
+via `client.signal(instanceId, name, payload)` (API), the portal's Signals tab, or
 `POST /api/instances/{id}/signal/{name}` (JSON body merges into the context). Optional deadline:
 `thenAwait(name, timeout)` fails the instance on timeout; the three-arg form runs an escalation
 branch instead. Signals are not buffered -- an early delivery is a retryable conflict.
@@ -842,7 +844,7 @@ parent cascades to children.
 Schedules fire a workflow on a fixed interval or a five-field cron expression (UTC),
 leader-driven and exactly-once per fire. From the client: `client.createSchedule(workflow,
 Duration, context)` / `createCronSchedule(workflow, "0 3 * * *", context)` / `schedules()` /
-`deleteSchedule(id)` (gRPC). Over HTTP: `POST /api/schedules {"workflow", "everyMillis"|"cron",
+`deleteSchedule(id)` (API). Over HTTP: `POST /api/schedules {"workflow", "everyMillis"|"cron",
 "context"?}`, `GET /api/schedules`, `DELETE /api/schedules/{id}`. Creation is an **upsert keyed
 on workflow name** -- a workflow has at most one schedule, so calling create again from any
 number of client instances updates it in place rather than creating duplicates.
@@ -914,4 +916,4 @@ WIGGLE_EXECUTION_MODE=LOCAL_ASYNC WIGGLE_JDBC_URL=jdbc:postgresql://localhost:54
 - `docs/local-execution.md` — execution modes, the wire protocol, the shared traversal seam, and
   the crash-replay contract per mode.
 - `RELEASING.md` — publishing to Maven Central.
-- `proto/src/main/proto/wiggle.proto` — the control-plane wire contract.
+- `docs/spec/70-api.md` — the control-plane wire contract: every method and JSON message.

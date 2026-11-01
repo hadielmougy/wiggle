@@ -1,5 +1,5 @@
 """Manages background `kubectl port-forward` processes so the host-side lab can reach in-cluster
-gRPC services (each server, its pods, and its console)."""
+API services (each server, its pods, and its console)."""
 from __future__ import annotations
 
 import socket
@@ -26,8 +26,8 @@ class PortForwards:
 
     def ensure(self, key: str, svc: str, remote_port: int, local_port: int, wait: float = 10.0,
                resource: str = "svc") -> str:
-        """Ensure a forward <resource>/<svc>:remote -> 127.0.0.1:local is live; returns the gRPC
-        target string ``127.0.0.1:<local_port>`` (ready to hand to grpc.insecure_channel).
+        """Ensure a forward <resource>/<svc>:remote -> 127.0.0.1:local is live; returns the API
+        target string ``127.0.0.1:<local_port>`` (ready to hand to CellClient).
         ``resource`` is ``svc`` (default) or ``pod`` for a forward pinned to one backing pod."""
         existing = self._procs.get(key)
         if existing and existing[0].poll() is None and _port_open(existing[1]):

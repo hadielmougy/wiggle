@@ -3,34 +3,25 @@
 //     implementation(platform("sh.wiggle:wiggle-bom:<version>"))
 //     implementation("sh.wiggle:wiggle-client")     // no version — the BOM supplies it
 //
-// and every wiggle module, the shared gRPC/protobuf stack, and the storage drivers resolve to one
+// and every wiggle module, the client's retry library, and the storage drivers resolve to one
 // coherent set. This removes the per-artifact version pins (and the resolutionStrategy.force hacks)
 // that otherwise force enterprise consumers to edit their build files.
 plugins {
     `java-platform`
 }
 
-javaPlatform {
-    // so the platform may import the gRPC BOM and re-export its aligned constraints
-    allowDependencies()
-}
-
 dependencies {
-    // Align the whole gRPC family (grpc-api/stub/protobuf/netty-shaded/...) from its own BOM.
-    api(platform("io.grpc:grpc-bom:${property("grpcVersion")}"))
-
     constraints {
         // --- wiggle's own modules, at this build's version ---
         listOf(
-            "wiggle-core", "wiggle-proto", "wiggle-client", "wiggle-server",
+            "wiggle-core", "wiggle-client", "wiggle-server",
             "wiggle-jdbc", "wiggle-postgres", "wiggle-client-all",
             // wiggle-server has an api dependency on it, so a consumer resolves it whether or
             // not they name it; the BOM should pin it like everything else it can drag in.
             "wiggle-election",
         ).forEach { api("sh.wiggle:$it:$version") }
 
-        // --- the control-plane stack wiggle-proto exposes transitively ---
-        api("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
+        // --- what the client and the JDBC store bring in ---
         api("io.github.hadielmougy:shield:${property("shieldVersion")}")
         api("com.zaxxer:HikariCP:${property("hikariVersion")}")
 

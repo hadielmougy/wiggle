@@ -11,8 +11,8 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 
 /**
- * Optional TLS material loaded from a keystore/truststore, shared by the gRPC server/client and
- * the HTTP dashboard. All of it is plain JSSE -- no gRPC or HTTP dependency -- so it lives in core
+ * Optional TLS material loaded from a keystore/truststore, shared by the API server/client and
+ * the portal. All of it is plain JSSE -- no HTTP dependency -- so it lives in core
  * and every module can build the {@link KeyManager}/{@link TrustManager} arrays it needs.
  *
  * <p>Everything is opt-in. A consumer with a {@link Options#DISABLED} (or empty) options object

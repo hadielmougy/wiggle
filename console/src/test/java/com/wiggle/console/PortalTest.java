@@ -44,7 +44,7 @@ class PortalTest {
         }
     }
 
-    @Test @DisplayName("a set port serves the portal from the server, separate from the gRPC port, behind its login")
+    @Test @DisplayName("a set port serves the portal from the server, separate from the API port, behind its login")
     void servesFromTheServer() throws Exception {
         Path users = Files.createTempFile("portal-users", ".json");
         Files.delete(users);
@@ -58,7 +58,7 @@ class PortalTest {
                      "WIGGLE_DASHBOARD_PASSWORD", "s3cret",
                      "WIGGLE_CONSOLE_USERS_FILE", users.toString())).orElseThrow()) {
             assertEquals(port, portal.port());
-            assertTrue(port != server.port(), "the portal is not on the gRPC port");
+            assertTrue(port != server.port(), "the portal is not on the API port");
             HttpClient http = HttpClient.newHttpClient();
             String base = "http://localhost:" + port;
             assertEquals(200, http.send(HttpRequest.newBuilder(URI.create(base + "/healthz")).build(),

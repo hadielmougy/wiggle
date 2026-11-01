@@ -57,7 +57,7 @@ FROM gcr.io/distroless/java21-debian12:nonroot AS runtime
 WORKDIR /opt/wiggle
 COPY --from=build /src/dist/build/install/wiggle-server/lib ./lib
 
-# gRPC control plane, the port that serves the always-open /healthz probe, and the portal
+# HTTP control plane, the port that serves the always-open /healthz probe, and the portal
 # (WIGGLE_PORTAL_PORT, default 8070; 0 turns it off). Storage defaults to in-memory; set
 # WIGGLE_JDBC_URL to run against PostgreSQL. Secure the portal with WIGGLE_DASHBOARD_PASSWORD and
 # turn on TLS with WIGGLE_TLS_KEYSTORE (see the README).

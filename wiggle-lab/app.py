@@ -352,7 +352,7 @@ with forwards:
         r1.markdown(f"**{cell}**")
         r2.code(addr or "— not forwarded —", language=None)
         if addr:
-            r2.caption(f"gRPC (worker): WIGGLE_URL={addr}")
+            r2.caption(f"API (worker): WIGGLE_URL={addr}")
             if r3.button("Stop", key=f"fw-stop-{cell}"):
                 lab.stop_forward_cell(cell)
                 st.rerun()

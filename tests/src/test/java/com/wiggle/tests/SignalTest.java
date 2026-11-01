@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Signals: an instance parks on a named wait and is resumed by (instance, signal name) over
- * gRPC or the dashboard, with an optional deadline that escalates or fails.
+ * the API or the dashboard, with an optional deadline that escalates or fails.
  */
 class SignalTest {
 
@@ -87,8 +87,8 @@ class SignalTest {
         return server.engine().pendingSignals(50);
     }
 
-    @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over gRPC")
-    void signalOverGrpc() throws Exception {
+    @Test @DisplayName("an instance parks on a signal wait and resumes when it arrives over the API")
+    void signalOverApi() throws Exception {
         FlowSpec bp = FlowSpec.define("sig-approve", 1, Map.class, AfterStep.class, (f, s) -> f
                 .thenAwait("approval")
                 .thenApply(s::after));

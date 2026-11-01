@@ -147,7 +147,7 @@ without a row lock ([§8](#8-the-spike), variant C2). It MUST keep the row lock 
 
 **WGL-PART-040** (MUST) A node that receives a command for a partitioned id MUST read the partition
 from the id and either enqueue the command on its own mailbox, when it owns the partition, or
-forward it to the owner over gRPC.
+forward it to the owner over HTTP.
 
 **WGL-PART-041** (MUST) A forwarded call MUST carry `wiggle-forwarded: <epoch>` metadata. A node
 that receives a forwarded call for a partition it does not own at that epoch MUST answer with the
@@ -224,7 +224,7 @@ with the leader: they start new instances or delete finished ones, and neither n
 2. Ownership assignment, leases and the fence.
 3. Engine write entry points that take an open `Tx`.
 4. Mailboxes and batches.
-5. Routing in `GrpcApi`.
+5. Routing in `ControlPlaneApi`.
 6. Sweeps per partition.
 7. The variant switch.
 

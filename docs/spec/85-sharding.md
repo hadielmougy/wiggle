@@ -445,7 +445,7 @@ gave observed runs a new id.
 **Status: implemented.** A consumer's home-shard position stays in `wf_event_cursor.acked_seq`, so a
 deployment on one database migrates nothing; its positions on other shards are in
 `wf_event_cursor_shard` (migration 25). Verified by `tests/ShardedEventFeedTest` (two shards, over
-gRPC), `server/engine/FeedCursorTest`, the storage contract, and the unchanged single-shard event
+the API), `server/engine/FeedCursorTest`, the storage contract, and the unchanged single-shard event
 suites.
 
 `seq` is one store-generated sequence per database today ([WGL-EVT-040](60-event-log.md)). Over
@@ -538,9 +538,9 @@ another database is out of scope.
 
 ## 12. The portal in the server
 
-Today the console is a separate process and a pure gRPC client ([WGL-OPS-040](90-ops.md)), and server
+Today the console is a separate process and a pure API client ([WGL-OPS-040](90-ops.md)), and server
 nodes serve no UI ([WGL-OPS-041](90-ops.md)). Over shards that split costs twice: every console read
-becomes an RPC that the server then fans out, and the gRPC surface lacks reads the console needs
+becomes an RPC that the server then fans out, and the API surface lacks reads the console needs
 (pending signals, [WGL-OPS-042a](90-ops.md)). The server already connects to every shard and its
 replicas, and the `DashboardData` seam already has an in-process adapter (`EngineDashboardData`).
 
@@ -550,24 +550,24 @@ are on the auth shard ([§13](#13-users-and-authorization)). WGL-SHARD-174 needs
 are not pointed at.
 
 **WGL-SHARD-170** (MUST) The portal MUST be served by the server process, on its own HTTP port
-(`WIGGLE_PORTAL_PORT`, default `8070`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
+(`WIGGLE_PORTAL_PORT`, default `8070`, `0` = off), separate from the API port. `GET /healthz` stays on the
 existing `WIGGLE_DASHBOARD_PORT` contract until that variable is retired.
 
 **WGL-SHARD-171** (MUST) The portal MUST read through `DashboardData` backed by the engine in
 process, using the routes and freshness of [§5](#5-where-each-operation-goes). It MUST NOT dial the
-gRPC API of its own node or of another node.
+API of its own node or of another node.
 
 **WGL-SHARD-172** (MUST) Any node with the portal enabled MUST be able to serve any portal request.
 Sessions MUST live on the auth shard ([§13](#13-users-and-authorization)), so a load balancer needs
 no sticky sessions.
 
 **WGL-SHARD-173** (MUST) The portal's mutations (cancel, signal, schedules, retry) MUST call the
-engine directly, not the gRPC API, and MUST be checked against the signed-in principal's
+engine directly, not the API, and MUST be checked against the signed-in principal's
 permissions before they run.
 
 **WGL-SHARD-174** (SHOULD) A deployment SHOULD be able to run portal-only nodes (portal on, no
-claims served) so heavy portal use does not share a node with the gRPC hot path. These are ordinary
-server nodes with the gRPC port closed to workers.
+claims served) so heavy portal use does not share a node with the API hot path. These are ordinary
+server nodes with the API port closed to workers.
 
 **WGL-SHARD-175** (MUST) The standalone `console` module MUST be retired once the in-server portal
 matches its views ([WGL-OPS-042](90-ops.md)). WGL-OPS-040 and WGL-OPS-041 are then marked
@@ -581,7 +581,7 @@ role.
 
 **Status: implemented.** WGL-SHARD-187 is chapter 70 §11
 ([per-RPC authorization](70-api.md#11-per-rpc-authorization)): off by default, enabled with
-`WIGGLE_GRPC_AUTH`. `Accounts`
+`WIGGLE_API_AUTH`. `Accounts`
 (server module) holds the rows and appends an audit entry with every change; `AuthCache` is the
 per-node cache, and each node polls the audit every second to drop what a change names. Built-in
 roles are `admin` (`*`) and `viewer` (`read`); the actions are `read`, `instance.start`,
@@ -621,12 +621,12 @@ every node to drop the entry.
 sign-ins MUST fail as `UNAVAILABLE`, and the engine MUST keep running
 ([WGL-SHARD-008](#1-model)).
 
-**WGL-SHARD-186** (MUST NOT) No gRPC RPC may read or write accounts, roles or credentials until the
+**WGL-SHARD-186** (MUST NOT) No API RPC may read or write accounts, roles or credentials until the
 control plane enforces per-RPC authorization. The reason WGL-OPS-047 kept accounts out of the
 database was that any process able to dial the server could reach whatever sits behind the control
 plane. Account management stays on the portal's authenticated HTTP surface.
 
-**WGL-SHARD-187** (SHOULD) Per-RPC authorization on the gRPC API SHOULD follow, resolving each call's
+**WGL-SHARD-187** (SHOULD) Per-RPC authorization on the API SHOULD follow, resolving each call's
 API key or mTLS subject through `wf_auth_credential` and the cache of WGL-SHARD-184, so the hot path
 never reads the auth shard per call. It is [chapter 70 §11](70-api.md#11-per-rpc-authorization).
 
@@ -779,7 +779,7 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
 11. **Measure**: `deploy/gcp/ceiling.sh` on two and on four Cloud SQL shards, steps/s first.
 12. **Accounts on the auth shard** ([§13](#13-users-and-authorization)): schema, file import,
     permission-set roles, the cache, and portal enforcement.
-13. **Per-RPC authorization** on gRPC ([WGL-SHARD-187](#13-users-and-authorization)).
+13. **Per-RPC authorization** on the API ([WGL-SHARD-187](#13-users-and-authorization)).
 14. **Search shards** ([§14](#14-search-shards)): indexer, full text.
 
 ## 17. Open questions

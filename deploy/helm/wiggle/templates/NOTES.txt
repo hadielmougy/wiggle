@@ -3,12 +3,12 @@ Wiggle is deployed as {{ include "wiggle.fullname" . }} ({{ .Values.replicaCount
 Image:   {{ include "wiggle.image" . }}
 Storage: {{ if or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret }}JDBC (durable){{ else }}in-memory (NON-DURABLE — single node, dev only){{ end }}
 
-Reach the gRPC control plane in-cluster at:
-    {{ include "wiggle.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+Reach the HTTP control plane in-cluster at:
+    {{ include "wiggle.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.apiPort }}
 
 Port-forward it to your machine:
-    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.grpcPort }}:{{ .Values.service.grpcPort }}
-Then point a client at localhost:{{ .Values.service.grpcPort }}.
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.apiPort }}:{{ .Values.service.apiPort }}
+Then point a client at localhost:{{ .Values.service.apiPort }}.
 
 Liveness/readiness use the always-open /healthz on port {{ .Values.service.healthPort }}.
 {{- if gt (int .Values.service.portalPort) 0 }}

@@ -6,7 +6,6 @@ under the group `sh.wiggle`:
 | Module       | Artifact             | Notes                                             |
 |--------------|----------------------|---------------------------------------------------|
 | `core`       | `wiggle-core`        |                                                   |
-| `proto`      | `wiggle-proto`       |                                                   |
 | `client`     | `wiggle-client`      | the usual dependency: DSL + worker + client       |
 | `server`     | `wiggle-server`      |                                                   |
 | `jdbc`       | `wiggle-jdbc`        |                                                   |
@@ -15,7 +14,7 @@ under the group `sh.wiggle`:
 | `oracle`     | `wiggle-oracle`      |                                                   |
 | `sqlserver`  | `wiggle-sqlserver`   |                                                   |
 | `bom`        | `wiggle-bom`         | version-alignment platform (`java-platform`)      |
-| `client-all` | `wiggle-client-all`  | shaded client — gRPC/protobuf/Guava relocated     |
+| `client-all` | `wiggle-client-all`  | shaded client — retry library relocated          |
 
 `example`, `tests`, `dist`, and `console` are not published.
 
