@@ -251,7 +251,7 @@ A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
 | `POST` | `/api/users/{name}/password` · `/roles` · `/disabled` | reset a password, replace roles, disable or enable |
 | `GET`/`POST`/`DELETE` | `/api/roles[/{name}]` | roles: list with the known actions, create or replace, delete |
 | `GET` | `/api/audit?after=&limit=` | changes to accounts, roles and sessions, oldest first |
-| `GET` | `/api/search?q=&workflow=&status=&limit=&partial=&attr=` | full-text search over instances ([§12](#12-search)); `attr=name:op:value` (repeatable; `op` is `eq`, `lt`, `le`, `gt` or `ge`) filters on an attribute the `workflow` declares, 400 for an undeclared one or a value of the wrong type; 404 when search is off |
+| `GET` | `/api/search?q=&workflow=&status=&limit=&partial=&attr=` | full-text search over instances ([§12](#12-search)); `attr=name:op:value` (repeatable; `op` is `eq`, `lt`, `le`, `gt` or `ge`) filters on an attribute the `workflow` declares, 400 for an undeclared one or a value of the wrong type; each hit carries the instance's `attributes`; 404 when search is off |
 | `POST` | `/api/password` | change one's own password |
 
 **WGL-API-101** (MUST) An unknown `/api/*` path MUST be 404; a mutating call on a GET-only endpoint MUST

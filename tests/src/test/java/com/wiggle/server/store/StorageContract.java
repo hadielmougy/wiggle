@@ -1926,6 +1926,10 @@ abstract class StorageContract {
         });
         Rows.AttrFilter region = new Rows.AttrFilter("region", Op.EQUAL, "EU");
         assertEquals(List.of(eu), attrSearch(wf, region), "text equality, in this flow only");
+        Rows.SearchDoc found = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(null, Scope.of(wf), null, null, null,
+                100, List.of(region)))).getFirst().doc();
+        assertEquals(Map.of("region", "EU", "total", 120L, "vip", true, "rate", new java.math.BigDecimal("0.25")),
+                found.attributes(), "a hit carries the attributes it was indexed with");
         assertEquals(List.of(other), attrSearch(wf + "-2", region), "each flow's documents are found under its own name");
         assertEquals(List.of(eu), attrSearch(wf, new Rows.AttrFilter("vip", Op.EQUAL, true)));
         assertEquals(List.of(us), attrSearch(wf, new Rows.AttrFilter("vip", Op.EQUAL, false)));

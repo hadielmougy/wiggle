@@ -453,6 +453,7 @@ public final class DashboardServlet extends HttpServlet {
             m.put("updatedAt", h.updatedAt());
             m.put("score", h.score());
             m.put("purged", h.purged());
+            m.put("attributes", h.attributes());
             hits.add(m);
         }
         json(res, 200, Map.of("hits", hits, "partial", found.partial()));

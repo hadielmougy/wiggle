@@ -288,6 +288,8 @@ class ConsoleWebTest {
                     Thread.sleep(100);
                 }
                 assertTrue(!hit.contains("\"us\""), hit);
+                assertTrue(hit.contains("\"attributes\":{") && hit.contains("\"region\":\"eu\"")
+                        && hit.contains("\"rush\":true"), "the hit carries its attributes: " + hit);
                 assertTrue(get(http, url + "total:lt:20", null).body().contains(eu), "ordered comparison on a decimal");
                 assertTrue(!get(http, url + "total:gt:20", null).body().contains(eu));
                 assertTrue(get(http, url + "rush:eq:true", null).body().contains(eu), "boolean");
