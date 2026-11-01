@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
+import com.wiggle.server.store.ShardTransactions;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.core.criteria.Criteria;
@@ -9,7 +11,6 @@ import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Freshness;
-import com.wiggle.server.store.ReadTx;
 import com.wiggle.server.store.Storage;
 
 import java.util.ArrayList;
@@ -20,23 +21,23 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** Read-only views over the store and the poller roster. Nothing here moves a token. */
 final class Queries {
 
-    private final Storage storage;
+    private final ShardTransactions shards;
     private final PollerRegistry pollers;
 
     Queries(Storage storage, PollerRegistry pollers) {
-        this.storage = storage;
+        this.shards = new ShardTransactions(storage);
         this.pollers = pollers;
     }
 
     List<Rows.BacklogSlice> backlog(int max) {
         long now = System.currentTimeMillis();
         Map<String, Rows.BacklogSlice> merged = new LinkedHashMap<>();
-        for (Rows.BacklogSlice s : readEach(tx -> tx.backlogByVersion(now, max))) {
+        for (Rows.BacklogSlice s : readEach(() -> Repositories.tokens().backlogByVersion(now, max))) {
             merged.merge(s.workflow() + ":" + s.version() + ":" + s.queue(), s, (a, b) ->
                     new Rows.BacklogSlice(a.workflow(), a.version(), a.queue(), a.readyCount() + b.readyCount(),
                             Math.min(a.oldestAvailableAt(), b.oldestAvailableAt())));
@@ -61,9 +62,9 @@ final class Queries {
                 if (s.readyCount() > COUNT_SLICES_UP_TO) yield null;
                 Predicate any = c.conditions().size() == 1 ? c.conditions().getFirst() : new Predicate.Or(c.conditions());
                 int n = 0;
-                for (int shard : storage.instanceShards()) {
-                    n += storage.readShard(shard, Freshness.REPLICA_OK,
-                            tx -> tx.countReady(s.workflow(), s.version(), s.queue(), any, now, COUNT_CAP));
+                for (int shard : shards.instanceShards()) {
+                    n += shards.read(shard, Freshness.REPLICA_OK,
+                            () -> Repositories.tokens().countReady(s.workflow(), s.version(), s.queue(), any, now, COUNT_CAP));
                 }
                 yield n >= COUNT_CAP && s.readyCount() > COUNT_CAP ? null : n;
             }
@@ -76,28 +77,28 @@ final class Queries {
     }
 
     Optional<InstanceView> instance(String id) {
-        return storage.readFor(id, Freshness.PRIMARY, tx -> tx.findInstance(id).map(Queries::view));
+        return shards.readFor(id, Freshness.PRIMARY, () -> Repositories.instances().findInstance(id).map(Queries::view));
     }
 
     List<InstanceView> list(String workflow, String status, int limit) {
         InstanceStatus s = status == null ? null : InstanceStatus.valueOf(status.toUpperCase(Locale.ROOT));
-        return newestFirst(readEach(tx -> tx.listInstances(workflow, s, limit)), limit);
+        return newestFirst(readEach(() -> Repositories.instances().listInstances(workflow, s, limit)), limit);
     }
 
     List<InstanceView> findByCorrelation(String correlationId, int limit) {
-        return newestFirst(readEach(tx -> tx.findByCorrelation(correlationId, limit)), limit);
+        return newestFirst(readEach(() -> Repositories.instances().findByCorrelation(correlationId, limit)), limit);
     }
 
     List<Token> tokens(String instanceId) {
-        return storage.readFor(instanceId, Freshness.PRIMARY, tx -> tx.tokensOf(instanceId));
+        return shards.readFor(instanceId, Freshness.PRIMARY, () -> Repositories.tokens().tokensOf(instanceId));
     }
 
     Rows.QueueDepth queueDepth() {
         long now = System.currentTimeMillis();
         int count = 0;
         long oldest = 0;
-        for (int shard : storage.instanceShards()) {
-            Rows.QueueDepth d = storage.readShard(shard, Freshness.PRIMARY, tx -> tx.queueDepth(now));
+        for (int shard : shards.instanceShards()) {
+            Rows.QueueDepth d = shards.read(shard, () -> Repositories.tokens().queueDepth(now));
             if (d.readyCount() == 0) continue;
             oldest = count == 0 ? d.oldestAvailableAt() : Math.min(oldest, d.oldestAvailableAt());
             count += d.readyCount();
@@ -106,14 +107,14 @@ final class Queries {
     }
 
     List<Token> pendingSignals(int max) {
-        return readEach(tx -> tx.pendingSignals(max)).stream()
+        return readEach(() -> Repositories.tokens().pendingSignals(max)).stream()
                 .sorted(Comparator.comparingLong((Token t) -> t.createdAt)).limit(max).toList();
     }
 
     /** A console read on every instance shard, a replica allowed, the lists concatenated. */
-    private <T> List<T> readEach(Function<ReadTx, List<T>> read) {
+    private <T> List<T> readEach(Supplier<List<T>> read) {
         List<T> out = new ArrayList<>();
-        for (int shard : storage.instanceShards()) out.addAll(storage.readShard(shard, Freshness.REPLICA_OK, read));
+        for (int shard : shards.instanceShards()) out.addAll(shards.read(shard, Freshness.REPLICA_OK, read));
         return out;
     }
 

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
@@ -56,7 +57,7 @@ final class Tokens {
     private static void move(Tx tx, Token t, TokenStatus target, long now) {
         t.status = TokenState.of(t.status).moveTo(target);
         t.updatedAt = now;
-        tx.updateToken(t);
+        Repositories.tokens().updateToken(t);
     }
 
     static Token create(Instance inst, String nodeId, String joinStack, TokenPayload payload, long now) {
@@ -89,7 +90,7 @@ final class Tokens {
      */
     static Token continueAt(Tx tx, Instance inst, Token t, String nextNodeId, TokenPayload payload, long now) {
         Token cont = create(inst, nextNodeId, t.joinStack, payload, now);
-        tx.insertToken(cont);
+        Repositories.tokens().insertToken(cont);
         return cont;
     }
 
@@ -103,7 +104,7 @@ final class Tokens {
         cont.availableAt = now;
         cont.startedAt = now;   // handed straight to the worker: no wait, and its clock starts now
         cont.updatedAt = now;
-        tx.insertToken(cont);
+        Repositories.tokens().insertToken(cont);
     }
 
     void markReady(Tx tx, Instance inst, Token t, Node node, long now) {
@@ -203,16 +204,16 @@ final class Tokens {
     }
 
     static void cancelAll(Tx tx, String instanceId, long now) {
-        tx.cancelActiveTokens(instanceId, now);
+        Repositories.tokens().cancelActiveTokens(instanceId, now);
     }
 
     static boolean anyActive(Tx tx, String instanceId) {
-        return tx.hasActiveTokens(instanceId);
+        return Repositories.tokens().hasActiveTokens(instanceId);
     }
 
     /** The task's instance, locked, and the task as it stands under that lock. */
     static LockedTask lock(Tx tx, String taskId) {
-        return tx.lockTask(taskId).orElseThrow(() -> tx.findToken(taskId).isPresent()
+        return Repositories.locks().lockTask(taskId).orElseThrow(() -> Repositories.locks().findToken(taskId).isPresent()
                 ? EngineException.notFound("instance") : EngineException.notFound("task"));
     }
 
@@ -230,18 +231,18 @@ final class Tokens {
      * caller limited to some {@code queues} reads it first, to check the task is on one of them.
      */
     static long extendLease(Tx tx, String taskId, String leaseOwner, long extraMillis, Predicate<String> queues) {
-        if (queues != null) requireQueue(tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task")), queues);
+        if (queues != null) requireQueue(Repositories.locks().findToken(taskId).orElseThrow(() -> EngineException.notFound("task")), queues);
         long now = System.currentTimeMillis();
         long until = now + extraMillis;
-        if (tx.renewLease(taskId, leaseOwner, until, now)) return until;
-        Token t = tx.findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+        if (Repositories.tokens().renewLease(taskId, leaseOwner, until, now)) return until;
+        Token t = Repositories.locks().findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
         requireLease(t, leaseOwner);
         TokenState.of(t.status).renewLease(t, until);
         throw EngineException.conflict("lease for task " + taskId + " changed while renewing it");
     }
 
     List<TaskActivation> claim(Tx tx, String workerId, ClaimFilter filter, int max, long now, long until) {
-        List<Token> claimed = tx.claimTasks(workerId, filter, max, now, until);
+        List<Token> claimed = Repositories.tokens().claimTasks(workerId, filter, max, now, until);
         List<TaskActivation> activations = new ArrayList<>(claimed.size());
         for (Token t : claimed) {
             activationFor(tx, t, workerId, until).ifPresent(activations::add);
@@ -250,7 +251,7 @@ final class Tokens {
     }
 
     private Optional<TaskActivation> activationFor(Tx tx, Token t, String workerId, long until) {
-        Instance inst = tx.findInstance(t.instanceId).orElse(null);
+        Instance inst = Repositories.instances().findInstance(t.instanceId).orElse(null);
         boolean comp = Sagas.isCompensation(t);
         if (inst == null || !InstanceState.of(inst.status).dispatches(comp)) {
             return Optional.empty();

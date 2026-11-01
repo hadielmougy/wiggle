@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.Doc;
 import com.wiggle.core.Node;
@@ -189,7 +190,7 @@ final class StepChain {
             return "created branches " + depth + " scopes deep, more than the " + spawnLimits.maxDepth()
                     + " allowed (WIGGLE_DYN_MAX_DEPTH)";
         }
-        long nodes = tx.dynNodeCount(inst.id) + Spawns.nodeCount(branches) + (round > 1 ? 1 : 0);
+        long nodes = Repositories.dynamicNodes().dynNodeCount(inst.id) + Spawns.nodeCount(branches) + (round > 1 ? 1 : 0);
         if (nodes > spawnLimits.maxNodes()) {
             return "would bring the instance to " + nodes + " created nodes, more than the "
                     + spawnLimits.maxNodes() + " allowed (WIGGLE_DYN_MAX_NODES)";
@@ -224,7 +225,7 @@ final class StepChain {
 
     /** Hand back: drive the continuation normally (READY for a worker, or a boundary). */
     private void handBack(Tx tx, LazyGraph def, Instance inst, Token cont, Node nextNode, long now) {
-        tx.insertToken(cont);
+        Repositories.tokens().insertToken(cont);
         LOG.log(System.Logger.Level.DEBUG, () -> "reportSteps: instance " + inst.id
                 + " handing back at " + cont.nodeId + " (" + nextNode.kind() + ")");
         drive(tx, def, inst, cont, now);

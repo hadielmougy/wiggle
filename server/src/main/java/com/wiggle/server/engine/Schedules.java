@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.Cron;
 import com.wiggle.core.Doc;
 import com.wiggle.core.Ids;
@@ -58,14 +59,14 @@ final class Schedules {
      */
     private String put(String workflow, Object context, Rows.Schedule s, String cadence) {
         return transactions.readHome(tx -> {
-            tx.latestVersion(workflow).orElseThrow(
+            Repositories.graph().latestVersion(workflow).orElseThrow(
                     () -> EngineException.notFound("workflow '" + workflow + "'"));
-            Optional<Rows.Schedule> existing = tx.scheduleByWorkflow(workflow);
+            Optional<Rows.Schedule> existing = Repositories.schedules().scheduleByWorkflow(workflow);
             s.id = existing.map(e -> e.id).orElseGet(() -> Ids.next("sched"));
             s.workflow = workflow;
             s.context = Doc.of(context);
             s.createdAt = existing.map(e -> e.createdAt).orElseGet(System::currentTimeMillis);
-            tx.putSchedule(s);
+            Repositories.schedules().putSchedule(s);
             boolean replaced = existing.isPresent();
             LOG.log(System.Logger.Level.INFO, () -> "schedule " + s.id + ": " + workflow + " " + cadence
                     + (replaced ? " (replacing existing schedule for this workflow)" : ""));
@@ -74,11 +75,11 @@ final class Schedules {
     }
 
     void delete(String id) {
-        transactions.readHomeVoid(tx -> tx.deleteSchedule(id));
+        transactions.readHomeVoid(tx -> Repositories.schedules().deleteSchedule(id));
     }
 
     List<Rows.Schedule> all() {
-        return transactions.readHome(tx -> tx.schedules());
+        return transactions.readHome(tx -> Repositories.schedules().schedules());
     }
 
     /**
@@ -88,13 +89,13 @@ final class Schedules {
      */
     int fireDue(int max) {
         long now = System.currentTimeMillis();
-        List<Rows.Schedule> due = transactions.readHome(tx -> tx.dueSchedules(now, max));
+        List<Rows.Schedule> due = transactions.readHome(tx -> Repositories.schedules().dueSchedules(now, max));
         return sweeper.run(due, sched -> "schedule " + sched.id + " firing", sched -> fire(sched, now));
     }
 
     private boolean fire(Rows.Schedule sched, long now) {
         return transactions.inHome(tx -> {
-            if (!tx.claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
+            if (!Repositories.schedules().claimSchedule(sched.id, sched.nextFireAt, nextFire(sched, now))) return false;
             String id = instances.start(tx, ShardIds.next("wfi", transactions.home()), sched.workflow, null,
                     sched.context.raw(), "schedule:" + sched.id, null);
             LOG.log(System.Logger.Level.DEBUG, () -> "schedule " + sched.id + " fired -> instance " + id);

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
@@ -7,6 +8,7 @@ import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.BufferedTx;
+import com.wiggle.server.store.CurrentTx;
 import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
@@ -39,7 +41,7 @@ final class LocalAsyncBatch {
     Map<String, RunResult> apply(Tx tx, List<Run> runs, Predicate<String> queues) {
         Map<String, RunResult> results = new LinkedHashMap<>();
 
-        Map<String, Token> probes = byId(tx.findTokens(
+        Map<String, Token> probes = byId(Repositories.tokens().findTokens(
                 runs.stream().map(Run::startTaskId).toList()));
         List<Run> probed = new ArrayList<>();
         Map<String, String> instanceOf = new HashMap<>();
@@ -59,10 +61,10 @@ final class LocalAsyncBatch {
         }
 
         Map<String, Instance> locked = new HashMap<>();
-        for (Instance inst : tx.lockInstances(List.copyOf(new TreeSet<>(instanceOf.values())))) {
+        for (Instance inst : Repositories.instances().lockInstances(List.copyOf(new TreeSet<>(instanceOf.values())))) {
             locked.put(inst.id, inst);
         }
-        Map<String, Token> tokens = byId(tx.findTokens(
+        Map<String, Token> tokens = byId(Repositories.tokens().findTokens(
                 probed.stream().map(Run::startTaskId).toList()));
 
         List<Run> survivors = new ArrayList<>();
@@ -79,10 +81,13 @@ final class LocalAsyncBatch {
             }
         }
         Tx applyTx = tx.transactional() ? BufferedTx.of(tx) : tx;
-        for (Run run : survivors) {
-            results.put(run.startTaskId(), RunResult.of(
-                    chain.apply(applyTx, tasks.get(run.startTaskId()), run, CHAINS_BACK)));
-        }
+        CurrentTx.rebind(applyTx, () -> {
+            for (Run run : survivors) {
+                results.put(run.startTaskId(), RunResult.of(
+                        chain.apply(applyTx, tasks.get(run.startTaskId()), run, CHAINS_BACK)));
+            }
+            return null;
+        });
         if (applyTx instanceof BufferedTx buffered) buffered.flush();
         return results;
     }

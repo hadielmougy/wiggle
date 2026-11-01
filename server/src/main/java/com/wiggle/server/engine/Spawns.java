@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.CreatedBranch;
 import com.wiggle.core.CreatedBranch.BranchStep;
 import com.wiggle.core.GraphTraversal;
@@ -177,7 +178,7 @@ final class Spawns {
         for (CreatedBranch b : branches) {
             items.add(new FanOut.Item(compileChain(inst, creator, b.steps(), joinId, joinId, nodes), b.key(), b.input()));
         }
-        tx.insertDynNodes(inst.id, nodes);
+        Repositories.dynamicNodes().insertDynNodes(inst.id, nodes);
         return FanOut.items(tx, inst, fork, items, now);
     }
 

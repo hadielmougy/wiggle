@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.Doc;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
@@ -67,14 +68,14 @@ final class Instances {
      *  the transaction could be opened on the shard it carries. */
     String start(Tx tx, String id, String workflow, Integer version, Object context,
                  String correlationId, String parentTokenId) {
-        int v = version != null ? version : tx.latestVersion(workflow).orElseThrow(
+        int v = version != null ? version : Repositories.graph().latestVersion(workflow).orElseThrow(
                 () -> EngineException.notFound("workflow '" + workflow + "'"));
         LazyGraph def = definitions.graph(tx, workflow, v);
         long now = System.currentTimeMillis();
         Instance inst = Instances.create(tx, id, def.name(), def.version(),
                 context, correlationId, parentTokenId, now);
         Token t = Tokens.create(inst, def.startNode(), "", null, now);
-        tx.insertToken(t);
+        Repositories.tokens().insertToken(t);
         LOG.log(System.Logger.Level.DEBUG, () -> "start: instance " + inst.id + " of " + def.key()
                 + " at node " + def.startNode() + " correlationId=" + correlationId);
         pump.drive(tx, def, inst, new ArrayDeque<>(List.of(t)), now);
@@ -87,7 +88,7 @@ final class Instances {
      * An instance that is no longer RUNNING is left alone, and has no children to report.
      */
     List<String> cancel(Tx tx, String instanceId, String reason) {
-        Instance inst = tx.lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
+        Instance inst = Repositories.instances().lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
         if (!InstanceState.of(inst.status).cancellable()) {
             LOG.log(System.Logger.Level.DEBUG, () ->
                     "cancel: instance " + instanceId + " ignored, already " + inst.status);
@@ -99,7 +100,7 @@ final class Instances {
         move(tx, inst, InstanceStatus.CANCELLED, now);
         notifyParent(tx, inst, now);
         LOG.log(System.Logger.Level.DEBUG, () -> "cancel: instance " + instanceId + " cancelled, reason=" + reason);
-        return tx.childInstanceIds(instanceId);
+        return Repositories.instances().childInstanceIds(instanceId);
     }
 
     /** The instance ran out of flow at a successful END node with no token left anywhere. */
@@ -142,7 +143,7 @@ final class Instances {
 
     static void touch(Tx tx, Instance inst, long now) {
         inst.updatedAt = now;
-        tx.updateInstance(inst);
+        Repositories.instances().updateInstance(inst);
     }
 
     static void requireRunning(Instance inst) {
@@ -156,11 +157,11 @@ final class Instances {
      */
     void notifyParent(Tx tx, Instance child, long now) {
         if (child.parentTokenId == null) return;
-        Token probe = tx.findToken(child.parentTokenId).orElse(null);
+        Token probe = Repositories.locks().findToken(child.parentTokenId).orElse(null);
         if (probe == null) return;
-        Instance parent = tx.lockInstance(probe.instanceId).orElse(null);
+        Instance parent = Repositories.instances().lockInstance(probe.instanceId).orElse(null);
         if (parent == null || !parent.status.running()) return;
-        Token t = tx.findToken(child.parentTokenId).orElse(null);   // re-read under the lock
+        Token t = Repositories.locks().findToken(child.parentTokenId).orElse(null);   // re-read under the lock
         if (t == null || t.status != TokenStatus.AWAITING || t.kind != NodeKind.SUB_WORKFLOW) return;
         LazyGraph def = definitions.graph(tx, parent.workflow, parent.version);
         Node node = def.node(t.nodeId);
@@ -191,14 +192,14 @@ final class Instances {
 
     /** Drops terminal instances last touched before {@code cutoff}. */
     static int purgeTerminalBefore(Tx tx, long cutoff, int max) {
-        return tx.deleteTerminalInstancesBefore(cutoff, max);
+        return Repositories.instances().deleteTerminalInstancesBefore(cutoff, max);
     }
 
     /** The one place an instance's status is written, and so the one place the event log hears of it. */
     private static void move(Tx tx, Instance inst, InstanceStatus target, long now) {
         inst.status = InstanceState.of(inst.status).moveTo(target);
         inst.updatedAt = now;
-        tx.updateInstance(inst);
+        Repositories.instances().updateInstance(inst);
         Events.moved(tx, inst, now);
     }
 
@@ -216,7 +217,7 @@ final class Instances {
         inst.context = Doc.of(context);
         inst.createdAt = now;
         inst.updatedAt = now;
-        tx.insertInstance(inst);
+        Repositories.instances().insertInstance(inst);
         Events.started(tx, inst, now);
         return inst;
     }

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
@@ -30,7 +31,7 @@ final class FanOut {
             Item item = items.get(i);
             Token child = Tokens.create(inst, item.start(), childStack,
                     fork.payload.push(TokenPayload.FrameKind.ITEM, i, item.key(), Doc.of(item.input())), now);
-            tx.insertToken(child);
+            Repositories.tokens().insertToken(child);
             children.add(child);
         }
         return children;

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.EmittedEvent;
 import com.wiggle.core.Json;
 import com.wiggle.server.store.Rows;
@@ -80,7 +81,7 @@ final class Events {
 
     private static void append(Tx tx, Instance inst, String type, String nodeId,
                                Map<?, ?> payload, long now) {
-        tx.appendEvent(new Rows.Event(0, inst.id, inst.workflow, inst.version, inst.correlationId,
+        Repositories.events().appendEvent(new Rows.Event(0, inst.id, inst.workflow, inst.version, inst.correlationId,
                 type, nodeId, PAYLOAD_VERSION, Json.write(payload), now));
     }
 }

@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.*;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.TokenPayload;
@@ -171,7 +172,7 @@ abstract class NodeBehaviour {
         }
 
         private static List<Rows.Token> joinedAtBarrier(Tx tx, Rows.Instance inst, Node node, String group) {
-            return tx.joinedAt(inst.id, node.id()).stream()
+            return Repositories.tokens().joinedAt(inst.id, node.id()).stream()
                     .filter(x -> Objects.equals(group, x.currentJoinGroup()))
                     .toList();
         }
@@ -236,7 +237,7 @@ abstract class NodeBehaviour {
             if (group == null) return TokenPayload.EMPTY;
             int hash = group.lastIndexOf('#');
             String forkTokenId = hash < 0 ? group : group.substring(0, hash);
-            return tx.findToken(forkTokenId).map(f -> f.payload).orElse(TokenPayload.EMPTY);
+            return Repositories.locks().findToken(forkTokenId).map(f -> f.payload).orElse(TokenPayload.EMPTY);
         }
     }
 
