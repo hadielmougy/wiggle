@@ -40,28 +40,14 @@ public final class EngineDashboardData implements DashboardData {
         return search != null;
     }
 
-    @Override public boolean semanticEnabled() {
-        return search != null && search.semanticEnabled();
-    }
-
     @Override public Optional<SearchView> search(String text, String workflow, String status, int limit,
-                                                 boolean partialOk, boolean semantic, Scope readable) {
+                                                 boolean partialOk, Scope readable) {
         if (search == null) return Optional.empty();
-        List<Search.Hit> hits;
-        boolean partial;
-        if (semantic) {
-            Search.SemanticResult r = search.semantic(text, workflow, status, null, null, limit, partialOk, readable);
-            hits = r.hits();
-            partial = r.partial();
-        } else {
-            Search.Result r = search.search(text, workflow, status, null, null, limit, partialOk, readable);
-            hits = r.hits();
-            partial = r.partial();
-        }
-        return Optional.of(new SearchView(hits.stream()
+        Search.Result r = search.search(text, workflow, status, null, null, limit, partialOk, readable);
+        return Optional.of(new SearchView(r.hits().stream()
                 .map(h -> new SearchHitView(h.instanceId(), h.workflow(), h.version(), h.status(), h.correlationId(),
                         h.updatedAt(), h.score(), h.purged()))
-                .toList(), partial));
+                .toList(), r.partial()));
     }
 
     @Override public List<String> workflowNames() {

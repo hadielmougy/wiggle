@@ -622,8 +622,7 @@ public final class JdbcStorage implements Storage {
             CREATE INDEX IF NOT EXISTS ix_search_doc_tsv ON wf_search_doc USING GIN (tsv);
             """, Dialect::supportsFullText),
             // Embeddings, one per instance and model, beside their document on a search shard; and on
-            // the home shard, the registry of the models being built, served or retired. Where
-            // pgvector is installed, migrate() also adds a native vector column (see enableVectors).
+            // the home shard, the registry of the models being built, served or retired. Dropped by 38.
             new Migration(31, "search-vectors", """
             CREATE TABLE IF NOT EXISTS wf_search_vec (
               instance_id    VARCHAR(128) NOT NULL,
@@ -696,6 +695,12 @@ public final class JdbcStorage implements Storage {
             new Migration(37, "drop-token-throughput", """
             DROP INDEX IF EXISTS ix_token_throughput;
             DROP INDEX IF EXISTS ix_token_done_steps;
+            """),
+            // Vector search is removed: its embeddings (and the pgvector column and HNSW indexes on
+            // them, which go with the table) and its model registry.
+            new Migration(38, "drop-search-vectors", """
+            DROP TABLE IF EXISTS wf_search_vec;
+            DROP TABLE IF EXISTS wf_search_model;
             """));
 
     /** How {@link #migrate()} treats pending schema changes. */
@@ -714,69 +719,6 @@ public final class JdbcStorage implements Storage {
         if (readOnly) throw new IllegalStateException("a read replica is not migrated; its primary is");
         MigrationMode mode = modeFromEnv();
         applyMigrations(MIGRATIONS, "baseline", mode);
-        if (mode == MigrationMode.APPLY && dialect.supportsFullText()) enableVectors();
-    }
-
-    /**
-     * Adds a native {@code vector} column to {@code wf_search_vec} where the pgvector extension is
-     * installed on the server, so nearest-neighbour search runs in the database over an HNSW index.
-     * Where it is not, or this user may not create it, vectors stay in {@code embedding} and are
-     * compared in Java: correct, but a scan of every candidate. Not a numbered migration because
-     * whether it applies depends on the server, not on this schema.
-     */
-    private void enableVectors() {
-        try (Handle h = open()) {
-            Connection c = h.getConnection();
-            try {
-                boolean available = h.createQuery("SELECT COUNT(*) FROM pg_available_extensions WHERE name='vector'")
-                        .mapTo(Long.class).one() > 0;
-                if (!available) {
-                    c.rollback();
-                    LOG.log(System.Logger.Level.INFO, "pgvector is not installed on this PostgreSQL; vector search "
-                            + "compares embeddings in Java (install pgvector for an HNSW index)");
-                    return;
-                }
-                h.execute("CREATE EXTENSION IF NOT EXISTS vector");
-                String schema = vectorSchema(h);
-                h.execute("ALTER TABLE wf_search_vec ADD COLUMN IF NOT EXISTS vec " + schema + ".vector");
-                c.commit();
-                vectorSchema = schema;
-                pgvector = true;
-            } catch (SQLException | RuntimeException e) {
-                rollback(c);
-                LOG.log(System.Logger.Level.WARNING, () -> "could not enable pgvector (" + e.getMessage()
-                        + "); vector search compares embeddings in Java. A superuser can run CREATE EXTENSION vector");
-            }
-        }
-    }
-
-    /** Whether {@code wf_search_vec} has the native vector column; asked of the database once. */
-    private volatile Boolean pgvector;
-
-    /** The quoted schema pgvector is installed in, which need not be on the search path; set when
-     *  {@link #pgvector} is true. */
-    private volatile String vectorSchema;
-
-    boolean pgvector(Handle h) {
-        Boolean known = pgvector;
-        if (known != null) return known;
-        boolean has = dialect.supportsFullText() && h.createQuery("SELECT COUNT(*) FROM information_schema.columns "
-                        + "WHERE table_schema=current_schema() AND table_name='wf_search_vec' AND column_name='vec'")
-                .mapTo(Long.class).one() > 0;
-        if (has) vectorSchema = vectorSchema(h);
-        pgvector = has;
-        return has;
-    }
-
-    /** {@code name}, a type, operator class or operator of pgvector, qualified by its schema. */
-    String pgvectorName(String name) {
-        return vectorSchema + "." + name;
-    }
-
-    private static String vectorSchema(Handle h) {
-        return h.createQuery("SELECT quote_ident(n.nspname) FROM pg_extension e "
-                        + "JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='vector'")
-                .mapTo(String.class).one();
     }
 
     private static MigrationMode modeFromEnv() {
@@ -1711,65 +1653,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void deleteSearchDoc(String instanceId) {
-            h.createUpdate("DELETE FROM wf_search_vec WHERE instance_id=:id").bind("id", instanceId).execute();
             h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
-        }
-
-        @Override public void upsertSearchVectors(List<Rows.SearchVector> vectors) {
-            boolean native_ = owner.pgvector(h);
-            String vector = native_ ? owner.pgvectorName("vector") : null;
-            String set = native_ ? "vec=CAST(:vec AS " + vector + "),embedding=NULL" : "embedding=:embedding";
-            for (Rows.SearchVector v : vectors) {
-                Update update = bindVector(h.createUpdate("UPDATE wf_search_vec SET " + set + ",updated_at=:updated "
-                        + "WHERE instance_id=:id AND model=:model AND updated_at<=:updated"), v, native_);
-                if (update.execute() > 0) continue;
-                String insert = native_
-                        ? "INSERT INTO wf_search_vec (instance_id,model,vec,updated_at) VALUES (:id,:model,CAST(:vec AS " + vector + "),:updated)"
-                        : "INSERT INTO wf_search_vec (instance_id,model,embedding,updated_at) VALUES (:id,:model,:embedding,:updated)";
-                if (bindVector(h.createUpdate(dialect.insertIgnore(insert)), v, native_).execute() > 0) continue;
-                bindVector(h.createUpdate("UPDATE wf_search_vec SET " + set + ",updated_at=:updated "
-                        + "WHERE instance_id=:id AND model=:model AND updated_at<=:updated"), v, native_).execute();
-            }
-        }
-
-        private static Update bindVector(Update u, Rows.SearchVector v, boolean native_) {
-            u.bind("id", v.instanceId()).bind("model", v.model()).bind("updated", v.updatedAt());
-            return native_ ? u.bind("vec", com.wiggle.server.store.Vectors.literal(v.embedding()))
-                    : u.bind("embedding", com.wiggle.server.store.Vectors.encode(v.embedding()));
-        }
-
-        @Override public int deleteSearchVectors(String model, int max) {
-            List<String> ids = h.createQuery("SELECT instance_id FROM wf_search_vec WHERE model=:model LIMIT :max")
-                    .bind("model", model).bind("max", max).mapTo(String.class).list();
-            if (ids.isEmpty()) return 0;
-            return h.createUpdate("DELETE FROM wf_search_vec WHERE model=:model AND instance_id IN (<ids>)")
-                    .bind("model", model).bindList("ids", ids).execute();
-        }
-
-        /** The name of {@code model}'s HNSW index: a hash, since a model id may hold any character. */
-        private static String vectorIndexName(String model) {
-            return "ix_search_vec_" + Integer.toHexString(model.hashCode() & 0x7fffffff);
-        }
-
-        @Override public void ensureVectorIndex(String model, int dimension) {
-            if (!owner.pgvector(h)) return;
-            h.execute("CREATE INDEX IF NOT EXISTS " + vectorIndexName(model) + " ON wf_search_vec USING hnsw "
-                    + "((vec::" + owner.pgvectorName("vector") + "(" + dimension + ")) "
-                    + owner.pgvectorName("vector_cosine_ops") + ") WHERE model=" + sqlString(model));
-        }
-
-        private static String sqlString(String value) {
-            return "'" + value.replace("'", "''") + "'";
-        }
-
-        /** The filters of {@code f} on {@code wf_search_doc} aliased {@code d}, for a WHERE that already has a condition. */
-        private static String docFilters(Rows.SearchQuery f) {
-            StringBuilder w = new StringBuilder();
-            w.append(workflowFilter(f.workflows(), "d.workflow"));
-            if (f.status() != null) w.append(" AND d.status=:status");
-            if (f.from() != null) w.append(" AND d.updated_at>=:from");
-            if (f.to() != null) w.append(" AND d.updated_at<=:to");
-            return w.toString();
         }
 
         /** {@code scope} on column {@code column}, for a WHERE that already has a condition; bound by {@link #bindWorkflows}. */
@@ -1799,111 +1683,6 @@ public final class JdbcStorage implements Storage {
             return out.append('%').toString();
         }
 
-        private static void bindFilters(Query q, Rows.SearchQuery f) {
-            bindWorkflows(q, f.workflows());
-            if (f.status() != null) q.bind("status", f.status());
-            if (f.from() != null) q.bind("from", f.from());
-            if (f.to() != null) q.bind("to", f.to());
-        }
-
-        /**
-         * With pgvector, the database orders by cosine distance over the model's HNSW index (the
-         * expression and predicate match {@link #ensureVectorIndex}), searching wider than the limit
-         * so the filters leave enough. Without it, the filtered candidates are compared here.
-         */
-        @Override public List<Rows.SearchHit> searchVectors(Rows.VectorQuery q) {
-            Rows.SearchQuery f = q.filters();
-            String docCols = "d.instance_id,d.workflow,d.version,d.status,d.correlation_id,d.text,d.created_at,d.updated_at";
-            if (owner.pgvector(h)) {
-                int dim = q.vector().length;
-                h.execute("SET LOCAL hnsw.ef_search = " + Math.max(40, Math.min(1000, q.limit() * 4)));
-                String vector = owner.pgvectorName("vector") + "(" + dim + ")";
-                String distance = "(v.vec::" + vector + " OPERATOR(" + owner.pgvectorName("<=>") + ") CAST(:q AS "
-                        + vector + "))";
-                Query query = h.createQuery("SELECT " + docCols + ", 1 - " + distance + " AS score "
-                                + "FROM wf_search_vec v JOIN wf_search_doc d ON d.instance_id=v.instance_id "
-                                // The model is a literal, as in the index predicate, so even a generic plan
-                                // can prove the partial index applies.
-                                + "WHERE v.model=" + sqlString(q.model()) + " AND v.vec IS NOT NULL" + docFilters(f)
-                                + " ORDER BY " + distance + " LIMIT :limit")
-                        .bind("q", com.wiggle.server.store.Vectors.literal(q.vector()))
-                        .bind("limit", q.limit());
-                bindFilters(query, f);
-                return query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list();
-            }
-            Query query = h.createQuery("SELECT " + docCols + ", v.embedding FROM wf_search_vec v "
-                    + "JOIN wf_search_doc d ON d.instance_id=v.instance_id WHERE v.model=:model" + docFilters(f))
-                    .bind("model", q.model());
-            bindFilters(query, f);
-            List<Rows.SearchDoc> docs = new ArrayList<>();
-            Map<String, float[]> vectors = new HashMap<>();
-            query.map((rs, ctx) -> {
-                Rows.SearchDoc d = searchDoc(rs);
-                byte[] e = rs.getBytes("embedding");
-                if (e != null) vectors.put(d.instanceId(), com.wiggle.server.store.Vectors.decode(e));
-                return d;
-            }).forEach(docs::add);
-            return com.wiggle.server.store.Vectors.nearest(docs, vectors, q.vector(), q.limit());
-        }
-
-        @Override public List<Rows.SearchDoc> docsNeedingVector(String model, int max) {
-            return h.createQuery("SELECT d.instance_id,d.workflow,d.version,d.status,d.correlation_id,d.text,"
-                            + "d.created_at,d.updated_at FROM wf_search_doc d LEFT JOIN wf_search_vec v "
-                            + "ON v.instance_id=d.instance_id AND v.model=:model "
-                            + "WHERE v.instance_id IS NULL OR v.updated_at<d.updated_at"
-                            + (owner.pgvector(h) ? " OR v.vec IS NULL" : "") + " ORDER BY d.updated_at LIMIT :max")
-                    .bind("model", model).bind("max", max)
-                    .map((rs, ctx) -> searchDoc(rs)).list();
-        }
-
-        @Override public long countDocsWithoutVector(String model, long updatedBefore) {
-            return h.createQuery("SELECT COUNT(*) FROM wf_search_doc d WHERE d.updated_at<:before AND NOT EXISTS "
-                            + "(SELECT 1 FROM wf_search_vec v WHERE v.instance_id=d.instance_id AND v.model=:model)")
-                    .bind("before", updatedBefore).bind("model", model).mapTo(Long.class).one();
-        }
-
-        @Override public List<Rows.SearchVector> searchVectorsOf(List<String> instanceIds) {
-            if (instanceIds.isEmpty()) return List.of();
-            boolean native_ = owner.pgvector(h);
-            return h.createQuery("SELECT instance_id,model,updated_at,embedding" + (native_ ? ",vec::text AS vec" : "")
-                            + " FROM wf_search_vec WHERE instance_id IN (<ids>)")
-                    .bindList("ids", instanceIds)
-                    .map((rs, ctx) -> {
-                        String text = native_ ? rs.getString("vec") : null;
-                        float[] v = text != null ? com.wiggle.server.store.Vectors.parseLiteral(text)
-                                : com.wiggle.server.store.Vectors.decode(rs.getBytes("embedding"));
-                        return new Rows.SearchVector(rs.getString("instance_id"), rs.getString("model"), v,
-                                rs.getLong("updated_at"));
-                    })
-                    .list();
-        }
-
-        @Override public List<Rows.SearchModel> searchModels() {
-            return h.createQuery("SELECT * FROM wf_search_model ORDER BY started_at, model")
-                    .map((rs, ctx) -> {
-                        long ready = rs.getLong("ready_at");
-                        Long readyAt = rs.wasNull() ? null : ready;
-                        return new Rows.SearchModel(rs.getString("model"), rs.getInt("dimension"), rs.getString("state"),
-                                rs.getLong("started_at"), readyAt);
-                    })
-                    .list();
-        }
-
-        @Override public void putSearchModel(Rows.SearchModel m) {
-            String update = "UPDATE wf_search_model SET dimension=:dim,state=:state,started_at=:started,ready_at=:ready "
-                    + "WHERE model=:model";
-            if (bindModel(h.createUpdate(update), m).execute() > 0) return;
-            if (bindModel(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_model "
-                    + "(model,dimension,state,started_at,ready_at) VALUES (:model,:dim,:state,:started,:ready)")), m)
-                    .execute() > 0) return;
-            bindModel(h.createUpdate(update), m).execute();
-        }
-
-        private static Update bindModel(Update u, Rows.SearchModel m) {
-            return u.bind("model", m.model()).bind("dim", m.dimension()).bind("state", m.state())
-                    .bind("started", m.startedAt()).bind("ready", m.readyAt());
-        }
-
         @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
             List<String> ids = h.createQuery("SELECT instance_id FROM wf_search_doc WHERE updated_at<:before "
                             + "ORDER BY updated_at LIMIT :max")
@@ -1912,7 +1691,6 @@ public final class JdbcStorage implements Storage {
                     .mapTo(String.class)
                     .list();
             if (ids.isEmpty()) return 0;
-            h.createUpdate("DELETE FROM wf_search_vec WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
             return h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
         }
 

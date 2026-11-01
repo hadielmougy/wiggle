@@ -523,7 +523,6 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | *(unset)* | keystore ⇒ TLS on; **unset = plaintext** |
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_SEARCH_ENABLED` | `false` | **full-text search** over instances on the one database; a topology gets it from a `search` shard (`WIGGLE_SEARCH_RETENTION_MILLIS`, `WIGGLE_SEARCH_WORKFLOWS`) |
-| `WIGGLE_EMBEDDER` | `none` | **semantic search** by meaning: `http` (any OpenAI-compatible `/embeddings` API, with `WIGGLE_EMBEDDER_URL`/`_MODEL`/`_DIMENSION`/`_API_KEY`) or `hashing`; pgvector gives it an HNSW index |
 | `WIGGLE_GRPC_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
 | `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
 

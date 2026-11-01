@@ -128,19 +128,8 @@ public final class WiggleClient implements AutoCloseable {
      */
     public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
                                int limit, boolean partialOk) {
-        return search(text, workflow, status, updatedFrom, updatedTo, limit, partialOk, false);
-    }
-
-    /**
-     * {@link #search(String, String, String, Long, Long, int, boolean)}, ranked by closeness in meaning
-     * when {@code semantic}: the server embeds {@code text} and finds the nearest instances. A
-     * semantic search needs an embedder on the server and a complete vector index; without them it
-     * fails as a precondition (409).
-     */
-    public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
-                               int limit, boolean partialOk, boolean semantic) {
         com.wiggle.proto.SearchRequest.Builder req = com.wiggle.proto.SearchRequest.newBuilder()
-                .setText(text == null ? "" : text).setLimit(limit).setPartialOk(partialOk).setSemantic(semantic);
+                .setText(text == null ? "" : text).setLimit(limit).setPartialOk(partialOk);
         if (workflow != null) req.setWorkflow(workflow);
         if (status != null) req.setStatus(status);
         if (updatedFrom != null) req.setUpdatedFrom(updatedFrom);
@@ -152,18 +141,15 @@ public final class WiggleClient implements AutoCloseable {
                     h.getCorrelationId().isEmpty() ? null : h.getCorrelationId(), h.getCreatedAt(), h.getUpdatedAt(),
                     h.getScore(), h.getPurged()));
         }
-        return new SearchResult(hits, r.getPartial(), r.getModel().isEmpty() ? null : r.getModel());
+        return new SearchResult(hits, r.getPartial());
     }
 
     /** One search hit; {@code purged} when the instance is gone and only its document remains. */
     public record SearchHit(String instanceId, String workflow, int version, String status, String correlationId,
                             long createdAt, long updatedAt, double score, boolean purged) {}
 
-    /**
-     * Search hits, best first; {@code partial} when a search shard did not answer; {@code model} the
-     * embedding model a semantic search used, null for a text search.
-     */
-    public record SearchResult(List<SearchHit> hits, boolean partial, String model) {}
+    /** Search hits, best first; {@code partial} when a search shard did not answer. */
+    public record SearchResult(List<SearchHit> hits, boolean partial) {}
 
     /** One slice of the dispatchable backlog. See {@link #backlogCoverage(int)}. */
     /** {@code coverage} is COVERED, CONDITIONAL or UNCOVERED (empty from a server that predates it);

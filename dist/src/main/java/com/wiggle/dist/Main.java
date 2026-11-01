@@ -4,7 +4,6 @@ import com.wiggle.console.Portal;
 import com.wiggle.server.Logging;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.search.Embedders;
 import com.wiggle.server.store.Storage;
 
 import java.util.Optional;
@@ -37,8 +36,7 @@ public final class Main {
             return;
         }
 
-        WiggleServer server = new WiggleServer(config, new WiggleStorageFactory(),
-                Embedders.fromEnvironment(System.getenv())).start();
+        WiggleServer server = new WiggleServer(config, new WiggleStorageFactory()).start();
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle server '" + config.nodeName() + "' on port " + server.port()
                 + " (gRPC: " + (tls ? "TLS" : "plaintext")
