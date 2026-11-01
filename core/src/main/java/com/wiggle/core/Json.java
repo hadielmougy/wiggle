@@ -1,10 +1,27 @@
 package com.wiggle.core;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonFactoryBuilder;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.SerializableString;
+import com.fasterxml.jackson.core.StreamReadConstraints;
+import com.fasterxml.jackson.core.io.CharacterEscapes;
+import com.fasterxml.jackson.core.io.SerializedString;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
+import com.fasterxml.jackson.core.util.JsonRecyclerPools;
+
+import java.io.IOException;
+import java.io.StringWriter;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.*;
 
 /**
- * Minimal, dependency-free JSON reader/writer.
+ * JSON reader/writer over Jackson's streaming API.
  *
  * Java representation:
  *   object -> LinkedHashMap<String,Object>
@@ -13,203 +30,134 @@ import java.util.*;
  *   number -> Long (integral) or Double
  *   bool   -> Boolean
  *   null   -> null
+ *
+ * A double is written in plain notation without trailing zeros ({@code 1.0} as {@code 1}), and a
+ * control character without a short escape as a unicode escape in lowercase hex: definition fingerprints
+ * hash {@link #canonical}, so its bytes must not change.
  */
 public final class Json {
     private Json() {}
 
+    private static final JsonFactory FACTORY = new JsonFactoryBuilder()
+            .enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS)
+            .enable(JsonReadFeature.ALLOW_LEADING_ZEROS_FOR_NUMBERS)
+            .streamReadConstraints(StreamReadConstraints.builder().maxStringLength(Integer.MAX_VALUE).build())
+            .characterEscapes(new LowercaseEscapes())
+            .recyclerPool(JsonRecyclerPools.sharedConcurrentDequePool())
+            .build();
+
     public static String write(Object v) {
-        StringBuilder sb = new StringBuilder(256);
-        write(v, sb);
-        return sb.toString();
+        StringWriter out = new StringWriter(256);
+        try (JsonGenerator g = FACTORY.createGenerator(out)) {
+            write(v, g);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return out.toString();
     }
 
-    @SuppressWarnings("unchecked")
-    private static void write(Object v, StringBuilder sb) {
+    private static void write(Object v, JsonGenerator g) throws IOException {
         switch (v) {
-            case null -> sb.append("null");
-            case String s -> string(s, sb);
-            case Boolean b -> sb.append(b.booleanValue());
+            case null -> g.writeNull();
+            case String s -> g.writeString(s);
+            case Boolean b -> g.writeBoolean(b);
             case Double d -> {
                 if (d.isNaN() || d.isInfinite()) throw new IllegalArgumentException("non-finite number: " + d);
-                sb.append(BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
+                g.writeNumber(BigDecimal.valueOf(d).stripTrailingZeros().toPlainString());
             }
-            case Float f -> write(f.doubleValue(), sb);
-            case BigDecimal bd -> sb.append(bd.toPlainString());
-            case Number n -> sb.append(n);
+            case Float f -> write(f.doubleValue(), g);
+            case BigDecimal bd -> g.writeNumber(bd.toPlainString());
+            case Long l -> g.writeNumber(l);
+            case Integer i -> g.writeNumber(i);
+            case Number n -> g.writeNumber(n.toString());
             case Map<?, ?> m -> {
-                sb.append('{');
-                boolean first = true;
+                g.writeStartObject();
                 for (Map.Entry<?, ?> e : m.entrySet()) {
-                    if (!first) sb.append(',');
-                    first = false;
-                    string(String.valueOf(e.getKey()), sb);
-                    sb.append(':');
-                    write(e.getValue(), sb);
+                    g.writeFieldName(String.valueOf(e.getKey()));
+                    write(e.getValue(), g);
                 }
-                sb.append('}');
+                g.writeEndObject();
             }
             case Iterable<?> it -> {
-                sb.append('[');
-                boolean first = true;
-                for (Object o : it) {
-                    if (!first) sb.append(',');
-                    first = false;
-                    write(o, sb);
-                }
-                sb.append(']');
+                g.writeStartArray();
+                for (Object o : it) write(o, g);
+                g.writeEndArray();
             }
-            case Object[] arr -> write(Arrays.asList(arr), sb);
+            case Object[] arr -> write(Arrays.asList(arr), g);
             default -> throw new IllegalArgumentException("cannot serialise " + v.getClass());
         }
     }
 
-    private static void string(String s, StringBuilder sb) {
-        sb.append('"');
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"' -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                case '\b' -> sb.append("\\b");
-                case '\f' -> sb.append("\\f");
-                default -> {
-                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
-                    else sb.append(c);
-                }
-            }
-        }
-        sb.append('"');
-    }
-
     public static Object parse(String text) {
-        Parser p = new Parser(text);
-        p.ws();
-        Object v = p.value();
-        p.ws();
-        if (p.i < p.s.length()) throw p.err("trailing content");
-        return v;
+        try (JsonParser p = FACTORY.createParser(text)) {
+            JsonToken t = p.nextToken();
+            if (t == null) throw new IllegalArgumentException("JSON error at 0: unexpected end of input");
+            Object v = read(p, t);
+            if (p.nextToken() != null) {
+                throw new IllegalArgumentException("JSON error at " + p.currentTokenLocation().getCharOffset()
+                        + ": trailing content");
+            }
+            return v;
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("JSON error at " + e.getLocation().getCharOffset() + ": "
+                    + e.getOriginalMessage(), e);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
-    private static final class Parser {
-        final String s;
-        int i;
-
-        Parser(String s) { this.s = s; }
-
-        RuntimeException err(String msg) {
-            return new IllegalArgumentException("JSON error at " + i + ": " + msg);
-        }
-
-        void ws() {
-            while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
-        }
-
-        char peek() {
-            if (i >= s.length()) throw err("unexpected end of input");
-            return s.charAt(i);
-        }
-
-        Object value() {
-            char c = peek();
-            return switch (c) {
-                case '{' -> object();
-                case '[' -> array();
-                case '"' -> string();
-                case 't' -> literal("true", Boolean.TRUE);
-                case 'f' -> literal("false", Boolean.FALSE);
-                case 'n' -> literal("null", null);
-                default -> number();
-            };
-        }
-
-        Object literal(String lit, Object v) {
-            if (!s.startsWith(lit, i)) throw err("expected " + lit);
-            i += lit.length();
-            return v;
-        }
-
-        Map<String, Object> object() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            i++; // {
-            ws();
-            if (peek() == '}') { i++; return m; }
-            while (true) {
-                ws();
-                String k = string();
-                ws();
-                if (peek() != ':') throw err("expected ':'");
-                i++;
-                ws();
-                m.put(k, value());
-                ws();
-                char c = peek();
-                if (c == ',') { i++; continue; }
-                if (c == '}') { i++; return m; }
-                throw err("expected ',' or '}'");
+    private static Object read(JsonParser p, JsonToken t) throws IOException {
+        return switch (t) {
+            case START_OBJECT -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                String name;
+                while ((name = p.nextFieldName()) != null) m.put(name, read(p, p.nextToken()));
+                yield m;
             }
-        }
-
-        List<Object> array() {
-            List<Object> l = new ArrayList<>();
-            i++; // [
-            ws();
-            if (peek() == ']') { i++; return l; }
-            while (true) {
-                ws();
-                l.add(value());
-                ws();
-                char c = peek();
-                if (c == ',') { i++; continue; }
-                if (c == ']') { i++; return l; }
-                throw err("expected ',' or ']'");
+            case START_ARRAY -> {
+                List<Object> l = new ArrayList<>();
+                JsonToken next;
+                while ((next = p.nextToken()) != JsonToken.END_ARRAY) l.add(read(p, next));
+                yield l;
             }
-        }
+            case VALUE_STRING -> p.getText();
+            case VALUE_NUMBER_INT -> {
+                if (p.getNumberType() == JsonParser.NumberType.BIG_INTEGER) {
+                    BigInteger big = p.getBigIntegerValue();
+                    throw new IllegalArgumentException("JSON error at " + p.currentTokenLocation().getCharOffset()
+                            + ": " + big + " does not fit in a long");
+                }
+                yield p.getLongValue();
+            }
+            case VALUE_NUMBER_FLOAT -> p.getDoubleValue();
+            case VALUE_TRUE -> Boolean.TRUE;
+            case VALUE_FALSE -> Boolean.FALSE;
+            case VALUE_NULL -> null;
+            default -> throw new IllegalArgumentException("JSON error at " + p.currentTokenLocation().getCharOffset()
+                    + ": unexpected " + t);
+        };
+    }
 
-        String string() {
-            if (peek() != '"') throw err("expected string");
-            i++;
-            StringBuilder sb = new StringBuilder();
-            while (true) {
-                char c = peek();
-                i++;
-                if (c == '"') return sb.toString();
-                if (c != '\\') { sb.append(c); continue; }
-                char e = peek();
-                i++;
-                switch (e) {
-                    case '"' -> sb.append('"');
-                    case '\\' -> sb.append('\\');
-                    case '/' -> sb.append('/');
-                    case 'n' -> sb.append('\n');
-                    case 'r' -> sb.append('\r');
-                    case 't' -> sb.append('\t');
-                    case 'b' -> sb.append('\b');
-                    case 'f' -> sb.append('\f');
-                    case 'u' -> {
-                        sb.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
-                        i += 4;
-                    }
-                    default -> throw err("bad escape \\" + e);
+    /** Jackson's escapes, except a control character with no short form is escaped in lowercase hex. */
+    private static final class LowercaseEscapes extends CharacterEscapes {
+        private static final long serialVersionUID = 1L;
+        private final int[] codes;
+        private final SerializableString[] lowercase = new SerializableString[0x20];
+
+        LowercaseEscapes() {
+            codes = standardAsciiEscapesForJSON();
+            for (int c = 0; c < 0x20; c++) {
+                if (codes[c] == ESCAPE_STANDARD) {
+                    codes[c] = ESCAPE_CUSTOM;
+                    lowercase[c] = new SerializedString(String.format("\\u%04x", c));
                 }
             }
         }
 
-        Object number() {
-            int start = i;
-            if (peek() == '-') i++;
-            boolean fp = false;
-            while (i < s.length()) {
-                char c = s.charAt(i);
-                if (c >= '0' && c <= '9') { i++; continue; }
-                if (c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') { fp = true; i++; continue; }
-                break;
-            }
-            String raw = s.substring(start, i);
-            if (raw.isEmpty()) throw err("expected number");
-            return fp ? (Object) Double.valueOf(raw) : (Object) Long.valueOf(raw);
+        @Override public int[] getEscapeCodesForAscii() { return codes; }
+
+        @Override public SerializableString getEscapeSequence(int ch) {
+            return ch < 0x20 ? lowercase[ch] : null;
         }
     }
 
