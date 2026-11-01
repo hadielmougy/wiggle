@@ -1,5 +1,7 @@
 package com.wiggle.server.search;
 
+import com.wiggle.server.store.ShardTransactions;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Freshness;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.SearchText;
@@ -37,6 +39,7 @@ public final class SearchIndex {
     public record Result(List<Rows.SearchHit> hits, boolean partial) { }
 
     private final Storage storage;
+    private final ShardTransactions shards;
     private final List<Integer> active;
     private final List<Integer> queried;
     /** Where each shard's rebalance pass has got to, by instance id. */
@@ -44,6 +47,7 @@ public final class SearchIndex {
 
     public SearchIndex(Storage storage, List<Target> shards) {
         this.storage = storage;
+        this.shards = new ShardTransactions(storage);
         this.active = shards.stream().filter(t -> t.state() == ShardState.ACTIVE).map(Target::shard).toList();
         this.queried = shards.stream().filter(t -> t.state() != ShardState.RETIRED).map(Target::shard).toList();
         if (active.isEmpty()) throw new IllegalArgumentException("search needs at least one ACTIVE search shard");
@@ -84,8 +88,8 @@ public final class SearchIndex {
     public void index(List<Rows.SearchDoc> docs) {
         Map<Integer, List<Rows.SearchDoc>> byShard = new LinkedHashMap<>();
         for (Rows.SearchDoc d : docs) byShard.computeIfAbsent(winner(d.instanceId()), k -> new ArrayList<>()).add(d);
-        byShard.forEach((shard, batch) -> storage.inShard(shard, tx -> {
-            batch.forEach(tx::upsertSearchDoc);
+        byShard.forEach((shard, batch) -> shards.inShard(shard, () -> {
+            batch.forEach(Repositories.search()::upsertSearchDoc);
             return null;
         }));
     }
@@ -96,11 +100,11 @@ public final class SearchIndex {
      */
     public Result search(Rows.SearchQuery query, boolean partialOk) {
         int limit = query.limit();
-        java.util.function.Function<com.wiggle.server.store.ReadTx, List<Rows.SearchHit>> read = tx -> tx.searchDocs(query);
+        java.util.function.Supplier<List<Rows.SearchHit>> read = () -> Repositories.search().searchDocs(query);
         List<Future<List<Rows.SearchHit>>> answers = new ArrayList<>();
         try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int shard : queried) {
-                answers.add(pool.submit(() -> storage.readShard(shard, Freshness.REPLICA_OK, read)));
+                answers.add(pool.submit(() -> shards.read(shard, Freshness.REPLICA_OK, read)));
             }
             Map<String, Rows.SearchHit> newest = new LinkedHashMap<>();
             boolean partial = false;
@@ -135,7 +139,7 @@ public final class SearchIndex {
     /** Deletes up to {@code max} documents per shard whose instance last changed before {@code updatedBefore}. */
     public int retain(long updatedBefore, int max) {
         int removed = 0;
-        for (int shard : queried) removed += storage.inShard(shard, tx -> tx.deleteSearchDocsBefore(updatedBefore, max));
+        for (int shard : queried) removed += shards.inShard(shard, () -> Repositories.search().deleteSearchDocsBefore(updatedBefore, max));
         return removed;
     }
 
@@ -148,13 +152,13 @@ public final class SearchIndex {
         int moved = 0;
         for (int shard : queried) {
             String from = rebalanceFrom.getOrDefault(shard, "");
-            List<Rows.SearchDoc> docs = storage.inShard(shard, tx -> tx.searchDocsAfter(from, max));
+            List<Rows.SearchDoc> docs = shards.inShard(shard, () -> Repositories.search().searchDocsAfter(from, max));
             rebalanceFrom.put(shard, docs.size() < max ? "" : docs.getLast().instanceId());
             List<Rows.SearchDoc> misplaced = docs.stream().filter(d -> winner(d.instanceId()) != shard).toList();
             if (misplaced.isEmpty()) continue;
             index(misplaced);
-            storage.inShard(shard, tx -> {
-                misplaced.forEach(d -> tx.deleteSearchDoc(d.instanceId()));
+            shards.inShard(shard, () -> {
+                misplaced.forEach(d -> Repositories.search().deleteSearchDoc(d.instanceId()));
                 return null;
             });
             moved += misplaced.size();

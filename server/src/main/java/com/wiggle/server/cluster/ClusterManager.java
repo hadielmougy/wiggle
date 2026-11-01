@@ -1,5 +1,7 @@
 package com.wiggle.server.cluster;
 
+import com.wiggle.server.store.ShardTransactions;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.Ids;
 import com.wiggle.election.ElectionRule;
 import com.wiggle.election.ElectionStore;
@@ -27,6 +29,7 @@ public final class ClusterManager implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(ClusterManager.class.getName());
 
     private final Storage storage;
+    private final ShardTransactions shards;
     private final ServerNode self = new ServerNode();
     private final LeaderElection election;
     private final LongSupplier generationInForce;
@@ -47,6 +50,7 @@ public final class ClusterManager implements AutoCloseable {
     public ClusterManager(Storage storage, String name, int workers, long heartbeatIntervalMillis,
                           int missedHeartbeatsBeforeDead, long loadedGeneration, LongSupplier generationInForce) {
         this.storage = storage;
+        this.shards = new ShardTransactions(storage);
         this.generationInForce = generationInForce;
         self.topologyGeneration = loadedGeneration;
         long now = System.currentTimeMillis();
@@ -70,7 +74,7 @@ public final class ClusterManager implements AutoCloseable {
 
     /** The full node rows -- worker counts and leader flag included -- for the dashboard. */
     public List<ServerNode> members() {
-        return storage.inHome(tx -> tx.nodes());
+        return shards.inHome(() -> Repositories.cluster().nodes());
     }
 
     @Override public void close() { election.close(); }
@@ -81,13 +85,13 @@ public final class ClusterManager implements AutoCloseable {
         @Override
         public List<Member> step(Member me, long pruneBefore, ElectionRule elect) {
             self.lastHeartbeat = me.lastHeartbeat();
-            return storage.inHome(tx -> {
-                tx.upsertNode(self);
-                tx.deleteNodesOlderThan(pruneBefore);
-                List<ServerNode> nodes = tx.nodes();
+            return shards.inHome(() -> {
+                Repositories.cluster().upsertNode(self);
+                Repositories.cluster().deleteNodesOlderThan(pruneBefore);
+                List<ServerNode> nodes = Repositories.cluster().nodes();
                 List<Member> roster = nodes.stream().map(ClusterManager::member).toList();
                 String leaderId = elect.leaderOf(roster);
-                tx.setLeader(self.id, self.id.equals(leaderId));
+                Repositories.cluster().setLeader(self.id, self.id.equals(leaderId));
                 if (self.id.equals(leaderId)) warnLagging(nodes);
                 return roster;
             });
@@ -108,15 +112,15 @@ public final class ClusterManager implements AutoCloseable {
             // Backdate our heartbeat so the rest of the cell re-elects immediately rather than
             // waiting out the whole timeout window.
             self.lastHeartbeat = 0;
-            storage.inHome(tx -> {
-                tx.upsertNode(self);
-                tx.setLeader(self.id, false);
+            shards.inHome(() -> {
+                Repositories.cluster().upsertNode(self);
+                Repositories.cluster().setLeader(self.id, false);
                 return null;
             });
         }
 
         @Override public List<Member> members() {
-            return storage.inHome(tx -> tx.nodes().stream().map(ClusterManager::member).toList());
+            return shards.inHome(() -> Repositories.cluster().nodes().stream().map(ClusterManager::member).toList());
         }
     }
 

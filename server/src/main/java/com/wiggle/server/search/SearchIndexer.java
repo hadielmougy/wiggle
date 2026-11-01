@@ -1,5 +1,7 @@
 package com.wiggle.server.search;
 
+import com.wiggle.server.store.ShardTransactions;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.core.EventView;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.criteria.SearchAttribute;
@@ -40,6 +42,7 @@ public final class SearchIndexer implements AutoCloseable {
 
     private final WorkflowEngine engine;
     private final Storage storage;
+    private final ShardTransactions shards;
     private final SearchIndex index;
     private final ClusterManager cluster;
     private final long retentionMillis;
@@ -58,6 +61,7 @@ public final class SearchIndexer implements AutoCloseable {
                          long retentionMillis, Set<String> workflows, LongSupplier clock) {
         this.engine = engine;
         this.storage = storage;
+        this.shards = new ShardTransactions(storage);
         this.index = index;
         this.cluster = cluster;
         this.retentionMillis = retentionMillis;
@@ -113,9 +117,9 @@ public final class SearchIndexer implements AutoCloseable {
      * from the primary. Null when it is gone (purged); its document, if any, stays until its own retention.
      */
     private Rows.Instance read(String id, long eventAt) {
-        Rows.Instance inst = storage.readFor(id, Freshness.REPLICA_OK, tx -> tx.findInstance(id)).orElse(null);
+        Rows.Instance inst = shards.readFor(id, Freshness.REPLICA_OK, () -> Repositories.instances().findInstance(id)).orElse(null);
         if (inst != null && inst.updatedAt >= eventAt) return inst;
-        return storage.readFor(id, Freshness.PRIMARY, tx -> tx.findInstance(id)).orElse(null);
+        return shards.readFor(id, Freshness.PRIMARY, () -> Repositories.instances().findInstance(id)).orElse(null);
     }
 
     /**
