@@ -1,9 +1,5 @@
 package com.wiggle.server.store;
 
-import com.wiggle.server.store.Rows.Instance;
-
-import java.util.Optional;
-
 /**
  * The mutable runtime state of one transaction: instances, tokens, leases, schedules, and cluster
  * nodes. It is every repository at once: {@link ReadTx}'s reads, the writes and locking reads of each
@@ -21,7 +17,8 @@ public interface Tx extends ReadTx, GraphStore,
         ClusterRepository,
         CompensationRepository,
         EventRepository,
-        DynamicNodeRepository {
+        DynamicNodeRepository,
+        TaskLocks {
 
     /**
      * Whether a throw rolls this transaction's writes back. The in-memory store answers false:
@@ -30,16 +27,4 @@ public interface Tx extends ReadTx, GraphStore,
      * while already-issued writes stand, leaving a state no execution could have produced.
      */
     default boolean transactional() { return true; }
-
-    /** {@code lockInstance} on the instance that owns token {@code tokenId}; empty when either the
-     *  token or its instance is missing. */
-    default Optional<Instance> lockInstanceOf(String tokenId) {
-        return findToken(tokenId).flatMap(t -> lockInstance(t.instanceId));
-    }
-
-    /** {@code lockInstanceOf}, and token {@code tokenId} read under that lock; empty when either the
-     *  token or its instance is missing. */
-    default Optional<Rows.LockedTask> lockTask(String tokenId) {
-        return lockInstanceOf(tokenId).flatMap(i -> findToken(tokenId).map(t -> new Rows.LockedTask(i, t)));
-    }
 }
