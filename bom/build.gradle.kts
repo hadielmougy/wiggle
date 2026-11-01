@@ -3,7 +3,7 @@
 //     implementation(platform("sh.wiggle:wiggle-bom:<version>"))
 //     implementation("sh.wiggle:wiggle-client")     // no version — the BOM supplies it
 //
-// and every wiggle module, the client's retry library, and the storage drivers resolve to one
+// and every wiggle module, Jackson, the client's retry library, and the storage drivers resolve to one
 // coherent set. This removes the per-artifact version pins (and the resolutionStrategy.force hacks)
 // that otherwise force enterprise consumers to edit their build files.
 plugins {
@@ -21,7 +21,8 @@ dependencies {
             "wiggle-election",
         ).forEach { api("sh.wiggle:$it:$version") }
 
-        // --- what the client and the JDBC store bring in ---
+        // --- what the core, the client and the JDBC store bring in ---
+        api("com.fasterxml.jackson.core:jackson-core:${property("jacksonVersion")}")
         api("io.github.hadielmougy:shield:${property("shieldVersion")}")
         api("com.zaxxer:HikariCP:${property("hikariVersion")}")
 

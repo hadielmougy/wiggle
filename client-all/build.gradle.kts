@@ -1,9 +1,9 @@
 import com.vanniktech.maven.publish.SonatypeHost
 import org.gradle.plugins.signing.Sign
 
-// wiggle-client-all: the client, fully shaded into ONE self-contained jar. Its one third-party
-// library, the retry library, is relocated under `com.wiggle.shaded`, and the published POM has NO
-// dependencies — so this jar drops onto any classpath without a
+// wiggle-client-all: the client, fully shaded into ONE self-contained jar. Its third-party
+// libraries, Jackson's streaming core and the retry library, are relocated under `com.wiggle.shaded`,
+// and the published POM has NO dependencies — so this jar drops onto any classpath without a
 // single version pin, exclusion, or resolutionStrategy hack. The public API is unchanged: consumers
 // use `com.wiggle.*` exactly as with wiggle-client.
 //
@@ -18,7 +18,7 @@ plugins {
 }
 
 dependencies {
-    // Swallowed whole into the shaded jar (client -> core, shield).
+    // Swallowed whole into the shaded jar (client -> core, jackson-core, shield).
     implementation(project(":client"))
 }
 
@@ -29,6 +29,7 @@ tasks.shadowJar {
     // Relocate every third-party package the client drags in. Nothing under these prefixes is part
     // of wiggle's public API (that's com.wiggle.*), so this is transparent to consumers.
     val shaded = "com.wiggle.shaded"
+    relocate("com.fasterxml.jackson", "$shaded.com.fasterxml.jackson")
     relocate("io.github.shield", "$shaded.io.github.shield")   // client retry lib
 
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "module-info.class")
@@ -80,7 +81,7 @@ mavenPublishing {
 
     pom {
         name.set("Wiggle client (shaded)")
-        description.set("Wiggle client as one self-contained jar: its retry library relocated " +
+        description.set("Wiggle client as one self-contained jar: Jackson and its retry library relocated " +
                 "under com.wiggle.shaded, zero transitive dependencies.")
         url.set("https://github.com/hadielmougy/wiggle")
         inceptionYear.set("2026")
