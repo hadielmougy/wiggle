@@ -54,7 +54,7 @@ the two parallel arms.
 ---
 
 **Contents** ·
-[What is Wiggle?](#1-what-is-wiggle) ·
+[Quickstart](#1-quickstart-docker--java-client) ·
 [Deployment options](#2-deployment--running-options) ·
 [Java example](#3-example-in-java) ·
 [Architecture](#4-architecture) ·
@@ -65,42 +65,84 @@ the two parallel arms.
 
 ---
 
-## 1. What is Wiggle?
+## 1. Quickstart: Docker + Java client
 
-Wiggle is a **durable workflow engine**: a JAR and a database. You define a
-business process as pure **topology** (named steps and how they chain, branch, and rejoin);
-Wiggle persists every instance as tokens moving over that graph, so a process **survives
-restarts, retries, and worker death** and resumes exactly where it left off. Steps are executed
-by **pull-based workers** over gRPC — your services, in your processes, in your language.
+Start a server. It uses the in-memory store, so stopping the container resets its data:
 
-Its distinctive move is that the workflow **is data**: a compiled graph the server walks, not
-replayed code. So there is no determinism discipline to get wrong, and a running process can be
-inspected, traced and versioned like any other row in your database.
+```bash
+docker run --rm --name wiggle -p 8080:8080 hadielmougy/wiggle:0.0.10
+```
 
-**Why teams pick it:**
+In a second terminal, create a Java 21 Gradle project with this `build.gradle.kts`:
 
-- 💾 **Durable, honestly** — every instance is DB-backed. Exactly-once dispatch, at-least-once
-  execution, lease-based recovery when a worker dies mid-step.
-- 🧭 **State machine, not glue code** — `step`, `gate`, `choose`, `fork`, `sleep`, signals,
-  timers, sub-flows, `repeatWhile`, `thenForEach` — a compiled graph, published at a version you declare.
-  **No workflow-code determinism to get wrong**, because the workflow *is* data, not replayed code.
-- 🔌 **Pull-based & polyglot** — workers long-poll over gRPC: no inbound connectivity, no broker,
-  backpressure built in. Idiomatic **Java, Go, and Python** workers interoperate on one server —
-  a single instance can have steps served by three languages, dispatched by activity name.
-- 🪶 **Lightweight & embeddable** — the whole thing is a JAR plus a database
-  (PostgreSQL, or in-memory for dev). Embed the server in your JVM for tests, or run it as one
-  process beside your services. No Elasticsearch, no sidecar mesh, no mandatory Kubernetes.
-- 🖥 **Operable from day one** — a web **portal** served by the server (every instance step by step — each
-  step's input, output, retries and timing — cancel, deliver signals, schedules, search by
-  instance or correlation id, full text or meaning, per-step latency and queue wait), `/healthz` probes, memory admission control.
+```kotlin
+plugins { application }
 
-In one picture — a single `orders` instance whose steps run on **different microservices**,
-routed by each step's **queue**. The server keeps the durable state; each service just pulls the
-steps it serves:
+repositories { mavenCentral() }
 
-![One 'orders' instance: its four steps — validate, charge, render-receipt, email — each on a different queue, each served by a separate worker service.](docs/img/queues-flow.svg)
+dependencies {
+    implementation("sh.wiggle:wiggle-client:0.0.10")
+}
 
-<sub>How queue routing works end to end → **[docs/queues.md](docs/queues.md)**</sub>
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
+
+application { mainClass.set("demo.Hello") }
+```
+
+Save this as `src/main/java/demo/Hello.java`:
+
+<!-- snippet: onboarding-quickstart/quickstart -->
+```java
+package demo;
+
+import com.wiggle.client.WiggleClient;
+import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.client.worker.Worker;
+import com.wiggle.core.InstanceView;
+
+import java.time.Duration;
+
+public final class Hello {
+    public record Greeting(String name, String message) {}
+
+    interface GreetingSteps {
+        Greeting greet(Greeting context);
+    }
+
+    static final class GreetingHandler implements GreetingSteps {
+        @Override
+        public Greeting greet(Greeting context) {
+            return new Greeting(context.name(), "Hello, " + context.name());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        FlowSpec hello = FlowSpec.define("hello", 1, Greeting.class, GreetingSteps.class,
+                (f, s) -> f.thenApply(s::greet));
+
+        try (WiggleClient client = new WiggleClient("localhost:8080");
+             Worker worker = new Worker(client, "hello-worker")
+                     .registerHandler("hello", new GreetingHandler())) {
+            client.register(hello);
+            worker.start();
+
+            String id = client.start(hello, new Greeting("Ada", ""));
+            InstanceView result = client.awaitCompletion(id, Duration.ofSeconds(10));
+
+            System.out.println(result.status());  // COMPLETED
+            System.out.println(result.context()); // {name=Ada, message=Hello, Ada}
+        }
+    }
+}
+```
+
+Run it with `./gradlew run`. It registers the workflow, starts a worker that pulls its step,
+submits an instance, and waits for it to finish. You should see `COMPLETED` and a context holding
+`Greeting[name=Ada, message=Hello, Ada]`. Stop the server with Ctrl-C.
+
+Add `-p 8070:8070` to the `docker run` to serve the portal at <http://localhost:8070>. Next:
+[deployment options](#2-deployment--running-options), the [Java example](#3-example-in-java) and
+the [onboarding guide](docs/onboarding.md).
 
 ---
 
