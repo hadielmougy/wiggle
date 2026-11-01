@@ -8,9 +8,12 @@ import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jdbi.v3.core.statement.Query;
 import org.jdbi.v3.core.statement.SqlStatement;
 import org.jdbi.v3.core.statement.Update;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
+import org.springframework.jdbc.support.SQLStateSQLExceptionTranslator;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionSystemException;
@@ -65,6 +68,8 @@ public final class JdbcStorage implements Storage {
     /** {@link #pool}, with each connection reporting to the {@link #observe} listeners while any are attached. */
     private final DataSource observed;
     private final TransactionTemplate transactions;
+    /** Statements on the connection of the transaction open on the calling thread. */
+    private final NamedParameterJdbcTemplate named;
     private final Jdbi jdbi;
     /** The store's operations; each finds the handle of the transaction open on the calling thread. */
     private final JdbcTx tx;
@@ -125,6 +130,9 @@ public final class JdbcStorage implements Storage {
         };
         this.transactions = new TransactionTemplate(new DataSourceTransactionManager(observed));
         this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        JdbcTemplate template = new JdbcTemplate(observed);
+        template.setExceptionTranslator(new SQLStateSQLExceptionTranslator());
+        this.named = new NamedParameterJdbcTemplate(template);
         this.jdbi = Jdbi.create(new TransactionAwareDataSourceProxy(observed))
                 .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
                 .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs))
@@ -1022,9 +1030,7 @@ public final class JdbcStorage implements Storage {
      */
     private Handle handle() {
         if (TransactionSynchronizationManager.getResource(this) instanceof BoundHandle bound) return bound.handle;
-        if (!TransactionSynchronizationManager.hasResource(observed)) {
-            throw new IllegalStateException("no transaction is open on this store; run the call inside inTx");
-        }
+        requireTransaction();
         Handle h;
         try {
             h = jdbi.open();
@@ -1042,6 +1048,17 @@ public final class JdbcStorage implements Storage {
                 });
         return h;
     }
+
+    /** Refuses to go on unless a transaction is open on this store on the calling thread. */
+    void requireTransaction() {
+        if (!TransactionSynchronizationManager.hasResource(observed)) {
+            throw new IllegalStateException("no transaction is open on this store; run the call inside inTx");
+        }
+    }
+
+    NamedParameterJdbcTemplate named() { return named; }
+
+    Dialect dialect() { return dialect; }
 
     /** One transaction's JDBI handle, as a Spring transaction resource. */
     private static final class BoundHandle extends ResourceHolderSupport {
@@ -1081,7 +1098,6 @@ public final class JdbcStorage implements Storage {
     @Override public void close() {
         if (ownsPool && pool instanceof HikariDataSource hikari) hikari.close();
     }
-
 
     /** Row readers, shared by the registered JDBI mappers and by the statements not yet
      *  converted. Unchanged from when they lived inside the transaction. */
@@ -1189,10 +1205,35 @@ public final class JdbcStorage implements Storage {
         private final Dialect dialect;
         private final JdbcStorage owner;
 
+        private final JdbcShardRepository shards;
+        private final JdbcClusterRepository cluster;
+        private final JdbcScheduleRepository schedules;
         JdbcTx(Dialect dialect, JdbcStorage owner) {
             this.dialect = dialect;
             this.owner = owner;
+            this.schedules = new JdbcScheduleRepository(owner);
+            this.cluster = new JdbcClusterRepository(owner);
+            this.shards = new JdbcShardRepository(owner);
         }
+
+        @Override public void putSchedule(Rows.Schedule s) { schedules.putSchedule(s); }
+        @Override public void deleteSchedule(String id) { schedules.deleteSchedule(id); }
+        @Override public List<Rows.Schedule> dueSchedules(long now, int max) { return schedules.dueSchedules(now, max); }
+        @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) { return schedules.claimSchedule(id, expectedFireAt, nextFireAt); }
+        @Override public List<Rows.Schedule> schedules() { return schedules.schedules(); }
+        @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) { return schedules.scheduleByWorkflow(workflow); }
+
+        @Override public void upsertNode(ServerNode n) { cluster.upsertNode(n); }
+        @Override public void deleteNodesOlderThan(long before) { cluster.deleteNodesOlderThan(before); }
+        @Override public void setLeader(String nodeId, boolean leader) { cluster.setLeader(nodeId, leader); }
+        @Override public List<ServerNode> nodes() { return cluster.nodes(); }
+
+        @Override public void claimShardIdentity(int shardId) { shards.claimShardIdentity(shardId); }
+        @Override public void writeShardBeat(long now) { shards.writeShardBeat(now); }
+        @Override public void putShardRecord(Rows.ShardRecord r) { shards.putShardRecord(r); }
+        @Override public OptionalInt shardIdentity() { return shards.shardIdentity(); }
+        @Override public OptionalLong shardBeat() { return shards.shardBeat(); }
+        @Override public List<Rows.ShardRecord> shardRegistry() { return shards.shardRegistry(); }
 
         /** The current transaction's handle; it also identifies the transaction. */
         private Handle h() { return owner.handle(); }
@@ -2509,60 +2550,6 @@ public final class JdbcStorage implements Storage {
                     .list();
         }
 
-        @Override public void putSchedule(Rows.Schedule s) {
-            // Upsert by id: the engine reuses the existing id when a schedule for the same
-            // workflow already exists, so a re-create updates the row rather than duplicating it.
-            // The seven bound parameters are identical across dialects; only the SQL text differs.
-            // The dialect supplies the SQL with positional parameters in insert-column order, so
-            // this one stays positional: the statement text is the dialect's to spell, not ours.
-            h().createUpdate(dialect.scheduleUpsert())
-                    .bind(0, s.id)
-                    .bind(1, s.workflow)
-                    .bind(2, s.intervalMillis)
-                    .bind(3, s.cron)
-                    .bind(4, s.context.json())
-                    .bind(5, s.nextFireAt)
-                    .bind(6, s.createdAt)
-                    .execute();
-        }
-
-        @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
-            return h().createQuery("SELECT * FROM wf_schedule WHERE workflow=:workflow")
-                    .bind("workflow", workflow)
-                    .mapTo(Rows.Schedule.class)
-                    .findFirst();
-        }
-
-        @Override public void deleteSchedule(String id) {
-            h().createUpdate("DELETE FROM wf_schedule WHERE id=:id").bind("id", id).execute();
-        }
-
-        @Override public List<Rows.Schedule> schedules() {
-            return h().createQuery("SELECT * FROM wf_schedule ORDER BY id")
-                    .mapTo(Rows.Schedule.class)
-                    .list();
-        }
-
-        @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            return h().createQuery("SELECT * FROM wf_schedule WHERE next_fire_at<=:now "
-                            + "ORDER BY next_fire_at LIMIT :max")
-                    .bind("now", now)
-                    .bind("max", max)
-                    .mapTo(Rows.Schedule.class)
-                    .list();
-        }
-
-        @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
-            // Compare-and-set on the fire time: exactly one node moves a schedule forward.
-            return h().createUpdate("UPDATE wf_schedule SET next_fire_at=:next "
-                            + "WHERE id=:id AND next_fire_at=:expected")
-                    .bind("next", nextFireAt)
-                    .bind("id", id)
-                    .bind("expected", expectedFireAt)
-                    .execute() == 1;
-        }
-
-
         @Override public Rows.QueueDepth queueDepth(long now) {
             return h().createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "
                             + "FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') "
@@ -2604,100 +2591,6 @@ public final class JdbcStorage implements Storage {
                     .bind(1, limit)
                     .mapTo(Token.class)
                     .list();
-        }
-
-        @Override public void upsertNode(ServerNode n) {
-            int updated = h().createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
-                            + "workers=:workers,topology_generation=:gen WHERE id=:id")
-                    .bind("name", n.name)
-                    .bind("beat", n.lastHeartbeat)
-                    .bind("workers", n.workers)
-                    .bind("gen", n.topologyGeneration)
-                    .bind("id", n.id)
-                    .execute();
-            if (updated > 0) return;
-            h().createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader,"
-                            + "topology_generation) VALUES (:id,:name,:first,:beat,:workers,0,:gen)")
-                    .bind("id", n.id)
-                    .bind("name", n.name)
-                    .bind("first", n.firstHeartbeat)
-                    .bind("beat", n.lastHeartbeat)
-                    .bind("workers", n.workers)
-                    .bind("gen", n.topologyGeneration)
-                    .execute();
-        }
-
-        @Override public List<ServerNode> nodes() {
-            return h().createQuery("SELECT * FROM wf_node ORDER BY first_heartbeat, id")
-                    .mapTo(ServerNode.class)
-                    .list();
-        }
-
-        @Override public void deleteNodesOlderThan(long before) {
-            h().createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
-                    .bind("before", before)
-                    .execute();
-        }
-
-        @Override public OptionalInt shardIdentity() {
-            return h().createQuery("SELECT shard_id FROM wf_shard WHERE k='self'")
-                    .mapTo(Integer.class)
-                    .findOne()
-                    .map(OptionalInt::of)
-                    .orElse(OptionalInt.empty());
-        }
-
-        @Override public void claimShardIdentity(int shardId) {
-            h().createUpdate(dialect.insertIgnore("INSERT INTO wf_shard (k,shard_id) VALUES ('self',:shard)"))
-                    .bind("shard", shardId)
-                    .execute();
-        }
-
-        @Override public OptionalLong shardBeat() {
-            List<Long> beats = h().createQuery("SELECT beat_at FROM wf_shard WHERE k='self' AND beat_at IS NOT NULL")
-                    .mapTo(Long.class)
-                    .list();
-            return beats.isEmpty() ? OptionalLong.empty() : OptionalLong.of(beats.getFirst());
-        }
-
-        @Override public void writeShardBeat(long now) {
-            h().createUpdate("UPDATE wf_shard SET beat_at=:now WHERE k='self'").bind("now", now).execute();
-        }
-
-        @Override public List<Rows.ShardRecord> shardRegistry() {
-            return h().createQuery("SELECT shard_id,state,first_seen,retired_at FROM wf_shard_registry "
-                            + "ORDER BY shard_id")
-                    .map((rs, ctx) -> {
-                        long retired = rs.getLong("retired_at");
-                        Long retiredAt = rs.wasNull() ? null : retired;
-                        return new Rows.ShardRecord(rs.getInt("shard_id"),
-                                ShardState.valueOf(rs.getString("state")), rs.getLong("first_seen"), retiredAt);
-                    })
-                    .list();
-        }
-
-        @Override public void putShardRecord(Rows.ShardRecord r) {
-            String update = "UPDATE wf_shard_registry SET state=:state,first_seen=:first,retired_at=:retired "
-                    + "WHERE shard_id=:shard";
-            if (bindShard(h().createUpdate(update), r).execute() > 0) return;
-            if (bindShard(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_shard_registry "
-                    + "(shard_id,state,first_seen,retired_at) VALUES (:shard,:state,:first,:retired)")), r)
-                    .execute() > 0) return;
-            bindShard(h().createUpdate(update), r).execute();   // another node inserted it first
-        }
-
-        private static Update bindShard(Update u, Rows.ShardRecord r) {
-            return u.bind("shard", r.shardId())
-                    .bind("state", r.state().name())
-                    .bind("first", r.firstSeen())
-                    .bind("retired", r.retiredAt());
-        }
-
-        @Override public void setLeader(String nodeId, boolean leader) {
-            h().createUpdate("UPDATE wf_node SET leader=:leader WHERE id=:id")
-                    .bind("leader", leader ? 1 : 0)
-                    .bind("id", nodeId)
-                    .execute();
         }
 
         @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
@@ -2949,7 +2842,6 @@ public final class JdbcStorage implements Storage {
                     .bind("id", instanceId)
                     .execute();
         }
-
 
     }
 }
