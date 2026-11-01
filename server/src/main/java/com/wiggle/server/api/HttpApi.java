@@ -1,11 +1,9 @@
 package com.wiggle.server.api;
 
-import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.Message;
-import com.google.protobuf.util.JsonFormat;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;
-import com.wiggle.proto.ControlPlane;
+import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.core.wire.Msg;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.EngineException;
@@ -35,16 +33,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Serves the {@link ControlPlaneApi} on embedded Tomcat: {@code POST /v1/<Method>} with a protobuf or
- * JSON body, as {@link ControlPlane} describes. HTTPS when a keystore is configured, requiring client
+ * Serves the {@link ControlPlaneApi} on embedded Tomcat: {@code POST /v1/<Method>} with a JSON body,
+ * as {@link ControlPlane} describes. HTTPS when a keystore is configured, requiring client
  * certificates when a truststore is too. Every call runs on its own virtual thread, so a long poll
  * holds no platform thread.
  */
 public final class HttpApi implements AutoCloseable {
 
     private static final System.Logger LOG = System.getLogger(HttpApi.class.getName());
-    private static final JsonFormat.Parser JSON_IN = JsonFormat.parser().ignoringUnknownFields();
-    private static final JsonFormat.Printer JSON_OUT = JsonFormat.printer().omittingInsignificantWhitespace();
     /** The largest request body served. */
     static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -134,7 +130,7 @@ public final class HttpApi implements AutoCloseable {
         @Override
         protected void service(HttpServletRequest req, HttpServletResponse resp) throws IOException {
             String path = req.getRequestURI();
-            ControlPlane.Method<?, ?> method = ControlPlane.BY_NAME.get(path.substring(ControlPlane.PREFIX.length()));
+            ControlPlane.Method method = ControlPlane.BY_NAME.get(path.substring(ControlPlane.PREFIX.length()));
             if (method == null) {
                 error(resp, 404, "NOT_FOUND", "no such method: " + path);
                 return;
@@ -146,7 +142,6 @@ public final class HttpApi implements AutoCloseable {
             }
             long held = 0;
             try {
-                boolean json = isJson(req.getContentType());
                 byte[] body;
                 try (InputStream in = req.getInputStream()) {
                     body = in.readNBytes(MAX_BODY_BYTES + 1);
@@ -157,14 +152,14 @@ public final class HttpApi implements AutoCloseable {
                 }
                 held += body.length;
                 memory.add(body.length);
-                Message request;
+                Msg request;
                 try {
-                    request = parse(method, body, json);
-                } catch (InvalidProtocolBufferException e) {
+                    request = Msg.parse(new String(body, StandardCharsets.UTF_8));
+                } catch (IllegalArgumentException e) {
                     error(resp, 400, "INVALID_ARGUMENT", "malformed request: " + e.getMessage());
                     return;
                 }
-                Message response;
+                Msg response;
                 try {
                     response = authz.as(method.name(), req.getHeader("Authorization"), subject(req),
                             () -> api.call(method, request));
@@ -172,10 +167,10 @@ public final class HttpApi implements AutoCloseable {
                     fail(resp, e);
                     return;
                 }
-                byte[] out = json ? JSON_OUT.print(response).getBytes(StandardCharsets.UTF_8) : response.toByteArray();
+                byte[] out = response.toString().getBytes(StandardCharsets.UTF_8);
                 held += out.length;
                 memory.add(out.length);
-                send(resp, 200, json ? ControlPlane.JSON : ControlPlane.PROTOBUF, out);
+                send(resp, 200, out);
             } finally {
                 memory.release(held);
             }
@@ -189,18 +184,6 @@ public final class HttpApi implements AutoCloseable {
             return chain[0].getSubjectX500Principal().getName();
         }
         return null;
-    }
-
-    private static boolean isJson(String contentType) {
-        return contentType != null && contentType.regionMatches(true, 0, ControlPlane.JSON, 0, ControlPlane.JSON.length());
-    }
-
-    private static Message parse(ControlPlane.Method<?, ?> method, byte[] body, boolean json)
-            throws InvalidProtocolBufferException {
-        if (!json) return method.request().parseFrom(body);
-        Message.Builder b = method.request().parseFrom(new byte[0]).newBuilderForType();
-        JSON_IN.merge(new String(body, StandardCharsets.UTF_8), b);
-        return b.build();
     }
 
     /** Answers a call that threw, with the status its exception stands for. */
@@ -258,12 +241,12 @@ public final class HttpApi implements AutoCloseable {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("code", code);
         body.put("message", message);
-        send(resp, status, ControlPlane.JSON, Json.write(body).getBytes(StandardCharsets.UTF_8));
+        send(resp, status, Json.write(body).getBytes(StandardCharsets.UTF_8));
     }
 
-    private static void send(HttpServletResponse resp, int status, String contentType, byte[] body) throws IOException {
+    private static void send(HttpServletResponse resp, int status, byte[] body) throws IOException {
         resp.setStatus(status);
-        resp.setContentType(contentType);
+        resp.setContentType(ControlPlane.JSON);
         resp.setContentLength(body.length);
         try (OutputStream os = resp.getOutputStream()) {
             os.write(body);

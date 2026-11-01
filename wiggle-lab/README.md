@@ -8,7 +8,7 @@ of tedious.
 It talks to the cluster two ways:
 - **kind / kubectl** (subprocess) for infrastructure: cluster, servers (each with its own Postgres),
   scaling, killing pods.
-- **gRPC** (Python stubs generated from `proto/`) for the control plane: register workflows, start
+- **HTTP + JSON** (the standard library's `urllib`) for the control plane: register workflows, start
   instances, observe state.
 
 ## What you can do
@@ -26,13 +26,10 @@ It talks to the cluster two ways:
 
 ```bash
 cd wiggle-lab
-./setup.sh                     # venv + deps + generate gRPC stubs from ../proto
+./setup.sh                     # venv + deps
 source .venv/bin/activate
 streamlit run app.py           # opens http://localhost:8501
 ```
-
-`setup.sh` runs `gen_proto.sh`, which compiles `proto/src/main/proto/wiggle.proto` into
-`wigglelab/pb/`. Re-run `./gen_proto.sh` if the protos change.
 
 ## Typical flow (in the UI)
 
@@ -73,7 +70,7 @@ what makes a bug report actionable: same sequence, same failure, then a fix.
 - **No workers yet.** The built-in `sleep` and `instant` flows are advanced by the server itself
   (so they actually complete); the `park` flow holds a task in a queue and stays `RUNNING`.
   Deploying real workers (the `example` order workflow) is the natural next iteration.
-- Host↔cluster gRPC goes over `kubectl port-forward` (managed automatically): each server on
+- Host↔cluster API calls go over `kubectl port-forward` (managed automatically): each server on
   `127.0.0.1:1810x`.
 - No database in this lab has a volume, so its state is ephemeral — a redeploy keeps it, but a node
   restart does not.
@@ -93,8 +90,7 @@ what makes a bug report actionable: same sequence, same failure, then a fix.
 wiggle-lab/
   app.py                 Streamlit UI (calls the controller)
   replay.py              reproduce a recording: python replay.py <file.json>
-  gen_proto.sh           proto -> Python stubs
-  setup.sh               venv + deps + stubs
+  setup.sh               venv + deps
   wigglelab/
     config.py            names, ports, labels
     shell.py             subprocess helpers
@@ -102,9 +98,8 @@ wiggle-lab/
     manifests.py         server (+DB) Kubernetes manifests
     k8s.py               kubectl apply/scale/delete/list
     portforward.py       managed kubectl port-forwards
-    cell_client.py       WiggleControlPlane gRPC (StartInstance, ListInstances, …)
+    cell_client.py       control-plane API over HTTP (StartInstance, ListInstances, …)
     workflows.py         built-in workflow definitions (JSON-native)
     recorder.py          @record decorator + Recording (capture actions for replay)
     controller.py        orchestration brain (all state + logic; UI-agnostic)
-    pb/                  generated gRPC stubs (git-ignored)
 ```

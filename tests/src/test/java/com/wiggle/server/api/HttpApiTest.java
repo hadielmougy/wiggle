@@ -1,7 +1,6 @@
 package com.wiggle.server.api;
 
-import com.wiggle.core.Json;
-import com.wiggle.proto.ControlPlane;
+import com.wiggle.core.wire.ControlPlane;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -13,9 +12,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -29,13 +26,13 @@ class HttpApiTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
-    @Test @DisplayName("a JSON request is answered in JSON")
+    @Test @DisplayName("a request is answered in JSON; an empty body is an empty message")
     void json() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start()) {
-            RawApi.Answer health = RawApi.callJson(server.baseUrl(), ControlPlane.HEALTH_CHECK, "{}");
+            RawApi.Answer health = RawApi.callJson(server.baseUrl(), ControlPlane.HEALTH_CHECK, "");
             assertEquals(200, health.status());
-            Map<String, Object> body = Json.asObject(Json.parse(new String(health.body(), StandardCharsets.UTF_8)));
-            assertEquals("UP", body.get("status"));
+            assertEquals("UP", health.msg().str("status"));
+            assertTrue(health.msg().has("leader"), "false and zero values are written, not left out");
 
             RawApi.Answer started = RawApi.callJson(server.baseUrl(), ControlPlane.START_INSTANCE,
                     "{\"workflow\": \"nope\", \"context\": {\"a\": 1}}");
@@ -65,6 +62,23 @@ class HttpApiTest {
         }
     }
 
+    @Test @DisplayName("a field of the wrong type, or a oneof with two members set, is 400")
+    void fieldChecks() throws Exception {
+        try (WiggleServer server = new WiggleServer(config()).start()) {
+            RawApi.Answer wrongType = RawApi.callJson(server.baseUrl(), ControlPlane.LIST_INSTANCES, "{\"limit\": \"ten\"}");
+            assertEquals(400, wrongType.status());
+            assertTrue(wrongType.message().contains("'limit'"), wrongType.message());
+
+            RawApi.Answer notAnObject = RawApi.callJson(server.baseUrl(), ControlPlane.LIST_INSTANCES, "[1]");
+            assertEquals(400, notAnObject.status());
+
+            RawApi.Answer both = RawApi.callJson(server.baseUrl(), ControlPlane.CREATE_SCHEDULE,
+                    "{\"workflow\": \"w\", \"everyMillis\": 1000, \"cron\": \"* * * * *\"}");
+            assertEquals(400, both.status());
+            assertTrue(both.message().contains("both"), both.message());
+        }
+    }
+
     @Test @DisplayName("a request body over the limit is refused with 413")
     void tooLarge() throws Exception {
         try (WiggleServer server = new WiggleServer(config()).start();
@@ -72,7 +86,7 @@ class HttpApiTest {
             byte[] body = new byte[HttpApi.MAX_BODY_BYTES + 1];
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder(URI.create("http://" + server.baseUrl()
                             + ControlPlane.START_INSTANCE.path()))
-                    .header("Content-Type", ControlPlane.PROTOBUF)
+                    .header("Content-Type", ControlPlane.JSON)
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(413, resp.statusCode());
         }

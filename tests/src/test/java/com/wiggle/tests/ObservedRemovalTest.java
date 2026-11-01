@@ -6,7 +6,6 @@ import com.wiggle.core.Json;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
-import com.wiggle.proto.ProtoJson;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -55,8 +54,8 @@ class ObservedRemovalTest {
             // an older client's register call, with the mode as it would send it
             Map<String, Object> json = spec().definition().toJson();
             json.put("executionMode", "OBSERVED");
-            RawApi.Answer e = RawApi.call(server.baseUrl(), com.wiggle.proto.ControlPlane.REGISTER_WORKFLOW,
-                    com.wiggle.proto.WorkflowDefinition.newBuilder().setDefinition(ProtoJson.toStruct(json)).build(), null);
+            RawApi.Answer e = RawApi.call(server.baseUrl(), com.wiggle.core.wire.ControlPlane.REGISTER_WORKFLOW,
+                    com.wiggle.core.wire.Msg.create().put("definition", json), null);
             assertEquals("INVALID_ARGUMENT", e.code());
             assertTrue(e.message().contains("OBSERVED"), e.message());
         }

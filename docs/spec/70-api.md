@@ -2,25 +2,25 @@
 
 ← [Event log](60-event-log.md) · [Index](00-index.md) · Next: [Storage](80-storage.md)
 
-One service, `com.wiggle.proto.WiggleControlPlane`, served over HTTP, is the whole contract between a
-server and everything else: submitters, workers, and the clients in other languages.
+One set of JSON methods served over HTTP is the whole contract between a server and everything else:
+submitters, workers, and the clients in other languages.
 Nothing is ever pushed to a worker, so workers need no inbound connectivity.
 
-The definition of record is `proto/src/main/proto/wiggle.proto`, and its HTTP binding is
-`com.wiggle.proto.ControlPlane`. This chapter specifies each RPC's behaviour, the shapes that carry
-meaning, and the error mapping.
+[§13](#13-messages) is the definition of record of every message, and `com.wiggle.core.wire.ControlPlane`
+lists the methods. This chapter specifies each RPC's behaviour, the shapes that carry meaning, and the
+error mapping.
 
 ## 1. General rules
 
 **WGL-API-001** (MUST) The transport MUST be HTTP/1.1 on one port (default 8080), plaintext unless TLS
 is configured ([WGL-OPS-060](90-ops.md)). Every RPC MUST be a `POST /v1/<Method>` whose body is the
-request message and whose `200` answer is the response message, both as `application/x-protobuf`, or
-both as `application/json` in protobuf's canonical JSON mapping when the request is sent as JSON. A
-request body over 4 MiB MUST be refused with `413`.
+request message and whose `200` answer is the response message, both `application/json` objects
+([§13](#13-messages)); an empty body is an empty message. A request body over 4 MiB MUST be refused
+with `413`.
 
-**WGL-API-002** (MUST) A workflow definition MUST travel as one opaque `google.protobuf.Struct` holding
-the definition's JSON, rather than being re-modelled in proto. Contexts and payloads MUST travel as
-`google.protobuf.Value`, so any JSON value — object, array or scalar — is carried.
+**WGL-API-002** (MUST) A workflow definition MUST travel as one opaque JSON object holding the
+definition's JSON, rather than being re-modelled as messages. Contexts and payloads MUST travel as they
+are, so any JSON value — object, array or scalar — is carried, and a whole number keeps every digit.
 
 **WGL-API-003** (MUST) A failed call MUST answer a non-2xx status with a JSON body
 `{"code": ..., "message": ...}`. Engine statuses MUST map exactly: 400 → `400 INVALID_ARGUMENT`,
@@ -49,7 +49,7 @@ simply re-send.
 constraint names, driver codes, host and schema all leak through it. The client MUST get a short
 correlation id and the server log MUST get the detail.
 
-*Verified by:* `tests/GrpcErrorMappingTest`, `tests/TlsTest`, `tests/StorageFailureStatusTest`.
+*Verified by:* `tests/ApiErrorMappingTest`, `tests/TlsTest`, `tests/StorageFailureStatusTest`.
 
 ## 2. Health and cluster
 
@@ -202,8 +202,7 @@ p50/p95 (0 for steps that were never queued).
 | `AckEvents` | `AckEventsRequest{consumer, ackedSeq}` → `Ack` |
 
 **WGL-API-080** (MUST) Both RPCs MUST be implemented by the server with the semantics of
-[chapter 60](60-event-log.md). *(The comment in `wiggle.proto` calling them contract-only is stale — see
-[drift](00-index.md#6-known-documentation-drift).)*
+[chapter 60](60-event-log.md).
 
 **WGL-API-081** (MUST) `EventList.retryAfterMillis` MUST carry the same backpressure hint as `TaskList`.
 
@@ -287,7 +286,7 @@ names; it carries a reference that the node's log pairs with the full cause.
 Who a call is, and what it may do ([WGL-SHARD-187](85-sharding.md#13-users-and-authorization)).
 Off by default, so a deployment that sets nothing behaves as before.
 
-**WGL-API-110** (MUST) `WIGGLE_GRPC_AUTH` MUST select the mode: `off` (default) reads no credential
+**WGL-API-110** (MUST) `WIGGLE_API_AUTH` MUST select the mode: `off` (default) reads no credential
 and allows every call; `log` checks every call, serves it anyway, and logs each distinct refusal
 `enforce` would make once; `enforce` refuses.
 
@@ -334,7 +333,7 @@ second after the change. A call already running, such as an open long poll, fini
 **WGL-API-115** (MUST) The Java client MUST send the key in `WIGGLE_API_KEY` (or `-Dwiggle.api.key`) on
 every call when one is set, and MUST report `UNAUTHENTICATED` as 401 and `PERMISSION_DENIED` as 403.
 
-*Verified by:* `server/grpc/GrpcAuthTest` (every RPC of the service is checked, so one added without
+*Verified by:* `server/api/ApiAuthTest` (every RPC of the service is checked, so one added without
 a permission fails it; two tenants on prefix scopes), `tests/TlsTest`, `server/auth/AccountsTest`,
 `server/auth/AuthCacheTest`, `server/auth/PermissionsTest`.
 
@@ -356,7 +355,7 @@ caller may read ([§11](#11-per-rpc-authorization)); asking for a workflow it ma
 nothing rather than failing.
 
 **WGL-API-123** (MUST) A search shard that does not answer MUST fail the search `UNAVAILABLE`, unless
-`partial_ok` asks for the hits of the shards that did, with `partial` set.
+`partialOk` asks for the hits of the shards that did, with `partial` set.
 
 **WGL-API-124** *Withdrawn with vector search.* `SearchRequest.semantic` and `SearchResult.model` (field
 numbers 8 and 3) are reserved.
@@ -380,3 +379,583 @@ Instances indexed before a version declared an attribute do not carry it.
 
 *Verified by:* `server/search/SearchEndToEndTest`, `server/search/SearchIndexTest`,
 `server/store/StorageContract` (search chapter, on every backend), `postgres/PostgresTopologyTest`.
+
+## 13. Messages
+
+Every message is a JSON object. A field that is absent reads as its type's zero value: `""`, `0`,
+`false` or an empty list; a field marked *optional* is told apart from that value by being absent.
+"One of" fields are alternatives: a message sets exactly one of them. A field of the wrong type is
+`400 INVALID_ARGUMENT`. Fields a server does not know are ignored. "Any JSON" is any JSON value;
+an integer is a JSON number with no fraction.
+
+| Method | Request | Response |
+|---|---|---|
+| `HealthCheck` | `Empty` | `HealthStatus` |
+| `GetCluster` | `Empty` | `ClusterView` |
+| `ListWorkflows` | `Empty` | `WorkflowNames` |
+| `GetBacklogCoverage` | `BacklogCoverageRequest` | `BacklogCoverage` |
+| `RegisterWorkflow` | `WorkflowDefinition` | `RegisterWorkflowResult` |
+| `GetWorkflow` | `GetWorkflowRequest` | `WorkflowDefinition` |
+| `StartInstance` | `StartInstanceRequest` | `StartInstanceResult` |
+| `ListInstances` | `ListInstancesRequest` | `InstanceList` |
+| `GetInstance` | `InstanceIdRequest` | `InstanceDetail` |
+| `CancelInstance` | `CancelInstanceRequest` | `CancelInstanceResult` |
+| `SignalInstance` | `SignalRequest` | `Ack` |
+| `CreateSchedule` | `CreateScheduleRequest` | `ScheduleView` |
+| `ListSchedules` | `Empty` | `ScheduleList` |
+| `DeleteSchedule` | `ScheduleIdRequest` | `Ack` |
+| `PollTasks` | `PollRequest` | `TaskList` |
+| `ReportSteps` | `ReportStepsRequest` | `ReportStepsResult` |
+| `FailTask` | `TaskFailureRequest` | `Ack` |
+| `HeartbeatTask` | `HeartbeatRequest` | `HeartbeatResult` |
+| `PollEvents` | `PollEventsRequest` | `EventList` |
+| `AckEvents` | `AckEventsRequest` | `Ack` |
+| `GetStepStats` | `StepStatsRequest` | `StepStats` |
+| `SearchInstances` | `SearchRequest` | `SearchResult` |
+
+### SearchRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `text` | string | Every word must occur in the instance's correlation id, context, termination reason or error; empty matches every instance the filters allow. |
+| `workflow` | string | *optional* |
+| `status` | string | *optional* |
+| `updatedFrom` | integer | Bounds on when the instance last changed (epoch millis); 0 = open. |
+| `updatedTo` | integer |  |
+| `limit` | integer |  |
+| `partialOk` | boolean | Answer from the search shards that respond when one does not, and say so in `partial`. |
+| `attributes` | list of `SearchAttributeFilter` | Keep the instances whose declared search attributes satisfy every filter. Attributes are declared per flow, so these need `workflow`. |
+
+### SearchAttributeFilter
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string |  |
+| `op` | string |  |
+| `value` | `CriteriaLiteral` |  |
+
+### SearchHit
+
+| Field | Type | Notes |
+|---|---|---|
+| `instanceId` | string |  |
+| `workflow` | string |  |
+| `version` | integer |  |
+| `status` | string |  |
+| `correlationId` | string |  |
+| `createdAt` | integer |  |
+| `updatedAt` | integer |  |
+| `score` | number |  |
+| `purged` | boolean | The instance itself has been purged; its document outlives it until its own retention. |
+
+### SearchResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `hits` | list of `SearchHit` |  |
+| `partial` | boolean |  |
+
+### Empty
+
+No fields: `{}`.
+
+### Ack
+
+| Field | Type | Notes |
+|---|---|---|
+| `ok` | boolean |  |
+
+### HealthStatus
+
+| Field | Type | Notes |
+|---|---|---|
+| `status` | string |  |
+| `node` | string |  |
+| `leader` | boolean |  |
+
+### ClusterMember
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string |  |
+| `name` | string |  |
+| `firstHeartbeat` | integer |  |
+| `lastHeartbeat` | integer |  |
+| `workers` | integer |  |
+| `leader` | boolean |  |
+| `alive` | boolean |  |
+
+### ClusterView
+
+| Field | Type | Notes |
+|---|---|---|
+| `self` | string |  |
+| `leader` | boolean |  |
+| `members` | list of `ClusterMember` |  |
+
+### WorkflowDefinition
+
+| Field | Type | Notes |
+|---|---|---|
+| `definition` | object |  |
+| `force` | boolean | RegisterWorkflow only: replace an already-registered (name, version) whose graph differs, instead of failing. The server refuses unless it is configured to allow it. |
+
+### WorkflowNames
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflows` | list of string |  |
+
+### RegisterWorkflowResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string |  |
+| `version` | string |  |
+| `nodes` | integer |  |
+
+### GetWorkflowRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string |  |
+| `version` | integer | *optional*; Absent = the latest registered version. A worker that binds handlers for one specific version asks for that version, so its signatures are checked against the graph it will actually serve. |
+
+### WorkflowVersion
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string |  |
+| `version` | integer |  |
+
+### BacklogCoverageRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `max` | integer | 0 = a server default |
+
+### BacklogSlice
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string |  |
+| `version` | integer |  |
+| `queue` | string |  |
+| `readyCount` | integer |  |
+| `oldestAvailableAt` | integer |  |
+| `covered` | boolean | False = no worker polling this node serves this queue at this version, so these tokens sit dispatchable and unclaimed. True for both COVERED and CONDITIONAL. |
+| `coverage` | string | COVERED: a live worker takes every such task. CONDITIONAL: only workers whose queue criteria test properties the slice does not fix (a step, a correlation id, an attribute) poll it, so some tasks may wait for none. UNCOVERED: no live worker takes any. |
+| `claimable` | integer | *optional*; Exactly how many of the slice's ready tasks some live worker would claim; unset for a conditional slice too large to count fully. |
+| `criteria` | list of string | The criteria a conditional slice depends on, as an operator reads them. |
+
+### BacklogCoverage
+
+| Field | Type | Notes |
+|---|---|---|
+| `slices` | list of `BacklogSlice` |  |
+| `livePollers` | integer |  |
+
+### StartInstanceRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string |  |
+| `context` | any JSON |  |
+| `version` | integer | *optional* |
+| `correlationId` | string | *optional* |
+
+### StartInstanceResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `instanceId` | string |  |
+| `workflow` | string |  |
+
+### InstanceView
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string |  |
+| `workflow` | string |  |
+| `version` | integer |  |
+| `status` | string |  |
+| `terminationReason` | string | *optional* |
+| `error` | string | *optional* |
+| `context` | any JSON |  |
+| `createdAt` | integer |  |
+| `updatedAt` | integer |  |
+
+### Token
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string |  |
+| `nodeId` | string |  |
+| `kind` | string |  |
+| `status` | string |  |
+| `activity` | string |  |
+| `attempt` | integer |  |
+| `availableAt` | integer |  |
+| `leaseOwner` | string | *optional* |
+| `lastError` | string | *optional* |
+| `startedAt` | integer | *optional*; When the step ran on the reporting side (LOCAL_*); absent when not reported. |
+| `finishedAt` | integer | *optional* |
+| `input` | any JSON | *optional*; What the step ran with and returned, where the server recorded it. A task's absent output left the context unchanged; a predicate's output is its branch. Either may be a truncation marker: {"$truncated": <length>, "head": "..."}. |
+| `output` | any JSON | *optional* |
+| `createdAt` | integer |  |
+
+### InstanceDetail
+
+| Field | Type | Notes |
+|---|---|---|
+| `instance` | `InstanceView` |  |
+| `tokens` | list of `Token` |  |
+
+### ListInstancesRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string | *optional* |
+| `status` | string | *optional* |
+| `limit` | integer |  |
+| `correlationId` | string | *optional*; When set, return only instances started with this correlation id (business key lookup). |
+
+### InstanceList
+
+| Field | Type | Notes |
+|---|---|---|
+| `instances` | list of `InstanceView` |  |
+
+### InstanceIdRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `instanceId` | string |  |
+
+### CancelInstanceRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `instanceId` | string |  |
+| `reason` | string |  |
+
+### SignalRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `instanceId` | string |  |
+| `signal` | string |  |
+| `payload` | any JSON |  |
+
+### CreateScheduleRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string |  |
+| `everyMillis` | integer | one of `cadence`; fixed interval |
+| `cron` | string | one of `cadence`; five-field cron, evaluated in UTC |
+| `context` | any JSON |  |
+
+### ScheduleView
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string |  |
+| `workflow` | string |  |
+| `everyMillis` | integer | 0 when cron-based |
+| `cron` | string | empty when interval-based |
+| `nextFireAt` | integer |  |
+| `createdAt` | integer |  |
+
+### ScheduleList
+
+| Field | Type | Notes |
+|---|---|---|
+| `schedules` | list of `ScheduleView` |  |
+
+### ScheduleIdRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string |  |
+
+### CancelInstanceResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `cancelled` | string |  |
+
+### PollRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `workerId` | string |  |
+| `queues` | list of string |  |
+| `max` | integer |  |
+| `leaseMillis` | integer |  |
+| `waitMillis` | integer |  |
+| `versions` | list of `WorkflowVersion` | Empty = serve every version, which is the default and what an unversioned worker sends. Non-empty = claim only these (workflow, version) pairs. |
+| `criteria` | list of `QueueCriteria` | The alternative to `queues`: one entry per queue served, each with its own predicate. Set one or the other, never both; a queue named twice is rejected. |
+
+### QueueCriteria
+
+| Field | Type | Notes |
+|---|---|---|
+| `queue` | string | required |
+| `where` | `CriteriaPredicate` | absent = every task on the queue |
+
+### CriteriaPredicate
+
+| Field | Type | Notes |
+|---|---|---|
+| `cmp` | `CriteriaComparison` | one of `p` |
+| `allOf` | `CriteriaJunction` | one of `p` |
+| `anyOf` | `CriteriaJunction` | one of `p` |
+| `negated` | `CriteriaPredicate` | one of `p` |
+
+### CriteriaJunction
+
+| Field | Type | Notes |
+|---|---|---|
+| `terms` | list of `CriteriaPredicate` |  |
+
+### CriteriaComparison
+
+| Field | Type | Notes |
+|---|---|---|
+| `field` | string |  |
+| `op` | string |  |
+| `args` | list of `CriteriaLiteral` |  |
+| `attribute` | string | the declared attribute's name, iff field is ATTRIBUTE |
+
+### CriteriaLiteral
+
+| Field | Type | Notes |
+|---|---|---|
+| `text` | string | one of `v` |
+| `integer` | integer | one of `v` |
+| `decimal` | string | one of `v`; exact decimal text, for an attribute |
+| `flag` | boolean | one of `v`; for an attribute |
+
+### TaskActivation
+
+| Field | Type | Notes |
+|---|---|---|
+| `taskId` | string |  |
+| `instanceId` | string |  |
+| `workflow` | string |  |
+| `version` | integer |  |
+| `nodeId` | string |  |
+| `stepName` | string |  |
+| `activity` | string |  |
+| `kind` | string |  |
+| `attempt` | integer |  |
+| `leaseExpiresAt` | integer |  |
+| `leaseOwner` | string |  |
+| `context` | any JSON |  |
+| `executionMode` | string | SERVER \| LOCAL_SYNC \| LOCAL_ASYNC (already resolved by the server) |
+| `baseContext` | any JSON | Set only for a forEach item step: `context` is then the ITEM's current value (any JSON value, scalars included), and `baseContext` is the frozen pre-forEach context (read-only for items). |
+| `itemIndex` | integer | the item's position in the input collection |
+| `itemMapKey` | string | the item's source key, when the input collection was a map |
+| `collectKey` | string | Set only for the combine of a forEach or of created branches: where its results are staged. A worker binds a created combine by it, since no graph it holds has the node. |
+| `armNames` | list of string | Set only for a fork's combine: the arms, in fork order, that it merges. |
+| `correlationId` | string | the instance's; empty when it has none |
+| `instanceCreatedAt` | integer |  |
+
+### TaskList
+
+| Field | Type | Notes |
+|---|---|---|
+| `tasks` | list of `TaskActivation` |  |
+| `retryAfterMillis` | integer | Backpressure hint: when > 0 the server is shedding load (it is over its memory threshold), so the worker should hold off this many millis before polling again instead of retrying immediately. The value already includes per-response jitter. |
+
+### EmittedEvent
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | string | handler-chosen; "wf." is reserved for lifecycle events |
+| `payload` | any JSON | a JSON object |
+
+### StepResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `nodeId` | string |  |
+| `merge` | any JSON | one of `outcome`; TASK: the complete next context |
+| `predicateValue` | boolean | one of `outcome`; PREDICATE: branch selector |
+| `startedAt` | integer | When the step ran, epoch millis; 0 = not reported. Kept on the token for duration stats. |
+| `finishedAt` | integer |  |
+| `events` | list of `EmittedEvent` | emitted while this step ran, in emission order |
+| `branches` | list of `CreatedBranch` | created while this step ran (Step.create), in creation order |
+
+### CreatedBranch
+
+| Field | Type | Notes |
+|---|---|---|
+| `input` | any JSON |  |
+| `key` | string | optional; all-or-none across one report |
+| `steps` | list of `BranchStep` | at least one |
+
+### BranchStep
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | the step name, signal name or sub-flow node name; blank for a sleep or fork |
+| `kind` | string | TASK \| PREDICATE \| SLEEP \| SIGNAL \| SUB_WORKFLOW \| FORK |
+| `compensable` | boolean |  |
+| `queue` | string | blank = the creating step's queue |
+| `retry` | any JSON | a retry policy as JSON; absent = the creating step's |
+| `sleepMillis` | integer |  |
+| `combine` | string | a TASK: creates branches, collected by this combine; a FORK: merges its arms |
+| `workflow` | string | SUB_WORKFLOW: the child workflow |
+| `escalation` | list of `BranchStep` | SIGNAL: run when the deadline in `sleepMillis` passes |
+| `arms` | list of `BranchArm` | FORK: each arm runs on its own copy of the context |
+| `body` | list of `BranchStep` | A PREDICATE with a body is a loop: the body runs, then again while the condition `name` holds. |
+| `loopBudget` | integer | a loop's most iterations; 0 = the engine's default |
+| `cases` | list of `BranchCase` | A PREDICATE with cases is a choice: the first case whose guard holds runs its steps. |
+
+### BranchCase
+
+| Field | Type | Notes |
+|---|---|---|
+| `guard` | string | blank: the otherwise, which must come last |
+| `steps` | list of `BranchStep` |  |
+
+### BranchArm
+
+| Field | Type | Notes |
+|---|---|---|
+| `steps` | list of `BranchStep` |  |
+
+### ReportedRun
+
+| Field | Type | Notes |
+|---|---|---|
+| `taskId` | string | the currently-leased token these steps start at |
+| `leaseOwner` | string |  |
+| `steps` | list of `StepResult` | ordered, at least one; one step is the ordinary case |
+| `final` | boolean | The worker will not take a continuation: it reached a boundary, filled its batch, or is draining. A statement about this worker, not about the workflow -- a mode that never chains hands back regardless. |
+| `criteria` | list of `QueueCriteria` | The criteria the worker polled with. The server leases a continuation back only when the entry for its queue matches it, so a chain cannot run a step the worker's poll would not have claimed. |
+
+### ReportStepsRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `runs` | list of `ReportedRun` | at least one, each naming a different instance |
+
+### RunApplied
+
+| Field | Type | Notes |
+|---|---|---|
+| `instanceStatus` | string | Any InstanceStatus, not just the terminal four: a concurrent failure can leave the instance COMPENSATING between a worker's local steps. Clients treat anything but RUNNING as "stop here". See docs/state-machines.md. RUNNING \| COMPLETED \| FAILED \| CANCELLED |
+| `leaseExpiresAt` | integer | \| COMPENSATING \| COMPENSATED \| COMPENSATION_FAILED renewed lease covering continued local execution |
+| `nextTaskId` | string | token to reference for the next local step (blank if handed back) |
+
+### RunOutcome
+
+| Field | Type | Notes |
+|---|---|---|
+| `taskId` | string |  |
+| `applied` | `RunApplied` | set when the run applied (`errorStatus` is 0) |
+| `errorStatus` | integer | 0 ok; else the status this run would have thrown |
+| `error` | string |  |
+
+### ReportStepsResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `results` | list of `RunOutcome` | one per submitted run, in submission order |
+
+### StepStatsRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string |  |
+| `version` | integer | 0 = the latest registered version |
+| `since` | integer | epoch millis; 0 = no lower bound |
+| `sample` | integer | newest settled steps considered; 0 = a server default |
+
+### NodeStats
+
+| Field | Type | Notes |
+|---|---|---|
+| `nodeId` | string |  |
+| `name` | string |  |
+| `count` | integer |  |
+| `meanMillis` | number |  |
+| `p50Millis` | integer |  |
+| `p95Millis` | integer |  |
+| `maxMillis` | integer |  |
+| `waitP50Millis` | integer | How long the step waited to be claimed by a worker (ready -> claimed). |
+| `waitP95Millis` | integer |  |
+
+### StepStats
+
+| Field | Type | Notes |
+|---|---|---|
+| `workflow` | string |  |
+| `version` | integer |  |
+| `nodes` | list of `NodeStats` | graph order is not implied; sort by p95 for a bottleneck view |
+
+### TaskFailureRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `taskId` | string |  |
+| `leaseOwner` | string |  |
+| `message` | string |  |
+| `retryable` | boolean |  |
+
+### HeartbeatRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `taskId` | string |  |
+| `leaseOwner` | string |  |
+| `extendMillis` | integer |  |
+
+### HeartbeatResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `leaseExpiresAt` | integer |  |
+
+### PollEventsRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `consumer` | string | named cursor; the first poll registers it |
+| `max` | integer |  |
+| `waitMillis` | integer | long-poll, clamped like PollTasks |
+| `startFrom` | integer | Start position when the first poll creates the cursor; ignored once it exists. 0 = tail (only events appended from now on), -1 = earliest retained, else a seq. |
+
+### EventView
+
+| Field | Type | Notes |
+|---|---|---|
+| `seq` | integer | strictly increasing within one shard's log; gaps are possible |
+| `instanceId` | string |  |
+| `workflow` | string |  |
+| `version` | integer |  |
+| `correlationId` | string |  |
+| `type` | string |  |
+| `createdAt` | integer |  |
+| `payload` | any JSON |  |
+| `nodeId` | string | the step that emitted it; empty for a lifecycle entry |
+| `shard` | integer | the shard whose log holds it; (shard, seq) identifies it |
+| `cursor` | string | opaque: the consumer's place just after this entry, for AckEvents |
+
+### EventList
+
+| Field | Type | Notes |
+|---|---|---|
+| `events` | list of `EventView` |  |
+| `retryAfterMillis` | integer | Same backpressure hint as TaskList: when > 0, hold off this many millis before polling again. |
+
+### AckEventsRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `consumer` | string |  |
+| `ackedSeq` | integer | Cumulative: acknowledges every event with seq <= this. Only for a log on one shard; a sharded log refuses it as INVALID_ARGUMENT. |
+| `ackedCursor` | string | Cumulative: the cursor of the last event handled, acknowledging it and everything before it. Takes precedence over `ackedSeq` when set. |

@@ -39,7 +39,7 @@ public final class Main {
         WiggleServer server = new WiggleServer(config, new WiggleStorageFactory()).start();
         boolean tls = config.tls().hasKeyStore();
         System.out.println("Wiggle server '" + config.nodeName() + "' on port " + server.port()
-                + " (gRPC: " + (tls ? "TLS" : "plaintext")
+                + " (API: " + (tls ? "HTTPS" : "plaintext HTTP")
                 + ", storage: " + storage(config) + ")");
         Optional<Portal> portal = Portal.fromEnvironment(server, config.tls(), System.getenv());
         portal.ifPresent(p -> System.out.println("Portal on " + (tls ? "https" : "http") + "://localhost:" + p.port()));

@@ -69,7 +69,7 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     public WiggleServer start() {
-        if (config.auth().grpc() != ServerConfig.GrpcAuth.OFF) authCache.start(AUTH_POLL_MILLIS);
+        if (config.auth().api() != ServerConfig.ApiAuth.OFF) authCache.start(AUTH_POLL_MILLIS);
         cluster.start();
         bundle.start();
         LOG.log(System.Logger.Level.INFO, () -> "server node '" + config.nodeName()

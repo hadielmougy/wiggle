@@ -227,9 +227,9 @@ enum Handback { SLEEP, FORK, JOIN, USER_TASK, OTHER_QUEUE, TERMINAL /* END */ }
 The worker stays pull-based: it still initiates the claim and pushes every `AdvanceRun`; the
 server never calls the worker.
 
-## 9. Server changes (`WorkflowEngine` / `GrpcApi`)
+## 9. Server changes (`WorkflowEngine` / `ControlPlaneApi`)
 
-- `GrpcApi.advanceRun(...)` → `engine.advanceRun(taskId, leaseOwner, steps, final)`.
+- `ControlPlaneApi.advanceRun(...)` → `engine.advanceRun(taskId, leaseOwner, steps, final)`.
 - `engine.advanceRun(...)`: instance-locked transaction that folds the batch through the existing
   transition logic (reuse `mergeContext`, predicate routing, retry policy, and `drive()` for the
   final boundary). This is "apply N completes atomically, keep the lease, report status".
@@ -286,7 +286,7 @@ marker on the parked token; keep the default `SERVER` for anyone who needs step-
   simply run any workflow in effective `SERVER` mode. A new worker that lacks the pinned version's
   flow spec falls back to `SERVER`. So mixed-version fleets stay correct, just not uniformly fast.
 - **Old servers** don't implement `AdvanceRun`; a new worker detects the unimplemented RPC and
-  falls back to `SERVER`. (gRPC returns `UNIMPLEMENTED`.)
+  falls back to `SERVER`. (The server answers `404` for a method it does not have.)
 
 ## 14. Rollout plan
 

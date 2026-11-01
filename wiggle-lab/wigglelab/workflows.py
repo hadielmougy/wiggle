@@ -1,6 +1,6 @@
 """Built-in workflow definitions, built directly as the engine's JSON-native definition form
 (see core.WorkflowDefinition#toJson). No Java compiler needed — the definition travels as an
-opaque JSON Struct over gRPC.
+opaque JSON object over the HTTP API.
 
 Because v1 deploys no workers, the useful flows are ones the *server* can advance on its own:
   * ``sleep``   — SLEEP -> END: an instance goes RUNNING then COMPLETED via server-side timers.

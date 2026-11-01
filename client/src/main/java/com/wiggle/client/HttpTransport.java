@@ -1,10 +1,9 @@
 package com.wiggle.client;
 
-import com.google.protobuf.InvalidProtocolBufferException;
-import com.google.protobuf.Message;
 import com.wiggle.core.Json;
 import com.wiggle.core.Tls;
-import com.wiggle.proto.ControlPlane;
+import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.core.wire.Msg;
 
 import java.io.IOException;
 import java.net.URI;
@@ -17,7 +16,7 @@ import java.time.Duration;
 import java.util.Map;
 
 /**
- * Calls the control plane over HTTP: {@code POST /v1/<Method>} with a protobuf body, as
+ * Calls the control plane over HTTP: {@code POST /v1/<Method>} with a JSON body, as
  * {@link ControlPlane} describes. HTTPS when TLS is configured or required.
  */
 final class HttpTransport implements AutoCloseable {
@@ -46,15 +45,15 @@ final class HttpTransport implements AutoCloseable {
     }
 
     /** Calls {@code method} with {@code request}, answering its response or throwing {@link RpcException}. */
-    <Q extends Message, R extends Message> R call(ControlPlane.Method<Q, R> method, Q request) {
+    Msg call(ControlPlane.Method method, Msg request) {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + method.path()))
-                .header("Content-Type", ControlPlane.PROTOBUF)
-                .header("Accept", ControlPlane.PROTOBUF)
-                .POST(HttpRequest.BodyPublishers.ofByteArray(request.toByteArray()));
+                .header("Content-Type", ControlPlane.JSON)
+                .header("Accept", ControlPlane.JSON)
+                .POST(HttpRequest.BodyPublishers.ofString(request.toString(), StandardCharsets.UTF_8));
         if (authorization != null) b.header("Authorization", authorization);
-        HttpResponse<byte[]> resp;
+        HttpResponse<String> resp;
         try {
-            resp = http.send(b.build(), HttpResponse.BodyHandlers.ofByteArray());
+            resp = http.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (HttpTimeoutException e) {
             throw new RpcException(0, "DEADLINE_EXCEEDED", e.getMessage(), false, e);
         } catch (IOException e) {
@@ -65,20 +64,20 @@ final class HttpTransport implements AutoCloseable {
         }
         if (resp.statusCode() == 200) {
             try {
-                return method.response().parseFrom(resp.body());
-            } catch (InvalidProtocolBufferException e) {
+                return Msg.parse(resp.body());
+            } catch (IllegalArgumentException e) {
                 throw new RpcException(500, "INTERNAL", "malformed response: " + e.getMessage(), false, e);
             }
         }
         throw failure(resp);
     }
 
-    private static RpcException failure(HttpResponse<byte[]> resp) {
+    private static RpcException failure(HttpResponse<String> resp) {
         int status = resp.statusCode();
         String code = "UNKNOWN";
         String message = "HTTP " + status;
         try {
-            if (Json.parse(new String(resp.body(), StandardCharsets.UTF_8)) instanceof Map<?, ?> m) {
+            if (Json.parse(resp.body()) instanceof Map<?, ?> m) {
                 if (m.get("code") instanceof String c) code = c;
                 if (m.get("message") instanceof String s) message = s;
             }

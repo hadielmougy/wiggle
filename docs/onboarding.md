@@ -57,8 +57,7 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 
 | Module | What's in it | Published artifact |
 |---|---|---|
-| `core` | JSON, the compiled graph model, retry policy, execution mode, wire records | `wiggle-core` |
-| `proto` | the `WiggleControlPlane` messages + the HTTP method table | `wiggle-proto` |
+| `core` | JSON, the compiled graph model, retry policy, execution mode, wire records, the API's methods and JSON messages | `wiggle-core` |
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
 | `server` | engine, cluster manager, housekeeper, HTTP API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
@@ -73,8 +72,8 @@ published). The server core is database-agnostic; it builds its store from an in
 `StorageFactory` and the backend is selected from the URL scheme ([§7.2](#72-storage-backends)).
 
 Two extras make wiggle painless behind a locked-down internal Artifactory: **`wiggle-bom`** (import
-it as a platform and every module — plus the shared protobuf stack — is version-aligned with no
-per-artifact pins), and **`wiggle-client-all`** (the client shaded into one jar with protobuf
+it as a platform and every module — and what it depends on — is version-aligned with no
+per-artifact pins), and **`wiggle-client-all`** (the client shaded into one jar with its retry library
 relocated under `com.wiggle.shaded`, so it has **zero transitive dependencies** and can't
 clash with anything already on the classpath). See the README's install section for snippets.
 
@@ -701,8 +700,8 @@ Off by default: any peer that can reach the API port may call any RPC. To decide
 2. Give each worker and service its key as `WIGGLE_API_KEY` (or `-Dwiggle.api.key`; the Go and
    Python clients send it as an `Authorization: Bearer <key>` header). Over plaintext the key is
    readable on the wire, so use TLS.
-3. Start the servers with `WIGGLE_GRPC_AUTH=log` and watch for `API auth (log mode)` warnings: each
-   is a call `enforce` would refuse. When there are none, switch to `WIGGLE_GRPC_AUTH=enforce`.
+3. Start the servers with `WIGGLE_API_AUTH=log` and watch for `API auth (log mode)` warnings: each
+   is a call `enforce` would refuse. When there are none, switch to `WIGGLE_API_AUTH=enforce`.
 
 Typical roles:
 
@@ -721,7 +720,7 @@ open long poll ends as it began, at most `WIGGLE_LONGPOLL_MAX_MILLIS` later.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `WIGGLE_GRPC_AUTH` | `off` | `off`, `log` (check and log, serve anyway) or `enforce` |
+| `WIGGLE_API_AUTH` | `off` | `off`, `log` (check and log, serve anyway) or `enforce` |
 | `WIGGLE_API_KEY` | *(unset)* | on a client or worker: the key it presents |
 
 ### 7.1a Transport security (TLS / mTLS)
@@ -914,4 +913,4 @@ WIGGLE_EXECUTION_MODE=LOCAL_ASYNC WIGGLE_JDBC_URL=jdbc:postgresql://localhost:54
 - `docs/local-execution.md` — execution modes, the wire protocol, the shared traversal seam, and
   the crash-replay contract per mode.
 - `RELEASING.md` — publishing to Maven Central.
-- `proto/src/main/proto/wiggle.proto` — the control-plane wire contract.
+- `docs/spec/70-api.md` — the control-plane wire contract: every method and JSON message.

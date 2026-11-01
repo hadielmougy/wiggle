@@ -101,7 +101,7 @@ Read by a server node that serves the portal.
 | `WIGGLE_DASHBOARD_VIEWER_USER` / `_PASSWORD` | `viewer` / *(unset)* | optional built-in read-only account |
 | `WIGGLE_CONSOLE_USERS_FILE` | `wiggle-users.json` | a console users file from before the auth shard, imported once ([WGL-SHARD-180](85-sharding.md#13-users-and-authorization)) |
 | `WIGGLE_AUTH_CACHE_MILLIS` | `30000` | how long a node serves a cached account, session or credential before reading it again |
-| `WIGGLE_GRPC_AUTH` | `off` | per-RPC authorization of the gRPC API: `off`, `log` or `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)) |
+| `WIGGLE_API_AUTH` | `off` | per-RPC authorization of the API: `off`, `log` or `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)) |
 | `WIGGLE_API_KEY` | *(unset)* | on a client or worker, the API key it presents |
 | `WIGGLE_SEARCH_ENABLED` | `false` | full-text search on the one database (a topology enables it with a `search` shard instead) |
 | `WIGGLE_SEARCH_RETENTION_MILLIS` | `2592000000` | how long a search document outlives its instance's last change (30 days) |
@@ -162,7 +162,7 @@ It was a separate console process; the requirements that described that are with
 their ids.
 
 **WGL-OPS-040** (*withdrawn*, by [WGL-SHARD-175](85-sharding.md#12-the-portal-in-the-server)) The
-console MUST be a separate process and a **pure gRPC client** — no engine, no storage — pointed at a
+console MUST be a separate process and a **pure API client** — no engine, no storage — pointed at a
 cluster by `WIGGLE_URL`.
 
 **WGL-OPS-041** (*withdrawn*, by [WGL-SHARD-175](85-sharding.md#12-the-portal-in-the-server)) Server
@@ -177,7 +177,7 @@ schedules), **Signals** (waits pending delivery), **Backlog** (dispatchable work
 **Users** (admins only).
 
 **WGL-OPS-042a** (*withdrawn*: the portal reads the engine, which enumerates signal waits) The
-**Signals** view MUST be empty against a gRPC backend today: the control plane has no RPC that
+**Signals** view MUST be empty against a remote backend today: the control plane has no RPC that
 enumerates parked signal waits. Delivering a signal from the console works regardless.
 
 **WGL-OPS-043** (MUST) There MUST be two built-in roles: **admin** does everything; **viewer** sees
@@ -233,7 +233,7 @@ certificate on a client or worker. Unset means plaintext.
 
 **WGL-OPS-063** (MUST) TLS MUST NOT be mistaken for authorization: it secures the channel and, with mTLS,
 authenticates the peer. What a peer may call is decided by per-RPC authorization when
-`WIGGLE_GRPC_AUTH` is `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)); with it off,
+`WIGGLE_API_AUTH` is `enforce` ([chapter 70 §11](70-api.md#11-per-rpc-authorization)); with it off,
 any trusted peer may call any RPC.
 
 *Verified by:* `tests/TlsTest`.
@@ -295,9 +295,9 @@ and weekly renewal that restarts only on a real change.
 **WGL-OPS-087** (SHOULD) The portal in that posture SHOULD bind to loopback so it is reached over an SSH
 tunnel rather than exposed.
 
-**WGL-OPS-088** (MUST) Published artifacts MUST include a BOM keeping every module and the shared
-protobuf stack version-aligned, and a **shaded** client (`wiggle-client-all`) with protobuf
-and Guava relocated so it has zero transitive dependencies.
+**WGL-OPS-088** (MUST) Published artifacts MUST include a BOM keeping every module and its
+dependencies version-aligned, and a **shaded** client (`wiggle-client-all`) with its retry library
+relocated so it has zero transitive dependencies.
 
 *Verified by:* `tests/ServerRoleTest`, `dist/RoleTest`, `scripts/regression-released-image.sh`,
 `scripts/kind-up.sh`.
@@ -335,7 +335,7 @@ turns it on. It shards one namespace's instances across **cells** (each a cluste
 database) and is never on the data path.
 
 **WGL-COORD-001** (MUST) The server and the coordinator MUST NOT depend on each other in source. The
-only link between them is the gRPC contract, and they are composed in the distribution.
+only link between them is the HTTP contract, and they are composed in the distribution.
 
 **WGL-COORD-002** (MUST) A coordinator MUST run no engine and no cell, and MUST use its **own** database,
 separate from any cell's ([WGL-STOR-047](80-storage.md)).
@@ -402,7 +402,7 @@ stored by the coordinator.
 **WGL-COORD-024** (MUST) A coordinated node MUST set a cell id, and a cell id already bound to a
 different cell MUST be refused.
 
-**WGL-COORD-025** (MUST) Resolution MUST answer a gRPC **target plus TLS**, not a bare host and port, and
+**WGL-COORD-025** (MUST) Resolution MUST answer an API **target plus TLS**, not a bare host and port, and
 MUST be region-aware: a caller's region gets a region-appropriate address and never a different cell.
 
 **WGL-COORD-026** (MUST) `Resolve` MUST take either an instance id (routed by its parsed

@@ -565,7 +565,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | *(unset)* | keystore ⇒ TLS on; **unset = plaintext** |
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_SEARCH_ENABLED` | `false` | **full-text search** over instances on the one database; a topology gets it from a `search` shard (`WIGGLE_SEARCH_RETENTION_MILLIS`, `WIGGLE_SEARCH_WORKFLOWS`) |
-| `WIGGLE_GRPC_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
+| `WIGGLE_API_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
 | `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
 
 ### Portal
@@ -580,7 +580,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_*` | *(unset)* | the same keystore serves the portal over HTTPS |
 
 > **Security posture in one line:** TLS everywhere is a keystore away; a truststore on the server
-> upgrades it to mTLS; `WIGGLE_GRPC_AUTH=enforce` checks every gRPC call against the caller's role,
+> upgrades it to mTLS; `WIGGLE_API_AUTH=enforce` checks every API call against the caller's role,
 > by API key or certificate; the portal has accounts with the same permission-set roles.
 
 ---
@@ -590,7 +590,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 Where it's going — the honest list:
 
 - [x] **Per-RPC authorization** — API keys and client certificates bound to permission-set roles,
-      scoped to a workflow or queue (`WIGGLE_GRPC_AUTH`).
+      scoped to a workflow or queue (`WIGGLE_API_AUTH`).
 - [ ] **SSO for the portal.**
 - [x] **Compensation helpers** — first-class saga/compensation patterns (today a failed instance
       stops; it does not roll back).
@@ -629,7 +629,7 @@ implementation("sh.wiggle:wiggle-server:0.0.10")     // only to embed the server
 implementation("sh.wiggle:wiggle-postgres:0.0.10")   // + your storage module
 ```
 
-Prefer the **BOM** so every wiggle module (and the shared protobuf stack) stays version-aligned
+Prefer the **BOM** so every wiggle module stays version-aligned
 with no per-dependency pins:
 
 ```kotlin
@@ -638,7 +638,7 @@ implementation("sh.wiggle:wiggle-client")            // versions come from the B
 ```
 
 Behind a locked-down internal Artifactory? Use the **shaded** client — one self-contained jar with
-protobuf relocated under `com.wiggle.shaded`, so it has **zero transitive
+its retry library relocated under `com.wiggle.shaded`, so it has **zero transitive
 dependencies** and cannot clash with anything already on the app's classpath:
 
 ```kotlin

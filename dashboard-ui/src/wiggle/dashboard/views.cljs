@@ -857,7 +857,7 @@
 (defn credentials-list []
   [:section.panel
    [:h2 "API credentials" [:span.count (count (:credentials @db))]]
-   [:p.muted "What workers and services present to the gRPC API, when it checks calls (WIGGLE_GRPC_AUTH)."]
+   [:p.muted "What workers and services present to the API, when it checks calls (WIGGLE_API_AUTH)."]
    (if-not (seq (:credentials @db))
      [:div.empty "no credentials yet"]
      [:table

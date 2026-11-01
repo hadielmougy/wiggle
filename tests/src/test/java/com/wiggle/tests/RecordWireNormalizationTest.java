@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * Typed records fed to the client entry points that take a workflow NAME rather than a
  * FlowSpec, plus a record signal payload. These paths hand the caller's object to the wire
- * layer directly, and ProtoJson only speaks the JSON model -- so the client must flatten
- * records first, or the caller gets "cannot convert to protobuf Value".
+ * layer directly, and the wire only speaks the JSON model -- so the client must flatten
+ * records first, or the caller's object cannot be written as JSON.
  */
 class RecordWireNormalizationTest {
 

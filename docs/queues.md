@@ -292,10 +292,10 @@ even inside a local chain, a step on another queue crosses to another service. E
 | default queue = workflow name; per-step `queue` | `client/**/dsl/Pipeline.java`, `client/**/dsl/WorkflowStream.java` |
 | queue compiled onto a node; worker-step set | `core/**/Node.java`, `client/**/dsl/WorkflowDefinition.java` |
 | a worker's served queues + specialization | `client/**/worker/Worker.java`, `client/**/worker/WorkerOptions.java` |
-| long-poll for served queues | `client/**/worker/Worker.java` (`pollLoop`), `server/**/grpc/GrpcApi.java` |
+| long-poll for served queues | `client/**/worker/Worker.java` (`pollLoop`), `server/**/api/ControlPlaneApi.java` |
 | stamp token queue / claim-filter by queue | `server/**/engine/WorkflowEngine.java` (`parkAtWorkerStep`), `server/**/store/*Storage.java` (`claimTasks`) |
 | local-vs-handback decision | `core/**/GraphTraversal.java` (`classify`), `server/**/engine/WorkflowEngine.java` (`applyRun`) |
-| RPCs (`PollTasks`, `ReportSteps`, `FailTask`, …) | `proto/src/main/proto/wiggle.proto` |
+| RPCs (`PollTasks`, `ReportSteps`, `FailTask`, …) | `docs/spec/70-api.md` §13, `core/**/wire/ControlPlane.java` |
 
 ---
 

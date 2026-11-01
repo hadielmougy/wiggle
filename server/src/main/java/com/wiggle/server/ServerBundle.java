@@ -62,7 +62,7 @@ final class ServerBundle {
             this.upkeepMillis = 0;
         }
         this.api = new HttpApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
-                config.tls(), config.memory(), new Authorizer(config.auth().grpc(), authCache), search);
+                config.tls(), config.memory(), new Authorizer(config.auth().api(), authCache), search);
         // The dashboard moved to the console; the former dashboard port now serves only /healthz.
         this.health = config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
     }

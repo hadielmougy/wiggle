@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TestPortsTest {
 
-    /** A listener another process might hold: {@code SO_REUSEADDR} on, as Java and gRPC set it. */
+    /** A listener another process might hold: {@code SO_REUSEADDR} on, as Java sets it by default. */
     private static ServerSocket hold(InetSocketAddress at) throws Exception {
         ServerSocket s = new ServerSocket();
         s.setReuseAddress(true);
@@ -30,7 +30,7 @@ class TestPortsTest {
     }
 
     @Test
-    @DisplayName("a port held on the wildcard address, as a gRPC server holds it, is not handed out")
+    @DisplayName("a port held on the wildcard address, as a server holds it, is not handed out")
     void wildcardHolderIsSeen() throws Exception {
         int port = TestPorts.free();
         try (ServerSocket ignored = hold(new InetSocketAddress(port))) {

@@ -256,7 +256,7 @@ may treat a child's `COMPENSATION_FAILED` as its own compensation failure — co
 | Capture | `WorkflowEngine.applyStepResult` (`:881`) | on a compensatable step's completion, append a comp-log entry with the returned-context snapshot |
 | Phase | `WorkflowEngine.failInstance` (`:1366`) + new `driveCompensation` | branch into `COMPENSATING`; mint/settle compensator tokens over the existing dispatch path; derive the cursor; land `COMPENSATED`/`COMPENSATION_FAILED` |
 | States | `Rows.InstanceStatus` (`store/Rows.java:9`) | add the three states; teach terminal checks and the purge/retention path |
-| Cancel | `WorkflowEngine.cancel` (`:158`), `WiggleClient.cancel`, proto | optional `compensate` flag |
+| Cancel | `WorkflowEngine.cancel` (`:158`), `WiggleClient.cancel`, the `CancelInstanceRequest` message | optional `compensate` flag |
 | Console | dashboard SPA + `DashboardData` | show `COMPENSATING`/`COMPENSATED`/`COMPENSATION_FAILED`, the comp-log, and a "retry compensator" action for the failed case |
 | Docs | `docs/cookbook.md`, a new pattern | a worked saga; retire the "no rollback" caveat in `README.md:497` and `patterns/retries` |
 

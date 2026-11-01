@@ -1,4 +1,4 @@
-# The wiggle server nodes. Each replica is one cluster node: they all serve the gRPC
+# The wiggle server nodes. Each replica is one cluster node: they all serve the HTTP
 # control plane and pull work; exactly one is elected leader for housekeeping. Scale
 # the replica count to change the number of nodes (scripts/kind-up.sh does this).
 apiVersion: apps/v1

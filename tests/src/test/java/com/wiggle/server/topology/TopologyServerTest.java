@@ -17,7 +17,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/** A server started from a topology document, seen from outside: over gRPC and in its node row. */
+/** A server started from a topology document, seen from outside: over the API and in its node row. */
 class TopologyServerTest {
 
     private static ServerConfig config(Topology t) {
@@ -43,7 +43,7 @@ class TopologyServerTest {
                 """.formatted(base), Map.of());
     }
 
-    @Test @DisplayName("an id on a retired shard is NOT_FOUND over gRPC")
+    @Test @DisplayName("an id on a retired shard is NOT_FOUND over the API")
     void aRetiredShardIsNotFound() throws Exception {
         try (WiggleServer server = new WiggleServer(config(topology()), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {

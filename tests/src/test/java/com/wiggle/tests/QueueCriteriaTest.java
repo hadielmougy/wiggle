@@ -13,10 +13,8 @@ import com.wiggle.core.TaskActivation;
 import com.wiggle.core.criteria.AttrType;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
-import com.wiggle.proto.CriteriaComparison;
-import com.wiggle.proto.CriteriaPredicate;
-import com.wiggle.proto.ControlPlane;
-import com.wiggle.proto.PollRequest;
+import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.core.wire.Msg;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -290,24 +288,24 @@ class QueueCriteriaTest {
     void wireChecks() throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start()) {
             String target = server.baseUrl();
-            com.wiggle.proto.QueueCriteria ok = com.wiggle.proto.QueueCriteria.newBuilder().setQueue("q").build();
+            Msg ok = Msg.create().put("queue", "q");
             RawApi.Answer both = RawApi.call(target, ControlPlane.POLL_TASKS,
-                    PollRequest.newBuilder().setWorkerId("w").addQueues("q").addCriteria(ok).build(), null);
+                    Msg.create().put("workerId", "w").add("queues", "q").add("criteria", ok), null);
             assertEquals("INVALID_ARGUMENT", both.code());
 
-            com.wiggle.proto.QueueCriteria unknownField = ok.toBuilder().setWhere(CriteriaPredicate.newBuilder()
-                    .setCmp(CriteriaComparison.newBuilder().setField("lease_owner").setOp("IS_NULL"))).build();
+            Msg unknownField = Msg.create().put("queue", "q").put("where", Msg.create()
+                    .put("cmp", Msg.create().put("field", "lease_owner").put("op", "IS_NULL")));
             RawApi.Answer bad = RawApi.call(target, ControlPlane.POLL_TASKS,
-                    PollRequest.newBuilder().setWorkerId("w").addCriteria(unknownField).build(), null);
+                    Msg.create().put("workerId", "w").add("criteria", unknownField), null);
             assertEquals("INVALID_ARGUMENT", bad.code());
             assertTrue(bad.message().contains("lease_owner"), bad.message());
 
-            RawApi.Answer noQueue = RawApi.call(target, ControlPlane.POLL_TASKS, PollRequest.newBuilder().setWorkerId("w")
-                    .addCriteria(com.wiggle.proto.QueueCriteria.getDefaultInstance()).build(), null);
+            RawApi.Answer noQueue = RawApi.call(target, ControlPlane.POLL_TASKS,
+                    Msg.create().put("workerId", "w").add("criteria", Msg.create()), null);
             assertEquals("INVALID_ARGUMENT", noQueue.code());
 
             RawApi.Answer twice = RawApi.call(target, ControlPlane.POLL_TASKS,
-                    PollRequest.newBuilder().setWorkerId("w").addCriteria(ok).addCriteria(ok).build(), null);
+                    Msg.create().put("workerId", "w").add("criteria", ok).add("criteria", ok), null);
             assertEquals("INVALID_ARGUMENT", twice.code());
             assertTrue(twice.message().contains("more than one"), twice.message());
         }

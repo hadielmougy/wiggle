@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Schedule management over the gRPC control plane: create (interval and cron), list, delete. */
+/** Schedule management over the control-plane API: create (interval and cron), list, delete. */
 class ScheduleClientTest {
 
     /** The step this spec names; a worker binds it by name. */

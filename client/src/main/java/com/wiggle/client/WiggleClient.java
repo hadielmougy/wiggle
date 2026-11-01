@@ -5,7 +5,8 @@ import com.wiggle.client.worker.PollResult;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.Tls;
-import com.wiggle.proto.*;
+import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.core.wire.Msg;
 import io.github.shield.internal.RetriesExhaustedException;
 
 import java.util.*;
@@ -72,10 +73,9 @@ public final class WiggleClient implements AutoCloseable {
      * rewrite a graph in production.
      */
     public void register(FlowSpec flowSpec, boolean force) {
-        call(() -> transport.call(ControlPlane.REGISTER_WORKFLOW, WorkflowDefinition.newBuilder()
-                .setDefinition(ProtoJson.toStruct(flowSpec.definition().toJson()))
-                .setForce(force)
-                .build()));
+        call(() -> transport.call(ControlPlane.REGISTER_WORKFLOW, Msg.create()
+                .put("definition", flowSpec.definition().toJson())
+                .put("force", force)));
     }
 
     /**
@@ -85,7 +85,7 @@ public final class WiggleClient implements AutoCloseable {
      */
     public List<BacklogSlice> backlogCoverage(int max) {
         return Wire.backlogSlices(call(() -> transport.call(ControlPlane.GET_BACKLOG_COVERAGE,
-                com.wiggle.proto.BacklogCoverageRequest.newBuilder().setMax(max).build())));
+                Msg.create().put("max", max))));
     }
 
     /**
@@ -109,21 +109,21 @@ public final class WiggleClient implements AutoCloseable {
      */
     public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
                                int limit, boolean partialOk, List<AttributeFilter> attributes) {
-        com.wiggle.proto.SearchRequest.Builder req = com.wiggle.proto.SearchRequest.newBuilder()
-                .setText(text == null ? "" : text).setLimit(limit).setPartialOk(partialOk);
-        for (AttributeFilter f : attributes) req.addAttributes(f.toProto());
-        if (workflow != null) req.setWorkflow(workflow);
-        if (status != null) req.setStatus(status);
-        if (updatedFrom != null) req.setUpdatedFrom(updatedFrom);
-        if (updatedTo != null) req.setUpdatedTo(updatedTo);
-        com.wiggle.proto.SearchResult r = call(() -> transport.call(ControlPlane.SEARCH_INSTANCES, req.build()));
+        Msg req = Msg.create()
+                .put("text", text == null ? "" : text).put("limit", limit).put("partialOk", partialOk);
+        for (AttributeFilter f : attributes) req.add("attributes", f.toWire());
+        if (workflow != null) req.put("workflow", workflow);
+        if (status != null) req.put("status", status);
+        if (updatedFrom != null) req.put("updatedFrom", updatedFrom);
+        if (updatedTo != null) req.put("updatedTo", updatedTo);
+        Msg r = call(() -> transport.call(ControlPlane.SEARCH_INSTANCES, req));
         List<SearchHit> hits = new ArrayList<>();
-        for (com.wiggle.proto.SearchHit h : r.getHitsList()) {
-            hits.add(new SearchHit(h.getInstanceId(), h.getWorkflow(), h.getVersion(), h.getStatus(),
-                    h.getCorrelationId().isEmpty() ? null : h.getCorrelationId(), h.getCreatedAt(), h.getUpdatedAt(),
-                    h.getScore(), h.getPurged()));
+        for (Msg h : r.msgs("hits")) {
+            hits.add(new SearchHit(h.str("instanceId"), h.str("workflow"), h.integer("version"), h.str("status"),
+                    h.str("correlationId").isEmpty() ? null : h.str("correlationId"), h.lng("createdAt"), h.lng("updatedAt"),
+                    h.dbl("score"), h.bool("purged")));
         }
-        return new SearchResult(hits, r.getPartial());
+        return new SearchResult(hits, r.bool("partial"));
     }
 
     /**
@@ -137,18 +137,18 @@ public final class WiggleClient implements AutoCloseable {
         public static AttributeFilter gt(String name, Number value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.GREATER_THAN, value); }
         public static AttributeFilter ge(String name, Number value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.GREATER_THAN_OR_EQUAL, value); }
 
-        com.wiggle.proto.SearchAttributeFilter toProto() {
-            com.wiggle.proto.CriteriaLiteral.Builder v = com.wiggle.proto.CriteriaLiteral.newBuilder();
+        Msg toWire() {
+            Msg v = Msg.create();
             switch (value) {
-                case String s -> v.setText(s);
-                case Boolean b -> v.setFlag(b);
-                case Long l -> v.setInteger(l);
-                case Integer i -> v.setInteger(i);
-                case Number n -> v.setDecimal(new java.math.BigDecimal(n.toString()).toPlainString());
+                case String s -> v.put("text", s);
+                case Boolean b -> v.put("flag", b);
+                case Long l -> v.put("integer", l);
+                case Integer i -> v.put("integer", i);
+                case Number n -> v.put("decimal", new java.math.BigDecimal(n.toString()).toPlainString());
                 case null, default -> throw new IllegalArgumentException("attribute '" + name
                         + "' compares with a String, Number or Boolean, got " + value);
             }
-            return com.wiggle.proto.SearchAttributeFilter.newBuilder().setName(name).setOp(op.name()).setValue(v).build();
+            return Msg.create().put("name", name).put("op", op.name()).put("value", v);
         }
     }
 
@@ -179,10 +179,10 @@ public final class WiggleClient implements AutoCloseable {
      * means the latest. Slowest 95th percentile first, so the head of the list is the bottleneck.
      */
     public java.util.List<com.wiggle.core.NodeStats> stepStats(String workflow, Integer version, long since, int sample) {
-        com.wiggle.proto.StepStatsRequest.Builder req = com.wiggle.proto.StepStatsRequest.newBuilder()
-                .setWorkflow(workflow).setSince(since).setSample(sample);
-        if (version != null) req.setVersion(version);
-        return Wire.nodeStats(call(() -> transport.call(ControlPlane.GET_STEP_STATS, req.build())));
+        Msg req = Msg.create()
+                .put("workflow", workflow).put("since", since).put("sample", sample);
+        if (version != null) req.put("version", version);
+        return Wire.nodeStats(call(() -> transport.call(ControlPlane.GET_STEP_STATS, req)));
     }
 
     /**
@@ -196,8 +196,8 @@ public final class WiggleClient implements AutoCloseable {
      * {@link #ackEvents(String, String)} and the last entry's {@link com.wiggle.core.EventView#cursor()}.
      */
     public java.util.List<com.wiggle.core.EventView> pollEvents(String consumer, int max, long waitMillis, long startFrom) {
-        return Wire.events(call(() -> transport.call(ControlPlane.POLL_EVENTS, com.wiggle.proto.PollEventsRequest.newBuilder()
-                .setConsumer(consumer).setMax(max).setWaitMillis(waitMillis).setStartFrom(startFrom).build())));
+        return Wire.events(call(() -> transport.call(ControlPlane.POLL_EVENTS, Msg.create()
+                .put("consumer", consumer).put("max", max).put("waitMillis", waitMillis).put("startFrom", startFrom))));
     }
 
     /**
@@ -205,15 +205,15 @@ public final class WiggleClient implements AutoCloseable {
      * is and every event served before it; cumulative, never backwards.
      */
     public void ackEvents(String consumer, String cursor) {
-        call(() -> transport.call(ControlPlane.ACK_EVENTS, com.wiggle.proto.AckEventsRequest.newBuilder()
-                .setConsumer(consumer).setAckedCursor(cursor).build()));
+        call(() -> transport.call(ControlPlane.ACK_EVENTS, Msg.create()
+                .put("consumer", consumer).put("ackedCursor", cursor)));
     }
 
     /** Acknowledges every event up to {@code ackedSeq} for {@code consumer}; cumulative, never backwards.
      *  Only for a log that is not sharded: a sharded one refuses it, and takes {@link #ackEvents(String, String)}. */
     public void ackEvents(String consumer, long ackedSeq) {
-        call(() -> transport.call(ControlPlane.ACK_EVENTS, com.wiggle.proto.AckEventsRequest.newBuilder()
-                .setConsumer(consumer).setAckedSeq(ackedSeq).build()));
+        call(() -> transport.call(ControlPlane.ACK_EVENTS, Msg.create()
+                .put("consumer", consumer).put("ackedSeq", ackedSeq)));
     }
 
     /**
@@ -227,10 +227,10 @@ public final class WiggleClient implements AutoCloseable {
 
     /** {@code version} null = the latest registered; otherwise that exact version. */
     public com.wiggle.core.WorkflowDefinition getWorkflow(String name, Integer version) {
-        GetWorkflowRequest.Builder req = GetWorkflowRequest.newBuilder().setName(name);
-        if (version != null) req.setVersion(version);
-        WorkflowDefinition def = call(() -> transport.call(ControlPlane.GET_WORKFLOW, req.build()));
-        return com.wiggle.core.WorkflowDefinition.fromJson(ProtoJson.fromStruct(def.getDefinition()));
+        Msg req = Msg.create().put("name", name);
+        if (version != null) req.put("version", version);
+        Msg def = call(() -> transport.call(ControlPlane.GET_WORKFLOW, req));
+        return com.wiggle.core.WorkflowDefinition.fromJson(def.obj("definition"));
     }
 
     public String start(String workflow, Object context) {
@@ -242,45 +242,45 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public String start(String workflow, Object context, Integer version, String correlationId) {
-        StartInstanceRequest.Builder req = StartInstanceRequest.newBuilder().setWorkflow(workflow);
-        if (context != null) req.setContext(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(context)));
-        if (version != null) req.setVersion(version);
-        if (correlationId != null) req.setCorrelationId(correlationId);
-        return call(() -> transport.call(ControlPlane.START_INSTANCE, req.build())).getInstanceId();
+        Msg req = Msg.create().put("workflow", workflow);
+        if (context != null) req.put("context", com.wiggle.core.RecordMapper.toJson(context));
+        if (version != null) req.put("version", version);
+        if (correlationId != null) req.put("correlationId", correlationId);
+        return call(() -> transport.call(ControlPlane.START_INSTANCE, req)).str("instanceId");
     }
 
     public com.wiggle.core.InstanceView instance(String instanceId) {
-        InstanceDetail detail = call(() -> transport.call(ControlPlane.GET_INSTANCE,
-                InstanceIdRequest.newBuilder().setInstanceId(instanceId).build()));
-        return Wire.instanceView(detail.getInstance());
+        Msg detail = call(() -> transport.call(ControlPlane.GET_INSTANCE,
+                Msg.create().put("instanceId", instanceId)));
+        return Wire.instanceView(detail.msg("instance"));
     }
 
     /** An instance plus its tokens (the {@code GetInstance} detail; {@link #instance} drops the tokens). */
     public InstanceWithTokens instanceDetail(String instanceId) {
-        InstanceDetail detail = call(() -> transport.call(ControlPlane.GET_INSTANCE,
-                InstanceIdRequest.newBuilder().setInstanceId(instanceId).build()));
+        Msg detail = call(() -> transport.call(ControlPlane.GET_INSTANCE,
+                Msg.create().put("instanceId", instanceId)));
         java.util.List<TokenInfo> tokens = new java.util.ArrayList<>();
-        for (Token t : detail.getTokensList()) tokens.add(Wire.tokenInfo(t));
-        return new InstanceWithTokens(Wire.instanceView(detail.getInstance()), tokens);
+        for (Msg t : detail.msgs("tokens")) tokens.add(Wire.tokenInfo(t));
+        return new InstanceWithTokens(Wire.instanceView(detail.msg("instance")), tokens);
     }
 
     /** The names of all registered workflows. */
     public java.util.List<String> workflowNames() {
-        return call(() -> transport.call(ControlPlane.LIST_WORKFLOWS, Empty.getDefaultInstance())).getWorkflowsList();
+        return call(() -> transport.call(ControlPlane.LIST_WORKFLOWS, Msg.create())).strs("workflows");
     }
 
     /** Lists instances filtered by {@code workflow} and/or {@code status} (either may be null), newest first. */
     public java.util.List<com.wiggle.core.InstanceView> listInstances(String workflow, String status, int limit) {
-        ListInstancesRequest.Builder req = ListInstancesRequest.newBuilder().setLimit(limit);
-        if (workflow != null) req.setWorkflow(workflow);
-        if (status != null) req.setStatus(status);
-        InstanceList list = call(() -> transport.call(ControlPlane.LIST_INSTANCES, req.build()));
+        Msg req = Msg.create().put("limit", limit);
+        if (workflow != null) req.put("workflow", workflow);
+        if (status != null) req.put("status", status);
+        Msg list = call(() -> transport.call(ControlPlane.LIST_INSTANCES, req));
         java.util.List<com.wiggle.core.InstanceView> out = new java.util.ArrayList<>();
-        for (InstanceView v : list.getInstancesList()) out.add(Wire.instanceView(v));
+        for (Msg v : list.msgs("instances")) out.add(Wire.instanceView(v));
         return out;
     }
 
-    /** An instance view plus the (proto-shaped) tokens driving it. */
+    /** An instance view plus the tokens driving it. */
     public record InstanceWithTokens(com.wiggle.core.InstanceView instance, java.util.List<TokenInfo> tokens) {}
 
     /**
@@ -298,10 +298,10 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public java.util.List<com.wiggle.core.InstanceView> findByCorrelation(String correlationId, int limit) {
-        InstanceList list = call(() -> transport.call(ControlPlane.LIST_INSTANCES, ListInstancesRequest.newBuilder()
-                .setCorrelationId(correlationId).setLimit(limit).build()));
+        Msg list = call(() -> transport.call(ControlPlane.LIST_INSTANCES, Msg.create()
+                .put("correlationId", correlationId).put("limit", limit)));
         java.util.List<com.wiggle.core.InstanceView> out = new java.util.ArrayList<>();
-        for (InstanceView v : list.getInstancesList()) out.add(Wire.instanceView(v));
+        for (Msg v : list.msgs("instances")) out.add(Wire.instanceView(v));
         return out;
     }
 
@@ -320,14 +320,13 @@ public final class WiggleClient implements AutoCloseable {
     }
 
     public void cancel(String instanceId, String reason) {
-        call(() -> transport.call(ControlPlane.CANCEL_INSTANCE, CancelInstanceRequest.newBuilder()
-                .setInstanceId(instanceId)
-                .setReason(reason == null ? "" : reason)
-                .build()));
+        call(() -> transport.call(ControlPlane.CANCEL_INSTANCE, Msg.create()
+                .put("instanceId", instanceId)
+                .put("reason", reason == null ? "" : reason)));
     }
 
     public Map<String, Object> cluster() {
-        return Wire.clusterMap(call(() -> transport.call(ControlPlane.GET_CLUSTER, Empty.getDefaultInstance())));
+        return Wire.clusterMap(call(() -> transport.call(ControlPlane.GET_CLUSTER, Msg.create())));
     }
 
     public PollResult poll(String workerId, Collection<String> queues, int max,
@@ -342,15 +341,15 @@ public final class WiggleClient implements AutoCloseable {
     public PollResult poll(String workerId, Collection<String> queues,
                            Collection<com.wiggle.core.WorkflowVersion> versions, int max,
                            long leaseMillis, long waitMillis) {
-        PollRequest.Builder b = PollRequest.newBuilder()
-                .setWorkerId(workerId)
-                .addAllQueues(queues)
-                .setMax(max)
-                .setLeaseMillis(leaseMillis)
-                .setWaitMillis(waitMillis);
+        Msg b = Msg.create()
+                .put("workerId", workerId)
+                .put("queues", queues)
+                .put("max", max)
+                .put("leaseMillis", leaseMillis)
+                .put("waitMillis", waitMillis);
         for (com.wiggle.core.WorkflowVersion v : versions) {
-            b.addVersions(com.wiggle.proto.WorkflowVersion.newBuilder()
-                    .setWorkflow(v.workflow()).setVersion(v.version()).build());
+            b.add("versions", Msg.create()
+                    .put("workflow", v.workflow()).put("version", v.version()));
         }
         return poll(b);
     }
@@ -362,81 +361,78 @@ public final class WiggleClient implements AutoCloseable {
     public PollResult poll(String workerId, List<com.wiggle.core.criteria.QueueCriteria> criteria,
                            Collection<com.wiggle.core.WorkflowVersion> versions, int max,
                            long leaseMillis, long waitMillis) {
-        PollRequest.Builder b = PollRequest.newBuilder()
-                .setWorkerId(workerId)
-                .setMax(max)
-                .setLeaseMillis(leaseMillis)
-                .setWaitMillis(waitMillis);
+        Msg b = Msg.create()
+                .put("workerId", workerId)
+                .put("max", max)
+                .put("leaseMillis", leaseMillis)
+                .put("waitMillis", waitMillis);
         for (com.wiggle.core.criteria.QueueCriteria c : com.wiggle.core.criteria.QueueCriteria.forPoll(criteria)) {
-            b.addCriteria(Wire.criteria(c));
+            b.add("criteria", Wire.criteria(c));
         }
         for (com.wiggle.core.WorkflowVersion v : versions) {
-            b.addVersions(com.wiggle.proto.WorkflowVersion.newBuilder()
-                    .setWorkflow(v.workflow()).setVersion(v.version()).build());
+            b.add("versions", Msg.create()
+                    .put("workflow", v.workflow()).put("version", v.version()));
         }
         return poll(b);
     }
 
-    private PollResult poll(PollRequest.Builder b) {
-        PollRequest req = b.build();
-        TaskList res = call(() -> transport.call(ControlPlane.POLL_TASKS, req));
-        List<com.wiggle.core.TaskActivation> out = new ArrayList<>(res.getTasksCount());
-        for (com.wiggle.proto.TaskActivation t : res.getTasksList()) out.add(Wire.taskActivation(t));
-        return new PollResult(out, res.getRetryAfterMillis());
+    private PollResult poll(Msg req) {
+        Msg res = call(() -> transport.call(ControlPlane.POLL_TASKS, req));
+        List<com.wiggle.core.TaskActivation> out = new ArrayList<>(res.msgs("tasks").size());
+        for (Msg t : res.msgs("tasks")) out.add(Wire.taskActivation(t));
+        return new PollResult(out, res.lng("retryAfterMillis"));
     }
 
     public void fail(String taskId, String leaseOwner, String message, boolean retryable) {
-        call(() -> transport.call(ControlPlane.FAIL_TASK, TaskFailureRequest.newBuilder()
-                .setTaskId(taskId)
-                .setLeaseOwner(leaseOwner)
-                .setMessage(message)
-                .setRetryable(retryable)
-                .build()));
+        call(() -> transport.call(ControlPlane.FAIL_TASK, Msg.create()
+                .put("taskId", taskId)
+                .put("leaseOwner", leaseOwner)
+                .put("message", message)
+                .put("retryable", retryable)));
     }
 
     /** Delivers a named signal to a running instance; {@code payload} merges into its context. */
     public void signal(String instanceId, String signal, Object payload) {
-        SignalRequest.Builder req = SignalRequest.newBuilder().setInstanceId(instanceId).setSignal(signal);
-        if (payload != null) req.setPayload(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(payload)));
-        call(() -> transport.call(ControlPlane.SIGNAL_INSTANCE, req.build()));
+        Msg req = Msg.create().put("instanceId", instanceId).put("signal", signal);
+        if (payload != null) req.put("payload", com.wiggle.core.RecordMapper.toJson(payload));
+        call(() -> transport.call(ControlPlane.SIGNAL_INSTANCE, req));
     }
 
     /** Creates a recurring start on a fixed interval; returns the schedule id. */
     public String createSchedule(String workflow, java.time.Duration every, Object context) {
-        CreateScheduleRequest.Builder req = CreateScheduleRequest.newBuilder()
-                .setWorkflow(workflow).setEveryMillis(every.toMillis());
-        if (context != null) req.setContext(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(context)));
-        return call(() -> transport.call(ControlPlane.CREATE_SCHEDULE, req.build())).getId();
+        Msg req = Msg.create()
+                .put("workflow", workflow).put("everyMillis", every.toMillis());
+        if (context != null) req.put("context", com.wiggle.core.RecordMapper.toJson(context));
+        return call(() -> transport.call(ControlPlane.CREATE_SCHEDULE, req)).str("id");
     }
 
     /** Creates a recurring start on a five-field cron expression (evaluated in UTC); returns the schedule id. */
     public String createCronSchedule(String workflow, String cron, Object context) {
-        CreateScheduleRequest.Builder req = CreateScheduleRequest.newBuilder()
-                .setWorkflow(workflow).setCron(cron);
-        if (context != null) req.setContext(ProtoJson.toValue(com.wiggle.core.RecordMapper.toJson(context)));
-        return call(() -> transport.call(ControlPlane.CREATE_SCHEDULE, req.build())).getId();
+        Msg req = Msg.create()
+                .put("workflow", workflow).put("cron", cron);
+        if (context != null) req.put("context", com.wiggle.core.RecordMapper.toJson(context));
+        return call(() -> transport.call(ControlPlane.CREATE_SCHEDULE, req)).str("id");
     }
 
     /** All schedules on the server. {@code everyMillis} is 0 for cron schedules; {@code cron} is null for interval ones. */
     public List<ScheduleInfo> schedules() {
-        return call(() -> transport.call(ControlPlane.LIST_SCHEDULES, Empty.getDefaultInstance())).getSchedulesList().stream()
+        return call(() -> transport.call(ControlPlane.LIST_SCHEDULES, Msg.create())).msgs("schedules").stream()
                 .map(Wire::scheduleInfo)
                 .toList();
     }
 
     public void deleteSchedule(String id) {
-        call(() -> transport.call(ControlPlane.DELETE_SCHEDULE, ScheduleIdRequest.newBuilder().setId(id).build()));
+        call(() -> transport.call(ControlPlane.DELETE_SCHEDULE, Msg.create().put("id", id)));
     }
 
     public record ScheduleInfo(String id, String workflow, long everyMillis, String cron,
                                long nextFireAt, long createdAt) {}
 
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {
-        call(() -> transport.call(ControlPlane.HEARTBEAT_TASK, HeartbeatRequest.newBuilder()
-                .setTaskId(taskId)
-                .setLeaseOwner(leaseOwner)
-                .setExtendMillis(extendMillis)
-                .build()));
+        call(() -> transport.call(ControlPlane.HEARTBEAT_TASK, Msg.create()
+                .put("taskId", taskId)
+                .put("leaseOwner", leaseOwner)
+                .put("extendMillis", extendMillis)));
     }
 
     /**
@@ -519,20 +515,20 @@ public final class WiggleClient implements AutoCloseable {
      * carries the status it was refused under rather than failing the call.
      */
     public Map<String, RunOutcome> reportSteps(List<RunSubmission> runs) {
-        ReportStepsRequest.Builder req = ReportStepsRequest.newBuilder();
+        Msg req = Msg.create();
         for (RunSubmission run : runs) {
-            ReportedRun.Builder one = ReportedRun.newBuilder()
-                    .setTaskId(run.taskId()).setLeaseOwner(run.leaseOwner()).setFinal(run.finalHandback());
-            for (StepReport s : run.steps()) one.addSteps(Wire.stepResult(s));
-            for (com.wiggle.core.criteria.QueueCriteria c : run.criteria()) one.addCriteria(Wire.criteria(c));
-            req.addRuns(one);
+            Msg one = Msg.create()
+                    .put("taskId", run.taskId()).put("leaseOwner", run.leaseOwner()).put("final", run.finalHandback());
+            for (StepReport s : run.steps()) one.add("steps", Wire.stepResult(s));
+            for (com.wiggle.core.criteria.QueueCriteria c : run.criteria()) one.add("criteria", Wire.criteria(c));
+            req.add("runs", one);
         }
-        ReportStepsResult res = call(() -> transport.call(ControlPlane.REPORT_STEPS, req.build()));
+        Msg res = call(() -> transport.call(ControlPlane.REPORT_STEPS, req));
         Map<String, RunOutcome> out = new java.util.LinkedHashMap<>();
-        for (com.wiggle.proto.RunOutcome r : res.getResultsList()) {
-            out.put(r.getTaskId(), r.getErrorStatus() == 0 && r.hasApplied()
-                    ? new RunOutcome(Wire.reportResult(r.getApplied()), 0, null)
-                    : new RunOutcome(null, r.getErrorStatus(), r.getError()));
+        for (Msg r : res.msgs("results")) {
+            out.put(r.str("taskId"), r.integer("errorStatus") == 0 && r.has("applied")
+                    ? new RunOutcome(Wire.reportResult(r.msg("applied")), 0, null)
+                    : new RunOutcome(null, r.integer("errorStatus"), r.str("error")));
         }
         return out;
     }

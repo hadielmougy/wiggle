@@ -9,9 +9,9 @@ spec:
   selector:
     {{- include "wiggle.selectorLabels" . | nindent 4 }}
   ports:
-    - name: grpc
-      port: {{ .Values.service.grpcPort }}
-      targetPort: grpc
+    - name: http
+      port: {{ .Values.service.apiPort }}
+      targetPort: http
     - name: health
       port: {{ .Values.service.healthPort }}
       targetPort: health

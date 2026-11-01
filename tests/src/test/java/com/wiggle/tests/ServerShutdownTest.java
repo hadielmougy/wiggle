@@ -23,8 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  *
  * <p>A worker parked in a long poll is an in-flight RPC, and a graceful shutdown waits for those. The
  * wait cannot be unbounded, so it is capped -- but when the cap expires the server has to be taken
- * down rather than left running: a half-closed server keeps its listening port, its executor, and its
- * share of the Netty event-loop groups gRPC shares process-wide. One is harmless. A suite that starts
+ * down rather than left running: a half-closed server keeps its listening port, its executor and its
+ * connector threads. One is harmless. A suite that starts
  * hundreds of servers in a single JVM accumulates them, and that is the kind of debris that surfaces
  * later as an unexplained transport failure in whichever test happens to run next.
  *

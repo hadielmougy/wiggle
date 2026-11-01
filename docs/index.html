@@ -228,7 +228,7 @@ footer .fin { margin-top: 34px; font-size: 13px; }
       sub-workflows, <code>doWhile</code>, <code>forEach</code> — a compiled graph, versioned by content
       hash. The workflow is <em>data</em>, not replayed code, so there is no determinism contract to get wrong.</p></div>
     <div class="card"><h3>🔌 Pull-based &amp; polyglot</h3>
-      <p>Workers long-poll over gRPC: no inbound connectivity, no broker, backpressure built in.
+      <p>Workers long-poll over HTTP: no inbound connectivity, no broker, backpressure built in.
       Java, Go, and Python workers interoperate on one server — one instance, three languages.</p></div>
     <div class="card"><h3>🪶 Lightweight &amp; embeddable</h3>
       <p>One JAR plus a database (PostgreSQL, MySQL, Oracle, SQL Server — or in-memory for dev).
@@ -297,11 +297,11 @@ footer .fin { margin-top: 34px; font-size: 13px; }
 
 <section id="architecture"><div class="wrap">
   <h2>Architecture</h2>
-  <p class="lead">Clients and pull-based workers speak gRPC to a wiggle server cluster: several
+  <p class="lead">Clients and pull-based workers speak HTTP to a wiggle server cluster: several
   nodes over <strong>one database</strong>, where any node can drive any instance and the leader
-  runs timers and recovery. The ops console is another gRPC client, not a special one.</p>
+  runs timers and recovery. The ops console is another API client, not a special one.</p>
   <figure class="figure">
-    <img src="img/architecture.svg" alt="Wiggle architecture: clients and pull-based workers talk gRPC to a wiggle server cluster over one database; a standalone ops console is another gRPC client.">
+    <img src="img/architecture.svg" alt="Wiggle architecture: clients and pull-based workers talk HTTP to a wiggle server cluster over one database; a standalone ops console is another API client.">
   </figure>
 </div></section>
 
@@ -331,7 +331,7 @@ footer .fin { margin-top: 34px; font-size: 13px; }
   <div class="tablewrap"><table>
     <tr><th>Mode</th><th>What it is</th><th>When</th></tr>
     <tr><td><b>Embedded</b></td><td><code>WiggleServer</code> inside your JVM, in-memory store</td><td>dev, tests, single-process apps</td></tr>
-    <tr><td><b>Standalone</b></td><td>one node, gRPC <code>:8080</code>, in-memory or a database</td><td>small services, first deploy</td></tr>
+    <tr><td><b>Standalone</b></td><td>one node, HTTP <code>:8080</code>, in-memory or a database</td><td>small services, first deploy</td></tr>
     <tr><td><b>Cluster</b></td><td>several nodes on one database — shared queue, leader runs timers/recovery</td><td>production, HA</td></tr>
   </table></div>
 

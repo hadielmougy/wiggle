@@ -1,6 +1,7 @@
 package com.wiggle.server.api;
 
-import com.wiggle.proto.*;
+import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.core.wire.Msg;
 import com.wiggle.server.auth.Permissions;
 import com.wiggle.server.auth.Scope;
 import com.wiggle.server.ServerConfig;
@@ -9,8 +10,6 @@ import com.wiggle.server.engine.ReportOutcome;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows.ServerNode;
-
-import com.google.protobuf.Message;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -37,7 +36,7 @@ public final class ControlPlaneApi {
     private final com.wiggle.server.search.Search search;
     /** Versions already announced at INFO, so N workers registering the same graph log it once. */
     private final Set<String> announced = ConcurrentHashMap.newKeySet();
-    private final Map<String, Handler<Message, Message>> handlers = new HashMap<>();
+    private final Map<String, Handler> handlers = new HashMap<>();
 
     public ControlPlaneApi(WorkflowEngine engine, ClusterManager cluster, long maxLongPollMillis, MemoryGuard memory,
                            Authorizer authz, com.wiggle.server.search.Search search) {
@@ -75,44 +74,43 @@ public final class ControlPlaneApi {
     }
 
     /** Answers one call of {@code method}. */
-    Message call(ControlPlane.Method<?, ?> method, Message request) throws Exception {
+    Msg call(ControlPlane.Method method, Msg request) throws Exception {
         return handlers.get(method.name()).call(request);
     }
 
-    interface Handler<Q, R> { R call(Q request) throws Exception; }
+    interface Handler { Msg call(Msg request) throws Exception; }
 
-    @SuppressWarnings("unchecked")
-    private <Q extends Message, R extends Message> void bind(ControlPlane.Method<Q, R> method, Handler<Q, R> handler) {
-        handlers.put(method.name(), (Handler<Message, Message>) (Handler<?, ?>) handler);
+    private void bind(ControlPlane.Method method, Handler handler) {
+        handlers.put(method.name(), handler);
     }
 
-    HealthStatus healthCheck(Empty req) throws Exception {
+    Msg healthCheck(Msg req) throws Exception {
         LOG.log(System.Logger.Level.DEBUG, "rpc HealthCheck");
-        return HealthStatus.newBuilder()
-                .setStatus("UP")
-                .setNode(cluster.nodeId())
-                .setLeader(cluster.isLeader())
-                .build();
+        return Msg.create()
+                .put("status", "UP")
+                .put("node", cluster.nodeId())
+                .put("leader", cluster.isLeader());
     }
 
-    ClusterView getCluster(Empty req) throws Exception {
+    Msg getCluster(Msg req) throws Exception {
         LOG.log(System.Logger.Level.DEBUG, "rpc GetCluster");
         authz.require(Permissions.READ, null);
         return clusterView();
     }
 
-    WorkflowNames listWorkflows(Empty req) throws Exception {
+    Msg listWorkflows(Msg req) throws Exception {
         LOG.log(System.Logger.Level.DEBUG, "rpc ListWorkflows");
         authz.requireAny(Permissions.READ);
         Scope readable = authz.scope(Permissions.READ);
-        return WorkflowNames.newBuilder()
-                .addAllWorkflows(engine.workflowNames().stream().filter(readable::matches).toList()).build();
+        return Msg.create()
+                .put("workflows", engine.workflowNames().stream().filter(readable::matches).toList());
     }
 
-    RegisterWorkflowResult registerWorkflow(WorkflowDefinition req) throws Exception {
+    Msg registerWorkflow(Msg req) throws Exception {
         LOG.log(System.Logger.Level.DEBUG, "rpc RegisterWorkflow");
         authz.requireAny(Permissions.WORKFLOW_REGISTER);
-        Map<String, Object> raw = com.wiggle.core.Json.asObject(ProtoJson.fromStruct(req.getDefinition()));
+        Map<String, Object> raw = req.obj("definition");
+        if (raw == null) throw EngineException.badRequest("a registration carries a definition");
         if ("OBSERVED".equals(raw.get("executionMode"))) {
             throw new IllegalArgumentException("OBSERVED execution was removed; register the workflow "
                     + "as SERVER, LOCAL_SYNC or LOCAL_ASYNC");
@@ -123,127 +121,126 @@ public final class ControlPlaneApi {
             if (n.kind() == com.wiggle.core.NodeKind.SUB_WORKFLOW) authz.require(Permissions.INSTANCE_START, n.activity());
         }
         for (String queue : def.workerQueues()) authz.require(Permissions.WORKFLOW_REGISTER, queue);
-        if (req.getForce() && !ServerConfig.allowGraphReplace()) {
+        if (req.bool("force") && !ServerConfig.allowGraphReplace()) {
             throw EngineException.conflict("replacing the graph of '" + def.key()
                     + "' was requested but this server does not allow it; set "
                     + "WIGGLE_ALLOW_GRAPH_REPLACE=true (development only) or publish a new version");
         }
-        engine.register(def, req.getForce());
+        engine.register(def, req.bool("force"));
         if (announced.add(def.key())) {
             LOG.log(System.Logger.Level.INFO, () -> "registered workflow " + def.key()
                     + " (" + def.nodes().size() + " nodes, mode=" + def.executionMode() + ")");
         }
-        return RegisterWorkflowResult.newBuilder()
-                .setName(def.name())
-                .setVersion(String.valueOf(def.version()))
-                .setNodes(def.nodes().size())
-                .build();
+        return Msg.create()
+                .put("name", def.name())
+                .put("version", String.valueOf(def.version()))
+                .put("nodes", def.nodes().size());
     }
 
-    WorkflowDefinition getWorkflow(GetWorkflowRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetWorkflow name=" + req.getName());
-        authz.require(Permissions.READ, req.getName());
-        com.wiggle.core.WorkflowDefinition def = (req.hasVersion()
-                ? engine.definition(req.getName(), req.getVersion())
-                : engine.latestDefinition(req.getName()))
+    Msg getWorkflow(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetWorkflow name=" + req.str("name"));
+        authz.require(Permissions.READ, req.str("name"));
+        com.wiggle.core.WorkflowDefinition def = (req.has("version")
+                ? engine.definition(req.str("name"), req.integer("version"))
+                : engine.latestDefinition(req.str("name")))
                 .orElseThrow(() -> EngineException.notFound("workflow"));
-        return WorkflowDefinition.newBuilder().setDefinition(ProtoJson.toStruct(def.toJson())).build();
+        return Msg.create().put("definition", def.toJson());
     }
 
-    StartInstanceResult startInstance(StartInstanceRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc StartInstance workflow=" + req.getWorkflow()
-                + " version=" + (req.hasVersion() ? req.getVersion() : "latest")
-                + " correlationId=" + (req.hasCorrelationId() ? req.getCorrelationId() : null));
-        authz.require(Permissions.INSTANCE_START, req.getWorkflow());
-        Integer version = req.hasVersion() ? req.getVersion() : null;
-        String correlationId = req.hasCorrelationId() ? req.getCorrelationId() : null;
-        Object context = req.hasContext() ? ProtoJson.fromValue(req.getContext()) : null;
-        String id = engine.start(req.getWorkflow(), version, context, correlationId);
-        return StartInstanceResult.newBuilder().setInstanceId(id).setWorkflow(req.getWorkflow()).build();
+    Msg startInstance(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc StartInstance workflow=" + req.str("workflow")
+                + " version=" + (req.has("version") ? req.integer("version") : "latest")
+                + " correlationId=" + (req.has("correlationId") ? req.str("correlationId") : null));
+        authz.require(Permissions.INSTANCE_START, req.str("workflow"));
+        Integer version = req.has("version") ? req.integer("version") : null;
+        String correlationId = req.has("correlationId") ? req.str("correlationId") : null;
+        Object context = req.has("context") ? req.value("context") : null;
+        String id = engine.start(req.str("workflow"), version, context, correlationId);
+        return Msg.create().put("instanceId", id).put("workflow", req.str("workflow"));
     }
 
-    InstanceList listInstances(ListInstancesRequest req) throws Exception {
+    Msg listInstances(Msg req) throws Exception {
         LOG.log(System.Logger.Level.DEBUG, () -> "rpc ListInstances workflow="
-                + (req.hasWorkflow() ? req.getWorkflow() : null) + " status="
-                + (req.hasStatus() ? req.getStatus() : null) + " limit=" + req.getLimit());
-        String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
-        String status = req.hasStatus() ? req.getStatus() : null;
+                + (req.has("workflow") ? req.str("workflow") : null) + " status="
+                + (req.has("status") ? req.str("status") : null) + " limit=" + req.integer("limit"));
+        String workflow = req.has("workflow") ? req.str("workflow") : null;
+        String status = req.has("status") ? req.str("status") : null;
         Scope readable;
-        if (req.hasCorrelationId()) {
+        if (req.has("correlationId")) {
             authz.requireAny(Permissions.READ);
             readable = authz.scope(Permissions.READ);
         } else {
             authz.require(Permissions.READ, workflow);
             readable = Scope.ALL;
         }
-        int limit = req.getLimit() > 0 ? req.getLimit() : 50;
-        List<com.wiggle.core.InstanceView> views = req.hasCorrelationId()
-                ? engine.findByCorrelation(req.getCorrelationId(), limit)
+        int limit = req.integer("limit") > 0 ? req.integer("limit") : 50;
+        List<com.wiggle.core.InstanceView> views = req.has("correlationId")
+                ? engine.findByCorrelation(req.str("correlationId"), limit)
                 : engine.list(workflow, status, limit);
-        InstanceList.Builder out = InstanceList.newBuilder();
-        for (com.wiggle.core.InstanceView v : views) if (readable.matches(v.workflow())) out.addInstances(viewProto(v));
-        return out.build();
+        Msg out = Msg.create();
+        for (com.wiggle.core.InstanceView v : views) if (readable.matches(v.workflow())) out.add("instances", viewMsg(v));
+        return out;
     }
 
-    InstanceDetail getInstance(InstanceIdRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetInstance id=" + req.getInstanceId());
+    Msg getInstance(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetInstance id=" + req.str("instanceId"));
         authz.requireAny(Permissions.READ);
-        com.wiggle.core.InstanceView v = engine.instance(req.getInstanceId())
+        com.wiggle.core.InstanceView v = engine.instance(req.str("instanceId"))
                 .orElseThrow(() -> EngineException.notFound("instance"));
         authz.require(Permissions.READ, v.workflow());
-        InstanceDetail.Builder out = InstanceDetail.newBuilder().setInstance(viewProto(v));
-        for (com.wiggle.server.store.Rows.Token t : engine.tokens(req.getInstanceId())) out.addTokens(tokenProto(t));
-        return out.build();
+        Msg out = Msg.create().put("instance", viewMsg(v));
+        for (com.wiggle.server.store.Rows.Token t : engine.tokens(req.str("instanceId"))) out.add("tokens", tokenMsg(t));
+        return out;
     }
 
-    CancelInstanceResult cancelInstance(CancelInstanceRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CancelInstance id=" + req.getInstanceId()
-                + " reason=" + req.getReason());
+    Msg cancelInstance(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CancelInstance id=" + req.str("instanceId")
+                + " reason=" + req.str("reason"));
         authz.requireAny(Permissions.INSTANCE_CANCEL);
-        authz.require(Permissions.INSTANCE_CANCEL, workflowOf(req.getInstanceId()));
-        engine.cancel(req.getInstanceId(),
-                req.getReason().isEmpty() ? "cancelled via API" : req.getReason());
-        return CancelInstanceResult.newBuilder().setCancelled(req.getInstanceId()).build();
+        authz.require(Permissions.INSTANCE_CANCEL, workflowOf(req.str("instanceId")));
+        engine.cancel(req.str("instanceId"),
+                req.str("reason").isEmpty() ? "cancelled via API" : req.str("reason"));
+        return Msg.create().put("cancelled", req.str("instanceId"));
     }
 
-    Ack signalInstance(SignalRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SignalInstance id=" + req.getInstanceId()
-                + " signal=" + req.getSignal());
+    Msg signalInstance(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SignalInstance id=" + req.str("instanceId")
+                + " signal=" + req.str("signal"));
         authz.requireAny(Permissions.INSTANCE_SIGNAL);
-        authz.require(Permissions.INSTANCE_SIGNAL, workflowOf(req.getInstanceId()));
-        Object payload = req.hasPayload() ? ProtoJson.fromValue(req.getPayload()) : null;
-        engine.signal(req.getInstanceId(), req.getSignal(), payload);
-        return Ack.newBuilder().setOk(true).build();
+        authz.require(Permissions.INSTANCE_SIGNAL, workflowOf(req.str("instanceId")));
+        Object payload = req.has("payload") ? req.value("payload") : null;
+        engine.signal(req.str("instanceId"), req.str("signal"), payload);
+        return Msg.create().put("ok", true);
     }
 
-    ScheduleView createSchedule(CreateScheduleRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CreateSchedule workflow=" + req.getWorkflow());
-        authz.require(Permissions.SCHEDULE_WRITE, req.getWorkflow());
-        Object context = req.hasContext() ? ProtoJson.fromValue(req.getContext()) : null;
-        String id = req.getCadenceCase() == CreateScheduleRequest.CadenceCase.CRON
-                ? engine.createCronSchedule(req.getWorkflow(), req.getCron(), context)
-                : engine.createSchedule(req.getWorkflow(),
-                        java.time.Duration.ofMillis(req.getEveryMillis()), context);
+    Msg createSchedule(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc CreateSchedule workflow=" + req.str("workflow"));
+        authz.require(Permissions.SCHEDULE_WRITE, req.str("workflow"));
+        Object context = req.has("context") ? req.value("context") : null;
+        String id = CriteriaWire.oneOf(req, "a schedule's cadence", "everyMillis", "cron").equals("cron")
+                ? engine.createCronSchedule(req.str("workflow"), req.str("cron"), context)
+                : engine.createSchedule(req.str("workflow"),
+                        java.time.Duration.ofMillis(req.lng("everyMillis")), context);
         return engine.schedules().stream().filter(s -> s.id.equals(id)).findFirst()
                 .map(ControlPlaneApi::scheduleView).orElseThrow();
     }
 
-    ScheduleList listSchedules(Empty req) throws Exception {
+    Msg listSchedules(Msg req) throws Exception {
         authz.requireAny(Permissions.READ);
         Scope readable = authz.scope(Permissions.READ);
-        ScheduleList.Builder out = ScheduleList.newBuilder();
-        engine.schedules().forEach(s -> { if (readable.matches(s.workflow)) out.addSchedules(scheduleView(s)); });
-        return out.build();
+        Msg out = Msg.create();
+        engine.schedules().forEach(s -> { if (readable.matches(s.workflow)) out.add("schedules", scheduleView(s)); });
+        return out;
     }
 
-    Ack deleteSchedule(ScheduleIdRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc DeleteSchedule id=" + req.getId());
+    Msg deleteSchedule(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc DeleteSchedule id=" + req.str("id"));
         authz.requireAny(Permissions.SCHEDULE_WRITE);
-        String workflow = engine.schedules().stream().filter(x -> x.id.equals(req.getId()))
+        String workflow = engine.schedules().stream().filter(x -> x.id.equals(req.str("id")))
                 .map(x -> x.workflow).findFirst().orElse(null);
         if (workflow != null) authz.require(Permissions.SCHEDULE_WRITE, workflow);
-        engine.deleteSchedule(req.getId());
-        return Ack.newBuilder().setOk(true).build();
+        engine.deleteSchedule(req.str("id"));
+        return Msg.create().put("ok", true);
     }
 
     /** The queues the current caller may serve tasks of, or null for every one. */
@@ -258,57 +255,57 @@ public final class ControlPlaneApi {
                 .orElseThrow(() -> EngineException.notFound("instance"));
     }
 
-    private static ScheduleView scheduleView(com.wiggle.server.store.Rows.Schedule s) {
-        ScheduleView.Builder b = ScheduleView.newBuilder()
-                .setId(s.id).setWorkflow(s.workflow)
-                .setEveryMillis(s.intervalMillis)
-                .setNextFireAt(s.nextFireAt).setCreatedAt(s.createdAt);
-        if (s.cron != null) b.setCron(s.cron);
-        return b.build();
+    private static Msg scheduleView(com.wiggle.server.store.Rows.Schedule s) {
+        Msg b = Msg.create()
+                .put("id", s.id).put("workflow", s.workflow)
+                .put("everyMillis", s.intervalMillis)
+                .put("nextFireAt", s.nextFireAt).put("createdAt", s.createdAt);
+        if (s.cron != null) b.put("cron", s.cron);
+        return b;
     }
 
     /** The (workflow, version) pairs a version-scoped worker serves; empty means every version. */
-    private static java.util.Set<com.wiggle.core.WorkflowVersion> versionFilter(PollRequest req) {
-        if (req.getVersionsCount() == 0) return java.util.Set.of();
+    private static java.util.Set<com.wiggle.core.WorkflowVersion> versionFilter(Msg req) {
+        if (req.msgs("versions").isEmpty()) return java.util.Set.of();
         java.util.Set<com.wiggle.core.WorkflowVersion> out = new java.util.LinkedHashSet<>();
-        for (com.wiggle.proto.WorkflowVersion v : req.getVersionsList()) {
-            out.add(new com.wiggle.core.WorkflowVersion(v.getWorkflow(), v.getVersion()));
+        for (Msg v : req.msgs("versions")) {
+            out.add(new com.wiggle.core.WorkflowVersion(v.str("workflow"), v.integer("version")));
         }
         return out;
     }
 
-    BacklogCoverage getBacklogCoverage(BacklogCoverageRequest req) throws Exception {
+    Msg getBacklogCoverage(Msg req) throws Exception {
         authz.requireAny(Permissions.READ);
         Scope readable = authz.scope(Permissions.READ);
-        int max = req.getMax() > 0 ? Math.min(req.getMax(), 500) : 100;
-        BacklogCoverage.Builder out = BacklogCoverage.newBuilder()
-                .setLivePollers(engine.livePollers().size());
+        int max = req.integer("max") > 0 ? Math.min(req.integer("max"), 500) : 100;
+        Msg out = Msg.create()
+                .put("livePollers", engine.livePollers().size());
         for (com.wiggle.server.store.Rows.BacklogSlice s : engine.backlog(max)) {
             if (!readable.matches(s.workflow())) continue;
             WorkflowEngine.SliceCoverage c = engine.coverage(s);
-            BacklogSlice.Builder slice = BacklogSlice.newBuilder()
-                    .setWorkflow(s.workflow())
-                    .setVersion(s.version())
-                    .setQueue(s.queue() == null ? "" : s.queue())
-                    .setReadyCount(s.readyCount())
-                    .setOldestAvailableAt(s.oldestAvailableAt())
-                    .setCovered(c.state() != com.wiggle.server.engine.PollerRegistry.Coverage.State.UNCOVERED)
-                    .setCoverage(c.state().name())
-                    .addAllCriteria(c.criteria());
-            if (c.claimable() != null) slice.setClaimable(c.claimable());
-            out.addSlices(slice.build());
+            Msg slice = Msg.create()
+                    .put("workflow", s.workflow())
+                    .put("version", s.version())
+                    .put("queue", s.queue() == null ? "" : s.queue())
+                    .put("readyCount", s.readyCount())
+                    .put("oldestAvailableAt", s.oldestAvailableAt())
+                    .put("covered", c.state() != com.wiggle.server.engine.PollerRegistry.Coverage.State.UNCOVERED)
+                    .put("coverage", c.state().name())
+                    .put("criteria", c.criteria());
+            if (c.claimable() != null) slice.put("claimable", c.claimable());
+            out.add("slices", slice);
         }
-        return out.build();
+        return out;
     }
 
-    TaskList pollTasks(PollRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
-                + " queues=" + req.getQueuesList() + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
-        if (req.getCriteriaCount() > 0 && req.getQueuesCount() > 0) {
+    Msg pollTasks(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.str("workerId")
+                + " queues=" + req.strs("queues") + " max=" + req.integer("max") + " waitMillis=" + req.lng("waitMillis"));
+        if (!req.msgs("criteria").isEmpty() && !req.strs("queues").isEmpty()) {
             throw EngineException.badRequest("a poll carries queues or criteria, not both");
         }
-        List<com.wiggle.core.criteria.QueueCriteria> criteria = CriteriaWire.decode(req.getCriteriaList());
-        List<String> polled = criteria.isEmpty() ? req.getQueuesList()
+        List<com.wiggle.core.criteria.QueueCriteria> criteria = CriteriaWire.decode(req.msgs("criteria"));
+        List<String> polled = criteria.isEmpty() ? req.strs("queues")
                 : criteria.stream().map(com.wiggle.core.criteria.QueueCriteria::queue).toList();
         if (polled.isEmpty()) authz.require(Permissions.TASK_POLL, null);   // every queue
         for (String q : polled) authz.require(Permissions.TASK_POLL, q);
@@ -320,70 +317,70 @@ public final class ControlPlaneApi {
             LOG.log(System.Logger.Level.WARNING, () -> "memory pressure ("
                     + String.format("%.0f%%", MemoryGuard.heapUtilization() * 100)
                     + " heap, in-flight req/resp " + memory.inFlightBytes() + " bytes): rejecting poll from "
-                    + req.getWorkerId() + ", retry after " + retryAfter + "ms");
-            return TaskList.newBuilder().setRetryAfterMillis(retryAfter).build();
+                    + req.str("workerId") + ", retry after " + retryAfter + "ms");
+            return Msg.create().put("retryAfterMillis", retryAfter);
         }
 
         com.wiggle.server.store.ClaimFilter filter = criteria.isEmpty()
                 ? com.wiggle.server.store.ClaimFilter.byName(polled, versionFilter(req))
                 : new com.wiggle.server.store.ClaimFilter(criteria, versionFilter(req));
-        int max = req.getMax() > 0 ? req.getMax() : 1;
-        long lease = req.getLeaseMillis();
-        long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
+        int max = req.integer("max") > 0 ? req.integer("max") : 1;
+        long lease = req.lng("leaseMillis");
+        long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.lng("waitMillis"));
         // An interrupted call means the server is stopping; don't claim work nobody will receive.
         List<com.wiggle.core.TaskActivation> tasks =
-                engine.poll(req.getWorkerId(), filter, max, lease, deadline, Thread.currentThread()::isInterrupted);
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.getWorkerId()
+                engine.poll(req.str("workerId"), filter, max, lease, deadline, Thread.currentThread()::isInterrupted);
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollTasks worker=" + req.str("workerId")
                 + " returning " + tasks.size() + " task(s)");
-        TaskList.Builder out = TaskList.newBuilder();
-        for (com.wiggle.core.TaskActivation t : tasks) out.addTasks(taskProto(t));
-        return out.build();
+        Msg out = Msg.create();
+        for (com.wiggle.core.TaskActivation t : tasks) out.add("tasks", taskMsg(t));
+        return out;
     }
 
-    Ack failTask(TaskFailureRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc FailTask taskId=" + req.getTaskId()
-                + " leaseOwner=" + req.getLeaseOwner() + " retryable=" + req.getRetryable()
-                + " message=" + req.getMessage());
+    Msg failTask(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc FailTask taskId=" + req.str("taskId")
+                + " leaseOwner=" + req.str("leaseOwner") + " retryable=" + req.bool("retryable")
+                + " message=" + req.str("message"));
         authz.requireAny(Permissions.TASK_POLL);
-        engine.fail(req.getTaskId(), req.getLeaseOwner(), req.getMessage(), req.getRetryable(), servedQueues());
-        return Ack.newBuilder().setOk(true).build();
+        engine.fail(req.str("taskId"), req.str("leaseOwner"), req.str("message"), req.bool("retryable"), servedQueues());
+        return Msg.create().put("ok", true);
     }
 
-    HeartbeatResult heartbeatTask(HeartbeatRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc HeartbeatTask taskId=" + req.getTaskId()
-                + " leaseOwner=" + req.getLeaseOwner() + " extendMillis=" + req.getExtendMillis());
+    Msg heartbeatTask(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc HeartbeatTask taskId=" + req.str("taskId")
+                + " leaseOwner=" + req.str("leaseOwner") + " extendMillis=" + req.lng("extendMillis"));
         authz.requireAny(Permissions.TASK_POLL);
-        long until = engine.extendLease(req.getTaskId(), req.getLeaseOwner(), req.getExtendMillis(), servedQueues());
-        return HeartbeatResult.newBuilder().setLeaseExpiresAt(until).build();
+        long until = engine.extendLease(req.str("taskId"), req.str("leaseOwner"), req.lng("extendMillis"), servedQueues());
+        return Msg.create().put("leaseExpiresAt", until);
     }
 
-    ReportStepsResult reportSteps(ReportStepsRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ReportSteps runs=" + req.getRunsCount());
+    Msg reportSteps(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc ReportSteps runs=" + req.msgs("runs").size());
         authz.requireAny(Permissions.TASK_POLL);
-        List<WorkflowEngine.Run> runs = new ArrayList<>(req.getRunsCount());
-        for (ReportedRun r : req.getRunsList()) {
+        List<WorkflowEngine.Run> runs = new ArrayList<>(req.msgs("runs").size());
+        for (Msg r : req.msgs("runs")) {
             List<WorkflowEngine.StepInput> steps = stepInputs(r);
             for (WorkflowEngine.StepInput step : steps) {
                 for (com.wiggle.core.CreatedBranch b : step.branches()) requireSubFlowStarts(b.steps());
             }
-            runs.add(new WorkflowEngine.Run(r.getTaskId(), r.getLeaseOwner(), steps, r.getFinal(),
-                    CriteriaWire.decode(r.getCriteriaList())));
+            runs.add(new WorkflowEngine.Run(r.str("taskId"), r.str("leaseOwner"), steps, r.bool("final"),
+                    CriteriaWire.decode(r.msgs("criteria"))));
         }
         Map<String, WorkflowEngine.RunResult> results = engine.report(runs, servedQueues());
-        ReportStepsResult.Builder out = ReportStepsResult.newBuilder();
+        Msg out = Msg.create();
         for (WorkflowEngine.Run submitted : runs) {
             WorkflowEngine.RunResult r = results.get(submitted.startTaskId());
-            RunOutcome.Builder one = RunOutcome.newBuilder().setTaskId(submitted.startTaskId());
+            Msg one = Msg.create().put("taskId", submitted.startTaskId());
             if (r != null && r.ok()) {
-                one.setApplied(applied(r.outcome()));
+                one.put("applied", applied(r.outcome()));
             } else if (r != null) {
-                one.setErrorStatus(r.errorStatus()).setError(r.error() == null ? "" : r.error());
+                one.put("errorStatus", r.errorStatus()).put("error", r.error() == null ? "" : r.error());
             } else {
-                one.setErrorStatus(500).setError("no answer for run " + submitted.startTaskId());
+                one.put("errorStatus", 500).put("error", "no answer for run " + submitted.startTaskId());
             }
-            out.addResults(one);
+            out.add("results", one);
         }
-        return out.build();
+        return out;
     }
 
     /**
@@ -403,66 +400,68 @@ public final class ControlPlaneApi {
         }
     }
 
-    private static RunApplied.Builder applied(ReportOutcome out) {
-        return RunApplied.newBuilder()
-                .setInstanceStatus(out.instanceStatus())
-                .setLeaseExpiresAt(out.leaseExpiresAt())
-                .setNextTaskId(out.nextTaskId() == null ? "" : out.nextTaskId());
+    private static Msg applied(ReportOutcome out) {
+        return Msg.create()
+                .put("instanceStatus", out.instanceStatus())
+                .put("leaseExpiresAt", out.leaseExpiresAt())
+                .put("nextTaskId", out.nextTaskId() == null ? "" : out.nextTaskId());
     }
 
-    private static List<WorkflowEngine.StepInput> stepInputs(ReportedRun req) {
-        return stepInputs(req.getStepsList());
+    private static List<WorkflowEngine.StepInput> stepInputs(Msg req) {
+        return stepInputs(req.msgs("steps"));
     }
 
-    private static List<WorkflowEngine.StepInput> stepInputs(List<StepResult> reported) {
+    /** A step's outcome is its {@code merge} (a task's next context) or its {@code predicateValue}, never both. */
+    private static List<WorkflowEngine.StepInput> stepInputs(List<Msg> reported) {
         List<WorkflowEngine.StepInput> steps = new ArrayList<>(reported.size());
-        for (StepResult s : reported) {
-            Object merge = s.getOutcomeCase() == StepResult.OutcomeCase.MERGE
-                    ? ProtoJson.fromValue(s.getMerge()) : null;
-            Boolean predicate = s.getOutcomeCase() == StepResult.OutcomeCase.PREDICATE_VALUE
-                    ? s.getPredicateValue() : null;
-            steps.add(new WorkflowEngine.StepInput(s.getNodeId(), merge, predicate,
-                    s.getStartedAt() == 0 ? null : s.getStartedAt(),
-                    s.getFinishedAt() == 0 ? null : s.getFinishedAt(),
-                    emitted(s.getEventsList()), branches(s.getBranchesList())));
+        for (Msg s : reported) {
+            if (s.has("merge") && s.has("predicateValue")) {
+                throw new IllegalArgumentException("step " + s.str("nodeId") + " reports both a merge and a predicate value");
+            }
+            Object merge = s.value("merge");
+            Boolean predicate = s.optBool("predicateValue");
+            steps.add(new WorkflowEngine.StepInput(s.str("nodeId"), merge, predicate,
+                    s.lng("startedAt") == 0 ? null : s.lng("startedAt"),
+                    s.lng("finishedAt") == 0 ? null : s.lng("finishedAt"),
+                    emitted(s.msgs("events")), branches(s.msgs("branches"))));
         }
         return steps;
     }
 
     /** Created branches as reported. A step kind this build does not know arrives as null, and the
      *  engine refuses the branch by failing the step, not the whole report. */
-    private static List<com.wiggle.core.CreatedBranch> branches(List<CreatedBranch> reported) {
+    private static List<com.wiggle.core.CreatedBranch> branches(List<Msg> reported) {
         List<com.wiggle.core.CreatedBranch> out = new ArrayList<>(reported.size());
-        for (CreatedBranch b : reported) {
-            out.add(new com.wiggle.core.CreatedBranch(b.hasInput() ? ProtoJson.fromValue(b.getInput()) : null,
-                    b.getKey().isEmpty() ? null : b.getKey(), branchSteps(b.getStepsList())));
+        for (Msg b : reported) {
+            out.add(new com.wiggle.core.CreatedBranch(b.has("input") ? b.value("input") : null,
+                    b.str("key").isEmpty() ? null : b.str("key"), branchSteps(b.msgs("steps"))));
         }
         return out;
     }
 
-    private static List<com.wiggle.core.CreatedBranch.BranchStep> branchSteps(List<BranchStep> reported) {
+    private static List<com.wiggle.core.CreatedBranch.BranchStep> branchSteps(List<Msg> reported) {
         List<com.wiggle.core.CreatedBranch.BranchStep> steps = new ArrayList<>(reported.size());
-        for (BranchStep st : reported) {
-            List<List<com.wiggle.core.CreatedBranch.BranchStep>> arms = new ArrayList<>(st.getArmsCount());
-            for (BranchArm arm : st.getArmsList()) arms.add(branchSteps(arm.getStepsList()));
-            List<com.wiggle.core.CreatedBranch.BranchStep.Case> cases = new ArrayList<>(st.getCasesCount());
-            for (BranchCase c : st.getCasesList()) {
+        for (Msg st : reported) {
+            List<List<com.wiggle.core.CreatedBranch.BranchStep>> arms = new ArrayList<>(st.msgs("arms").size());
+            for (Msg arm : st.msgs("arms")) arms.add(branchSteps(arm.msgs("steps")));
+            List<com.wiggle.core.CreatedBranch.BranchStep.Case> cases = new ArrayList<>(st.msgs("cases").size());
+            for (Msg c : st.msgs("cases")) {
                 cases.add(new com.wiggle.core.CreatedBranch.BranchStep.Case(
-                        c.getGuard().isEmpty() ? null : c.getGuard(), branchSteps(c.getStepsList())));
+                        c.str("guard").isEmpty() ? null : c.str("guard"), branchSteps(c.msgs("steps"))));
             }
             steps.add(new com.wiggle.core.CreatedBranch.BranchStep(
-                    st.getName().isEmpty() ? null : st.getName(),
-                    nodeKind(st.getKind()),
-                    st.getCompensable(),
-                    st.getQueue().isEmpty() ? null : st.getQueue(),
-                    st.hasRetry() ? com.wiggle.core.RetryPolicy.fromJson(ProtoJson.fromValue(st.getRetry())) : null,
-                    st.getSleepMillis(),
-                    st.getCombine().isEmpty() ? null : st.getCombine(),
-                    st.getWorkflow().isEmpty() ? null : st.getWorkflow(),
-                    branchSteps(st.getEscalationList()),
+                    st.str("name").isEmpty() ? null : st.str("name"),
+                    nodeKind(st.str("kind")),
+                    st.bool("compensable"),
+                    st.str("queue").isEmpty() ? null : st.str("queue"),
+                    st.has("retry") ? com.wiggle.core.RetryPolicy.fromJson(st.value("retry")) : null,
+                    st.lng("sleepMillis"),
+                    st.str("combine").isEmpty() ? null : st.str("combine"),
+                    st.str("workflow").isEmpty() ? null : st.str("workflow"),
+                    branchSteps(st.msgs("escalation")),
                     arms,
-                    branchSteps(st.getBodyList()),
-                    st.getLoopBudget(),
+                    branchSteps(st.msgs("body")),
+                    st.integer("loopBudget"),
                     cases));
         }
         return steps;
@@ -477,70 +476,71 @@ public final class ControlPlaneApi {
     }
 
     /** The wire's emitted events, validated by {@link com.wiggle.core.EmittedEvent}'s own contract. */
-    private static List<com.wiggle.core.EmittedEvent> emitted(List<EmittedEvent> reported) {
+    private static List<com.wiggle.core.EmittedEvent> emitted(List<Msg> reported) {
         List<com.wiggle.core.EmittedEvent> out = new ArrayList<>(reported.size());
-        for (EmittedEvent e : reported) {
-            out.add(new com.wiggle.core.EmittedEvent(e.getType(),
-                    e.hasPayload() ? ProtoJson.fromValue(e.getPayload()) : null));
+        for (Msg e : reported) {
+            out.add(new com.wiggle.core.EmittedEvent(e.str("type"),
+                    e.has("payload") ? e.value("payload") : null));
         }
         return out;
     }
 
-    StepStats getStepStats(StepStatsRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetStepStats workflow=" + req.getWorkflow()
-                + " version=" + req.getVersion() + " since=" + req.getSince());
-        authz.require(Permissions.READ, req.getWorkflow());
-        int sample = req.getSample() > 0 ? req.getSample() : 10_000;
-        StepStats.Builder out = StepStats.newBuilder().setWorkflow(req.getWorkflow()).setVersion(req.getVersion());
-        for (com.wiggle.core.NodeStats n : engine.stepStats(req.getWorkflow(), req.getVersion(), req.getSince(), sample)) {
-            out.addNodes(NodeStats.newBuilder()
-                    .setNodeId(n.nodeId()).setName(n.name() == null ? "" : n.name())
-                    .setCount(n.count()).setMeanMillis(n.meanMillis())
-                    .setP50Millis(n.p50Millis()).setP95Millis(n.p95Millis()).setMaxMillis(n.maxMillis())
-                    .setWaitP50Millis(n.waitP50Millis()).setWaitP95Millis(n.waitP95Millis()));
+    Msg getStepStats(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc GetStepStats workflow=" + req.str("workflow")
+                + " version=" + req.integer("version") + " since=" + req.lng("since"));
+        authz.require(Permissions.READ, req.str("workflow"));
+        int sample = req.integer("sample") > 0 ? req.integer("sample") : 10_000;
+        Msg out = Msg.create().put("workflow", req.str("workflow")).put("version", req.integer("version"));
+        for (com.wiggle.core.NodeStats n : engine.stepStats(req.str("workflow"), req.integer("version"), req.lng("since"), sample)) {
+            out.add("nodes", Msg.create()
+                    .put("nodeId", n.nodeId()).put("name", n.name() == null ? "" : n.name())
+                    .put("count", n.count()).put("meanMillis", n.meanMillis())
+                    .put("p50Millis", n.p50Millis()).put("p95Millis", n.p95Millis()).put("maxMillis", n.maxMillis())
+                    .put("waitP50Millis", n.waitP50Millis()).put("waitP95Millis", n.waitP95Millis()));
         }
-        return out.build();
+        return out;
     }
 
-    SearchResult searchInstances(SearchRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SearchInstances text=" + req.getText());
+    Msg searchInstances(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc SearchInstances text=" + req.str("text"));
         authz.requireAny(Permissions.READ);
         if (search == null) {
             throw EngineException.conflict("search is not enabled: give a shard the search role, "
                     + "or set WIGGLE_SEARCH_ENABLED=true on a single database");
         }
-        String workflow = req.hasWorkflow() ? req.getWorkflow() : null;
-        String status = req.hasStatus() ? req.getStatus() : null;
-        Long from = req.getUpdatedFrom() > 0 ? req.getUpdatedFrom() : null;
-        Long to = req.getUpdatedTo() > 0 ? req.getUpdatedTo() : null;
-        int limit = req.getLimit() > 0 ? req.getLimit() : 20;
-        SearchResult.Builder out = SearchResult.newBuilder();
-        com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
-                limit, req.getPartialOk(), authz.scope(Permissions.READ), attributeFilters(req));
-        out.setPartial(r.partial());
+        String workflow = req.has("workflow") ? req.str("workflow") : null;
+        String status = req.has("status") ? req.str("status") : null;
+        Long from = req.lng("updatedFrom") > 0 ? req.lng("updatedFrom") : null;
+        Long to = req.lng("updatedTo") > 0 ? req.lng("updatedTo") : null;
+        int limit = req.integer("limit") > 0 ? req.integer("limit") : 20;
+        Msg out = Msg.create();
+        com.wiggle.server.search.Search.Result r = search.search(req.str("text"), workflow, status, from, to,
+                limit, req.bool("partialOk"), authz.scope(Permissions.READ), attributeFilters(req));
+        out.put("partial", r.partial());
         for (com.wiggle.server.search.Search.Hit h : r.hits()) {
-            out.addHits(SearchHit.newBuilder().setInstanceId(h.instanceId()).setWorkflow(h.workflow())
-                    .setVersion(h.version()).setStatus(h.status())
-                    .setCorrelationId(h.correlationId() == null ? "" : h.correlationId())
-                    .setCreatedAt(h.createdAt()).setUpdatedAt(h.updatedAt()).setScore(h.score())
-                    .setPurged(h.purged()));
+            out.add("hits", Msg.create().put("instanceId", h.instanceId()).put("workflow", h.workflow())
+                    .put("version", h.version()).put("status", h.status())
+                    .put("correlationId", h.correlationId() == null ? "" : h.correlationId())
+                    .put("createdAt", h.createdAt()).put("updatedAt", h.updatedAt()).put("score", h.score())
+                    .put("purged", h.purged()));
         }
-        return out.build();
+        return out;
     }
 
-    private static List<com.wiggle.server.store.Rows.AttrFilter> attributeFilters(SearchRequest req) {
+    private static List<com.wiggle.server.store.Rows.AttrFilter> attributeFilters(Msg req) {
         List<com.wiggle.server.store.Rows.AttrFilter> out = new ArrayList<>();
         try {
-            for (SearchAttributeFilter f : req.getAttributesList()) {
-                Object value = switch (f.getValue().getVCase()) {
-                    case TEXT -> f.getValue().getText();
-                    case INTEGER -> f.getValue().getInteger();
-                    case DECIMAL -> new java.math.BigDecimal(f.getValue().getDecimal());
-                    case FLAG -> f.getValue().getFlag();
-                    case V_NOT_SET -> throw new IllegalArgumentException("attribute '" + f.getName() + "' has no value");
+            for (Msg f : req.msgs("attributes")) {
+                Msg v = f.msg("value");
+                Object value = switch (CriteriaWire.oneOf(v, "attribute '" + f.str("name") + "'",
+                        "text", "integer", "decimal", "flag")) {
+                    case "text" -> v.str("text");
+                    case "integer" -> v.lng("integer");
+                    case "decimal" -> new java.math.BigDecimal(v.str("decimal"));
+                    default -> v.bool("flag");
                 };
-                out.add(new com.wiggle.server.store.Rows.AttrFilter(f.getName(),
-                        com.wiggle.core.criteria.Op.valueOf(f.getOp()), value));
+                out.add(new com.wiggle.server.store.Rows.AttrFilter(f.str("name"),
+                        com.wiggle.core.criteria.Op.valueOf(f.str("op")), value));
             }
             if (out.size() > com.wiggle.server.store.Rows.SearchQuery.MAX_ATTRIBUTE_FILTERS) {
                 throw new IllegalArgumentException("a search filters on at most "
@@ -552,118 +552,117 @@ public final class ControlPlaneApi {
         return out;
     }
 
-    EventList pollEvents(PollEventsRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollEvents consumer=" + req.getConsumer()
-                + " max=" + req.getMax() + " waitMillis=" + req.getWaitMillis());
+    Msg pollEvents(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc PollEvents consumer=" + req.str("consumer")
+                + " max=" + req.integer("max") + " waitMillis=" + req.lng("waitMillis"));
         authz.require(Permissions.EVENT_READ, null);
         if (memory.rejectPoll()) {
             long retryAfter = memory.retryAfterMillis();
             LOG.log(System.Logger.Level.WARNING, () -> "memory pressure: rejecting event poll from "
-                    + req.getConsumer() + ", retry after " + retryAfter + "ms");
-            return EventList.newBuilder().setRetryAfterMillis(retryAfter).build();
+                    + req.str("consumer") + ", retry after " + retryAfter + "ms");
+            return Msg.create().put("retryAfterMillis", retryAfter);
         }
-        long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.getWaitMillis());
+        long deadline = System.currentTimeMillis() + Math.min(maxLongPollMillis, req.lng("waitMillis"));
         List<com.wiggle.core.EventView> events =
-                engine.pollEvents(req.getConsumer(), req.getMax(), req.getStartFrom(), deadline, Thread.currentThread()::isInterrupted);
-        EventList.Builder out = EventList.newBuilder();
-        for (com.wiggle.core.EventView e : events) out.addEvents(eventProto(e));
-        return out.build();
+                engine.pollEvents(req.str("consumer"), req.integer("max"), req.lng("startFrom"), deadline, Thread.currentThread()::isInterrupted);
+        Msg out = Msg.create();
+        for (com.wiggle.core.EventView e : events) out.add("events", eventMsg(e));
+        return out;
     }
 
-    Ack ackEvents(AckEventsRequest req) throws Exception {
-        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AckEvents consumer=" + req.getConsumer()
-                + " ackedSeq=" + req.getAckedSeq() + " ackedCursor=" + req.getAckedCursor());
+    Msg ackEvents(Msg req) throws Exception {
+        LOG.log(System.Logger.Level.DEBUG, () -> "rpc AckEvents consumer=" + req.str("consumer")
+                + " ackedSeq=" + req.lng("ackedSeq") + " ackedCursor=" + req.str("ackedCursor"));
         authz.require(Permissions.EVENT_READ, null);
-        if (req.getAckedCursor().isEmpty()) engine.ackEvents(req.getConsumer(), req.getAckedSeq());
-        else engine.ackEvents(req.getConsumer(), req.getAckedCursor());
-        return Ack.newBuilder().setOk(true).build();
+        if (req.str("ackedCursor").isEmpty()) engine.ackEvents(req.str("consumer"), req.lng("ackedSeq"));
+        else engine.ackEvents(req.str("consumer"), req.str("ackedCursor"));
+        return Msg.create().put("ok", true);
     }
 
-    private static EventView eventProto(com.wiggle.core.EventView e) {
-        EventView.Builder b = EventView.newBuilder()
-                .setSeq(e.seq()).setInstanceId(e.instanceId()).setWorkflow(e.workflow())
-                .setVersion(e.version()).setType(e.type()).setCreatedAt(e.createdAt()).setShard(e.shard());
-        if (e.cursor() != null) b.setCursor(e.cursor());
-        if (e.correlationId() != null) b.setCorrelationId(e.correlationId());
-        if (e.nodeId() != null) b.setNodeId(e.nodeId());
-        if (e.payload() != null && !e.payload().isEmpty()) b.setPayload(ProtoJson.toValue(e.payload()));
-        return b.build();
+    private static Msg eventMsg(com.wiggle.core.EventView e) {
+        Msg b = Msg.create()
+                .put("seq", e.seq()).put("instanceId", e.instanceId()).put("workflow", e.workflow())
+                .put("version", e.version()).put("type", e.type()).put("createdAt", e.createdAt()).put("shard", e.shard());
+        if (e.cursor() != null) b.put("cursor", e.cursor());
+        if (e.correlationId() != null) b.put("correlationId", e.correlationId());
+        if (e.nodeId() != null) b.put("nodeId", e.nodeId());
+        if (e.payload() != null && !e.payload().isEmpty()) b.put("payload", e.payload());
+        return b;
     }
 
-    private ClusterView clusterView() {
-        ClusterView.Builder out = ClusterView.newBuilder().setSelf(cluster.nodeId()).setLeader(cluster.isLeader());
+    private Msg clusterView() {
+        Msg out = Msg.create().put("self", cluster.nodeId()).put("leader", cluster.isLeader());
         long now = System.currentTimeMillis();
         for (ServerNode n : cluster.members()) {
-            out.addMembers(ClusterMember.newBuilder()
-                    .setId(n.id)
-                    .setName(n.name)
-                    .setFirstHeartbeat(n.firstHeartbeat)
-                    .setLastHeartbeat(n.lastHeartbeat)
-                    .setWorkers(n.workers)
-                    .setLeader(n.leader)
-                    .setAlive(now - n.lastHeartbeat < cluster.deadAfterMillis())
-                    .build());
+            out.add("members", Msg.create()
+                    .put("id", n.id)
+                    .put("name", n.name)
+                    .put("firstHeartbeat", n.firstHeartbeat)
+                    .put("lastHeartbeat", n.lastHeartbeat)
+                    .put("workers", n.workers)
+                    .put("leader", n.leader)
+                    .put("alive", now - n.lastHeartbeat < cluster.deadAfterMillis()));
         }
-        return out.build();
+        return out;
     }
 
-    private static InstanceView viewProto(com.wiggle.core.InstanceView v) {
-        InstanceView.Builder m = InstanceView.newBuilder()
-                .setId(v.id())
-                .setWorkflow(v.workflow())
-                .setVersion(v.version())
-                .setStatus(v.status())
-                .setCreatedAt(v.createdAt())
-                .setUpdatedAt(v.updatedAt());
-        if (v.terminationReason() != null) m.setTerminationReason(v.terminationReason());
-        if (v.error() != null) m.setError(v.error());
-        if (v.context() != null) m.setContext(ProtoJson.toValue(v.context()));
-        return m.build();
+    private static Msg viewMsg(com.wiggle.core.InstanceView v) {
+        Msg m = Msg.create()
+                .put("id", v.id())
+                .put("workflow", v.workflow())
+                .put("version", v.version())
+                .put("status", v.status())
+                .put("createdAt", v.createdAt())
+                .put("updatedAt", v.updatedAt());
+        if (v.terminationReason() != null) m.put("terminationReason", v.terminationReason());
+        if (v.error() != null) m.put("error", v.error());
+        if (v.context() != null) m.put("context", v.context());
+        return m;
     }
 
-    private static Token tokenProto(com.wiggle.server.store.Rows.Token t) {
-        Token.Builder m = Token.newBuilder()
-                .setId(t.id)
-                .setNodeId(t.nodeId)
-                .setKind(t.kind.name())
-                .setStatus(t.status.name())
-                .setActivity(t.activity == null ? "" : t.activity)
-                .setAttempt(t.attempt)
-                .setAvailableAt(t.availableAt);
-        if (t.leaseOwner != null) m.setLeaseOwner(t.leaseOwner);
-        if (t.lastError != null) m.setLastError(t.lastError);
-        if (t.startedAt != null) m.setStartedAt(t.startedAt);
-        if (t.finishedAt != null) m.setFinishedAt(t.finishedAt);
-        if (t.stepInput != null) m.setInput(ProtoJson.toValue(com.wiggle.core.Json.parse(t.stepInput)));
-        if (t.stepOutput != null) m.setOutput(ProtoJson.toValue(com.wiggle.core.Json.parse(t.stepOutput)));
-        m.setCreatedAt(t.createdAt);
-        return m.build();
+    private static Msg tokenMsg(com.wiggle.server.store.Rows.Token t) {
+        Msg m = Msg.create()
+                .put("id", t.id)
+                .put("nodeId", t.nodeId)
+                .put("kind", t.kind.name())
+                .put("status", t.status.name())
+                .put("activity", t.activity == null ? "" : t.activity)
+                .put("attempt", t.attempt)
+                .put("availableAt", t.availableAt);
+        if (t.leaseOwner != null) m.put("leaseOwner", t.leaseOwner);
+        if (t.lastError != null) m.put("lastError", t.lastError);
+        if (t.startedAt != null) m.put("startedAt", t.startedAt);
+        if (t.finishedAt != null) m.put("finishedAt", t.finishedAt);
+        if (t.stepInput != null) m.put("input", com.wiggle.core.Json.parse(t.stepInput));
+        if (t.stepOutput != null) m.put("output", com.wiggle.core.Json.parse(t.stepOutput));
+        m.put("createdAt", t.createdAt);
+        return m;
     }
 
-    private static TaskActivation taskProto(com.wiggle.core.TaskActivation t) {
-        TaskActivation.Builder m = TaskActivation.newBuilder()
-                .setTaskId(t.taskId())
-                .setInstanceId(t.instanceId())
-                .setWorkflow(t.workflow())
-                .setVersion(t.version())
-                .setNodeId(t.nodeId())
-                .setStepName(t.stepName() == null ? "" : t.stepName())
-                .setActivity(t.activity())
-                .setKind(t.kind().name())
-                .setAttempt(t.attempt())
-                .setLeaseExpiresAt(t.leaseExpiresAt())
-                .setLeaseOwner(t.leaseOwner())
-                .setExecutionMode(t.executionMode().name());
-        if (t.context() != null) m.setContext(ProtoJson.toValue(t.context()));
+    private static Msg taskMsg(com.wiggle.core.TaskActivation t) {
+        Msg m = Msg.create()
+                .put("taskId", t.taskId())
+                .put("instanceId", t.instanceId())
+                .put("workflow", t.workflow())
+                .put("version", t.version())
+                .put("nodeId", t.nodeId())
+                .put("stepName", t.stepName() == null ? "" : t.stepName())
+                .put("activity", t.activity())
+                .put("kind", t.kind().name())
+                .put("attempt", t.attempt())
+                .put("leaseExpiresAt", t.leaseExpiresAt())
+                .put("leaseOwner", t.leaseOwner())
+                .put("executionMode", t.executionMode().name());
+        if (t.context() != null) m.put("context", t.context());
         if (t.baseContext() != null) {   // a forEach item step: deliver the frozen base alongside
-            m.setBaseContext(ProtoJson.toValue(t.baseContext()));
-            m.setItemIndex(t.itemIndex());
-            if (t.itemMapKey() != null) m.setItemMapKey(t.itemMapKey());
+            m.put("baseContext", t.baseContext());
+            m.put("itemIndex", t.itemIndex());
+            if (t.itemMapKey() != null) m.put("itemMapKey", t.itemMapKey());
         }
-        if (t.collectKey() != null) m.setCollectKey(t.collectKey());
-        m.addAllArmNames(t.armNames());
-        if (t.correlationId() != null) m.setCorrelationId(t.correlationId());
-        m.setInstanceCreatedAt(t.instanceCreatedAt());
-        return m.build();
+        if (t.collectKey() != null) m.put("collectKey", t.collectKey());
+        m.put("armNames", t.armNames());
+        if (t.correlationId() != null) m.put("correlationId", t.correlationId());
+        m.put("instanceCreatedAt", t.instanceCreatedAt());
+        return m;
     }
 }

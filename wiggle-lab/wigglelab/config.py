@@ -18,7 +18,7 @@ IMAGE = os.environ.get("WIGGLE_LAB_IMAGE", "wiggle:local")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # In-cluster ports.
-CELL_GRPC_PORT = 8080           # WiggleControlPlane gRPC on a cell node
+CELL_API_PORT = 8080            # the control-plane API (HTTP) on a cell node
 CELL_DASHBOARD_PORT = 8090      # cell /healthz probe port
 CELL_PORTAL_PORT = 8070         # the portal (web UI) every cell node serves
 DB_PORT = 5432

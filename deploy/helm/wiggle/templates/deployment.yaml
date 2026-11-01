@@ -35,8 +35,8 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
-            - name: grpc
-              containerPort: {{ .Values.service.grpcPort }}
+            - name: http
+              containerPort: {{ .Values.service.apiPort }}
             - name: health
               containerPort: {{ .Values.service.healthPort }}
             {{- if gt (int .Values.service.portalPort) 0 }}
@@ -54,7 +54,7 @@ spec:
                 fieldRef:
                   fieldPath: status.podIP
             - name: WIGGLE_PORT
-              value: {{ .Values.service.grpcPort | quote }}
+              value: {{ .Values.service.apiPort | quote }}
             - name: WIGGLE_DASHBOARD_PORT
               value: {{ .Values.service.healthPort | quote }}
             {{- if gt (int .Values.service.portalPort) 0 }}

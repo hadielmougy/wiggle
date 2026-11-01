@@ -28,7 +28,7 @@ here first, and the requirement names the test that holds it.
 ## 1. Scope
 
 **In scope.** The durable workflow engine (the `server` module), the authoring and worker library
-(`client`), the wire contract (`proto`), storage
+(`client`), the wire contract (`core`'s `wire` package), storage
 (`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the
 portal the server serves (`console`).
 
@@ -90,7 +90,7 @@ instance write-lock, so any number of server nodes over one database may drive t
 ## 5. Conformance
 
 **WGL-GEN-003** (MUST) A conforming **server** implements every RPC of
-`com.wiggle.proto.WiggleControlPlane` with the semantics in [chapter 70](70-api.md), and the engine
+the control-plane API with the semantics in [chapter 70](70-api.md), and the engine
 semantics of [chapter 30](30-engine.md).
 
 **WGL-GEN-004** (MUST) A conforming **client library** may implement any subset of the RPCs, but
@@ -131,7 +131,7 @@ Stated so a reader does not look for them.
   be idempotent.
 - **No workflow-code determinism model.** The workflow is data the server walks, not code replayed
   to rebuild state, so there is no replay discipline, no history API, and no side-effect wrappers.
-- **No authorization unless asked for.** With `WIGGLE_GRPC_AUTH` unset, any peer that can connect
+- **No authorization unless asked for.** With `WIGGLE_API_AUTH` unset, any peer that can connect
   may call any control-plane RPC; set it to `enforce` for per-RPC authorization by API key or client
   certificate ([chapter 70 §11](70-api.md#11-per-rpc-authorization)).
 - **No rollback by default.** A failed instance stops where it is unless the topology declares

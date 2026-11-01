@@ -73,13 +73,13 @@ def cell_manifests(cell: str, replicas: int, tunables: dict | None = None) -> li
     labels = C.labels("cell", cell=cell)
     container = {
         "name": "wiggle", "image": C.IMAGE, "imagePullPolicy": "IfNotPresent",
-        "ports": [{"containerPort": C.CELL_GRPC_PORT}, {"containerPort": C.CELL_DASHBOARD_PORT},
+        "ports": [{"containerPort": C.CELL_API_PORT}, {"containerPort": C.CELL_DASHBOARD_PORT},
                   {"containerPort": C.CELL_PORTAL_PORT}],
         "env": [
             _node_name_env(),
             # Structural env the lab wires itself (never user-editable).
             *_env({
-                "WIGGLE_PORT": C.CELL_GRPC_PORT,
+                "WIGGLE_PORT": C.CELL_API_PORT,
                 "WIGGLE_DASHBOARD_PORT": C.CELL_DASHBOARD_PORT,
                 "WIGGLE_PORTAL_PORT": C.CELL_PORTAL_PORT,
                 "WIGGLE_JDBC_URL": f"jdbc:postgresql://{db}:{C.DB_PORT}/wiggle",
@@ -90,17 +90,17 @@ def cell_manifests(cell: str, replicas: int, tunables: dict | None = None) -> li
             # are dropped by _env ⇒ the server falls back to its own defaults.
             *_env(C.to_env(C.CELL_TUNABLES, tunables)),
         ],
-        "readinessProbe": {"tcpSocket": {"port": C.CELL_GRPC_PORT},
+        "readinessProbe": {"tcpSocket": {"port": C.CELL_API_PORT},
                            "initialDelaySeconds": 4, "periodSeconds": 3},
-        "livenessProbe": {"tcpSocket": {"port": C.CELL_GRPC_PORT},
+        "livenessProbe": {"tcpSocket": {"port": C.CELL_API_PORT},
                           "initialDelaySeconds": 12, "periodSeconds": 10},
     }
-    # The cell Service exposes gRPC (8080), /healthz (8090) and the portal (8070) so each can be port-forwarded.
+    # The cell Service exposes the API (8080), /healthz (8090) and the portal (8070) so each can be port-forwarded.
     svc = {
         "apiVersion": "v1", "kind": "Service",
         "metadata": {"name": name, "namespace": C.K8S_NAMESPACE, "labels": labels},
         "spec": {"selector": {"app": name}, "ports": [
-            {"name": "grpc", "port": C.CELL_GRPC_PORT, "targetPort": C.CELL_GRPC_PORT},
+            {"name": "http", "port": C.CELL_API_PORT, "targetPort": C.CELL_API_PORT},
             {"name": "dashboard", "port": C.CELL_DASHBOARD_PORT, "targetPort": C.CELL_DASHBOARD_PORT},
             {"name": "portal", "port": C.CELL_PORTAL_PORT, "targetPort": C.CELL_PORTAL_PORT},
         ]},

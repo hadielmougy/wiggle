@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * End-to-end TLS: real keystores are generated with {@code keytool}, then the gRPC API and HTTP
+ * End-to-end TLS: real keystores are generated with {@code keytool}, then the API and HTTP
  * dashboard are driven over TLS -- server-side TLS, mutual TLS, and the plaintext fallback that
  * every other test relies on (which holds because {@code WIGGLE_TLS_*} is unset in this JVM).
  */
@@ -75,8 +75,8 @@ class TlsTest {
     }
 
 
-    @Test @DisplayName("gRPC server-side TLS: a trusting client works, a plaintext client is refused")
-    void grpcServerTls() throws Exception {
+    @Test @DisplayName("API server-side TLS: a trusting client works, a plaintext client is refused")
+    void apiServerTls() throws Exception {
         ServerConfig config = serverConfig(opts(serverKs, null), 0, null);   // keystore only
         try (WiggleServer server = new WiggleServer(config).start()) {
             Tls.Options clientTls = opts(null, trust);   // trusts the server, no client cert
@@ -96,8 +96,8 @@ class TlsTest {
         }
     }
 
-    @Test @DisplayName("gRPC mTLS: a client with a trusted cert works, one without a cert is rejected")
-    void grpcMutualTls() throws Exception {
+    @Test @DisplayName("API mTLS: a client with a trusted cert works, one without a cert is rejected")
+    void apiMutualTls() throws Exception {
         ServerConfig config = serverConfig(opts(serverKs, trust), 0, null);   // keystore + truststore => mTLS
         try (WiggleServer server = new WiggleServer(config).start()) {
 
@@ -117,10 +117,10 @@ class TlsTest {
     }
 
 
-    @Test @DisplayName("gRPC authorization by client certificate: its subject is the credential")
-    void grpcCertificateCredential() throws Exception {
+    @Test @DisplayName("API authorization by client certificate: its subject is the credential")
+    void apiCertificateCredential() throws Exception {
         ServerConfig config = serverConfig(opts(serverKs, trust), 0, null)
-                .withAuth(new ServerConfig.Auth(ServerConfig.GrpcAuth.ENFORCE, Duration.ofSeconds(30)));
+                .withAuth(new ServerConfig.Auth(ServerConfig.ApiAuth.ENFORCE, Duration.ofSeconds(30)));
         try (WiggleServer server = new WiggleServer(config).start();
              WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust))) {
             WiggleClient.WiggleApiException refused = assertThrows(WiggleClient.WiggleApiException.class, client::cluster);
