@@ -226,10 +226,10 @@ hop away: it collapses N report RPCs into one but couples instances into shared 
 
 ## 8. RPC resilience
 
-**WGL-WRK-100** (MUST) Every client and worker RPC MUST retry on `UNAVAILABLE` only — the call almost
-certainly never ran, so the retry is safe even for a non-idempotent operation.
+**WGL-WRK-100** (MUST) Every client and worker RPC MUST retry on `UNAVAILABLE` only — the server could
+not be reached, or answered `502`/`503` — since the call almost certainly never ran, so the retry is safe even for a non-idempotent operation.
 
-**WGL-WRK-101** (MUST) `DEADLINE_EXCEEDED` and permanent errors MUST NOT be retried.
+**WGL-WRK-101** (MUST) A timed-out call and permanent errors MUST NOT be retried.
 
 **WGL-WRK-102** (MUST) Retry is tunable per JVM by `wiggle.rpc.maxAttempts` /
 `WIGGLE_RPC_MAX_ATTEMPTS` (default 5; 1 disables) and `wiggle.rpc.retryDelayMillis` /

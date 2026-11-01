@@ -66,12 +66,12 @@ val publishedModules = setOf("core", "proto", "client", "server", "jdbc", "postg
 
 val moduleDescriptions = mapOf(
     "core" to "Wiggle shared model: JSON, the compiled state-machine graph, retry policy, wire records.",
-    "proto" to "Wiggle gRPC/protobuf stubs for the control-plane wire protocol.",
+    "proto" to "Wiggle protobuf messages and HTTP method table for the control-plane wire protocol.",
     "client" to "Wiggle client: the flow-authoring DSL, imperative builder, and worker runtime.",
     "server" to "Wiggle server: the durable state-machine engine, cluster manager, and control-plane API.",
     "jdbc" to "Wiggle JDBC storage core: the dialect-aware, HikariCP-pooled store shared by every database module.",
     "postgres" to "Wiggle PostgreSQL storage: PostgreSQL and H2 dialects for multi-node clustering.",
-    "bom" to "Wiggle BOM: a version-alignment platform for every wiggle module and its gRPC/protobuf stack.",
+    "bom" to "Wiggle BOM: a version-alignment platform for every wiggle module and its protobuf stack.",
     "election" to "Wiggle leader election: announce-and-heartbeat election over a pluggable store.",
 )
 

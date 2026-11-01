@@ -1,8 +1,6 @@
 package com.wiggle.client.worker;
 
 import com.wiggle.client.WiggleClient.WiggleApiException;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -120,6 +118,6 @@ final class Heartbeat {
     }
 
     static boolean unreachable(WiggleApiException e) {
-        return e.getCause() instanceof StatusRuntimeException s && s.getStatus().getCode() == Status.Code.UNAVAILABLE;
+        return e.unavailable();
     }
 }

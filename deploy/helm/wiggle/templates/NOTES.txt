@@ -3,7 +3,7 @@ Wiggle is deployed as {{ include "wiggle.fullname" . }} ({{ .Values.replicaCount
 Image:   {{ include "wiggle.image" . }}
 Storage: {{ if or .Values.storage.jdbc.url .Values.storage.jdbc.existingSecret }}JDBC (durable){{ else }}in-memory (NON-DURABLE — single node, dev only){{ end }}
 
-Reach the gRPC control plane in-cluster at:
+Reach the HTTP control plane in-cluster at:
     {{ include "wiggle.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
 
 Port-forward it to your machine:

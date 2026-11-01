@@ -2,7 +2,7 @@
 # Brings up three server nodes against one Postgres, plus two workers, and submits
 # a batch of orders. Demonstrates leader election and pull-based work distribution.
 #
-# Prerequisites: a reachable Postgres, plus grpc/protobuf/JDBC on the classpath.
+# Prerequisites: a reachable Postgres, plus protobuf/JDBC on the classpath.
 #   docker compose up -d postgres
 #   ./gradlew :server:installDist          # produces a lib dir with every runtime jar
 set -euo pipefail

@@ -2,40 +2,47 @@
 
 ← [Event log](60-event-log.md) · [Index](00-index.md) · Next: [Storage](80-storage.md)
 
-One gRPC service, `com.wiggle.proto.WiggleControlPlane`, is the whole contract between a server and
-everything else: submitters, workers, and the clients in other languages.
+One service, `com.wiggle.proto.WiggleControlPlane`, served over HTTP, is the whole contract between a
+server and everything else: submitters, workers, and the clients in other languages.
 Nothing is ever pushed to a worker, so workers need no inbound connectivity.
 
-The definition of record is `proto/src/main/proto/wiggle.proto`. This chapter specifies each RPC's
-behaviour, the shapes that carry meaning, and the error mapping.
+The definition of record is `proto/src/main/proto/wiggle.proto`, and its HTTP binding is
+`com.wiggle.proto.ControlPlane`. This chapter specifies each RPC's behaviour, the shapes that carry
+meaning, and the error mapping.
 
 ## 1. General rules
 
-**WGL-API-001** (MUST) The transport MUST be gRPC on one port (default 8080), plaintext unless TLS is
-configured ([WGL-OPS-060](90-ops.md)).
+**WGL-API-001** (MUST) The transport MUST be HTTP/1.1 on one port (default 8080), plaintext unless TLS
+is configured ([WGL-OPS-060](90-ops.md)). Every RPC MUST be a `POST /v1/<Method>` whose body is the
+request message and whose `200` answer is the response message, both as `application/x-protobuf`, or
+both as `application/json` in protobuf's canonical JSON mapping when the request is sent as JSON. A
+request body over 4 MiB MUST be refused with `413`.
 
 **WGL-API-002** (MUST) A workflow definition MUST travel as one opaque `google.protobuf.Struct` holding
 the definition's JSON, rather than being re-modelled in proto. Contexts and payloads MUST travel as
 `google.protobuf.Value`, so any JSON value — object, array or scalar — is carried.
 
-**WGL-API-003** (MUST) Engine statuses MUST map to gRPC statuses exactly: 400 → `INVALID_ARGUMENT`,
-404 → `NOT_FOUND`, 409 → `FAILED_PRECONDITION`, anything else → `INTERNAL` (infrastructure failures
-excepted: WGL-API-007). An `IllegalArgumentException` from the definition layer MUST map to
-`INVALID_ARGUMENT`.
+**WGL-API-003** (MUST) A failed call MUST answer a non-2xx status with a JSON body
+`{"code": ..., "message": ...}`. Engine statuses MUST map exactly: 400 → `400 INVALID_ARGUMENT`,
+404 → `404 NOT_FOUND`, 409 → `409 FAILED_PRECONDITION`, anything else → `500 INTERNAL`
+(infrastructure failures excepted: WGL-API-007). An `IllegalArgumentException` from the definition
+layer MUST map to `400 INVALID_ARGUMENT`. An unknown method MUST answer `404`, and any method but
+`POST` `405`.
 
 **WGL-API-004** (MUST) Long-polling RPCs (`PollTasks`, `PollEvents`) MUST clamp the caller's requested
 wait to the server's maximum.
 
-**WGL-API-005** (MUST) A cancelled call on `PollTasks` MUST be treated as "the worker is gone": the
-server MUST NOT claim work it cannot run.
+**WGL-API-005** (MUST) A `PollTasks` interrupted because its server is stopping MUST NOT claim work.
+A worker that disconnects while its poll is parked is not seen: what the poll then claims returns to
+`READY` when its lease expires.
 
 **WGL-API-006** (*withdrawn*, by [§11](#11-per-rpc-authorization)) There MUST be no per-RPC
 authorization. TLS (optionally mTLS) authenticates the channel; any trusted peer may call any RPC.
 
 **WGL-API-007** (MUST) A storage failure that applied nothing — a `StorageException` classified
-`TRANSIENT`, see [WGL-STOR-080](80-storage.md) — MUST map to `UNAVAILABLE`, which is what makes it
+`TRANSIENT`, see [WGL-STOR-080](80-storage.md) — MUST map to `503 UNAVAILABLE`, which is what makes it
 retryable by [WGL-WRK-100](20-worker.md). Every other storage failure, an unknown commit (`AMBIGUOUS`)
-above all, MUST map to `INTERNAL`: the work may be durable, and the caller MUST NOT be told it can
+above all, MUST map to `500 INTERNAL`: the work may be durable, and the caller MUST NOT be told it can
 simply re-send.
 
 **WGL-API-008** (MUST NOT) Neither status's description may carry the exception's text: SQL, table and
@@ -226,7 +233,7 @@ explanation when a registration is refused.
 
 ## 10. The portal's HTTP surface
 
-A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the gRPC port
+A server node serves these on `WIGGLE_PORTAL_PORT`, apart from the API port
 ([WGL-SHARD-170](85-sharding.md#12-the-portal-in-the-server)), through the engine in process.
 
 **WGL-API-100** (MUST) The JSON API MUST be exactly:
@@ -285,7 +292,7 @@ and allows every call; `log` checks every call, serves it anyway, and logs each 
 `enforce` would make once; `enforce` refuses.
 
 **WGL-API-111** (MUST) A caller MUST identify itself with an API key, sent as
-`authorization: Bearer <key>` metadata, or, on an mTLS listener, with its client certificate, whose
+an `Authorization: Bearer <key>` header, or, on an mTLS listener, with its client certificate, whose
 RFC 2253 subject names a certificate credential. A key wins when both are present. Credentials are
 created in the portal and hold one role ([WGL-SHARD-181](85-sharding.md#13-users-and-authorization)).
 

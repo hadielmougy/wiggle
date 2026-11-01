@@ -22,7 +22,7 @@ conventions, not the library's.
 | Variable | Property | Default | Meaning |
 |---|---|---|---|
 | `WIGGLE_ROLE` | — | `server` | which process the image runs: only `server` (`cell` is the old name for it; `console` and `coordinator` are refused) |
-| `WIGGLE_PORT` | `wiggle.port` | `8080` | gRPC port; `0` picks a free one |
+| `WIGGLE_PORT` | `wiggle.port` | `8080` | API port; `0` picks a free one |
 | `WIGGLE_NODE_NAME` | `wiggle.node.name` | hostname | name in cluster membership |
 | `WIGGLE_JDBC_URL` | `wiggle.jdbc.url` | *(unset)* | unset = in-memory single node; set to cluster on a database |
 | `WIGGLE_JDBC_USER` / `WIGGLE_JDBC_PASSWORD` | `wiggle.jdbc.user` / `.password` | *(unset)* | credentials |
@@ -223,7 +223,7 @@ without the auth shard, as in tests) is open instead, and every request is an ad
 
 ## 5. Transport security
 
-**WGL-OPS-060** (MUST) TLS MUST be opt-in and shared by the gRPC API and the portal's HTTP: a keystore
+**WGL-OPS-060** (MUST) TLS MUST be opt-in and shared by the API and the portal: a keystore
 turns TLS on; a truststore additionally requires client certificates on a server and presents a client
 certificate on a client or worker. Unset means plaintext.
 
@@ -263,13 +263,13 @@ serialised bytes held by in-flight request/response cycles.
 
 **WGL-OPS-076** (MUST) A shed poll MUST NOT be an error: the worker holds off and retries.
 
-*Verified by:* `tests/BacklogCoverageTest`, `server/grpc/MemoryGuardTest`, `tests/MemoryPollTest`.
+*Verified by:* `tests/BacklogCoverageTest`, `server/api/MemoryGuardTest`, `tests/MemoryPollTest`.
 
 ## 7. Deployment postures
 
 **WGL-OPS-080** (MUST) The same workflows MUST run unchanged in all three postures: **embedded**
 (`WiggleServer` in the application's JVM, in-memory or on a database), **standalone** (one node serving
-gRPC), and **cluster** (several nodes on one database).
+the HTTP API), and **cluster** (several nodes on one database).
 
 **WGL-OPS-081** (MUST) An embedded server MUST need nothing but a config and a storage factory, and with
 no database configured MUST keep state in memory — the test posture.
@@ -296,7 +296,7 @@ and weekly renewal that restarts only on a real change.
 tunnel rather than exposed.
 
 **WGL-OPS-088** (MUST) Published artifacts MUST include a BOM keeping every module and the shared
-gRPC/protobuf stack version-aligned, and a **shaded** client (`wiggle-client-all`) with gRPC, protobuf
+protobuf stack version-aligned, and a **shaded** client (`wiggle-client-all`) with protobuf
 and Guava relocated so it has zero transitive dependencies.
 
 *Verified by:* `tests/ServerRoleTest`, `dist/RoleTest`, `scripts/regression-released-image.sh`,

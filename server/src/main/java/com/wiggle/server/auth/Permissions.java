@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 public final class Permissions {
 
     public static final String ALL = "*";
-    /** Every read, over the portal or gRPC; scoped, the reads of one workflow. */
+    /** Every read, over the portal or the API; scoped, the reads of one workflow. */
     public static final String READ = "read";
     public static final String INSTANCE_CANCEL = "instance.cancel";
     public static final String INSTANCE_SIGNAL = "instance.signal";

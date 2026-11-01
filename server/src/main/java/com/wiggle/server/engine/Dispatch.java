@@ -44,7 +44,7 @@ final class Dispatch {
     }
 
     /**
-     * Long-polls for work. {@code cancelled} lets the caller (the gRPC layer) signal that the worker's
+     * Long-polls for work. {@code cancelled} lets the caller (the API layer) signal that the worker's
      * request is gone -- a closing or dead worker whose call was cancelled -- so we do not claim a
      * token for a worker that will never run it (which would only strand it until lease expiry). This
      * matters with wake-on-produce: a signal can wake a parked poll the instant its worker is shutting

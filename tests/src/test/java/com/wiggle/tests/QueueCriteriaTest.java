@@ -15,16 +15,11 @@ import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 import com.wiggle.proto.CriteriaComparison;
 import com.wiggle.proto.CriteriaPredicate;
+import com.wiggle.proto.ControlPlane;
 import com.wiggle.proto.PollRequest;
-import com.wiggle.proto.WiggleControlPlaneGrpc;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
-import io.grpc.Grpc;
-import io.grpc.InsecureChannelCredentials;
-import io.grpc.ManagedChannel;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -294,33 +289,27 @@ class QueueCriteriaTest {
     @DisplayName("WGL-QC-050/051: queues and criteria together, or malformed criteria, are INVALID_ARGUMENT")
     void wireChecks() throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start()) {
-            ManagedChannel channel = Grpc.newChannelBuilder(server.baseUrl(), InsecureChannelCredentials.create()).build();
-            try {
-                var stub = WiggleControlPlaneGrpc.newBlockingStub(channel);
-                com.wiggle.proto.QueueCriteria ok = com.wiggle.proto.QueueCriteria.newBuilder().setQueue("q").build();
-                StatusRuntimeException both = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
-                        PollRequest.newBuilder().setWorkerId("w").addQueues("q").addCriteria(ok).build()));
-                assertEquals(Status.Code.INVALID_ARGUMENT, both.getStatus().getCode());
+            String target = server.baseUrl();
+            com.wiggle.proto.QueueCriteria ok = com.wiggle.proto.QueueCriteria.newBuilder().setQueue("q").build();
+            RawApi.Answer both = RawApi.call(target, ControlPlane.POLL_TASKS,
+                    PollRequest.newBuilder().setWorkerId("w").addQueues("q").addCriteria(ok).build(), null);
+            assertEquals("INVALID_ARGUMENT", both.code());
 
-                com.wiggle.proto.QueueCriteria unknownField = ok.toBuilder().setWhere(CriteriaPredicate.newBuilder()
-                        .setCmp(CriteriaComparison.newBuilder().setField("lease_owner").setOp("IS_NULL"))).build();
-                StatusRuntimeException bad = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
-                        PollRequest.newBuilder().setWorkerId("w").addCriteria(unknownField).build()));
-                assertEquals(Status.Code.INVALID_ARGUMENT, bad.getStatus().getCode());
-                assertTrue(bad.getStatus().getDescription().contains("lease_owner"), bad.getStatus().getDescription());
+            com.wiggle.proto.QueueCriteria unknownField = ok.toBuilder().setWhere(CriteriaPredicate.newBuilder()
+                    .setCmp(CriteriaComparison.newBuilder().setField("lease_owner").setOp("IS_NULL"))).build();
+            RawApi.Answer bad = RawApi.call(target, ControlPlane.POLL_TASKS,
+                    PollRequest.newBuilder().setWorkerId("w").addCriteria(unknownField).build(), null);
+            assertEquals("INVALID_ARGUMENT", bad.code());
+            assertTrue(bad.message().contains("lease_owner"), bad.message());
 
-                StatusRuntimeException noQueue = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
-                        PollRequest.newBuilder().setWorkerId("w")
-                                .addCriteria(com.wiggle.proto.QueueCriteria.getDefaultInstance()).build()));
-                assertEquals(Status.Code.INVALID_ARGUMENT, noQueue.getStatus().getCode());
+            RawApi.Answer noQueue = RawApi.call(target, ControlPlane.POLL_TASKS, PollRequest.newBuilder().setWorkerId("w")
+                    .addCriteria(com.wiggle.proto.QueueCriteria.getDefaultInstance()).build(), null);
+            assertEquals("INVALID_ARGUMENT", noQueue.code());
 
-                StatusRuntimeException twice = assertThrows(StatusRuntimeException.class, () -> stub.pollTasks(
-                        PollRequest.newBuilder().setWorkerId("w").addCriteria(ok).addCriteria(ok).build()));
-                assertEquals(Status.Code.INVALID_ARGUMENT, twice.getStatus().getCode());
-                assertTrue(twice.getStatus().getDescription().contains("more than one"), twice.getStatus().getDescription());
-            } finally {
-                channel.shutdownNow();
-            }
+            RawApi.Answer twice = RawApi.call(target, ControlPlane.POLL_TASKS,
+                    PollRequest.newBuilder().setWorkerId("w").addCriteria(ok).addCriteria(ok).build(), null);
+            assertEquals("INVALID_ARGUMENT", twice.code());
+            assertTrue(twice.message().contains("more than one"), twice.message());
         }
     }
 

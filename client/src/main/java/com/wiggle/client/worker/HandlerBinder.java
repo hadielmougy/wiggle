@@ -6,8 +6,6 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.ScratchKeys;
-import org.checkerframework.checker.nullness.qual.NonNull;
-import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -165,7 +163,7 @@ final class HandlerBinder {
         return new Candidate(typed, concreteMethod(typed, primary), compensate);
     }
 
-    private static @Nullable String getWorkflowName(Object handlerObject) {
+    private static String getWorkflowName(Object handlerObject) {
         if (handlerObject == null) throw new IllegalArgumentException("handlers object is required");
         ForFlow ann = handlerObject.getClass().getAnnotation(ForFlow.class);
         if (ann == null) {

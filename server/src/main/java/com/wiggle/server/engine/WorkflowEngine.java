@@ -31,7 +31,7 @@ import java.util.function.Predicate;
  * instance row, {@link Tokens} owns the token rows, and nothing else writes either.
  * What remains here is the work of joining them -- the drive pump that advances tokens until
  * they park, the worker-report entry points that apply a result under the instance lock, and
- * the leader sweeps -- plus the public surface the gRPC and cluster layers call.
+ * the leader sweeps -- plus the public surface the API and cluster layers call.
  *
  * <p>All mutations for a given instance are serialised by {@link Tx#lockInstance}, which
  * is what lets several server nodes drive the same instance without stepping on

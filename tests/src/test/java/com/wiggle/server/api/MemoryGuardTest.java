@@ -1,4 +1,4 @@
-package com.wiggle.server.grpc;
+package com.wiggle.server.api;
 
 import com.wiggle.server.ServerConfig;
 import org.junit.jupiter.api.DisplayName;

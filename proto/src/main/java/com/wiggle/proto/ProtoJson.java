@@ -14,7 +14,7 @@ import java.util.Map;
  * Converts between the dependency-free JSON model used by {@code com.wiggle.core.Json}
  * (object -&gt; Map, array -&gt; List, number -&gt; Long|Double, plus String/Boolean/null) and
  * protobuf's well-known {@link Value}/{@link Struct} types, so arbitrary workflow
- * contexts and node graphs can travel over gRPC without a bespoke message per shape.
+ * contexts and node graphs can travel over the wire without a bespoke message per shape.
  */
 public final class ProtoJson {
     private ProtoJson() {}

@@ -64,7 +64,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     }
 
     /**
-     * Who may call what. {@code grpc} is how the gRPC API checks calls; {@code cache} is how long a
+     * Who may call what. {@code grpc} is how the API checks calls; {@code cache} is how long a
      * node serves a cached account, session or credential before reading it again.
      */
     public record Auth(GrpcAuth grpc, Duration cache) {
@@ -202,7 +202,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 housekeepingBatch, dashboardPort, dashboardUser, dashboardPassword, tls, memory, topology, auth, search);
     }
 
-    /** A copy of this config bound to a different gRPC port. */
+    /** A copy of this config bound to a different API port. */
     public ServerConfig withPort(int port) {
         return new ServerConfig(port, nodeName, jdbcUrl, jdbcUser, jdbcPassword, jdbcPoolSize, pollInterval,
                 heartbeatInterval, missedHeartbeatsBeforeDead, defaultLease, maxLongPoll, retention,
@@ -229,7 +229,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 // HTTP Basic credentials for the dashboard/API; no password => unauthenticated.
                 strProp("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
                 strProp("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),
-                // TLS for gRPC + HTTP; no keystore => plaintext, no truststore => no client-cert (mTLS).
+                // TLS for the API and the portal; no keystore => plaintext, no truststore => no client-cert (mTLS).
                 Tls.Options.fromEnvironment(),
                 // Memory-pressure load shedding; disabled unless WIGGLE_MEMORY_SHEDDING_ENABLED=true.
                 Memory.fromEnvironment(),

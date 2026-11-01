@@ -13,7 +13,7 @@ import java.util.Set;
 
 /**
  * The portal: the dashboard SPA and its JSON API, served by a server process over its own engine
- * on {@code WIGGLE_PORTAL_PORT}, separate from the gRPC port.
+ * on {@code WIGGLE_PORTAL_PORT}, separate from the API port.
  *
  * <p>Built-in accounts come from {@code WIGGLE_DASHBOARD_USER} / {@code WIGGLE_DASHBOARD_PASSWORD} and
  * the optional read-only {@code WIGGLE_DASHBOARD_VIEWER_*} pair. Every other account, role and

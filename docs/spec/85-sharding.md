@@ -550,7 +550,7 @@ are on the auth shard ([§13](#13-users-and-authorization)). WGL-SHARD-174 needs
 are not pointed at.
 
 **WGL-SHARD-170** (MUST) The portal MUST be served by the server process, on its own HTTP port
-(`WIGGLE_PORTAL_PORT`, default `8070`, `0` = off), separate from the gRPC port. `GET /healthz` stays on the
+(`WIGGLE_PORTAL_PORT`, default `8070`, `0` = off), separate from the API port. `GET /healthz` stays on the
 existing `WIGGLE_DASHBOARD_PORT` contract until that variable is retired.
 
 **WGL-SHARD-171** (MUST) The portal MUST read through `DashboardData` backed by the engine in
@@ -562,12 +562,12 @@ Sessions MUST live on the auth shard ([§13](#13-users-and-authorization)), so a
 no sticky sessions.
 
 **WGL-SHARD-173** (MUST) The portal's mutations (cancel, signal, schedules, retry) MUST call the
-engine directly, not the gRPC API, and MUST be checked against the signed-in principal's
+engine directly, not the API, and MUST be checked against the signed-in principal's
 permissions before they run.
 
 **WGL-SHARD-174** (SHOULD) A deployment SHOULD be able to run portal-only nodes (portal on, no
-claims served) so heavy portal use does not share a node with the gRPC hot path. These are ordinary
-server nodes with the gRPC port closed to workers.
+claims served) so heavy portal use does not share a node with the API hot path. These are ordinary
+server nodes with the API port closed to workers.
 
 **WGL-SHARD-175** (MUST) The standalone `console` module MUST be retired once the in-server portal
 matches its views ([WGL-OPS-042](90-ops.md)). WGL-OPS-040 and WGL-OPS-041 are then marked

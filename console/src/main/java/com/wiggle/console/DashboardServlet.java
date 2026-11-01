@@ -257,7 +257,7 @@ public final class DashboardServlet extends HttpServlet {
     }
 
     /**
-     * Machine credentials for the gRPC API: API keys and client certificate subjects, each holding a
+     * Machine credentials for the API: API keys and client certificate subjects, each holding a
      * role. A new API key is in the response that creates it and nowhere else. The filter has checked
      * {@code user.manage}.
      */

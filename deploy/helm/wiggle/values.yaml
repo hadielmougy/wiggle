@@ -25,7 +25,7 @@ storage:
 
 service:
   type: ClusterIP
-  grpcPort: 8080     # the gRPC control plane
+  grpcPort: 8080     # the HTTP control plane
   healthPort: 8090   # serves the always-open /healthz probe
   portalPort: 8070   # the web portal; 0 = off. Without WIGGLE_DASHBOARD_PASSWORD, its first visit sets the admin password
 

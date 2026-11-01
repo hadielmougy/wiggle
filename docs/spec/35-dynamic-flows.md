@@ -448,5 +448,5 @@ step. `thenForEach` therefore stays a supported, non-deprecated construct: the D
   worker chain through a branch. It is worth doing only if dynamic flows turn out to be hot.
 - **Empty-round semantics.** [WGL-DYN-048](#53-fan-out-and-join) diverges from `thenForEach`. If the
   divergence surprises users, an opt-in `skipWhenEmpty()` would align them.
-- **Report size.** 10 000 branches with large inputs can exceed the gRPC message limit. The branch
+- **Report size.** 10 000 branches with large inputs can exceed the API's 4 MiB request limit. The branch
   limit may need to become a byte limit.

@@ -1,4 +1,4 @@
-package com.wiggle.server.grpc;
+package com.wiggle.server.api;
 
 import com.wiggle.core.criteria.Criteria;
 import com.wiggle.core.criteria.Field;

@@ -2,6 +2,9 @@ dependencies {
     api(project(":election"))
     api(project(":core"))
     api(project(":proto"))
+    // the API's HTTP server, and protobuf's canonical JSON mapping for its JSON content type
+    implementation("org.apache.tomcat.embed:tomcat-embed-core:${property("tomcatVersion")}")
+    implementation("com.google.protobuf:protobuf-java-util:${property("protobufVersion")}")
     // No storage dependency: the server core is storage-agnostic and builds its store from an
     // injected StorageFactory. The runnable, all-backends server lives in the :dist module.
 }

@@ -66,7 +66,7 @@ public final class DefinitionRegistry {
      * Publishes a definition. An unregistered version is written; a re-registration of the same
      * graph is a no-op. A re-registration whose graph differs is a conflict (409) unless
      * {@code force} is set, which replaces the stored graph -- a development affordance the server
-     * only honours when it is configured to (see {@code WIGGLE_ALLOW_GRAPH_REPLACE}); the gRPC
+     * only honours when it is configured to (see {@code WIGGLE_ALLOW_GRAPH_REPLACE}); the API
      * layer rejects an unpermitted force before reaching here.
      *
      * <p>It is written to every instance shard and the home shard, one transaction each, so an

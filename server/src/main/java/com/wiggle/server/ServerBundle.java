@@ -6,14 +6,14 @@ import com.wiggle.server.search.SearchIndex;
 import com.wiggle.server.search.SearchIndexer;
 import com.wiggle.server.store.ShardState;
 import com.wiggle.server.topology.Topology;
-import com.wiggle.server.grpc.Authorizer;
+import com.wiggle.server.api.Authorizer;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
 import com.wiggle.server.cluster.ReplicaMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.grpc.GrpcApi;
+import com.wiggle.server.api.HttpApi;
 import com.wiggle.server.http.HealthServer;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.topology.Placement;
@@ -33,7 +33,7 @@ final class ServerBundle {
     private final WorkflowEngine engine;
     private final Housekeeper housekeeper;
     private final ReplicaMonitor replicaMonitor;
-    private final GrpcApi api;
+    private final HttpApi api;
     private final Search search;
     private final SearchIndexer indexer;
     private final long upkeepMillis;
@@ -61,7 +61,7 @@ final class ServerBundle {
             this.indexer = null;
             this.upkeepMillis = 0;
         }
-        this.api = new GrpcApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
+        this.api = new HttpApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
                 config.tls(), config.memory(), new Authorizer(config.auth().grpc(), authCache), search);
         // The dashboard moved to the console; the former dashboard port now serves only /healthz.
         this.health = config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the whole monorepo with plain javac. ./gradlew build is the normal path.
 #
-# Unlike before the gRPC migration, this is no longer dependency-free: the control
-# plane now needs generated protobuf/grpc stubs plus the grpc-java/protobuf-java jars.
+# This is not dependency-free: the control plane needs generated protobuf messages plus
+# the protobuf-java, protobuf-java-util and Tomcat jars.
 # Run `./gradlew :server:installDist` at least once (with network access) so the
 # generated sources and every correctly-resolved runtime jar land on disk; after that
 # this script reuses what's already there and needs no network itself. (Globbing the
@@ -15,8 +15,8 @@ cd "$(dirname "$0")/.."
 
 PROTO_GENERATED="proto/build/generated/source/proto/main"
 LIB_DIR="server/build/install/server/lib"
-if [ ! -d "$PROTO_GENERATED/java" ] && [ ! -d "$PROTO_GENERATED/grpc" ]; then
-  echo "no generated protobuf/grpc sources found under $PROTO_GENERATED" >&2
+if [ ! -d "$PROTO_GENERATED/java" ]; then
+  echo "no generated protobuf sources found under $PROTO_GENERATED" >&2
   echo "run './gradlew :server:installDist' once (needs network) before using this script" >&2
   exit 1
 fi
@@ -26,8 +26,7 @@ if [ ! -d "$LIB_DIR" ]; then
   exit 1
 fi
 
-ANNOTATIONS_API="$(find ~/.gradle/caches/modules-2 -name 'annotations-api-*.jar' 2>/dev/null | head -1)"
-CP="${WIGGLE_CLASSPATH:-$(find "$LIB_DIR" -name '*.jar' | paste -sd: -)${ANNOTATIONS_API:+:$ANNOTATIONS_API}}"
+CP="${WIGGLE_CLASSPATH:-$(find "$LIB_DIR" -name '*.jar' | paste -sd: -)}"
 
 OUT=out/classes
 rm -rf "$OUT" && mkdir -p "$OUT"
