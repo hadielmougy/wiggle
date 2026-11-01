@@ -1208,13 +1208,39 @@ public final class JdbcStorage implements Storage {
         private final JdbcShardRepository shards;
         private final JdbcClusterRepository cluster;
         private final JdbcScheduleRepository schedules;
+        private final JdbcAuthRepository auth;
         JdbcTx(Dialect dialect, JdbcStorage owner) {
             this.dialect = dialect;
             this.owner = owner;
+            this.auth = new JdbcAuthRepository(owner);
             this.schedules = new JdbcScheduleRepository(owner);
             this.cluster = new JdbcClusterRepository(owner);
             this.shards = new JdbcShardRepository(owner);
         }
+
+        @Override public Optional<Rows.AuthUser> findAuthUser(String name) { return auth.findAuthUser(name); }
+        @Override public List<Rows.AuthUser> authUsers() { return auth.authUsers(); }
+        @Override public List<String> authRolesOf(String user) { return auth.authRolesOf(user); }
+        @Override public List<Rows.AuthRole> authRoles() { return auth.authRoles(); }
+        @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) { return auth.findAuthSession(idHash); }
+        @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) { return auth.authAuditAfter(afterSeq, max); }
+        @Override public long authAuditHead() { return auth.authAuditHead(); }
+        @Override public boolean authAuditHas(String action) { return auth.authAuditHas(action); }
+        @Override public void putAuthUser(Rows.AuthUser u) { auth.putAuthUser(u); }
+        @Override public boolean deleteAuthUser(String name) { return auth.deleteAuthUser(name); }
+        @Override public void setAuthRolesOf(String user, List<String> roles) { auth.setAuthRolesOf(user, roles); }
+        @Override public void putAuthRole(Rows.AuthRole r) { auth.putAuthRole(r); }
+        @Override public boolean deleteAuthRole(String name) { return auth.deleteAuthRole(name); }
+        @Override public List<Rows.AuthCredential> authCredentials() { return auth.authCredentials(); }
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) { return auth.findAuthCredentialByKeyHash(keyHash); }
+        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) { return auth.findAuthCredentialBySubject(subject); }
+        @Override public void insertAuthCredential(Rows.AuthCredential c) { auth.insertAuthCredential(c); }
+        @Override public boolean deleteAuthCredential(String id) { return auth.deleteAuthCredential(id); }
+        @Override public void insertAuthSession(Rows.AuthSession x) { auth.insertAuthSession(x); }
+        @Override public void deleteAuthSession(String idHash) { auth.deleteAuthSession(idHash); }
+        @Override public int deleteAuthSessionsOf(String user, String keepIdHash) { return auth.deleteAuthSessionsOf(user, keepIdHash); }
+        @Override public int deleteExpiredAuthSessions(long now, int max) { return auth.deleteExpiredAuthSessions(now, max); }
+        @Override public long appendAuthAudit(Rows.AuthAudit e) { return auth.appendAuthAudit(e); }
 
         @Override public void putSchedule(Rows.Schedule s) { schedules.putSchedule(s); }
         @Override public void deleteSchedule(String id) { schedules.deleteSchedule(id); }
@@ -1550,217 +1576,6 @@ public final class JdbcStorage implements Storage {
                 + "revision,parent_token_id) VALUES "
                 + "(:id,:workflow,:version,:correlationId,:status,:termReason,:error,:context,:createdAt,"
                 + ":updatedAt,:revision,:parentTokenId)";
-
-        @Override public Optional<Rows.AuthUser> findAuthUser(String name) {
-            return h().createQuery("SELECT * FROM wf_auth_user WHERE name=:name")
-                    .bind("name", name)
-                    .map(JdbcTx::authUser)
-                    .findOne();
-        }
-
-        @Override public List<Rows.AuthUser> authUsers() {
-            return h().createQuery("SELECT * FROM wf_auth_user ORDER BY created_at, name")
-                    .map(JdbcTx::authUser)
-                    .list();
-        }
-
-        private static Rows.AuthUser authUser(ResultSet rs, org.jdbi.v3.core.statement.StatementContext ctx)
-                throws SQLException {
-            return new Rows.AuthUser(rs.getString("name"), rs.getString("hash"), rs.getString("salt"),
-                    rs.getInt("iterations"), rs.getInt("disabled") != 0, rs.getLong("created_at"),
-                    rs.getLong("updated_at"));
-        }
-
-        @Override public List<String> authRolesOf(String user) {
-            return h().createQuery("SELECT role_name FROM wf_auth_user_role WHERE user_name=:user ORDER BY role_name")
-                    .bind("user", user)
-                    .mapTo(String.class)
-                    .list();
-        }
-
-        @Override public List<Rows.AuthRole> authRoles() {
-            return h().createQuery("SELECT * FROM wf_auth_role ORDER BY name")
-                    .map((rs, ctx) -> new Rows.AuthRole(rs.getString("name"),
-                            permissionSet(rs.getString("permissions")), rs.getInt("builtin") != 0,
-                            rs.getLong("created_at"), rs.getLong("updated_at")))
-                    .list();
-        }
-
-        private static Set<String> permissionSet(String stored) {
-            Set<String> out = new TreeSet<>();
-            for (String p : stored.split("\\s+")) if (!p.isEmpty()) out.add(p);
-            return out;
-        }
-
-        @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) {
-            return h().createQuery("SELECT * FROM wf_auth_session WHERE id_hash=:id")
-                    .bind("id", idHash)
-                    .map((rs, ctx) -> new Rows.AuthSession(rs.getString("id_hash"), rs.getString("user_name"),
-                            rs.getLong("expires_at"), rs.getLong("created_at")))
-                    .findOne();
-        }
-
-        @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) {
-            return h().createQuery("SELECT * FROM wf_auth_audit WHERE seq>:after ORDER BY seq LIMIT :max")
-                    .bind("after", afterSeq)
-                    .bind("max", max)
-                    .map((rs, ctx) -> new Rows.AuthAudit(rs.getLong("seq"), rs.getLong("at"), rs.getString("actor"),
-                            rs.getString("action"), rs.getString("target"), rs.getString("detail")))
-                    .list();
-        }
-
-        @Override public long authAuditHead() {
-            return h().createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_auth_audit").mapTo(Long.class).one();
-        }
-
-        @Override public boolean authAuditHas(String action) {
-            return h().createQuery("SELECT COUNT(*) FROM wf_auth_audit WHERE action=:action")
-                    .bind("action", action)
-                    .mapTo(Long.class)
-                    .one() > 0;
-        }
-
-        @Override public void putAuthUser(Rows.AuthUser u) {
-            String update = "UPDATE wf_auth_user SET hash=:hash,salt=:salt,iterations=:iterations,"
-                    + "disabled=:disabled,created_at=:created,updated_at=:updated WHERE name=:name";
-            if (bindAuthUser(h().createUpdate(update), u).execute() > 0) return;
-            if (bindAuthUser(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_user "
-                    + "(name,hash,salt,iterations,disabled,created_at,updated_at) VALUES "
-                    + "(:name,:hash,:salt,:iterations,:disabled,:created,:updated)")), u).execute() > 0) return;
-            bindAuthUser(h().createUpdate(update), u).execute();
-        }
-
-        private static Update bindAuthUser(Update q, Rows.AuthUser u) {
-            return q.bind("name", u.name())
-                    .bind("hash", u.hash())
-                    .bind("salt", u.salt())
-                    .bind("iterations", u.iterations())
-                    .bind("disabled", u.disabled() ? 1 : 0)
-                    .bind("created", u.createdAt())
-                    .bind("updated", u.updatedAt());
-        }
-
-        @Override public boolean deleteAuthUser(String name) {
-            h().createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:name").bind("name", name).execute();
-            h().createUpdate("DELETE FROM wf_auth_session WHERE user_name=:name").bind("name", name).execute();
-            return h().createUpdate("DELETE FROM wf_auth_user WHERE name=:name").bind("name", name).execute() > 0;
-        }
-
-        @Override public void setAuthRolesOf(String user, List<String> roles) {
-            h().createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:user").bind("user", user).execute();
-            if (roles.isEmpty()) return;
-            PreparedBatch b = h().prepareBatch("INSERT INTO wf_auth_user_role (user_name,role_name) VALUES (:user,:role)");
-            for (String r : new TreeSet<>(roles)) b.bind("user", user).bind("role", r).add();
-            b.execute();
-        }
-
-        @Override public void putAuthRole(Rows.AuthRole r) {
-            String update = "UPDATE wf_auth_role SET permissions=:permissions,builtin=:builtin,"
-                    + "created_at=:created,updated_at=:updated WHERE name=:name";
-            if (bindAuthRole(h().createUpdate(update), r).execute() > 0) return;
-            if (bindAuthRole(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_role "
-                    + "(name,permissions,builtin,created_at,updated_at) VALUES "
-                    + "(:name,:permissions,:builtin,:created,:updated)")), r).execute() > 0) return;
-            bindAuthRole(h().createUpdate(update), r).execute();
-        }
-
-        private static Update bindAuthRole(Update q, Rows.AuthRole r) {
-            return q.bind("name", r.name())
-                    .bind("permissions", String.join(" ", new TreeSet<>(r.permissions())))
-                    .bind("builtin", r.builtin() ? 1 : 0)
-                    .bind("created", r.createdAt())
-                    .bind("updated", r.updatedAt());
-        }
-
-        @Override public boolean deleteAuthRole(String name) {
-            h().createUpdate("DELETE FROM wf_auth_user_role WHERE role_name=:name").bind("name", name).execute();
-            return h().createUpdate("DELETE FROM wf_auth_role WHERE name=:name").bind("name", name).execute() > 0;
-        }
-
-        @Override public List<Rows.AuthCredential> authCredentials() {
-            return h().createQuery("SELECT * FROM wf_auth_credential ORDER BY id").map(JdbcTx::authCredential).list();
-        }
-
-        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
-            return h().createQuery("SELECT * FROM wf_auth_credential WHERE key_hash=:h")
-                    .bind("h", keyHash).map(JdbcTx::authCredential).findOne();
-        }
-
-        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
-            return h().createQuery("SELECT * FROM wf_auth_credential WHERE subject=:s")
-                    .bind("s", subject).map(JdbcTx::authCredential).findOne();
-        }
-
-        private static Rows.AuthCredential authCredential(ResultSet rs, org.jdbi.v3.core.statement.StatementContext ctx)
-                throws SQLException {
-            long expires = rs.getLong("expires_at");
-            Long expiresAt = rs.wasNull() ? null : expires;
-            return new Rows.AuthCredential(rs.getString("id"), rs.getString("kind"), rs.getString("key_hash"),
-                    rs.getString("subject"), rs.getString("role_name"), rs.getLong("created_at"), expiresAt);
-        }
-
-        @Override public void insertAuthCredential(Rows.AuthCredential c) {
-            h().createUpdate("INSERT INTO wf_auth_credential (id,kind,key_hash,subject,role_name,created_at,expires_at) "
-                            + "VALUES (:id,:kind,:keyHash,:subject,:role,:created,:expires)")
-                    .bind("id", c.id())
-                    .bind("kind", c.kind())
-                    .bind("keyHash", c.keyHash())
-                    .bind("subject", c.subject())
-                    .bind("role", c.role())
-                    .bind("created", c.createdAt())
-                    .bind("expires", c.expiresAt())
-                    .execute();
-        }
-
-        @Override public boolean deleteAuthCredential(String id) {
-            return h().createUpdate("DELETE FROM wf_auth_credential WHERE id=:id").bind("id", id).execute() > 0;
-        }
-
-        @Override public void insertAuthSession(Rows.AuthSession x) {
-            h().createUpdate("INSERT INTO wf_auth_session (id_hash,user_name,expires_at,created_at) "
-                            + "VALUES (:id,:user,:expires,:created)")
-                    .bind("id", x.idHash())
-                    .bind("user", x.user())
-                    .bind("expires", x.expiresAt())
-                    .bind("created", x.createdAt())
-                    .execute();
-        }
-
-        @Override public void deleteAuthSession(String idHash) {
-            h().createUpdate("DELETE FROM wf_auth_session WHERE id_hash=:id").bind("id", idHash).execute();
-        }
-
-        @Override public int deleteAuthSessionsOf(String user, String keepIdHash) {
-            return h().createUpdate("DELETE FROM wf_auth_session WHERE user_name=:user AND id_hash<>:keep")
-                    .bind("user", user)
-                    .bind("keep", keepIdHash == null ? "" : keepIdHash)
-                    .execute();
-        }
-
-        @Override public int deleteExpiredAuthSessions(long now, int max) {
-            List<String> ids = h().createQuery("SELECT id_hash FROM wf_auth_session WHERE expires_at<:now "
-                            + "ORDER BY expires_at LIMIT :max")
-                    .bind("now", now)
-                    .bind("max", max)
-                    .mapTo(String.class)
-                    .list();
-            if (ids.isEmpty()) return 0;
-            return h().createUpdate("DELETE FROM wf_auth_session WHERE id_hash IN (<ids>)").bindList("ids", ids).execute();
-        }
-
-        @Override public long appendAuthAudit(Rows.AuthAudit e) {
-            return h().createUpdate("INSERT INTO wf_auth_audit (at,actor,action,target,detail) "
-                            + "VALUES (:at,:actor,:action,:target,:detail)")
-                    .bind("at", e.at())
-                    .bind("actor", e.actor())
-                    .bind("action", e.action())
-                    .bind("target", e.target())
-                    .bind("detail", e.detail())
-                    .executeAndReturnGeneratedKeys("seq")
-                    .mapTo(Long.class)
-                    .findOne()
-                    .orElseThrow(() -> new StorageException("wf_auth_audit insert returned no seq", null));
-        }
 
         @Override public boolean upsertSearchDoc(Rows.SearchDoc d) {
             String update = "UPDATE wf_search_doc SET workflow=:workflow,version=:version,status=:status,"
