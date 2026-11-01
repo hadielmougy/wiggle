@@ -32,4 +32,14 @@ abstract class JdbcRepository {
     static Params params() {
         return new Params();
     }
+
+    /** The first row, as JDBI's {@code findOne} answered it for a query on a unique key. */
+    static <T> java.util.Optional<T> first(java.util.List<T> rows) {
+        return rows.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(rows.getFirst());
+    }
+
+    /** An attribute's number as the decimal it is stored as. */
+    static java.math.BigDecimal attributeNumber(Number n) {
+        return n instanceof java.math.BigDecimal d ? d : java.math.BigDecimal.valueOf(n.longValue());
+    }
 }

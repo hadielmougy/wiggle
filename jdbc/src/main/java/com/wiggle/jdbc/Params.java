@@ -31,4 +31,9 @@ final class Params extends MapSqlParameterSource {
         addValue(name, value, Types.INTEGER);
         return this;
     }
+
+    Params decimal(String name, java.math.BigDecimal value) {
+        addValue(name, value, Types.NUMERIC);
+        return this;
+    }
 }

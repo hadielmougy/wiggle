@@ -1209,14 +1209,48 @@ public final class JdbcStorage implements Storage {
         private final JdbcClusterRepository cluster;
         private final JdbcScheduleRepository schedules;
         private final JdbcAuthRepository auth;
+        private final JdbcSearchRepository search;
+        private final JdbcCompensationRepository compensation;
+        private final JdbcDynamicNodeRepository dynamicNodes;
+        private final JdbcEventRepository events;
         JdbcTx(Dialect dialect, JdbcStorage owner) {
             this.dialect = dialect;
             this.owner = owner;
+            this.events = new JdbcEventRepository(owner);
+            this.dynamicNodes = new JdbcDynamicNodeRepository(owner);
+            this.compensation = new JdbcCompensationRepository(owner);
+            this.search = new JdbcSearchRepository(owner);
             this.auth = new JdbcAuthRepository(owner);
             this.schedules = new JdbcScheduleRepository(owner);
             this.cluster = new JdbcClusterRepository(owner);
             this.shards = new JdbcShardRepository(owner);
         }
+
+        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) { events.advanceEventPosition(consumer, shard, ackedSeq); }
+        @Override public long appendEvent(Rows.Event e) { return events.appendEvent(e); }
+        @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) { events.createEventCursorIfAbsent(cursor); }
+        @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) { events.advanceEventCursor(consumer, ackedSeq, now); }
+        @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) { return events.deleteEvents(createdBefore, upToSeq, max); }
+        @Override public Map<Integer, Long> eventPositions(String consumer) { return events.eventPositions(consumer); }
+        @Override public Long oldestEventPosition(int shard) { return events.oldestEventPosition(shard); }
+        @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) { return events.eventsAfter(afterSeq, createdBefore, max); }
+        @Override public long latestEventSeq() { return events.latestEventSeq(); }
+        @Override public Rows.EventCursor eventCursor(String consumer) { return events.eventCursor(consumer); }
+        @Override public Long oldestAckedSeq() { return events.oldestAckedSeq(); }
+
+        @Override public void insertDynNodes(String instanceId, java.util.List<Node> nodes) { dynamicNodes.insertDynNodes(instanceId, nodes); }
+        @Override public Optional<Node> dynNode(String nodeId) { return dynamicNodes.dynNode(nodeId); }
+        @Override public long dynNodeCount(String instanceId) { return dynamicNodes.dynNodeCount(instanceId); }
+
+        @Override public void appendCompensation(Rows.CompLog e) { compensation.appendCompensation(e); }
+        @Override public void markCompensated(String instanceId, long seq) { compensation.markCompensated(instanceId, seq); }
+        @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) { return compensation.compensationLog(instanceId); }
+
+        @Override public boolean upsertSearchDoc(Rows.SearchDoc d) { return search.upsertSearchDoc(d); }
+        @Override public void deleteSearchDoc(String instanceId) { search.deleteSearchDoc(instanceId); }
+        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) { return search.deleteSearchDocsBefore(updatedBefore, max); }
+        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) { return search.searchDocsAfter(afterId, max); }
+        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) { return search.searchDocs(q); }
 
         @Override public Optional<Rows.AuthUser> findAuthUser(String name) { return auth.findAuthUser(name); }
         @Override public List<Rows.AuthUser> authUsers() { return auth.authUsers(); }
@@ -1576,201 +1610,6 @@ public final class JdbcStorage implements Storage {
                 + "revision,parent_token_id) VALUES "
                 + "(:id,:workflow,:version,:correlationId,:status,:termReason,:error,:context,:createdAt,"
                 + ":updatedAt,:revision,:parentTokenId)";
-
-        @Override public boolean upsertSearchDoc(Rows.SearchDoc d) {
-            String update = "UPDATE wf_search_doc SET workflow=:workflow,version=:version,status=:status,"
-                    + "correlation_id=:correlationId,text=:text,created_at=:created,updated_at=:updated "
-                    + "WHERE instance_id=:id AND updated_at<=:updated";
-            boolean wrote = bindSearchDoc(h().createUpdate(update), d).execute() > 0
-                    || bindSearchDoc(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
-                            + "(instance_id,workflow,version,status,correlation_id,text,created_at,updated_at) VALUES "
-                            + "(:id,:workflow,:version,:status,:correlationId,:text,:created,:updated)")), d).execute() > 0
-                    || bindSearchDoc(h().createUpdate(update), d).execute() > 0;   // another writer inserted it first
-            if (wrote) writeSearchAttributes(d);
-            return wrote;
-        }
-
-        /** Replaces the document's attribute rows with its current ones. */
-        private void writeSearchAttributes(Rows.SearchDoc d) {
-            h().createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", d.instanceId()).execute();
-            if (d.attributes().isEmpty()) return;
-            PreparedBatch b = h().prepareBatch("INSERT INTO wf_search_attr (instance_id,workflow,name,t,s_val,n_val)"
-                    + " VALUES (:id,:workflow,:name,:t,:s,:n)");
-            for (Map.Entry<String, Object> a : d.attributes().entrySet()) {
-                Object v = a.getValue();
-                b.bind("id", d.instanceId()).bind("workflow", d.workflow()).bind("name", a.getKey())
-                        .bind("t", v instanceof Boolean ? "B" : v instanceof String ? "S" : "N")
-                        .bindByType("s", v instanceof Number ? null : String.valueOf(v), String.class)
-                        .bindByType("n", v instanceof Number n ? attributeNumber(n) : null, java.math.BigDecimal.class)
-                        .add();
-            }
-            b.execute();
-        }
-
-        private static Update bindSearchDoc(Update u, Rows.SearchDoc d) {
-            return u.bind("id", d.instanceId())
-                    .bind("workflow", d.workflow())
-                    .bind("version", d.version())
-                    .bind("status", d.status())
-                    .bind("correlationId", d.correlationId())
-                    .bind("text", d.text())
-                    .bind("created", d.createdAt())
-                    .bind("updated", d.updatedAt());
-        }
-
-        @Override public void deleteSearchDoc(String instanceId) {
-            h().createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", instanceId).execute();
-            h().createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
-        }
-
-        /** {@code scope} on column {@code column}, for a WHERE that already has a condition; bound by {@link #bindWorkflows}. */
-        private static String workflowFilter(com.wiggle.server.auth.Scope scope, String column) {
-            if (scope.all()) return "";
-            if (scope.isEmpty()) return " AND 1=0";
-            List<String> terms = new ArrayList<>();
-            if (!scope.names().isEmpty()) terms.add(column + " IN (<workflows>)");
-            for (int i = 0; i < scope.prefixes().size(); i++) terms.add(column + " LIKE :wfp" + i + " ESCAPE '!'");
-            return " AND (" + String.join(" OR ", terms) + ")";
-        }
-
-        private static void bindWorkflows(Query q, com.wiggle.server.auth.Scope scope) {
-            if (scope.all()) return;
-            if (!scope.names().isEmpty()) q.bindList("workflows", List.copyOf(scope.names()));
-            int i = 0;
-            for (String prefix : scope.prefixes()) q.bind("wfp" + i++, likePrefix(prefix));
-        }
-
-        /** A LIKE pattern matching what starts with {@code prefix}, escaped with {@code !}. */
-        static String likePrefix(String prefix) {
-            StringBuilder out = new StringBuilder(prefix.length() + 1);
-            for (char c : prefix.toCharArray()) {
-                if (c == '!' || c == '%' || c == '_' || c == '[') out.append('!');
-                out.append(c);
-            }
-            return out.append('%').toString();
-        }
-
-        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
-            List<String> ids = h().createQuery("SELECT instance_id FROM wf_search_doc WHERE updated_at<:before "
-                            + "ORDER BY updated_at LIMIT :max")
-                    .bind("before", updatedBefore)
-                    .bind("max", max)
-                    .mapTo(String.class)
-                    .list();
-            if (ids.isEmpty()) return 0;
-            h().createUpdate("DELETE FROM wf_search_attr WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
-            return h().createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
-        }
-
-        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
-            List<Rows.SearchDoc> docs = h().createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc "
-                            + "WHERE instance_id>:after ORDER BY instance_id LIMIT :max")
-                    .bind("after", afterId == null ? "" : afterId)
-                    .bind("max", max)
-                    .map((rs, ctx) -> searchDoc(rs))
-                    .list();
-            return withAttributes(docs);
-        }
-
-        /** {@code docs} with the search attributes stored for them, one statement for all. */
-        private List<Rows.SearchDoc> withAttributes(List<Rows.SearchDoc> docs) {
-            if (docs.isEmpty()) return docs;
-            Map<String, Map<String, Object>> attributes = new HashMap<>();
-            h().createQuery("SELECT instance_id,name,t,s_val,n_val FROM wf_search_attr WHERE instance_id IN (<ids>)")
-                    .bindList("ids", docs.stream().map(Rows.SearchDoc::instanceId).toList())
-                    .map((rs, ctx) -> {
-                        String t = rs.getString("t");
-                        Object v = switch (t) {
-                            case "B" -> Boolean.parseBoolean(rs.getString("s_val"));
-                            case "S" -> rs.getString("s_val");
-                            default -> attributeValue(rs.getBigDecimal("n_val"));
-                        };
-                        attributes.computeIfAbsent(rs.getString("instance_id"), k -> new HashMap<>())
-                                .put(rs.getString("name"), v);
-                        return null;
-                    }).list();
-            return docs.stream().map(d -> new Rows.SearchDoc(d.instanceId(), d.workflow(), d.version(), d.status(),
-                    d.correlationId(), d.text(), d.createdAt(), d.updatedAt(),
-                    attributes.getOrDefault(d.instanceId(), Map.of()))).toList();
-        }
-
-        /** A stored number as the type it was declared with: a Long when it has no fraction, else the decimal. */
-        private static Object attributeValue(java.math.BigDecimal n) {
-            java.math.BigDecimal s = n.stripTrailingZeros();
-            return s.scale() <= 0 && s.precision() - s.scale() <= 18 ? (Object) s.longValueExact() : s;
-        }
-
-        private static final String SEARCH_COLUMNS =
-                "instance_id,workflow,version,status,correlation_id,text,created_at,updated_at";
-
-        private static Rows.SearchDoc searchDoc(ResultSet rs) throws SQLException {
-            return new Rows.SearchDoc(rs.getString("instance_id"), rs.getString("workflow"), rs.getInt("version"),
-                    rs.getString("status"), rs.getString("correlation_id"), rs.getString("text"),
-                    rs.getLong("created_at"), rs.getLong("updated_at"));
-        }
-
-        /**
-         * With full-text support, the database matches and ranks ({@code ts_rank} over the
-         * {@code simple} configuration: words as written, no stemming). Without it, the filtered
-         * documents are matched word by word here, as the in-memory store does.
-         */
-        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) {
-            boolean text = q.text() != null && !q.text().isBlank();
-            StringBuilder where = new StringBuilder(" WHERE 1=1");
-            where.append(workflowFilter(q.workflows(), "workflow"));
-            if (q.status() != null) where.append(" AND status=:status");
-            if (q.from() != null) where.append(" AND updated_at>=:from");
-            if (q.to() != null) where.append(" AND updated_at<=:to");
-            for (int i = 0; i < q.attributes().size(); i++) where.append(attributeFilter(q.attributes().get(i), i));
-            Query query;
-            if (dialect.supportsFullText()) {
-                String sql = text
-                        ? "SELECT " + SEARCH_COLUMNS + ", ts_rank(tsv, plainto_tsquery('simple', :text)) AS score "
-                          + "FROM wf_search_doc" + where + " AND tsv @@ plainto_tsquery('simple', :text) "
-                          + "ORDER BY score DESC, updated_at DESC, instance_id LIMIT :limit"
-                        : "SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
-                          + " ORDER BY updated_at DESC, instance_id LIMIT :limit";
-                query = h().createQuery(sql).bind("limit", q.limit());
-                if (text) query.bind("text", q.text());
-            } else {
-                query = h().createQuery("SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
-                        + " ORDER BY updated_at DESC, instance_id");
-            }
-            bindWorkflows(query, q.workflows());
-            if (q.status() != null) query.bind("status", q.status());
-            if (q.from() != null) query.bind("from", q.from());
-            if (q.to() != null) query.bind("to", q.to());
-            if (!q.attributes().isEmpty()) query.bind("aw", q.attributeWorkflow());
-            for (int i = 0; i < q.attributes().size(); i++) {
-                Rows.AttrFilter f = q.attributes().get(i);
-                query.bind("an" + i, f.name());
-                query.bind("av" + i, f.value() instanceof Number n ? attributeNumber(n)
-                        : (Object) String.valueOf(f.value()));
-            }
-            List<Rows.SearchHit> hits = dialect.supportsFullText()
-                    ? query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list()
-                    : com.wiggle.server.store.SearchText.match(query.map((rs, ctx) -> searchDoc(rs)).list(), q.text(), q.limit());
-            List<Rows.SearchDoc> docs = withAttributes(hits.stream().map(Rows.SearchHit::doc).toList());
-            List<Rows.SearchHit> out = new ArrayList<>(hits.size());
-            for (int i = 0; i < hits.size(); i++) out.add(new Rows.SearchHit(docs.get(i), hits.get(i).score()));
-            return out;
-        }
-
-        /** The condition that the document has attribute {@code f}, as a semi-join on the value index. */
-        private static String attributeFilter(Rows.AttrFilter f, int i) {
-            String test = f.value() instanceof Number
-                    ? "a.t='N' AND a.n_val" + switch (f.op()) {
-                        case EQUAL -> "=";
-                        case LESS_THAN -> "<";
-                        case LESS_THAN_OR_EQUAL -> "<=";
-                        case GREATER_THAN -> ">";
-                        case GREATER_THAN_OR_EQUAL -> ">=";
-                        default -> throw new IllegalStateException("unexpected operator " + f.op());
-                    } + ":av" + i
-                    : "a.t='" + (f.value() instanceof Boolean ? "B" : "S") + "' AND a.s_val=:av" + i;
-            return " AND EXISTS (SELECT 1 FROM wf_search_attr a WHERE a.instance_id=wf_search_doc.instance_id"
-                    + " AND a.workflow=:aw AND a.name=:an" + i + " AND " + test + ")";
-        }
 
         @Override public void insertInstance(Instance i) {
             bindInstance(h().createUpdate(INSERT_INSTANCE), i).execute();
@@ -2433,194 +2272,6 @@ public final class JdbcStorage implements Storage {
             return ids.size();
         }
 
-        @Override public void insertDynNodes(String instanceId, java.util.List<Node> nodes) {
-            if (nodes.isEmpty()) return;
-            PreparedBatch batch = h().prepareBatch(
-                    "INSERT INTO wf_dyn_node (node_id,instance_id,body) VALUES (:nodeId,:instanceId,:body)");
-            for (Node n : nodes) {
-                batch.bind("nodeId", n.id()).bind("instanceId", instanceId)
-                        .bind("body", Json.write(n.toJson())).add();
-            }
-            batch.execute();
-        }
-
-        @Override public Optional<Node> dynNode(String nodeId) {
-            return h().createQuery("SELECT body FROM wf_dyn_node WHERE node_id=:id")
-                    .bind("id", nodeId)
-                    .mapTo(String.class)
-                    .findOne()
-                    .map(body -> Node.fromJson(Json.parse(body)));
-        }
-
-        @Override public long dynNodeCount(String instanceId) {
-            return h().createQuery("SELECT COUNT(*) FROM wf_dyn_node WHERE instance_id=:id")
-                    .bind("id", instanceId)
-                    .mapTo(Long.class)
-                    .one();
-        }
-
-        @Override public void appendCompensation(Rows.CompLog e) {
-            h().createUpdate("INSERT INTO wf_comp_log "
-                            + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
-                            + "VALUES (:instanceId,:seq,:nodeId,:activity,:queue,:input,:result,:compensated)")
-                    .bind("instanceId", e.instanceId)
-                    .bind("seq", e.seq)
-                    .bind("nodeId", e.nodeId)
-                    .bind("activity", e.activity)
-                    .bind("queue", e.queue)
-                    .bind("input", e.input == null ? null : e.input.json())
-                    .bind("result", e.result == null ? null : e.result.json())
-                    .bind("compensated", e.compensated ? 1 : 0)
-                    .execute();
-        }
-
-        @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
-            return h().createQuery("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
-                            + "FROM wf_comp_log WHERE instance_id=:id ORDER BY seq")
-                    .bind("id", instanceId)
-                    .map((rs, ctx) -> {
-                        Rows.CompLog e = new Rows.CompLog();
-                        e.instanceId = instanceId;
-                        e.seq = rs.getLong("seq");
-                        e.nodeId = rs.getString("node_id");
-                        e.activity = rs.getString("activity");
-                        e.queue = rs.getString("queue");
-                        e.input = Doc.parse(rs.getString("input_json"));
-                        e.result = Doc.parse(rs.getString("result_json"));
-                        e.compensated = rs.getInt("compensated") != 0;
-                        return e;
-                    })
-                    .list();
-        }
-
-        @Override public long appendEvent(Rows.Event e) {
-            return h().createUpdate("INSERT INTO wf_event (instance_id,workflow,version,correlation_id,type,"
-                            + "node_id,payload_ver,payload,created_at) VALUES "
-                            + "(:instanceId,:workflow,:version,:correlationId,:type,:nodeId,:payloadVer,"
-                            + ":payload,:createdAt)")
-                    .bind("instanceId", e.instanceId())
-                    .bind("workflow", e.workflow())
-                    .bind("version", e.version())
-                    .bind("correlationId", e.correlationId())
-                    .bind("type", e.type())
-                    .bind("nodeId", e.nodeId())
-                    .bind("payloadVer", e.payloadVer())
-                    .bind("payload", e.payload())
-                    .bind("createdAt", e.createdAt())
-                    .executeAndReturnGeneratedKeys("seq")
-                    .mapTo(Long.class)
-                    .findOne()
-                    .orElseThrow(() -> new StorageException("wf_event insert returned no seq", null));
-        }
-
-        @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
-            return h().createQuery("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
-                            + "payload_ver,payload,created_at FROM wf_event "
-                            + "WHERE seq>:after AND created_at<:before ORDER BY seq LIMIT :max")
-                    .bind("after", afterSeq)
-                    .bind("before", createdBefore)
-                    .bind("max", max)
-                    .mapTo(Rows.Event.class)
-                    .list();
-        }
-
-        @Override public long latestEventSeq() {
-            return h().createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_event").mapTo(Long.class).one();
-        }
-
-        @Override public Rows.EventCursor eventCursor(String consumer) {
-            return h().createQuery("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor "
-                            + "WHERE consumer=:consumer")
-                    .bind("consumer", consumer)
-                    .mapTo(Rows.EventCursor.class)
-                    .findFirst()
-                    .orElse(null);
-        }
-
-        @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
-            h().createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor "
-                            + "(consumer,acked_seq,last_seen,created_at) VALUES "
-                            + "(:consumer,:acked,:lastSeen,:createdAt)"))
-                    .bind("consumer", cursor.consumer())
-                    .bind("acked", cursor.ackedSeq())
-                    .bind("lastSeen", cursor.lastSeen())
-                    .bind("createdAt", cursor.createdAt())
-                    .execute();
-        }
-
-        @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) {
-            // Update-then-insert rather than an upsert: only PostgreSQL takes ON CONFLICT DO UPDATE,
-            // and the two statements are portable. The trailing update covers the race where another
-            // ack inserted the row between ours: it folds our seq into the row that won.
-            if (moveCursor(consumer, ackedSeq, now) > 0) return;
-            createEventCursorIfAbsent(new Rows.EventCursor(consumer, ackedSeq, now, now));
-            moveCursor(consumer, ackedSeq, now);
-        }
-
-        /** Moves an existing cursor forward (never back) and stamps it; 0 when the consumer has none. */
-        /** An ack never moves a cursor back, so the new seq appears twice in the CASE. One name,
-         *  bound once, rather than two positions that have to hold the same value. */
-        private int moveCursor(String consumer, long ackedSeq, long now) {
-            return h().createUpdate("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<:acked "
-                            + "THEN :acked ELSE acked_seq END, last_seen=:now WHERE consumer=:consumer")
-                    .bind("acked", ackedSeq)
-                    .bind("now", now)
-                    .bind("consumer", consumer)
-                    .execute();
-        }
-
-        @Override public Map<Integer, Long> eventPositions(String consumer) {
-            Map<Integer, Long> out = new HashMap<>();
-            h().createQuery("SELECT shard_id, acked_seq FROM wf_event_cursor_shard WHERE consumer=:consumer")
-                    .bind("consumer", consumer)
-                    .map((rs, ctx) -> Map.entry(rs.getInt("shard_id"), rs.getLong("acked_seq")))
-                    .forEach(e -> out.put(e.getKey(), e.getValue()));
-            return out;
-        }
-
-        @Override public Long oldestEventPosition(int shard) {
-            // MIN over no cursors is NULL; a consumer with no row for the shard holds 0.
-            return h().createQuery("SELECT MIN(COALESCE(p.acked_seq, 0)) FROM wf_event_cursor c "
-                            + "LEFT JOIN wf_event_cursor_shard p ON p.consumer=c.consumer AND p.shard_id=:shard")
-                    .bind("shard", shard)
-                    .mapTo(Long.class)
-                    .findOne()
-                    .orElse(null);
-        }
-
-        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
-            String move = "UPDATE wf_event_cursor_shard SET acked_seq=CASE WHEN acked_seq<:acked THEN :acked "
-                    + "ELSE acked_seq END WHERE consumer=:consumer AND shard_id=:shard";
-            if (h().createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard)
-                    .execute() > 0) return;
-            if (h().createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor_shard (consumer,shard_id,acked_seq) "
-                    + "VALUES (:consumer,:shard,:acked)")).bind("consumer", consumer).bind("shard", shard)
-                    .bind("acked", ackedSeq).execute() > 0) return;
-            h().createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard).execute();
-        }
-
-        @Override public Long oldestAckedSeq() {
-            // MIN over no cursors is a row holding NULL, so the absence comes from the value.
-            return h().createQuery("SELECT MIN(acked_seq) FROM wf_event_cursor")
-                    .mapTo(Long.class)
-                    .findOne()
-                    .orElse(null);
-        }
-
-        @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
-            Query pick = h().createQuery("SELECT seq FROM wf_event WHERE created_at<:before"
-                    + (upToSeq != null ? " AND seq<=:upTo" : "")
-                    + " ORDER BY seq LIMIT :max");
-            pick.bind("before", createdBefore).bind("max", max);
-            if (upToSeq != null) pick.bind("upTo", upToSeq);
-            List<Long> seqs = pick.mapTo(Long.class).list();
-            if (seqs.isEmpty()) return 0;
-            return h().createUpdate("DELETE FROM wf_event WHERE seq<=:upTo AND created_at<:before")
-                    .bind("upTo", seqs.getLast())
-                    .bind("before", createdBefore)
-                    .execute();
-        }
-
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
             return h().createQuery("SELECT node_id, started_at, finished_at, available_at FROM wf_token "
                             + "WHERE workflow=:workflow AND version=:version AND status='DONE' "
@@ -2636,13 +2287,6 @@ public final class JdbcStorage implements Storage {
                         return new Rows.StepDuration(rs.getString("node_id"), ran, waited);
                     })
                     .list();
-        }
-
-        @Override public void markCompensated(String instanceId, long seq) {
-            h().createUpdate("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=:id AND seq=:seq")
-                    .bind("id", instanceId)
-                    .bind("seq", seq)
-                    .execute();
         }
 
         @Override

@@ -216,9 +216,4 @@ final class JdbcAuthRepository extends JdbcRepository implements AuthRepository 
         if (key == null) throw new StorageException("wf_auth_audit insert returned no seq", null);
         return key.longValue();
     }
-
-    /** The first row, as JDBI's {@code findOne} answered it for a query on a unique key. */
-    static <T> Optional<T> first(List<T> rows) {
-        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
-    }
 }
