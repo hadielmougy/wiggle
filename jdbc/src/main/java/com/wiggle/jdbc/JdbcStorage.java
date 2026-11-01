@@ -14,6 +14,9 @@ import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.ResourceHolderSupport;
+import org.springframework.transaction.support.ResourceHolderSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
@@ -63,6 +66,8 @@ public final class JdbcStorage implements Storage {
     private final DataSource observed;
     private final TransactionTemplate transactions;
     private final Jdbi jdbi;
+    /** The store's operations; each finds the handle of the transaction open on the calling thread. */
+    private final JdbcTx tx;
     private final String fingerprint;
     private final boolean readOnly;
     private final List<StatementListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -127,6 +132,7 @@ public final class JdbcStorage implements Storage {
                 .registerRowMapper(Rows.EventCursor.class, (rs, ctx) -> readCursor(rs))
                 .registerRowMapper(Rows.Schedule.class, (rs, ctx) -> readSchedule(rs))
                 .registerRowMapper(ServerNode.class, (rs, ctx) -> readNode(rs));
+        this.tx = new JdbcTx(dialect, this);
     }
 
     /** The HikariCP pool a URL-configured store runs on. */
@@ -996,11 +1002,7 @@ public final class JdbcStorage implements Storage {
      */
     private <R> R attemptTx(Function<Tx, R> work) {
         try {
-            return transactions.execute(status -> {
-                try (Handle h = open()) {
-                    return work.apply(new JdbcTx(h, dialect, this));
-                }
-            });
+            return transactions.execute(status -> work.apply(tx));
         } catch (CannotCreateTransactionException e) {
             throw connectionFailure(e);
         } catch (TransactionSystemException e) {
@@ -1013,12 +1015,40 @@ public final class JdbcStorage implements Storage {
         }
     }
 
-    /** A handle, with a pool timeout or a dead connection reported as the transient failure it is. */
-    private Handle open() {
+    /**
+     * The JDBI handle of the transaction open on this store on the calling thread, opened on the
+     * connection Spring bound for it at first use and closed when the transaction completes. A
+     * transaction suspended by a nested one keeps its handle out of the nested one's sight.
+     */
+    private Handle handle() {
+        if (TransactionSynchronizationManager.getResource(this) instanceof BoundHandle bound) return bound.handle;
+        if (!TransactionSynchronizationManager.hasResource(observed)) {
+            throw new IllegalStateException("no transaction is open on this store; run the call inside inTx");
+        }
+        Handle h;
         try {
-            return jdbi.open();
+            h = jdbi.open();
         } catch (RuntimeException e) {
             throw connectionFailure(e);
+        }
+        h.registerRowMapper(Token.class, (rs, ctx) -> tx.recorded(readToken(rs)));
+        BoundHandle bound = new BoundHandle(h);
+        TransactionSynchronizationManager.bindResource(this, bound);
+        TransactionSynchronizationManager.registerSynchronization(
+                new ResourceHolderSynchronization<BoundHandle, JdbcStorage>(bound, this) {
+                    @Override protected void releaseResource(BoundHandle holder, JdbcStorage key) {
+                        holder.handle.close();
+                    }
+                });
+        return h;
+    }
+
+    /** One transaction's JDBI handle, as a Spring transaction resource. */
+    private static final class BoundHandle extends ResourceHolderSupport {
+        final Handle handle;
+
+        BoundHandle(Handle handle) {
+            this.handle = handle;
         }
     }
 
@@ -1154,28 +1184,27 @@ public final class JdbcStorage implements Storage {
                 rs.getLong("last_seen"), rs.getLong("created_at"));
     }
 
+    /** The store's operations, run on the handle of the transaction open on the calling thread. */
     private static final class JdbcTx implements Tx {
-        private final Handle h;
-        private final Connection c;
         private final Dialect dialect;
         private final JdbcStorage owner;
 
-        JdbcTx(Handle h, Dialect dialect, JdbcStorage owner) {
-            this.h = h;
-            this.c = h.getConnection();
+        JdbcTx(Dialect dialect, JdbcStorage owner) {
             this.dialect = dialect;
             this.owner = owner;
-            h.registerRowMapper(Token.class, (rs, ctx) -> recorded(readToken(rs)));
         }
 
-        /** Notes that the row's stored payload is {@code t.payload}, as of this transaction. */
+        /** The current transaction's handle; it also identifies the transaction. */
+        private Handle h() { return owner.handle(); }
+
+        /** Notes that the row's stored payload is {@code t.payload}, as of the current transaction. */
         private Token recorded(Token t) {
             t.storedPayload = t.payload;
-            t.storedIn = this;
+            t.storedIn = h();
             return t;
         }
 
-        private PreparedStatement ps(String sql) throws SQLException { return c.prepareStatement(sql); }
+        private PreparedStatement ps(String sql) throws SQLException { return h().getConnection().prepareStatement(sql); }
 
         private StorageException wrap(SQLException e) {
             return new StorageException(e.getMessage(), e, dialect.isTransient(e)
@@ -1226,7 +1255,7 @@ public final class JdbcStorage implements Storage {
             // registering the same new version collide on the primary key. The isDuplicateKey catch
             // covers a backend whose ignore is not inline.
             try {
-                h.createUpdate(dialect.insertIgnore("INSERT INTO wf_definition "
+                h().createUpdate(dialect.insertIgnore("INSERT INTO wf_definition "
                                 + "(name,version,body,registered_at,fingerprint,fingerprint_algo) VALUES "
                                 + "(:name,:version,:body,:registeredAt,:fingerprint,:algo)"))
                         .bind("name", name)
@@ -1243,7 +1272,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public void replaceDefinition(String name, int version, String json,
                                                 String fingerprint, String fingerprintAlgo) {
-            h.createUpdate("UPDATE wf_definition SET body=:body, registered_at=:registeredAt, "
+            h().createUpdate("UPDATE wf_definition SET body=:body, registered_at=:registeredAt, "
                             + "fingerprint=:fingerprint, fingerprint_algo=:algo "
                             + "WHERE name=:name AND version=:version")
                     .bind("body", json)
@@ -1256,7 +1285,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<StoredFingerprint> definitionFingerprint(String name, int version) {
-            return h.createQuery("SELECT fingerprint, fingerprint_algo FROM wf_definition "
+            return h().createQuery("SELECT fingerprint, fingerprint_algo FROM wf_definition "
                             + "WHERE name=:name AND version=:version FOR UPDATE")
                     .bind("name", name)
                     .bind("version", version)
@@ -1269,13 +1298,13 @@ public final class JdbcStorage implements Storage {
             // The registry deletes these rows before a replacement, so anything still here is the
             // same graph: a no-op, even when two nodes register it at once.
             if (graphExists(def.name(), def.version())) return;
-            PreparedBatch nodes = h.prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_node "
+            PreparedBatch nodes = h().prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_node "
                     + "(workflow,version,node_id,kind,name,activity,queue,retry_json,sleep_millis,expected,"
                     + "success,reason,is_start,items_key,item_key,loop_budget,compensable,arm_names,collect_key) "
                     + "VALUES (:workflow,:version,:nodeId,:kind,:name,:activity,:queue,:retry,:sleepMillis,"
                     + ":expected,:success,:reason,:isStart,:itemsKey,:itemKey,:loopBudget,:compensable,"
                     + ":armNames,:collectKey)"));
-            PreparedBatch edges = h.prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_edge "
+            PreparedBatch edges = h().prepareBatch(dialect.insertIgnore("INSERT INTO wf_graph_edge "
                     + "(workflow,version,from_node,to_node,cond,ordinal) "
                     + "VALUES (:workflow,:version,:from,:to,:cond,:ordinal)"));
             for (Node n : def.nodes().values()) {
@@ -1318,7 +1347,7 @@ public final class JdbcStorage implements Storage {
         }
 
         private boolean graphExists(String workflow, int version) {
-            return h.createQuery("SELECT 1 FROM wf_graph_node "
+            return h().createQuery("SELECT 1 FROM wf_graph_node "
                             + "WHERE workflow=:workflow AND version=:version LIMIT 1")
                     .bind("workflow", workflow)
                     .bind("version", version)
@@ -1334,14 +1363,14 @@ public final class JdbcStorage implements Storage {
 
         /** Edges before nodes: an edge pointing at a node that is gone is worse than neither. */
         private void deleteGraphRows(String table, String workflow, int version) {
-            h.createUpdate("DELETE FROM " + table + " WHERE workflow=:workflow AND version=:version")
+            h().createUpdate("DELETE FROM " + table + " WHERE workflow=:workflow AND version=:version")
                     .bind("workflow", workflow)
                     .bind("version", version)
                     .execute();
         }
 
         @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
-            return h.createQuery("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,"
+            return h().createQuery("SELECT kind,name,activity,queue,retry_json,sleep_millis,expected,success,"
                             + "reason,items_key,item_key,loop_budget,compensable,arm_names,collect_key "
                             + "FROM wf_graph_node WHERE workflow=:workflow AND version=:version "
                             + "AND node_id=:nodeId")
@@ -1389,7 +1418,7 @@ public final class JdbcStorage implements Storage {
                               String queue, RetryPolicy retry, long sleep, int expected, boolean success, String reason,
                               String itemsKey, String itemKey, int loopBudget, boolean compensable, Combine combine) {
             EdgeTargets targets = new EdgeTargets(kind);
-            h.createQuery("SELECT to_node,cond FROM wf_graph_edge "
+            h().createQuery("SELECT to_node,cond FROM wf_graph_edge "
                             + "WHERE workflow=:workflow AND version=:version AND from_node=:from "
                             + "ORDER BY ordinal")
                     .bind("workflow", workflow)
@@ -1429,7 +1458,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<String> graphStartNode(String workflow, int version) {
-            return h.createQuery("SELECT node_id FROM wf_graph_node "
+            return h().createQuery("SELECT node_id FROM wf_graph_node "
                             + "WHERE workflow=:workflow AND version=:version AND is_start=1")
                     .bind("workflow", workflow)
                     .bind("version", version)
@@ -1438,7 +1467,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public int graphNodeCount(String workflow, int version) {
-            return h.createQuery("SELECT COUNT(*) FROM wf_graph_node WHERE workflow=:workflow AND version=:version")
+            return h().createQuery("SELECT COUNT(*) FROM wf_graph_node WHERE workflow=:workflow AND version=:version")
                     .bind("workflow", workflow)
                     .bind("version", version)
                     .mapTo(Integer.class)
@@ -1446,7 +1475,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<String> definition(String name, int version) {
-            return h.createQuery("SELECT body FROM wf_definition WHERE name=:name AND version=:version")
+            return h().createQuery("SELECT body FROM wf_definition WHERE name=:name AND version=:version")
                     .bind("name", name)
                     .bind("version", version)
                     .mapTo(String.class)
@@ -1456,20 +1485,20 @@ public final class JdbcStorage implements Storage {
         @Override public Optional<Integer> latestVersion(String name) {
             // MAX over no rows is a row holding NULL, not an empty result: findFirst would see
             // one row either way, so the Optional has to come from the value.
-            return h.createQuery("SELECT MAX(version) FROM wf_definition WHERE name=:name")
+            return h().createQuery("SELECT MAX(version) FROM wf_definition WHERE name=:name")
                     .bind("name", name)
                     .mapTo(Integer.class)
                     .findOne();
         }
 
         @Override public List<String> definitionNames() {
-            return h.createQuery("SELECT DISTINCT name FROM wf_definition ORDER BY name")
+            return h().createQuery("SELECT DISTINCT name FROM wf_definition ORDER BY name")
                     .mapTo(String.class)
                     .list();
         }
 
         @Override public List<Integer> definitionVersions(String name) {
-            return h.createQuery("SELECT version FROM wf_definition WHERE name=:name ORDER BY version")
+            return h().createQuery("SELECT version FROM wf_definition WHERE name=:name ORDER BY version")
                     .bind("name", name)
                     .mapTo(Integer.class)
                     .list();
@@ -1482,14 +1511,14 @@ public final class JdbcStorage implements Storage {
                 + ":updatedAt,:revision,:parentTokenId)";
 
         @Override public Optional<Rows.AuthUser> findAuthUser(String name) {
-            return h.createQuery("SELECT * FROM wf_auth_user WHERE name=:name")
+            return h().createQuery("SELECT * FROM wf_auth_user WHERE name=:name")
                     .bind("name", name)
                     .map(JdbcTx::authUser)
                     .findOne();
         }
 
         @Override public List<Rows.AuthUser> authUsers() {
-            return h.createQuery("SELECT * FROM wf_auth_user ORDER BY created_at, name")
+            return h().createQuery("SELECT * FROM wf_auth_user ORDER BY created_at, name")
                     .map(JdbcTx::authUser)
                     .list();
         }
@@ -1502,14 +1531,14 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<String> authRolesOf(String user) {
-            return h.createQuery("SELECT role_name FROM wf_auth_user_role WHERE user_name=:user ORDER BY role_name")
+            return h().createQuery("SELECT role_name FROM wf_auth_user_role WHERE user_name=:user ORDER BY role_name")
                     .bind("user", user)
                     .mapTo(String.class)
                     .list();
         }
 
         @Override public List<Rows.AuthRole> authRoles() {
-            return h.createQuery("SELECT * FROM wf_auth_role ORDER BY name")
+            return h().createQuery("SELECT * FROM wf_auth_role ORDER BY name")
                     .map((rs, ctx) -> new Rows.AuthRole(rs.getString("name"),
                             permissionSet(rs.getString("permissions")), rs.getInt("builtin") != 0,
                             rs.getLong("created_at"), rs.getLong("updated_at")))
@@ -1523,7 +1552,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) {
-            return h.createQuery("SELECT * FROM wf_auth_session WHERE id_hash=:id")
+            return h().createQuery("SELECT * FROM wf_auth_session WHERE id_hash=:id")
                     .bind("id", idHash)
                     .map((rs, ctx) -> new Rows.AuthSession(rs.getString("id_hash"), rs.getString("user_name"),
                             rs.getLong("expires_at"), rs.getLong("created_at")))
@@ -1531,7 +1560,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) {
-            return h.createQuery("SELECT * FROM wf_auth_audit WHERE seq>:after ORDER BY seq LIMIT :max")
+            return h().createQuery("SELECT * FROM wf_auth_audit WHERE seq>:after ORDER BY seq LIMIT :max")
                     .bind("after", afterSeq)
                     .bind("max", max)
                     .map((rs, ctx) -> new Rows.AuthAudit(rs.getLong("seq"), rs.getLong("at"), rs.getString("actor"),
@@ -1540,11 +1569,11 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public long authAuditHead() {
-            return h.createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_auth_audit").mapTo(Long.class).one();
+            return h().createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_auth_audit").mapTo(Long.class).one();
         }
 
         @Override public boolean authAuditHas(String action) {
-            return h.createQuery("SELECT COUNT(*) FROM wf_auth_audit WHERE action=:action")
+            return h().createQuery("SELECT COUNT(*) FROM wf_auth_audit WHERE action=:action")
                     .bind("action", action)
                     .mapTo(Long.class)
                     .one() > 0;
@@ -1553,11 +1582,11 @@ public final class JdbcStorage implements Storage {
         @Override public void putAuthUser(Rows.AuthUser u) {
             String update = "UPDATE wf_auth_user SET hash=:hash,salt=:salt,iterations=:iterations,"
                     + "disabled=:disabled,created_at=:created,updated_at=:updated WHERE name=:name";
-            if (bindAuthUser(h.createUpdate(update), u).execute() > 0) return;
-            if (bindAuthUser(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_user "
+            if (bindAuthUser(h().createUpdate(update), u).execute() > 0) return;
+            if (bindAuthUser(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_user "
                     + "(name,hash,salt,iterations,disabled,created_at,updated_at) VALUES "
                     + "(:name,:hash,:salt,:iterations,:disabled,:created,:updated)")), u).execute() > 0) return;
-            bindAuthUser(h.createUpdate(update), u).execute();
+            bindAuthUser(h().createUpdate(update), u).execute();
         }
 
         private static Update bindAuthUser(Update q, Rows.AuthUser u) {
@@ -1571,15 +1600,15 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public boolean deleteAuthUser(String name) {
-            h.createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:name").bind("name", name).execute();
-            h.createUpdate("DELETE FROM wf_auth_session WHERE user_name=:name").bind("name", name).execute();
-            return h.createUpdate("DELETE FROM wf_auth_user WHERE name=:name").bind("name", name).execute() > 0;
+            h().createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:name").bind("name", name).execute();
+            h().createUpdate("DELETE FROM wf_auth_session WHERE user_name=:name").bind("name", name).execute();
+            return h().createUpdate("DELETE FROM wf_auth_user WHERE name=:name").bind("name", name).execute() > 0;
         }
 
         @Override public void setAuthRolesOf(String user, List<String> roles) {
-            h.createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:user").bind("user", user).execute();
+            h().createUpdate("DELETE FROM wf_auth_user_role WHERE user_name=:user").bind("user", user).execute();
             if (roles.isEmpty()) return;
-            PreparedBatch b = h.prepareBatch("INSERT INTO wf_auth_user_role (user_name,role_name) VALUES (:user,:role)");
+            PreparedBatch b = h().prepareBatch("INSERT INTO wf_auth_user_role (user_name,role_name) VALUES (:user,:role)");
             for (String r : new TreeSet<>(roles)) b.bind("user", user).bind("role", r).add();
             b.execute();
         }
@@ -1587,11 +1616,11 @@ public final class JdbcStorage implements Storage {
         @Override public void putAuthRole(Rows.AuthRole r) {
             String update = "UPDATE wf_auth_role SET permissions=:permissions,builtin=:builtin,"
                     + "created_at=:created,updated_at=:updated WHERE name=:name";
-            if (bindAuthRole(h.createUpdate(update), r).execute() > 0) return;
-            if (bindAuthRole(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_role "
+            if (bindAuthRole(h().createUpdate(update), r).execute() > 0) return;
+            if (bindAuthRole(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_auth_role "
                     + "(name,permissions,builtin,created_at,updated_at) VALUES "
                     + "(:name,:permissions,:builtin,:created,:updated)")), r).execute() > 0) return;
-            bindAuthRole(h.createUpdate(update), r).execute();
+            bindAuthRole(h().createUpdate(update), r).execute();
         }
 
         private static Update bindAuthRole(Update q, Rows.AuthRole r) {
@@ -1603,21 +1632,21 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public boolean deleteAuthRole(String name) {
-            h.createUpdate("DELETE FROM wf_auth_user_role WHERE role_name=:name").bind("name", name).execute();
-            return h.createUpdate("DELETE FROM wf_auth_role WHERE name=:name").bind("name", name).execute() > 0;
+            h().createUpdate("DELETE FROM wf_auth_user_role WHERE role_name=:name").bind("name", name).execute();
+            return h().createUpdate("DELETE FROM wf_auth_role WHERE name=:name").bind("name", name).execute() > 0;
         }
 
         @Override public List<Rows.AuthCredential> authCredentials() {
-            return h.createQuery("SELECT * FROM wf_auth_credential ORDER BY id").map(JdbcTx::authCredential).list();
+            return h().createQuery("SELECT * FROM wf_auth_credential ORDER BY id").map(JdbcTx::authCredential).list();
         }
 
         @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
-            return h.createQuery("SELECT * FROM wf_auth_credential WHERE key_hash=:h")
+            return h().createQuery("SELECT * FROM wf_auth_credential WHERE key_hash=:h")
                     .bind("h", keyHash).map(JdbcTx::authCredential).findOne();
         }
 
         @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
-            return h.createQuery("SELECT * FROM wf_auth_credential WHERE subject=:s")
+            return h().createQuery("SELECT * FROM wf_auth_credential WHERE subject=:s")
                     .bind("s", subject).map(JdbcTx::authCredential).findOne();
         }
 
@@ -1630,7 +1659,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void insertAuthCredential(Rows.AuthCredential c) {
-            h.createUpdate("INSERT INTO wf_auth_credential (id,kind,key_hash,subject,role_name,created_at,expires_at) "
+            h().createUpdate("INSERT INTO wf_auth_credential (id,kind,key_hash,subject,role_name,created_at,expires_at) "
                             + "VALUES (:id,:kind,:keyHash,:subject,:role,:created,:expires)")
                     .bind("id", c.id())
                     .bind("kind", c.kind())
@@ -1643,11 +1672,11 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public boolean deleteAuthCredential(String id) {
-            return h.createUpdate("DELETE FROM wf_auth_credential WHERE id=:id").bind("id", id).execute() > 0;
+            return h().createUpdate("DELETE FROM wf_auth_credential WHERE id=:id").bind("id", id).execute() > 0;
         }
 
         @Override public void insertAuthSession(Rows.AuthSession x) {
-            h.createUpdate("INSERT INTO wf_auth_session (id_hash,user_name,expires_at,created_at) "
+            h().createUpdate("INSERT INTO wf_auth_session (id_hash,user_name,expires_at,created_at) "
                             + "VALUES (:id,:user,:expires,:created)")
                     .bind("id", x.idHash())
                     .bind("user", x.user())
@@ -1657,29 +1686,29 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void deleteAuthSession(String idHash) {
-            h.createUpdate("DELETE FROM wf_auth_session WHERE id_hash=:id").bind("id", idHash).execute();
+            h().createUpdate("DELETE FROM wf_auth_session WHERE id_hash=:id").bind("id", idHash).execute();
         }
 
         @Override public int deleteAuthSessionsOf(String user, String keepIdHash) {
-            return h.createUpdate("DELETE FROM wf_auth_session WHERE user_name=:user AND id_hash<>:keep")
+            return h().createUpdate("DELETE FROM wf_auth_session WHERE user_name=:user AND id_hash<>:keep")
                     .bind("user", user)
                     .bind("keep", keepIdHash == null ? "" : keepIdHash)
                     .execute();
         }
 
         @Override public int deleteExpiredAuthSessions(long now, int max) {
-            List<String> ids = h.createQuery("SELECT id_hash FROM wf_auth_session WHERE expires_at<:now "
+            List<String> ids = h().createQuery("SELECT id_hash FROM wf_auth_session WHERE expires_at<:now "
                             + "ORDER BY expires_at LIMIT :max")
                     .bind("now", now)
                     .bind("max", max)
                     .mapTo(String.class)
                     .list();
             if (ids.isEmpty()) return 0;
-            return h.createUpdate("DELETE FROM wf_auth_session WHERE id_hash IN (<ids>)").bindList("ids", ids).execute();
+            return h().createUpdate("DELETE FROM wf_auth_session WHERE id_hash IN (<ids>)").bindList("ids", ids).execute();
         }
 
         @Override public long appendAuthAudit(Rows.AuthAudit e) {
-            return h.createUpdate("INSERT INTO wf_auth_audit (at,actor,action,target,detail) "
+            return h().createUpdate("INSERT INTO wf_auth_audit (at,actor,action,target,detail) "
                             + "VALUES (:at,:actor,:action,:target,:detail)")
                     .bind("at", e.at())
                     .bind("actor", e.actor())
@@ -1696,20 +1725,20 @@ public final class JdbcStorage implements Storage {
             String update = "UPDATE wf_search_doc SET workflow=:workflow,version=:version,status=:status,"
                     + "correlation_id=:correlationId,text=:text,created_at=:created,updated_at=:updated "
                     + "WHERE instance_id=:id AND updated_at<=:updated";
-            boolean wrote = bindSearchDoc(h.createUpdate(update), d).execute() > 0
-                    || bindSearchDoc(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
+            boolean wrote = bindSearchDoc(h().createUpdate(update), d).execute() > 0
+                    || bindSearchDoc(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_search_doc "
                             + "(instance_id,workflow,version,status,correlation_id,text,created_at,updated_at) VALUES "
                             + "(:id,:workflow,:version,:status,:correlationId,:text,:created,:updated)")), d).execute() > 0
-                    || bindSearchDoc(h.createUpdate(update), d).execute() > 0;   // another writer inserted it first
+                    || bindSearchDoc(h().createUpdate(update), d).execute() > 0;   // another writer inserted it first
             if (wrote) writeSearchAttributes(d);
             return wrote;
         }
 
         /** Replaces the document's attribute rows with its current ones. */
         private void writeSearchAttributes(Rows.SearchDoc d) {
-            h.createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", d.instanceId()).execute();
+            h().createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", d.instanceId()).execute();
             if (d.attributes().isEmpty()) return;
-            PreparedBatch b = h.prepareBatch("INSERT INTO wf_search_attr (instance_id,workflow,name,t,s_val,n_val)"
+            PreparedBatch b = h().prepareBatch("INSERT INTO wf_search_attr (instance_id,workflow,name,t,s_val,n_val)"
                     + " VALUES (:id,:workflow,:name,:t,:s,:n)");
             for (Map.Entry<String, Object> a : d.attributes().entrySet()) {
                 Object v = a.getValue();
@@ -1734,8 +1763,8 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void deleteSearchDoc(String instanceId) {
-            h.createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", instanceId).execute();
-            h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
+            h().createUpdate("DELETE FROM wf_search_attr WHERE instance_id=:id").bind("id", instanceId).execute();
+            h().createUpdate("DELETE FROM wf_search_doc WHERE instance_id=:id").bind("id", instanceId).execute();
         }
 
         /** {@code scope} on column {@code column}, for a WHERE that already has a condition; bound by {@link #bindWorkflows}. */
@@ -1766,19 +1795,19 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
-            List<String> ids = h.createQuery("SELECT instance_id FROM wf_search_doc WHERE updated_at<:before "
+            List<String> ids = h().createQuery("SELECT instance_id FROM wf_search_doc WHERE updated_at<:before "
                             + "ORDER BY updated_at LIMIT :max")
                     .bind("before", updatedBefore)
                     .bind("max", max)
                     .mapTo(String.class)
                     .list();
             if (ids.isEmpty()) return 0;
-            h.createUpdate("DELETE FROM wf_search_attr WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
-            return h.createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
+            h().createUpdate("DELETE FROM wf_search_attr WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
+            return h().createUpdate("DELETE FROM wf_search_doc WHERE instance_id IN (<ids>)").bindList("ids", ids).execute();
         }
 
         @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
-            List<Rows.SearchDoc> docs = h.createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc "
+            List<Rows.SearchDoc> docs = h().createQuery("SELECT " + SEARCH_COLUMNS + " FROM wf_search_doc "
                             + "WHERE instance_id>:after ORDER BY instance_id LIMIT :max")
                     .bind("after", afterId == null ? "" : afterId)
                     .bind("max", max)
@@ -1791,7 +1820,7 @@ public final class JdbcStorage implements Storage {
         private List<Rows.SearchDoc> withAttributes(List<Rows.SearchDoc> docs) {
             if (docs.isEmpty()) return docs;
             Map<String, Map<String, Object>> attributes = new HashMap<>();
-            h.createQuery("SELECT instance_id,name,t,s_val,n_val FROM wf_search_attr WHERE instance_id IN (<ids>)")
+            h().createQuery("SELECT instance_id,name,t,s_val,n_val FROM wf_search_attr WHERE instance_id IN (<ids>)")
                     .bindList("ids", docs.stream().map(Rows.SearchDoc::instanceId).toList())
                     .map((rs, ctx) -> {
                         String t = rs.getString("t");
@@ -1845,10 +1874,10 @@ public final class JdbcStorage implements Storage {
                           + "ORDER BY score DESC, updated_at DESC, instance_id LIMIT :limit"
                         : "SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
                           + " ORDER BY updated_at DESC, instance_id LIMIT :limit";
-                query = h.createQuery(sql).bind("limit", q.limit());
+                query = h().createQuery(sql).bind("limit", q.limit());
                 if (text) query.bind("text", q.text());
             } else {
-                query = h.createQuery("SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
+                query = h().createQuery("SELECT " + SEARCH_COLUMNS + ", 0 AS score FROM wf_search_doc" + where
                         + " ORDER BY updated_at DESC, instance_id");
             }
             bindWorkflows(query, q.workflows());
@@ -1888,7 +1917,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void insertInstance(Instance i) {
-            bindInstance(h.createUpdate(INSERT_INSTANCE), i).execute();
+            bindInstance(h().createUpdate(INSERT_INSTANCE), i).execute();
         }
 
         private static <S extends SqlStatement<S>> S bindInstance(S s, Instance i) {
@@ -1911,7 +1940,7 @@ public final class JdbcStorage implements Storage {
         @Override public Optional<Instance> findInstance(String id) { return loadInstance(id, false); }
 
         @Override public Optional<Instance> lockInstanceOf(String tokenId) {
-            return h.createQuery("SELECT * FROM wf_instance WHERE id=(SELECT instance_id FROM wf_token WHERE id=:id)"
+            return h().createQuery("SELECT * FROM wf_instance WHERE id=(SELECT instance_id FROM wf_token WHERE id=:id)"
                             + " FOR UPDATE")
                     .bind("id", tokenId)
                     .mapTo(Instance.class)
@@ -1926,7 +1955,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public Optional<Rows.LockedTask> lockTask(String tokenId) {
             if (!dialect.supportsJoinedLock()) return Tx.super.lockTask(tokenId);
-            return h.createQuery(LOCK_TASK)
+            return h().createQuery(LOCK_TASK)
                     .bind("id", tokenId)
                     .map((rs, ctx) -> new Rows.LockedTask(readInstance(rs, "i_"), recorded(readToken(rs))))
                     .findFirst();
@@ -1936,7 +1965,7 @@ public final class JdbcStorage implements Storage {
             String sql = forUpdate
                     ? "SELECT * FROM wf_instance WHERE id=:id FOR UPDATE"
                     : "SELECT * FROM wf_instance WHERE id=:id";
-            return h.createQuery(sql).bind("id", id).mapTo(Instance.class).findFirst();
+            return h().createQuery(sql).bind("id", id).mapTo(Instance.class).findFirst();
         }
 
         private static final String UPDATE_INSTANCE = "UPDATE wf_instance SET status=:status,"
@@ -1944,7 +1973,7 @@ public final class JdbcStorage implements Storage {
                 + "revision=revision+1 WHERE id=:id";
 
         @Override public void updateInstance(Instance i) {
-            bindInstanceUpdate(h.createUpdate(UPDATE_INSTANCE), i).execute();
+            bindInstanceUpdate(h().createUpdate(UPDATE_INSTANCE), i).execute();
             i.revision++;
         }
 
@@ -1956,7 +1985,7 @@ public final class JdbcStorage implements Storage {
             // would otherwise convoy, each batch serialising behind the other's whole commit. A
             // skipped instance is simply absent from the result; the caller answers its run as
             // retryable and the worker reports it singly.
-            return h.createQuery("SELECT * FROM wf_instance WHERE id IN (<ids>) ORDER BY id FOR UPDATE"
+            return h().createQuery("SELECT * FROM wf_instance WHERE id IN (<ids>) ORDER BY id FOR UPDATE"
                             + (dialect.supportsSkipLocked() ? " SKIP LOCKED" : ""))
                     .bindList("ids", ids)
                     .mapTo(Instance.class)
@@ -1965,7 +1994,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public void updateInstances(List<Instance> instances) {
             if (instances.isEmpty()) return;
-            PreparedBatch b = h.prepareBatch(UPDATE_INSTANCE);
+            PreparedBatch b = h().prepareBatch(UPDATE_INSTANCE);
             for (Instance i : instances) bindInstanceUpdate(b, i).add();
             requireOneRowEach(b.execute(), "update wf_instance");
             for (Instance i : instances) i.revision++;
@@ -1981,7 +2010,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
-            return h.createQuery("SELECT * FROM wf_instance WHERE correlation_id=:cid "
+            return h().createQuery("SELECT * FROM wf_instance WHERE correlation_id=:cid "
                             + "ORDER BY created_at DESC LIMIT :limit")
                     .bind("cid", correlationId)
                     .bind("limit", limit)
@@ -1992,7 +2021,7 @@ public final class JdbcStorage implements Storage {
         @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
             // Both filters are optional, so the clauses are conditional but the binds are not
             // positional: a name binds where it appears, or nowhere, and cannot slide.
-            Query q = h.createQuery("SELECT * FROM wf_instance WHERE 1=1"
+            Query q = h().createQuery("SELECT * FROM wf_instance WHERE 1=1"
                     + (workflow != null ? " AND workflow=:workflow" : "")
                     + (status != null ? " AND status=:status" : "")
                     + " ORDER BY created_at DESC LIMIT :limit");
@@ -2003,7 +2032,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public int countInstances(InstanceStatus status) {
-            return h.createQuery("SELECT COUNT(*) FROM wf_instance WHERE status=:status")
+            return h().createQuery("SELECT COUNT(*) FROM wf_instance WHERE status=:status")
                     .bind("status", status.name())
                     .mapTo(Integer.class)
                     .one();
@@ -2018,14 +2047,14 @@ public final class JdbcStorage implements Storage {
                 + ":compSeq,:startedAt,:finishedAt,:instCreatedAt,:correlationId,:stepInput,:stepOutput)";
 
         @Override public void insertToken(Token t) {
-            bindToken(h.createUpdate(INSERT_TOKEN), t).execute();
+            bindToken(h().createUpdate(INSERT_TOKEN), t).execute();
             writeAttributes(List.of(t), false);
             recorded(t);
         }
 
         @Override public void insertTokens(List<Token> tokens) {
             if (tokens.isEmpty()) return;
-            PreparedBatch b = h.prepareBatch(INSERT_TOKEN);
+            PreparedBatch b = h().prepareBatch(INSERT_TOKEN);
             for (Token t : tokens) bindToken(b, t).add();
             requireOneRowEach(b.execute(), "insert wf_token");
             writeAttributes(tokens, false);
@@ -2042,12 +2071,12 @@ public final class JdbcStorage implements Storage {
             if (last.isEmpty()) return;
             List<Token> changed = List.copyOf(last.values());
             if (replace) {
-                h.createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (<ids>)")
+                h().createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (<ids>)")
                         .bindList("ids", List.copyOf(last.keySet()))
                         .execute();
             }
             for (Token t : tokens) t.attributesChanged = false;
-            PreparedBatch b = h.prepareBatch("INSERT INTO wf_token_attr (token_id,name,t,s_val,n_val)"
+            PreparedBatch b = h().prepareBatch("INSERT INTO wf_token_attr (token_id,name,t,s_val,n_val)"
                     + " VALUES (:tokenId,:name,:t,:s,:n)");
             int rows = 0;
             for (Token t : changed) {
@@ -2105,7 +2134,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<Token> findToken(String id) {
-            return h.createQuery("SELECT * FROM wf_token WHERE id=:id")
+            return h().createQuery("SELECT * FROM wf_token WHERE id=:id")
                     .bind("id", id)
                     .mapTo(Token.class)
                     .findFirst();
@@ -2113,14 +2142,14 @@ public final class JdbcStorage implements Storage {
 
         @Override public List<Token> findTokens(List<String> ids) {
             if (ids.isEmpty()) return List.of();
-            return h.createQuery("SELECT * FROM wf_token WHERE id IN (<ids>)")
+            return h().createQuery("SELECT * FROM wf_token WHERE id IN (<ids>)")
                     .bindList("ids", ids)
                     .mapTo(Token.class)
                     .list();
         }
 
         @Override public List<Token> tokensOf(String instanceId) {
-            return h.createQuery("SELECT * FROM wf_token WHERE instance_id=:id ORDER BY id")
+            return h().createQuery("SELECT * FROM wf_token WHERE instance_id=:id ORDER BY id")
                     .bind("id", instanceId)
                     .mapTo(Token.class)
                     .list();
@@ -2128,7 +2157,7 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public boolean hasActiveTokens(String instanceId) {
-            return h.createQuery("SELECT 1 FROM wf_token WHERE instance_id=:id "
+            return h().createQuery("SELECT 1 FROM wf_token WHERE instance_id=:id "
                             + "AND status IN ('READY','RUNNING','WAITING','AWAITING','JOINED') LIMIT 1")
                     .bind("id", instanceId)
                     .mapTo(Integer.class)
@@ -2148,7 +2177,7 @@ public final class JdbcStorage implements Storage {
         private static final String UPDATE_TOKEN_KEEP_PAYLOAD = UPDATE_TOKEN.replace("payload=:payload,", "");
 
         private boolean payloadUnchanged(Token t) {
-            return t.storedIn == this && t.payload == t.storedPayload;
+            return t.storedIn == h() && t.payload == t.storedPayload;
         }
 
         private static <S extends SqlStatement<S>> S bindTokenUpdate(S s, Token t, boolean keepPayload) {
@@ -2157,7 +2186,7 @@ public final class JdbcStorage implements Storage {
 
         public void updateToken(Token t) {
             boolean keep = payloadUnchanged(t);
-            bindTokenUpdate(h.createUpdate(keep ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN), t, keep).execute();
+            bindTokenUpdate(h().createUpdate(keep ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN), t, keep).execute();
             writeAttributes(List.of(t), true);
             recorded(t);
         }
@@ -2187,14 +2216,14 @@ public final class JdbcStorage implements Storage {
 
         private void updateBatch(List<Token> tokens, boolean keepPayload) {
             if (tokens.isEmpty()) return;
-            PreparedBatch b = h.prepareBatch(keepPayload ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN);
+            PreparedBatch b = h().prepareBatch(keepPayload ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN);
             for (Token t : tokens) bindTokenUpdate(b, t, keepPayload).add();
             requireOneRowEach(b.execute(), "update wf_token");
         }
 
         @Override
         public boolean renewLease(String taskId, String leaseOwner, long until, long now) {
-            Update u = h.createUpdate("UPDATE wf_token SET lease_expires=:until,updated_at=:now"
+            Update u = h().createUpdate("UPDATE wf_token SET lease_expires=:until,updated_at=:now"
                             + " WHERE id=:id AND status='RUNNING'"
                             + (leaseOwner == null ? "" : " AND lease_owner=:owner"))
                     .bind("until", until)
@@ -2218,7 +2247,7 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public List<String> joinStacksAt(String instanceId, String nodeId) {
-            return h.createQuery("SELECT join_stack FROM wf_token "
+            return h().createQuery("SELECT join_stack FROM wf_token "
                             + "WHERE instance_id=:id AND node_id=:node AND status='JOINED'")
                     .bind("id", instanceId)
                     .bind("node", nodeId)
@@ -2228,7 +2257,7 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public List<Token> joinedAt(String instanceId, String nodeId) {
-            return h.createQuery("SELECT * FROM wf_token "
+            return h().createQuery("SELECT * FROM wf_token "
                             + "WHERE instance_id=:id AND node_id=:node AND status='JOINED' ORDER BY id")
                     .bind("id", instanceId)
                     .bind("node", nodeId)
@@ -2238,7 +2267,7 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public Optional<Token> awaitingSignal(String instanceId, String name) {
-            return h.createQuery("SELECT * FROM wf_token WHERE instance_id=:id AND status='AWAITING' "
+            return h().createQuery("SELECT * FROM wf_token WHERE instance_id=:id AND status='AWAITING' "
                             + "AND kind='SIGNAL' AND activity=:name ORDER BY id LIMIT 1")
                     .bind("id", instanceId)
                     .bind("name", name)
@@ -2364,7 +2393,7 @@ public final class JdbcStorage implements Storage {
             String pick = perQueue
                     ? perQueuePick(queues, versions)
                     : claimFilter(queues, versions).formatted("id") + " FOR UPDATE SKIP LOCKED";
-            Query q = h.createQuery(prefix + "UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+            Query q = h().createQuery(prefix + "UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                     + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                     + " WHERE id IN (" + pick + ") RETURNING *");
             q.bind("owner", workerId)
@@ -2413,7 +2442,7 @@ public final class JdbcStorage implements Storage {
         private List<Token> claimCompareAndSet(String workerId, QueueSql queues,
                                                Set<WorkflowVersion> versions,
                                                int max, long now, long leaseUntil) {
-            Query pick = h.createQuery(claimFilter(queues, versions).formatted("*"));
+            Query pick = h().createQuery(claimFilter(queues, versions).formatted("*"));
             pick.bind("now", now)
                     .bind("max", max * 4);   // over-fetch: some candidates will lose the CAS race
             queues.bind(pick);
@@ -2423,7 +2452,7 @@ public final class JdbcStorage implements Storage {
             List<Token> claimed = new ArrayList<>();
             for (Token t : candidates) {
                 if (claimed.size() >= max) break;
-                int won = h.createUpdate("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
+                int won = h().createUpdate("UPDATE wf_token SET status='RUNNING',lease_owner=:owner,"
                                 + "lease_expires=:until,updated_at=:now,started_at=:now,finished_at=NULL"
                                 + " WHERE id=:id AND status='READY'")
                         .bind("owner", workerId)
@@ -2460,7 +2489,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Token> pendingSignals(int max) {
-            return h.createQuery("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' "
+            return h().createQuery("SELECT * FROM wf_token WHERE status='AWAITING' AND kind='SIGNAL' "
                             + "ORDER BY created_at LIMIT :max")
                     .bind("max", max)
                     .mapTo(Token.class)
@@ -2473,7 +2502,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<String> childInstanceIds(String parentInstanceId) {
-            return h.createQuery("SELECT id FROM wf_instance WHERE parent_token_id IN "
+            return h().createQuery("SELECT id FROM wf_instance WHERE parent_token_id IN "
                             + "(SELECT id FROM wf_token WHERE instance_id=:id) ORDER BY id")
                     .bind("id", parentInstanceId)
                     .mapTo(String.class)
@@ -2486,7 +2515,7 @@ public final class JdbcStorage implements Storage {
             // The seven bound parameters are identical across dialects; only the SQL text differs.
             // The dialect supplies the SQL with positional parameters in insert-column order, so
             // this one stays positional: the statement text is the dialect's to spell, not ours.
-            h.createUpdate(dialect.scheduleUpsert())
+            h().createUpdate(dialect.scheduleUpsert())
                     .bind(0, s.id)
                     .bind(1, s.workflow)
                     .bind(2, s.intervalMillis)
@@ -2498,24 +2527,24 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
-            return h.createQuery("SELECT * FROM wf_schedule WHERE workflow=:workflow")
+            return h().createQuery("SELECT * FROM wf_schedule WHERE workflow=:workflow")
                     .bind("workflow", workflow)
                     .mapTo(Rows.Schedule.class)
                     .findFirst();
         }
 
         @Override public void deleteSchedule(String id) {
-            h.createUpdate("DELETE FROM wf_schedule WHERE id=:id").bind("id", id).execute();
+            h().createUpdate("DELETE FROM wf_schedule WHERE id=:id").bind("id", id).execute();
         }
 
         @Override public List<Rows.Schedule> schedules() {
-            return h.createQuery("SELECT * FROM wf_schedule ORDER BY id")
+            return h().createQuery("SELECT * FROM wf_schedule ORDER BY id")
                     .mapTo(Rows.Schedule.class)
                     .list();
         }
 
         @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            return h.createQuery("SELECT * FROM wf_schedule WHERE next_fire_at<=:now "
+            return h().createQuery("SELECT * FROM wf_schedule WHERE next_fire_at<=:now "
                             + "ORDER BY next_fire_at LIMIT :max")
                     .bind("now", now)
                     .bind("max", max)
@@ -2525,7 +2554,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
             // Compare-and-set on the fire time: exactly one node moves a schedule forward.
-            return h.createUpdate("UPDATE wf_schedule SET next_fire_at=:next "
+            return h().createUpdate("UPDATE wf_schedule SET next_fire_at=:next "
                             + "WHERE id=:id AND next_fire_at=:expected")
                     .bind("next", nextFireAt)
                     .bind("id", id)
@@ -2535,7 +2564,7 @@ public final class JdbcStorage implements Storage {
 
 
         @Override public Rows.QueueDepth queueDepth(long now) {
-            return h.createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "
+            return h().createQuery("SELECT COUNT(*) AS depth, COALESCE(MIN(available_at),0) AS oldest "
                             + "FROM wf_token WHERE status='READY' AND kind IN ('TASK','PREDICATE') "
                             + "AND available_at<=:now")
                     .bind("now", now)
@@ -2546,7 +2575,7 @@ public final class JdbcStorage implements Storage {
         @Override public int countReady(String workflow, int version, String queue,
                                         com.wiggle.core.criteria.Predicate where, long now, int cap) {
             CriteriaSql sql = where == null ? null : CriteriaSql.compile(where, dialect);
-            Query q = h.createQuery("SELECT COUNT(*) FROM (SELECT 1 FROM wf_token WHERE status='READY'"
+            Query q = h().createQuery("SELECT COUNT(*) FROM (SELECT 1 FROM wf_token WHERE status='READY'"
                     + " AND kind IN ('TASK','PREDICATE') AND available_at<=:now AND queue=:queue"
                     + " AND workflow=:workflow AND version=:version" + (sql == null ? "" : " AND " + sql.sql())
                     + " LIMIT :cap) slice")
@@ -2557,7 +2586,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
-            return h.createQuery("SELECT workflow, version, queue, COUNT(*) AS depth, "
+            return h().createQuery("SELECT workflow, version, queue, COUNT(*) AS depth, "
                             + "COALESCE(MIN(available_at),0) AS oldest FROM wf_token "
                             + "WHERE status='READY' AND kind IN ('TASK','PREDICATE') AND available_at<=:now "
                             + "GROUP BY workflow, version, queue ORDER BY COUNT(*) DESC LIMIT :max")
@@ -2570,7 +2599,7 @@ public final class JdbcStorage implements Storage {
 
         /** The token sweeps: one bound time and a cap, in that order. */
         private List<Token> query(String sql, long arg, int limit) {
-            return h.createQuery(sql)
+            return h().createQuery(sql)
                     .bind(0, arg)
                     .bind(1, limit)
                     .mapTo(Token.class)
@@ -2578,7 +2607,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void upsertNode(ServerNode n) {
-            int updated = h.createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
+            int updated = h().createUpdate("UPDATE wf_node SET name=:name,last_heartbeat=:beat,"
                             + "workers=:workers,topology_generation=:gen WHERE id=:id")
                     .bind("name", n.name)
                     .bind("beat", n.lastHeartbeat)
@@ -2587,7 +2616,7 @@ public final class JdbcStorage implements Storage {
                     .bind("id", n.id)
                     .execute();
             if (updated > 0) return;
-            h.createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader,"
+            h().createUpdate("INSERT INTO wf_node (id,name,first_heartbeat,last_heartbeat,workers,leader,"
                             + "topology_generation) VALUES (:id,:name,:first,:beat,:workers,0,:gen)")
                     .bind("id", n.id)
                     .bind("name", n.name)
@@ -2599,19 +2628,19 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<ServerNode> nodes() {
-            return h.createQuery("SELECT * FROM wf_node ORDER BY first_heartbeat, id")
+            return h().createQuery("SELECT * FROM wf_node ORDER BY first_heartbeat, id")
                     .mapTo(ServerNode.class)
                     .list();
         }
 
         @Override public void deleteNodesOlderThan(long before) {
-            h.createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
+            h().createUpdate("DELETE FROM wf_node WHERE last_heartbeat<:before")
                     .bind("before", before)
                     .execute();
         }
 
         @Override public OptionalInt shardIdentity() {
-            return h.createQuery("SELECT shard_id FROM wf_shard WHERE k='self'")
+            return h().createQuery("SELECT shard_id FROM wf_shard WHERE k='self'")
                     .mapTo(Integer.class)
                     .findOne()
                     .map(OptionalInt::of)
@@ -2619,24 +2648,24 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void claimShardIdentity(int shardId) {
-            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard (k,shard_id) VALUES ('self',:shard)"))
+            h().createUpdate(dialect.insertIgnore("INSERT INTO wf_shard (k,shard_id) VALUES ('self',:shard)"))
                     .bind("shard", shardId)
                     .execute();
         }
 
         @Override public OptionalLong shardBeat() {
-            List<Long> beats = h.createQuery("SELECT beat_at FROM wf_shard WHERE k='self' AND beat_at IS NOT NULL")
+            List<Long> beats = h().createQuery("SELECT beat_at FROM wf_shard WHERE k='self' AND beat_at IS NOT NULL")
                     .mapTo(Long.class)
                     .list();
             return beats.isEmpty() ? OptionalLong.empty() : OptionalLong.of(beats.getFirst());
         }
 
         @Override public void writeShardBeat(long now) {
-            h.createUpdate("UPDATE wf_shard SET beat_at=:now WHERE k='self'").bind("now", now).execute();
+            h().createUpdate("UPDATE wf_shard SET beat_at=:now WHERE k='self'").bind("now", now).execute();
         }
 
         @Override public List<Rows.ShardRecord> shardRegistry() {
-            return h.createQuery("SELECT shard_id,state,first_seen,retired_at FROM wf_shard_registry "
+            return h().createQuery("SELECT shard_id,state,first_seen,retired_at FROM wf_shard_registry "
                             + "ORDER BY shard_id")
                     .map((rs, ctx) -> {
                         long retired = rs.getLong("retired_at");
@@ -2650,11 +2679,11 @@ public final class JdbcStorage implements Storage {
         @Override public void putShardRecord(Rows.ShardRecord r) {
             String update = "UPDATE wf_shard_registry SET state=:state,first_seen=:first,retired_at=:retired "
                     + "WHERE shard_id=:shard";
-            if (bindShard(h.createUpdate(update), r).execute() > 0) return;
-            if (bindShard(h.createUpdate(dialect.insertIgnore("INSERT INTO wf_shard_registry "
+            if (bindShard(h().createUpdate(update), r).execute() > 0) return;
+            if (bindShard(h().createUpdate(dialect.insertIgnore("INSERT INTO wf_shard_registry "
                     + "(shard_id,state,first_seen,retired_at) VALUES (:shard,:state,:first,:retired)")), r)
                     .execute() > 0) return;
-            bindShard(h.createUpdate(update), r).execute();   // another node inserted it first
+            bindShard(h().createUpdate(update), r).execute();   // another node inserted it first
         }
 
         private static Update bindShard(Update u, Rows.ShardRecord r) {
@@ -2665,7 +2694,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void setLeader(String nodeId, boolean leader) {
-            h.createUpdate("UPDATE wf_node SET leader=:leader WHERE id=:id")
+            h().createUpdate("UPDATE wf_node SET leader=:leader WHERE id=:id")
                     .bind("leader", leader ? 1 : 0)
                     .bind("id", nodeId)
                     .execute();
@@ -2675,7 +2704,7 @@ public final class JdbcStorage implements Storage {
             List<String> ids = new ArrayList<>();
             // ORDER BY is required for SQL Server's OFFSET/FETCH rewrite of LIMIT, and gives every
             // dialect a deterministic "oldest first" deletion order at no cost.
-            ids.addAll(h.createQuery("SELECT id FROM wf_instance "
+            ids.addAll(h().createQuery("SELECT id FROM wf_instance "
                             + "WHERE status NOT IN ('RUNNING','COMPENSATING') AND updated_at<:before "
                             + "ORDER BY updated_at LIMIT :limit")
                     .bind("before", updatedBefore)
@@ -2684,21 +2713,21 @@ public final class JdbcStorage implements Storage {
                     .list());
             if (ids.isEmpty()) return 0;
             // Children before parents: a token or comp-log row outliving its instance is a leak.
-            h.createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (SELECT id FROM wf_token WHERE instance_id IN (<ids>))")
+            h().createUpdate("DELETE FROM wf_token_attr WHERE token_id IN (SELECT id FROM wf_token WHERE instance_id IN (<ids>))")
                     .bindList("ids", ids)
                     .execute();
             for (String table : List.of("wf_token", "wf_comp_log", "wf_dyn_node")) {
-                h.createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
+                h().createUpdate("DELETE FROM " + table + " WHERE instance_id IN (<ids>)")
                         .bindList("ids", ids)
                         .execute();
             }
-            h.createUpdate("DELETE FROM wf_instance WHERE id IN (<ids>)").bindList("ids", ids).execute();
+            h().createUpdate("DELETE FROM wf_instance WHERE id IN (<ids>)").bindList("ids", ids).execute();
             return ids.size();
         }
 
         @Override public void insertDynNodes(String instanceId, java.util.List<Node> nodes) {
             if (nodes.isEmpty()) return;
-            PreparedBatch batch = h.prepareBatch(
+            PreparedBatch batch = h().prepareBatch(
                     "INSERT INTO wf_dyn_node (node_id,instance_id,body) VALUES (:nodeId,:instanceId,:body)");
             for (Node n : nodes) {
                 batch.bind("nodeId", n.id()).bind("instanceId", instanceId)
@@ -2708,7 +2737,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public Optional<Node> dynNode(String nodeId) {
-            return h.createQuery("SELECT body FROM wf_dyn_node WHERE node_id=:id")
+            return h().createQuery("SELECT body FROM wf_dyn_node WHERE node_id=:id")
                     .bind("id", nodeId)
                     .mapTo(String.class)
                     .findOne()
@@ -2716,14 +2745,14 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public long dynNodeCount(String instanceId) {
-            return h.createQuery("SELECT COUNT(*) FROM wf_dyn_node WHERE instance_id=:id")
+            return h().createQuery("SELECT COUNT(*) FROM wf_dyn_node WHERE instance_id=:id")
                     .bind("id", instanceId)
                     .mapTo(Long.class)
                     .one();
         }
 
         @Override public void appendCompensation(Rows.CompLog e) {
-            h.createUpdate("INSERT INTO wf_comp_log "
+            h().createUpdate("INSERT INTO wf_comp_log "
                             + "(instance_id,seq,node_id,activity,queue,input_json,result_json,compensated) "
                             + "VALUES (:instanceId,:seq,:nodeId,:activity,:queue,:input,:result,:compensated)")
                     .bind("instanceId", e.instanceId)
@@ -2738,7 +2767,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
-            return h.createQuery("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
+            return h().createQuery("SELECT seq,node_id,activity,queue,input_json,result_json,compensated "
                             + "FROM wf_comp_log WHERE instance_id=:id ORDER BY seq")
                     .bind("id", instanceId)
                     .map((rs, ctx) -> {
@@ -2757,7 +2786,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public long appendEvent(Rows.Event e) {
-            return h.createUpdate("INSERT INTO wf_event (instance_id,workflow,version,correlation_id,type,"
+            return h().createUpdate("INSERT INTO wf_event (instance_id,workflow,version,correlation_id,type,"
                             + "node_id,payload_ver,payload,created_at) VALUES "
                             + "(:instanceId,:workflow,:version,:correlationId,:type,:nodeId,:payloadVer,"
                             + ":payload,:createdAt)")
@@ -2777,7 +2806,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
-            return h.createQuery("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
+            return h().createQuery("SELECT seq,instance_id,workflow,version,correlation_id,type,node_id,"
                             + "payload_ver,payload,created_at FROM wf_event "
                             + "WHERE seq>:after AND created_at<:before ORDER BY seq LIMIT :max")
                     .bind("after", afterSeq)
@@ -2788,11 +2817,11 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public long latestEventSeq() {
-            return h.createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_event").mapTo(Long.class).one();
+            return h().createQuery("SELECT COALESCE(MAX(seq),0) FROM wf_event").mapTo(Long.class).one();
         }
 
         @Override public Rows.EventCursor eventCursor(String consumer) {
-            return h.createQuery("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor "
+            return h().createQuery("SELECT consumer,acked_seq,last_seen,created_at FROM wf_event_cursor "
                             + "WHERE consumer=:consumer")
                     .bind("consumer", consumer)
                     .mapTo(Rows.EventCursor.class)
@@ -2801,7 +2830,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
-            h.createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor "
+            h().createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor "
                             + "(consumer,acked_seq,last_seen,created_at) VALUES "
                             + "(:consumer,:acked,:lastSeen,:createdAt)"))
                     .bind("consumer", cursor.consumer())
@@ -2824,7 +2853,7 @@ public final class JdbcStorage implements Storage {
         /** An ack never moves a cursor back, so the new seq appears twice in the CASE. One name,
          *  bound once, rather than two positions that have to hold the same value. */
         private int moveCursor(String consumer, long ackedSeq, long now) {
-            return h.createUpdate("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<:acked "
+            return h().createUpdate("UPDATE wf_event_cursor SET acked_seq=CASE WHEN acked_seq<:acked "
                             + "THEN :acked ELSE acked_seq END, last_seen=:now WHERE consumer=:consumer")
                     .bind("acked", ackedSeq)
                     .bind("now", now)
@@ -2834,7 +2863,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public Map<Integer, Long> eventPositions(String consumer) {
             Map<Integer, Long> out = new HashMap<>();
-            h.createQuery("SELECT shard_id, acked_seq FROM wf_event_cursor_shard WHERE consumer=:consumer")
+            h().createQuery("SELECT shard_id, acked_seq FROM wf_event_cursor_shard WHERE consumer=:consumer")
                     .bind("consumer", consumer)
                     .map((rs, ctx) -> Map.entry(rs.getInt("shard_id"), rs.getLong("acked_seq")))
                     .forEach(e -> out.put(e.getKey(), e.getValue()));
@@ -2843,7 +2872,7 @@ public final class JdbcStorage implements Storage {
 
         @Override public Long oldestEventPosition(int shard) {
             // MIN over no cursors is NULL; a consumer with no row for the shard holds 0.
-            return h.createQuery("SELECT MIN(COALESCE(p.acked_seq, 0)) FROM wf_event_cursor c "
+            return h().createQuery("SELECT MIN(COALESCE(p.acked_seq, 0)) FROM wf_event_cursor c "
                             + "LEFT JOIN wf_event_cursor_shard p ON p.consumer=c.consumer AND p.shard_id=:shard")
                     .bind("shard", shard)
                     .mapTo(Long.class)
@@ -2854,38 +2883,38 @@ public final class JdbcStorage implements Storage {
         @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
             String move = "UPDATE wf_event_cursor_shard SET acked_seq=CASE WHEN acked_seq<:acked THEN :acked "
                     + "ELSE acked_seq END WHERE consumer=:consumer AND shard_id=:shard";
-            if (h.createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard)
+            if (h().createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard)
                     .execute() > 0) return;
-            if (h.createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor_shard (consumer,shard_id,acked_seq) "
+            if (h().createUpdate(dialect.insertIgnore("INSERT INTO wf_event_cursor_shard (consumer,shard_id,acked_seq) "
                     + "VALUES (:consumer,:shard,:acked)")).bind("consumer", consumer).bind("shard", shard)
                     .bind("acked", ackedSeq).execute() > 0) return;
-            h.createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard).execute();
+            h().createUpdate(move).bind("acked", ackedSeq).bind("consumer", consumer).bind("shard", shard).execute();
         }
 
         @Override public Long oldestAckedSeq() {
             // MIN over no cursors is a row holding NULL, so the absence comes from the value.
-            return h.createQuery("SELECT MIN(acked_seq) FROM wf_event_cursor")
+            return h().createQuery("SELECT MIN(acked_seq) FROM wf_event_cursor")
                     .mapTo(Long.class)
                     .findOne()
                     .orElse(null);
         }
 
         @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
-            Query pick = h.createQuery("SELECT seq FROM wf_event WHERE created_at<:before"
+            Query pick = h().createQuery("SELECT seq FROM wf_event WHERE created_at<:before"
                     + (upToSeq != null ? " AND seq<=:upTo" : "")
                     + " ORDER BY seq LIMIT :max");
             pick.bind("before", createdBefore).bind("max", max);
             if (upToSeq != null) pick.bind("upTo", upToSeq);
             List<Long> seqs = pick.mapTo(Long.class).list();
             if (seqs.isEmpty()) return 0;
-            return h.createUpdate("DELETE FROM wf_event WHERE seq<=:upTo AND created_at<:before")
+            return h().createUpdate("DELETE FROM wf_event WHERE seq<=:upTo AND created_at<:before")
                     .bind("upTo", seqs.getLast())
                     .bind("before", createdBefore)
                     .execute();
         }
 
         @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
-            return h.createQuery("SELECT node_id, started_at, finished_at, available_at FROM wf_token "
+            return h().createQuery("SELECT node_id, started_at, finished_at, available_at FROM wf_token "
                             + "WHERE workflow=:workflow AND version=:version AND status='DONE' "
                             + "AND finished_at > :since AND started_at IS NOT NULL "
                             + "ORDER BY finished_at DESC LIMIT :max")
@@ -2902,7 +2931,7 @@ public final class JdbcStorage implements Storage {
         }
 
         @Override public void markCompensated(String instanceId, long seq) {
-            h.createUpdate("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=:id AND seq=:seq")
+            h().createUpdate("UPDATE wf_comp_log SET compensated=1 WHERE instance_id=:id AND seq=:seq")
                     .bind("id", instanceId)
                     .bind("seq", seq)
                     .execute();
@@ -2910,7 +2939,7 @@ public final class JdbcStorage implements Storage {
 
         @Override
         public void cancelActiveTokens(String instanceId, long now) {
-            h.createUpdate("""
+            h().createUpdate("""
                             UPDATE wf_token
                                SET status='CANCELLED', lease_owner=NULL, lease_expires=0, updated_at=:now
                              WHERE instance_id=:id
