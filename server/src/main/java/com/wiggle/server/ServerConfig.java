@@ -24,8 +24,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
      * Full-text search over instances. On a topology, search runs when a shard carries the search role;
      * on one database (or in memory), when {@code enabled}, on that database. {@code workflows} limits
      * which workflows are indexed (empty: all); {@code retention} is how long a document outlives its
-     * instance's last change; {@code upkeep} is how often the leader applies retention, rebalances,
-     * backfills vectors and moves the embedding model on.
+     * instance's last change; {@code upkeep} is how often the leader applies retention, rebalances.
      */
     public record Search(boolean enabled, Duration retention, java.util.Set<String> workflows, Duration upkeep) {
 

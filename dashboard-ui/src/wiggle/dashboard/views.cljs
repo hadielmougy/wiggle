@@ -280,7 +280,7 @@
 (defn instances-toolbar []
   (let [f (:filter @db)
         searching (seq (:search f))
-        exact? (and searching (not (#{:text :meaning} (:search-by f))))]
+        exact? (and searching (not= :text (:search-by f)))]
     [:div.toolbar
      [:select {:value (:workflow f) :disabled (boolean exact?)
                :on-change #(do (st/set-filter! :workflow (.. % -target -value)) (act/load-instances!))}
@@ -300,11 +300,9 @@
                                (when searching (act/load-instances!)))}
       [:option {:value "correlation"} "correlation id"]
       [:option {:value "id"} "instance id"]
-      (when (get-in @db [:auth :searchEnabled]) [:option {:value "text"} "full text"])
-      (when (get-in @db [:auth :semanticEnabled]) [:option {:value "meaning"} "by meaning"])]
+      (when (get-in @db [:auth :searchEnabled]) [:option {:value "text"} "full text"])]
      [:input {:type "search" :style {:width 220}
-              :placeholder (case (:search-by f) :id "instance id…" :text "words in the context or error…"
-                             :meaning "describe what you are looking for…" "correlation id…")
+              :placeholder (case (:search-by f) :id "instance id…" :text "words in the context or error…" "correlation id…")
               :value (:search f)
               :on-change #(st/set-filter! :search (.. % -target -value))
               :on-key-down #(when (= (.-key %) "Enter") (act/load-instances!))}]

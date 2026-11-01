@@ -601,19 +601,10 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             Long to = req.getUpdatedTo() > 0 ? req.getUpdatedTo() : null;
             int limit = req.getLimit() > 0 ? req.getLimit() : 20;
             SearchResult.Builder out = SearchResult.newBuilder();
-            List<com.wiggle.server.search.Search.Hit> hits;
-            if (req.getSemantic()) {
-                com.wiggle.server.search.Search.SemanticResult r = search.semantic(req.getText(), workflow, status,
-                        from, to, limit, req.getPartialOk(), authz.scope(Permissions.READ));
-                out.setPartial(r.partial()).setModel(r.model());
-                hits = r.hits();
-            } else {
-                com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
-                        limit, req.getPartialOk(), authz.scope(Permissions.READ));
-                out.setPartial(r.partial());
-                hits = r.hits();
-            }
-            for (com.wiggle.server.search.Search.Hit h : hits) {
+            com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
+                    limit, req.getPartialOk(), authz.scope(Permissions.READ));
+            out.setPartial(r.partial());
+            for (com.wiggle.server.search.Search.Hit h : r.hits()) {
                 out.addHits(SearchHit.newBuilder().setInstanceId(h.instanceId()).setWorkflow(h.workflow())
                         .setVersion(h.version()).setStatus(h.status())
                         .setCorrelationId(h.correlationId() == null ? "" : h.correlationId())

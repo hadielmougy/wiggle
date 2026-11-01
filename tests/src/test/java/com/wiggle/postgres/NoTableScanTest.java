@@ -68,9 +68,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @EnabledIfEnvironmentVariable(named = "WIGGLE_TEST_PG_URL", matches = ".+")
 class NoTableScanTest {
 
-    /** Tables sized by the cluster and its configuration (nodes, accounts, consumers, models), not by its workload. */
+    /** Tables sized by the cluster and its configuration (nodes, accounts, consumers), not by its workload. */
     private static final Set<String> BOUNDED = Set.of("wf_schema_version", "wf_node", "wf_auth_user", "wf_auth_role",
-            "wf_event_cursor", "wf_search_model");
+            "wf_event_cursor");
 
     private static final Pattern PLANNABLE = Pattern.compile("^\\s*(SELECT|INSERT|UPDATE|DELETE|WITH|MERGE)\\b",
             Pattern.CASE_INSENSITIVE);
@@ -352,17 +352,6 @@ class NoTableScanTest {
         tx.searchDocs(new Rows.SearchQuery(null, names, "RUNNING", now - 60_000, now + 60_000, 10));
         tx.searchDocs(new Rows.SearchQuery("shipped", prefixed, "RUNNING", now - 60_000, now + 60_000, 10));
         tx.searchDocsAfter("", 10);
-        tx.putSearchModel(new Rows.SearchModel("m", 3, Rows.SearchModel.BUILDING, now, null));
-        tx.searchModels();
-        tx.ensureVectorIndex("m", 3);
-        tx.upsertSearchVectors(List.of(new Rows.SearchVector(inst.id, "m", new float[]{1, 0, 0}, now)));
-        tx.searchVectorsOf(List.of(inst.id));
-        tx.searchVectors(new Rows.VectorQuery("m", new float[]{1, 0, 0}, null, null, null, null, 10));
-        tx.searchVectors(new Rows.VectorQuery("m", new float[]{1, 0, 0}, names, "RUNNING", now - 60_000,
-                now + 60_000, 10));
-        tx.docsNeedingVector("m", 10);
-        tx.countDocsWithoutVector("m", now + 60_000);
-        tx.deleteSearchVectors("m", 10);
         tx.deleteSearchDocsBefore(now - 60_000, 10);
         tx.deleteSearchDoc(inst.id);
 

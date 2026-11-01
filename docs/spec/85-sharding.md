@@ -13,7 +13,7 @@ This chapter specifies how one Wiggle cluster spreads its instances over several
 (**shards**), how each shard serves read-heavy queries from its own **read replicas**, how shards are
 added and retired without moving data, and how the optional cell coordinator is removed in favour of
 it. It also specifies the data that does not shard by instance: the portal moves into the server,
-users and roles move into a database on a dedicated **auth shard**, and vector search gets its own
+users and roles move into a database on a dedicated **auth shard**, and search gets its own
 **search shards**.
 
 ## 1. Model
@@ -21,7 +21,7 @@ users and roles move into a database on a dedicated **auth shard**, and vector s
 | Term | Meaning |
 |---|---|
 | **shard** | One primary database, plus zero or more read replicas of it. Identified by a permanent non-negative integer, and carrying one or more roles. |
-| **role** | What a shard holds: `instances` (workflow runtime state, minted onto by weight), `home` (cluster-global rows), `auth` (users, roles, sessions, credentials), `search` (derived search documents and vector indexes). |
+| **role** | What a shard holds: `instances` (workflow runtime state, minted onto by weight), `home` (cluster-global rows), `auth` (users, roles, sessions, credentials), `search` (derived search documents). |
 | **home shard** | The one shard with the `home` role: the node table, schedules, event cursors and the shard registry. |
 | **auth shard** | The one shard with the `auth` role. Defaults to the home shard. |
 | **search shard** | A shard with the `search` role. There may be none, one, or several. |
@@ -53,7 +53,7 @@ several roles, so a one-database deployment is one shard with all four.
 
 **WGL-SHARD-007** (MUST) Only an `instances` shard may take a mint weight. Each role's schema MUST be
 migrated only onto the shards that carry the role: `wf_*` runtime tables on `instances`, the global
-tables on `home`, `wf_auth_*` on `auth`, `wf_search_*` (and the `vector` extension) on `search`.
+tables on `home`, `wf_auth_*` on `auth`, `wf_search_*` on `search`.
 
 **WGL-SHARD-008** (MUST) The engine's hot path (start, claim, report, fail, heartbeat, signal, the
 leader's sweeps) MUST NOT read or write the auth or search shards. Either can be down while
@@ -324,7 +324,7 @@ console.
 | sign-in, credential and session checks on a cache miss; user and role writes | auth shard ([§13](#13-users-and-authorization)) | `PRIMARY` |
 | user and role listings in the portal | auth shard | `REPLICA_OK` |
 | search indexing | search shards ([§14](#14-search-shards)) | primary |
-| full-text and vector search | every search shard, merged | `REPLICA_OK` |
+| full-text search | every search shard, merged | `REPLICA_OK` |
 
 **WGL-SHARD-091** (MUST) A fan-out read MUST run its per-shard queries concurrently and merge them on
 a keyset `(created_at, id)`. A page cursor MUST carry that key, not an offset. Counts MUST be summed.
@@ -633,27 +633,24 @@ never reads the auth shard per call. It is [chapter 70 §11](70-api.md#11-per-rp
 ## 14. Search shards
 
 Today search means exact lookups: by instance id, by correlation id, by workflow and status. Those
-stay on the instance shards' replicas. Full-text and vector search over instance data (context, step
-input and output, errors) go to dedicated search shards.
+stay on the instance shards' replicas. Full-text search over instance data (context, step
+input and output, errors) goes to dedicated search shards.
 
 ### 14.1 Why search does not live on the instance shards
 
-- **Write cost on the hot path.** An HNSW vector index costs far more per insert than the B-tree
+- **Write cost on the hot path.** A GIN full-text index costs far more per insert than the B-tree
   indexes on `wf_token`, and the instance shards are what reach the database ceiling. Indexing in
   the engine transaction would lower steps/s for every workload, searched or not.
-- **Replicas don't help.** Physical replicas carry the primary's indexes. A vector index that serves
+- **Replicas don't help.** Physical replicas carry the primary's indexes. A text index that serves
   queries from a replica has still been maintained on the primary.
-- **Embeddings can't be computed in the transaction anyway.** They come from a model call that is
-  slow and can fail. Indexing has to be asynchronous whatever the storage, so separate storage costs
-  no consistency.
-- **Churn.** Instance rows are short-lived and purged by retention. HNSW handles deletes poorly
-  (tombstones, rebuilds). Search documents can have their own, longer retention.
+- **Churn.** Instance rows are short-lived and purged by retention. Search documents can have their
+  own, longer retention.
 - **Different scaling.** Search load grows with query volume and history size; instance load grows
   with steps/s. Separate shards scale each one on its own.
 
 ### 14.2 Requirements
 
-**Status: implemented**, full text and vectors (step 14 of [§16](#16-delivery-plan)). Not yet:
+**Status: implemented**, full text (step 14 of [§16](#16-delivery-plan)). Not yet:
 - WGL-SHARD-190's rebuild covers what the event log still retains, from which a new consumer starts.
   A rebuild that walks the instance tables is not built.
 - WGL-SHARD-196's delete on request applies once instances can be deleted on request; today only
@@ -671,35 +668,18 @@ Search runs when a topology shard carries the `search` role, or on the one datab
   default 30 days) and rebalances. `WIGGLE_SEARCH_WORKFLOWS` limits which workflows are indexed.
 - **API.** Search is the `SearchInstances` RPC ([chapter 70 §12](70-api.md#12-search)) and the
   portal's `/api/search`.
-- **Vectors (WGL-SHARD-192).** The `Embedder` SPI (`model()`, `dimension()`, `embed(texts)`) ships
-  with `HttpEmbedder` (the OpenAI-compatible `/embeddings` API: OpenAI, Ollama, vLLM, LiteLLM) and
-  `HashingEmbedder` (no model; for development). `WIGGLE_EMBEDDER` picks one.
-  - *Storage.* Vectors live in `wf_search_vec`, one per instance and model, beside their document.
-    Where pgvector is installed, `migrate()` adds a native `vector` column, and each model gets an HNSW
-    index over `vec::vector(<dimension>)`, partial on the model. Elsewhere the embedding is stored as
-    bytes and compared in Java, exactly and by scan.
-  - *Indexing.* The indexer embeds the documents it writes. If embedding fails, the documents stay
-    searchable by text, and the upkeep's backfill embeds any document without a current vector.
-  - *Changing the model.* The registry `wf_search_model` (home shard) holds each model as BUILDING,
-    READY or RETIRED. A new model is BUILDING until every document indexed before it started has a
-    vector; then it is READY and the one it replaces RETIRED, whose vectors are deleted. A semantic
-    query uses the newest READY model, so a node keeps a replaced model's embedder
-    (`WIGGLE_EMBEDDER_PREVIOUS_MODEL`) to answer during the build; without it, semantic search fails
-    as a precondition until the build completes.
-
 **WGL-SHARD-190** (MUST) A search document MUST be derived data: built from an instance shard, never
 the source of truth, and always rebuildable from the instance shards while the instances are
 retained.
 
 **WGL-SHARD-191** (MUST) An indexer MUST feed the search shards asynchronously, as a named consumer
 of the event log ([§10](#10-event-log)). For each event it reads the instance from its shard's
-replica, builds the document (identity, workflow, status, timestamps, the text fields chosen for
-indexing, and the embedding), and upserts it by instance id. Delivery is at-least-once, so the
+replica, builds the document (identity, workflow, status, timestamps, and the text fields chosen for
+indexing), and upserts it by instance id. Delivery is at-least-once, so the
 upsert MUST be idempotent and MUST NOT replace a document with an older `updated_at`.
 
-**WGL-SHARD-192** (MUST) Embeddings MUST come from a pluggable `Embedder` SPI. The model id and
-dimension MUST be stored with each document. Changing the model MUST build a new index alongside
-the old one and switch queries only once it is complete.
+**WGL-SHARD-192** *Withdrawn with vector search.* Search documents carry no embeddings; migration 38
+drops `wf_search_vec` and `wf_search_model`.
 
 **WGL-SHARD-193** (MUST) A document's search shard MUST be chosen by rendezvous hashing of its
 instance id over the `ACTIVE` search shards. Search shards carry no weight in the mint generations.
@@ -796,8 +776,7 @@ One PR each, in this order. Each leaves the build green and a one-shard deployme
 12. **Accounts on the auth shard** ([§13](#13-users-and-authorization)): schema, file import,
     permission-set roles, the cache, and portal enforcement.
 13. **Per-RPC authorization** on gRPC ([WGL-SHARD-187](#13-users-and-authorization)).
-14. **Search shards** ([§14](#14-search-shards)): indexer, `Embedder` SPI, full-text first, then
-    vector.
+14. **Search shards** ([§14](#14-search-shards)): indexer, full text.
 
 ## 17. Open questions
 
@@ -812,11 +791,6 @@ weight.
 - **Which instance fields are searchable.** *Settled for now:* search is opt-in per deployment (a
   search shard, or `WIGGLE_SEARCH_ENABLED`), `WIGGLE_SEARCH_WORKFLOWS` limits it to named workflows,
   and step input and output are not indexed. Per-field selection stays open.
-- **Hybrid ranking.** A semantic search ranks by vector alone. Mixing text rank and vector closeness
-  (reciprocal rank fusion) is left until a workload asks for it.
-- **A search engine other than Postgres.** WGL-SHARD-190 to 198 do not depend on pgvector. A
-  `SearchStore` SPI would let OpenSearch or a dedicated vector database stand in for search shards;
-  pgvector first keeps one operational stack.
 - **Multi-tenancy.** *Settled:* tenants share an engine by naming (`<slug>.<name>` for workflows
   and queues) and prefix-scoped credentials ([WGL-API-116](70-api.md#11-per-rpc-authorization));
   the engine keeps no tenant of its own.
