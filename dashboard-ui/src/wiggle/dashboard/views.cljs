@@ -362,8 +362,8 @@
      [:button.ghost {:on-click act/load-instances! :title "refresh"} "↻"]]))
 
 (defn- attribute-chips [attrs]
-  (for [[k v] attrs]
-    ^{:key k} [:span.badge {:style {:margin-right 4}} (name k) "=" (str v)]))
+  (for [[k v] (sort-by (comp name key) attrs)]
+    ^{:key k} [:span.badge {:style {:display "inline-block" :margin "1px 4px 1px 0"}} (name k) "=" (str v)]))
 
 (defn instances-table []
   (let [{:keys [instances selected]} @db
@@ -382,7 +382,7 @@
                 :on-click #(do (act/load-detail! (:id i)) (st/open-window! :detail))}
            [:td [:code (:id i)]] [:td (:workflow i)]
            [:td [badge (:status i)] (when (:purged i) [:span.badge {:style {:margin-left 6}} "purged"])]
-           (when attrs? [:td (attribute-chips (:attributes i))])
+           (when attrs? [:td.attrs (attribute-chips (:attributes i))])
            [:td.muted (u/ago (:updatedAt i)) " ago"]])]]])))
 
 (defn instances-tab []

@@ -65,6 +65,7 @@ tbody tr { cursor: pointer; }
 tbody tr:hover { background: #1e222b; }
 tbody tr.sel { background: #20293b; }
 td.actions { text-align: right; overflow: visible; }
+td.attrs { white-space: normal; }
 
 /* badges */
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }

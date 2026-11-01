@@ -78,7 +78,10 @@
   (when (and (seq workflow) (get-in @db [:auth :searchEnabled]))
     (-> (api/workflow-graph workflow)
         (.then (fn [g] (when (= workflow (get-in @db [:filter :workflow]))
-                         (swap! db assoc :filter-attrs (vec (:searchAttributes g))))))
+                         (let [declared (vec (:searchAttributes g))]
+                           (swap! db assoc :filter-attrs declared)
+                           (when (and (seq declared) (empty? (get-in @db [:filter :attrs])))
+                             (swap! db assoc-in [:filter :attrs] [{:name (:name (first declared)) :op "eq" :value ""}]))))))
         (.catch (fn [_] nil)))))
 
 (defn load-detail! [id]
