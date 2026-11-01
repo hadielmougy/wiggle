@@ -51,7 +51,7 @@ abstract class JdbcRepository {
         return new Params();
     }
 
-    /** The first row, as JDBI's {@code findOne} answered it for a query on a unique key. */
+    /** The first row of a query on a unique key, or empty. */
     static <T> java.util.Optional<T> first(java.util.List<T> rows) {
         return rows.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(rows.getFirst());
     }
