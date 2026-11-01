@@ -361,15 +361,20 @@
                        :on-click #(do (st/set-filter! :search "") (act/load-instances!))} "✕"])
      [:button.ghost {:on-click act/load-instances! :title "refresh"} "↻"]]))
 
+(defn- attribute-chips [attrs]
+  (for [[k v] attrs]
+    ^{:key k} [:span.badge {:style {:margin-right 4}} (name k) "=" (str v)]))
+
 (defn instances-table []
-  (let [{:keys [instances selected]} @db]
+  (let [{:keys [instances selected]} @db
+        attrs? (some (comp seq :attributes) instances)]
     (if-not (seq instances)
       [:div.empty "no instances"]
       [:<>
        (when (:partial @db)
          [:p.muted {:style {:padding "0 14px"}} "A search shard did not answer; these results are partial."])
        [:table
-       [:thead [:tr [:th "id"] [:th "workflow"] [:th "status"] [:th "updated"]]]
+       [:thead [:tr [:th "id"] [:th "workflow"] [:th "status"] (when attrs? [:th "attributes"]) [:th "updated"]]]
        [:tbody
         (for [i instances]
           ^{:key (:id i)}
@@ -377,6 +382,7 @@
                 :on-click #(do (act/load-detail! (:id i)) (st/open-window! :detail))}
            [:td [:code (:id i)]] [:td (:workflow i)]
            [:td [badge (:status i)] (when (:purged i) [:span.badge {:style {:margin-left 6}} "purged"])]
+           (when attrs? [:td (attribute-chips (:attributes i))])
            [:td.muted (u/ago (:updatedAt i)) " ago"]])]]])))
 
 (defn instances-tab []

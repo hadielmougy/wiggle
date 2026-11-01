@@ -1737,6 +1737,11 @@ public final class JdbcStorage implements Storage {
                     .bind("max", max)
                     .map((rs, ctx) -> searchDoc(rs))
                     .list();
+            return withAttributes(docs);
+        }
+
+        /** {@code docs} with the search attributes stored for them, one statement for all. */
+        private List<Rows.SearchDoc> withAttributes(List<Rows.SearchDoc> docs) {
             if (docs.isEmpty()) return docs;
             Map<String, Map<String, Object>> attributes = new HashMap<>();
             h.createQuery("SELECT instance_id,name,t,s_val,n_val FROM wf_search_attr WHERE instance_id IN (<ids>)")
@@ -1810,10 +1815,13 @@ public final class JdbcStorage implements Storage {
                 query.bind("av" + i, f.value() instanceof Number n ? attributeNumber(n)
                         : (Object) String.valueOf(f.value()));
             }
-            if (dialect.supportsFullText()) {
-                return query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list();
-            }
-            return com.wiggle.server.store.SearchText.match(query.map((rs, ctx) -> searchDoc(rs)).list(), q.text(), q.limit());
+            List<Rows.SearchHit> hits = dialect.supportsFullText()
+                    ? query.map((rs, ctx) -> new Rows.SearchHit(searchDoc(rs), rs.getDouble("score"))).list()
+                    : com.wiggle.server.store.SearchText.match(query.map((rs, ctx) -> searchDoc(rs)).list(), q.text(), q.limit());
+            List<Rows.SearchDoc> docs = withAttributes(hits.stream().map(Rows.SearchHit::doc).toList());
+            List<Rows.SearchHit> out = new ArrayList<>(hits.size());
+            for (int i = 0; i < hits.size(); i++) out.add(new Rows.SearchHit(docs.get(i), hits.get(i).score()));
+            return out;
         }
 
         /** The condition that the document has attribute {@code f}, as a semi-join on the value index. */

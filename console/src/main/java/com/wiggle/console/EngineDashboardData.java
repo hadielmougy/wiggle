@@ -53,7 +53,7 @@ public final class EngineDashboardData implements DashboardData {
                 attrFilters(workflow, attributes));
         return Optional.of(new SearchView(r.hits().stream()
                 .map(h -> new SearchHitView(h.instanceId(), h.workflow(), h.version(), h.status(), h.correlationId(),
-                        h.updatedAt(), h.score(), h.purged()))
+                        h.updatedAt(), h.score(), h.purged(), h.attributes()))
                 .toList(), r.partial()));
     }
 

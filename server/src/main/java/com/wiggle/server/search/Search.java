@@ -6,6 +6,7 @@ import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Full-text search over instances, as callers use it: limited to the workflows the caller may read,
@@ -15,7 +16,8 @@ public final class Search {
 
     /** One hit: the instance as it was last indexed. */
     public record Hit(String instanceId, String workflow, int version, String status, String correlationId,
-                      long createdAt, long updatedAt, double score, boolean purged) { }
+                      long createdAt, long updatedAt, double score, boolean purged,
+                      Map<String, Object> attributes) { }
 
     /** The hits, best first, and whether a search shard could not answer. */
     public record Result(List<Hit> hits, boolean partial) { }
@@ -31,7 +33,7 @@ public final class Search {
         return r.hits().stream().map(h -> {
             Rows.SearchDoc d = h.doc();
             return new Hit(d.instanceId(), d.workflow(), d.version(), d.status(), d.correlationId(), d.createdAt(),
-                    d.updatedAt(), h.score(), engine.instance(d.instanceId()).isEmpty());
+                    d.updatedAt(), h.score(), engine.instance(d.instanceId()).isEmpty(), d.attributes());
         }).toList();
     }
 

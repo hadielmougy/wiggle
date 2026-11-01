@@ -5,6 +5,7 @@ import com.wiggle.core.NodeStats;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -76,7 +77,8 @@ public interface DashboardData {
     record SearchView(List<SearchHitView> hits, boolean partial) {}
 
     record SearchHitView(String instanceId, String workflow, int version, String status, String correlationId,
-                         long updatedAt, double score, boolean purged) {}
+                         long updatedAt, double score, boolean purged,
+                         Map<String, Object> attributes) {}
 
     record InstanceDetail(InstanceView instance, List<TokenView> tokens) {}
 
