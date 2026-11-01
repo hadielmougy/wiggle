@@ -14,6 +14,7 @@ import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Calls the control plane over HTTP: {@code POST /v1/<Method>} with a JSON body, as
@@ -23,7 +24,9 @@ final class HttpTransport implements AutoCloseable {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
 
-    private final HttpClient http;
+    /** Calls go to these in turn; each does its I/O, and finishes each response, on its own selector thread. */
+    private final HttpClient[] clients;
+    private final AtomicInteger next = new AtomicInteger();
     private final String base;
     private final String authorization;
 
@@ -31,11 +34,25 @@ final class HttpTransport implements AutoCloseable {
         boolean secure = requireTls || tls.any();
         HttpClient.Builder b = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(CONNECT_TIMEOUT);
+                .connectTimeout(CONNECT_TIMEOUT)
+                .executor(Runnable::run);
         if (secure) b.sslContext(Tls.sslContext(tls));   // no truststore: the JVM default trust
-        this.http = b.build();
+        this.clients = new HttpClient[clientCount()];
+        for (int i = 0; i < clients.length; i++) clients[i] = b.build();
         this.base = (secure ? "https://" : "http://") + stripScheme(target);
         this.authorization = apiKey == null || apiKey.isBlank() ? null : "Bearer " + apiKey.trim();
+    }
+
+    /** {@code -Dwiggle.http.clients}, else {@code WIGGLE_HTTP_CLIENTS}; by default half the processors, at least 2. */
+    static int clientCount() {
+        String v = System.getProperty("wiggle.http.clients");
+        if (v == null || v.isBlank()) v = System.getenv("WIGGLE_HTTP_CLIENTS");
+        try {
+            if (v != null && !v.isBlank()) return Math.max(1, Integer.parseInt(v.trim()));
+        } catch (NumberFormatException ignored) {
+            // the default below
+        }
+        return Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
     }
 
     private static String stripScheme(String target) {
@@ -53,6 +70,7 @@ final class HttpTransport implements AutoCloseable {
         if (authorization != null) b.header("Authorization", authorization);
         HttpResponse<String> resp;
         try {
+            HttpClient http = clients[Math.floorMod(next.getAndIncrement(), clients.length)];
             resp = http.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (HttpTimeoutException e) {
             throw new RpcException(0, "DEADLINE_EXCEEDED", e.getMessage(), false, e);
@@ -88,7 +106,7 @@ final class HttpTransport implements AutoCloseable {
     }
 
     @Override public void close() {
-        http.shutdownNow();
+        for (HttpClient http : clients) http.shutdownNow();
     }
 
     /**

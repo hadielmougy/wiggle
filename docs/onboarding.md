@@ -548,6 +548,9 @@ JVM: `-Dwiggle.rpc.maxAttempts` / `WIGGLE_RPC_MAX_ATTEMPTS` (default `5`; `1` di
 `-Dwiggle.rpc.retryDelayMillis` / `WIGGLE_RPC_RETRY_DELAY_MILLIS` (default `200`, exponential
 backoff). For exactly-once starts across a retried failover, pass a `correlationId` to `start`.
 
+**Client connections.** A `WiggleClient` spreads its calls over several HTTP clients, each with its own
+I/O thread: `-Dwiggle.http.clients` / `WIGGLE_HTTP_CLIENTS` (default half the processors, at least 2).
+
 ### 6.6 Logging
 
 Wiggle logs through the JDK's `System.Logger` (routes to `java.util.logging`), so there's no
