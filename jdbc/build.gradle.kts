@@ -7,12 +7,7 @@ dependencies {
     // (postgres/mysql/oracle) inherit it without re-declaring it.
     api("com.zaxxer:HikariCP:${property("hikariVersion")}")
 
-    // Row mapping and statement binding over the store's own connections. Deliberately
-    // `implementation`: no JDBI type appears on the Storage/Tx API, so it stays off a consumer's
-    // compile classpath.
-    implementation("org.jdbi:jdbi3-core:${property("jdbiVersion")}")
-
-    // Transactions run through Spring's DataSourceTransactionManager. No Spring type appears on the
-    // Storage/Tx API either.
+    // Transactions run through Spring's DataSourceTransactionManager and statements through its
+    // JdbcTemplate. No Spring type appears on the Storage/Tx API.
     implementation("org.springframework:spring-jdbc:${property("springFrameworkVersion")}")
 }

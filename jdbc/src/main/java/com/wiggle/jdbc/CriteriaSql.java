@@ -7,7 +7,6 @@ import com.wiggle.core.criteria.Predicate.And;
 import com.wiggle.core.criteria.Predicate.Comparison;
 import com.wiggle.core.criteria.Predicate.Not;
 import com.wiggle.core.criteria.Predicate.Or;
-import org.jdbi.v3.core.statement.SqlStatement;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
@@ -33,8 +32,8 @@ record CriteriaSql(String sql, Map<String, Object> binds) {
         return new CriteriaSql(c.sql.toString(), Map.copyOf(c.binds));
     }
 
-    void bind(SqlStatement<?> q) {
-        binds.forEach(q::bind);
+    void bind(Params p) {
+        binds.forEach(p::add);
     }
 
     /** An attribute literal as its column stores it: numbers as DECIMAL, booleans as text. */
