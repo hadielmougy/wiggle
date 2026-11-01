@@ -2,6 +2,7 @@ package com.wiggle.client.flow;
 
 import com.wiggle.core.*;
 import com.wiggle.core.criteria.DispatchAttribute;
+import com.wiggle.core.criteria.SearchAttribute;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -33,6 +34,7 @@ final class Pipeline {
     private String defaultQueue;
     private ExecutionMode executionMode = ExecutionMode.DEFAULT;
     private final List<DispatchAttribute> attributes = new ArrayList<>();
+    private final List<SearchAttribute> searchAttributes = new ArrayList<>();
     private int counter;
 
     Pipeline(String name, int version, RetryPolicy defaultRetry) {
@@ -50,6 +52,9 @@ final class Pipeline {
 
     /** Declares a value queue criteria can test; see {@link GraphBuilder#attribute}. */
     void attribute(DispatchAttribute attribute) { attributes.add(attribute); }
+
+    /** Declares a value search can filter on; see {@link GraphBuilder#searchAttribute}. */
+    void searchAttribute(SearchAttribute attribute) { searchAttributes.add(attribute); }
 
     /** SERVER, LOCAL_SYNC or LOCAL_ASYNC: a spec declares how workers run it. */
     void executionMode(ExecutionMode mode) {
@@ -220,7 +225,7 @@ final class Pipeline {
         if (startNode == null) throw new IllegalStateException("workflow defines no steps");
         WorkflowDefinition def = new WorkflowDefinition(
                 name, version, startNode, Map.copyOf(nodes), Set.copyOf(queues), executionMode, copyOf(checkpoints),
-                attributes);
+                attributes, searchAttributes);
         validate(def);
         return new FlowSpec(def);
     }

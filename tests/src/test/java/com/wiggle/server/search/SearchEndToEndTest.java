@@ -1,10 +1,12 @@
 package com.wiggle.server.search;
 
 import com.wiggle.client.WiggleClient;
+import com.wiggle.client.WiggleClient.AttributeFilter;
 import com.wiggle.client.WiggleClient.SearchResult;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Tls;
+import com.wiggle.core.criteria.AttrType;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -114,6 +116,52 @@ class SearchEndToEndTest {
             assertTrue(server.search().isEmpty());
             assertEquals(409, assertThrows(WiggleApiException.class,
                     () -> c.search("x", null, null, null, null, 10, false)).status());
+        }
+    }
+
+    private static final FlowSpec SHIPMENTS = FlowSpec.define("shipments", 1, Map.class, Steps.class, (f, s) -> f
+            .searchAttribute("region", AttrType.STRING, "customer.region")
+            .searchAttribute("total", AttrType.DECIMAL, "total")
+            .searchAttribute("priority", AttrType.BOOLEAN, "priority")
+            .thenApply(s::work));
+
+    @Test @DisplayName("instances are found by the search attributes their flow declares, with or without words")
+    void findsByDeclaredAttributes() throws Exception {
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.GrpcAuth.OFF)).start();
+             WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
+            c.register(SHIPMENTS);
+            c.register(ORDERS);
+            String eu = c.start("shipments", Map.of("customer", Map.of("region", "EU"), "total", 120, "priority", true, "note", "fragile"), null, null);
+            String us = c.start("shipments", Map.of("customer", Map.of("region", "US"), "total", 80.5, "priority", false, "note", "fragile"), null, null);
+            c.start("orders", Map.of("customer", Map.of("region", "EU")), null, null);
+
+            await(() -> c.search("", "shipments", null, null, null, 10, false), x -> x.hits().size() == 2);
+            await(() -> c.search("", "orders", null, null, null, 10, false), x -> x.hits().size() == 1);
+
+            assertEquals(List.of(eu), ids(c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.eq("region", "EU")))));
+            assertEquals(List.of(eu), ids(c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.gt("total", 100)))));
+            assertEquals(List.of(us), ids(c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.lt("total", new java.math.BigDecimal("80.51"))))));
+            assertEquals(List.of(us), ids(c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.eq("priority", false)))));
+            assertEquals(List.of(eu), ids(c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.eq("region", "EU"), AttributeFilter.ge("total", 120)))));
+            assertEquals(List.of(), ids(c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.eq("region", "EU"), AttributeFilter.lt("total", 100)))));
+            assertEquals(Set.of(eu, us), Set.copyOf(ids(c.search("fragile", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.ge("total", 0))))), "words and attributes together");
+
+            WiggleApiException noWorkflow = assertThrows(WiggleApiException.class, () -> c.search("", null, null, null, null, 10, false,
+                    List.of(AttributeFilter.eq("region", "EU"))));
+            assertEquals(400, noWorkflow.status());
+            assertTrue(noWorkflow.getMessage().contains("workflow"), noWorkflow.getMessage());
+            assertEquals(400, assertThrows(WiggleApiException.class, () -> c.search("", "shipments", null, null, null, 10, false,
+                    List.of(AttributeFilter.eq("region", "EU"), AttributeFilter.eq("region", "EU"), AttributeFilter.eq("region", "EU"),
+                            AttributeFilter.eq("region", "EU"), AttributeFilter.eq("region", "EU"), AttributeFilter.eq("region", "EU"),
+                            AttributeFilter.eq("region", "EU"), AttributeFilter.eq("region", "EU"), AttributeFilter.eq("region", "EU")))).status(),
+                    "at most eight filters");
         }
     }
 }

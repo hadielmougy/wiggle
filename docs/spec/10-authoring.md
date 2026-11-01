@@ -270,8 +270,17 @@ an escalation branch without a timeout, and a nested body that defines no steps.
 build, a missing successor, a malformed fan-out, an unknown edge target, a second `build()`, a fork
 left un-combined, and `checkpoint()` in a position that is not immediately after a step.
 
+**WGL-AUTH-094** (MAY) A flow MAY declare **search attributes** with `searchAttribute(name, type, path)`:
+`path` is a dotted path into the instance's context, read as `STRING`, `LONG`, `DECIMAL` or `BOOLEAN`
+(a value that is absent or does not fit leaves the attribute absent). A name MUST match
+`[a-z][a-z0-9_]{0,62}` and be declared once, and a flow MUST declare at most 16. They are part of the
+definition: they are serialised with it and counted in its fingerprint, so changing them is a new
+version, while a flow that declares none keeps the fingerprint it had before they existed. They are
+independent of the attributes of WGL-QC (queue criteria), which are read per step. Search reads them
+([chapter 70 §12](70-api.md#12-search)).
+
 *Verified by:* `client/…/PipelineTest`, `client/…/FlowGuardrailsTest`,
-`client/…/CompensationDeclarationTest`.
+`client/…/CompensationDeclarationTest`, `core/criteria/SearchAttributeTest`.
 
 ## 5. Versioning
 

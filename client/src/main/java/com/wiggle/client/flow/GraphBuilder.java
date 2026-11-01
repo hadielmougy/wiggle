@@ -3,6 +3,7 @@ package com.wiggle.client.flow;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.criteria.AttrType;
 import com.wiggle.core.criteria.DispatchAttribute;
+import com.wiggle.core.criteria.SearchAttribute;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
@@ -465,6 +466,18 @@ final class GraphBuilder {
      */
     public GraphBuilder attribute(String name, AttrType type, String path) {
         pipeline.attribute(new DispatchAttribute(name, type, path));
+        return this;
+    }
+
+    /**
+     * Declares {@code name}, the value at the dotted {@code path} of the instance's context read as
+     * {@code type}, for search to filter on (see {@code WiggleClient.AttributeFilter}). The search
+     * indexer reads it each time it indexes the instance, so it follows the context as it changes; a
+     * path that does not resolve, or a value that does not fit, leaves it absent. Part of the
+     * version: changing the declaration needs a new one.
+     */
+    public GraphBuilder searchAttribute(String name, AttrType type, String path) {
+        pipeline.searchAttribute(new SearchAttribute(name, type, path));
         return this;
     }
 

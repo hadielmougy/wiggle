@@ -695,6 +695,11 @@ public final class WiggleFlow<T> {
         return record(null, b -> b.attribute(name, type, path));
     }
 
+    /** Declares a value search can filter on; see {@link GraphBuilder#searchAttribute}. */
+    public WiggleFlow<T> searchAttribute(String name, AttrType type, String path) {
+        return record(null, b -> b.searchAttribute(name, type, path));
+    }
+
     /** Sets the queue used by every step defined after this point. */
     public WiggleFlow<T> defaultQueue(String queue) {
         return record(null, b -> b.defaultQueue(queue));

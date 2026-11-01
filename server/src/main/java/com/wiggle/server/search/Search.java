@@ -1,6 +1,7 @@
 package com.wiggle.server.search;
 
 import com.wiggle.server.auth.Scope;
+import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Rows;
 
@@ -45,10 +46,23 @@ public final class Search {
      */
     public Result search(String text, String workflow, String status, Long from, Long to, int limit,
                          boolean partialOk, Scope readable) {
+        return search(text, workflow, status, from, to, limit, partialOk, readable, List.of());
+    }
+
+    /**
+     * {@link #search(String, String, String, Long, Long, int, boolean, Scope)}, keeping the instances
+     * whose search attributes satisfy every filter. Attributes are declared per flow, so the filters
+     * need {@code workflow}.
+     */
+    public Result search(String text, String workflow, String status, Long from, Long to, int limit,
+                         boolean partialOk, Scope readable, List<Rows.AttrFilter> attributes) {
+        if (!attributes.isEmpty() && workflow == null) {
+            throw EngineException.badRequest("attribute filters need a workflow: search attributes are declared per flow");
+        }
         Scope workflows = (readable == null ? Scope.ALL : readable).narrow(workflow);
         if (workflows.isEmpty()) return new Result(List.of(), false);
         SearchIndex.Result r = index.search(new Rows.SearchQuery(text, workflows, status, from, to,
-                Math.max(1, Math.min(limit, 1000))), partialOk);
+                Math.max(1, Math.min(limit, 1000)), attributes), partialOk);
         return new Result(hits(r), r.partial());
     }
 }

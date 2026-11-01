@@ -660,6 +660,10 @@ Search runs when a topology shard carries the `search` role, or on the one datab
 `WIGGLE_SEARCH_ENABLED=true` (WGL-SHARD-197, which warns at startup).
 - **Indexer.** `SearchIndexer` runs on the leader as the `wiggle.search` consumer of the event log. It
   reads each instance from a replica when the replica has caught up to the event, else from the primary.
+- **Attributes.** A document also carries the values of the search attributes its flow version declares
+  (WGL-AUTH-094), read from the instance's context. They are stored in `wf_search_attr` beside the
+  document, written and deleted with it in the same transaction, and moved with it by the rebalance.
+  A filter on them is a semi-join on the value index, so it reads the matching rows, not the table.
 - **Document text.** The text is the correlation id, the context JSON, the termination reason and the
   error, capped at 64 KB. It is matched with Postgres `tsvector` over the `simple` configuration (words
   as written, no stemming) and ranked by `ts_rank`. Other databases, and the in-memory store, match

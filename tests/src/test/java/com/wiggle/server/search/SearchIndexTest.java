@@ -132,7 +132,8 @@ class SearchIndexTest {
     void rebalance() {
         ShardedStorage storage = storage();
         new SearchIndex(storage, active(1, 2, 3)).index(java.util.stream.IntStream.range(0, 300)
-                .mapToObj(i -> doc("wfi.s0.r" + i, "plum", 100)).toList());
+                .mapToObj(i -> new Rows.SearchDoc("wfi.s0.r" + i, "wf", 1, "RUNNING", null, "plum", 100, 100,
+                        java.util.Map.of("region", "EU"))).toList());
         int onThree = shards.get(3).docs();
         assertTrue(onThree > 0);
 
@@ -144,6 +145,9 @@ class SearchIndexTest {
         assertEquals(onThree, moved);
         assertEquals(0, shards.get(3).docs());
         assertEquals(300, draining.search(query("plum"), false).hits().size(), "nothing is lost or doubled");
+        assertEquals(300, draining.search(new Rows.SearchQuery(null, com.wiggle.server.auth.Scope.of("wf"), null, null, null,
+                1000, List.of(new Rows.AttrFilter("region", com.wiggle.core.criteria.Op.EQUAL, "EU"))), false).hits().size(),
+                "a document keeps its attributes when it moves");
         assertEquals(0, draining.rebalance(50), "a second pass finds nothing to move");
     }
 

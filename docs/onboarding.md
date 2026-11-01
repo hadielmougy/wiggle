@@ -678,6 +678,36 @@ for (WiggleClient.SearchHit hit : r.hits()) {
 }
 ```
 
+**Search attributes.** Words find text; to filter on a value (a region, an amount, a flag), have the
+flow declare it. The indexer then reads it from the instance's context each time it indexes the
+instance, so it follows the context as it changes, and keeps it in a table of its own with an index
+on the value. Declare a text, whole-number, decimal or boolean value by its dotted path in the
+context; a flow declares at most 16, and changing the declaration is a new version.
+
+<!-- snippet: search-attributes/declare -->
+```java
+FlowSpec orders = FlowSpec.define("regional-orders", 1, QueuesSnippet.RegionalOrder.class,
+        QueuesSnippet.RegionalSteps.class, (f, s) -> f
+        .searchAttribute("region", AttrType.STRING, "customer.region")   // read from the instance's context
+        .searchAttribute("total", AttrType.DECIMAL, "total")
+        .thenApply(s::validate)
+        .thenApply(s::charge, "payments"));
+```
+
+Then filter on them. Attributes are declared per flow, so a search that filters on them must name the
+workflow. Text and boolean attributes compare for equality; numbers also by `<`, `<=`, `>` and
+`>=`. Every filter must hold (at most eight), and they combine with the words, which may be empty.
+An instance that lacks the attribute, or holds it as another type, does not match. Only instances
+indexed after the flow declared the attribute carry it.
+
+<!-- snippet: search-attributes/query -->
+```java
+// EU orders of 1000 or more: the attributes need the workflow, the words are optional
+WiggleClient.SearchResult r = client.search("", "regional-orders", null, null, null, 50, false, List.of(
+        AttributeFilter.eq("region", "eu"),
+        AttributeFilter.ge("total", 1000)));
+```
+
 In the portal, pick **full text** next to the Instances search box. Searches see only the workflows
 the caller may read. With several search shards, documents spread by instance id; add or drain one
 and the leader moves documents in the background, a batch a minute.

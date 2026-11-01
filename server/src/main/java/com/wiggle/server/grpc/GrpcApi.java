@@ -602,7 +602,7 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             int limit = req.getLimit() > 0 ? req.getLimit() : 20;
             SearchResult.Builder out = SearchResult.newBuilder();
             com.wiggle.server.search.Search.Result r = search.search(req.getText(), workflow, status, from, to,
-                    limit, req.getPartialOk(), authz.scope(Permissions.READ));
+                    limit, req.getPartialOk(), authz.scope(Permissions.READ), attributeFilters(req));
             out.setPartial(r.partial());
             for (com.wiggle.server.search.Search.Hit h : r.hits()) {
                 out.addHits(SearchHit.newBuilder().setInstanceId(h.instanceId()).setWorkflow(h.workflow())
@@ -613,6 +613,30 @@ public final class GrpcApi extends WiggleControlPlaneGrpc.WiggleControlPlaneImpl
             }
             return out.build();
         });
+    }
+
+    private static List<com.wiggle.server.store.Rows.AttrFilter> attributeFilters(SearchRequest req) {
+        List<com.wiggle.server.store.Rows.AttrFilter> out = new ArrayList<>();
+        try {
+            for (SearchAttributeFilter f : req.getAttributesList()) {
+                Object value = switch (f.getValue().getVCase()) {
+                    case TEXT -> f.getValue().getText();
+                    case INTEGER -> f.getValue().getInteger();
+                    case DECIMAL -> new java.math.BigDecimal(f.getValue().getDecimal());
+                    case FLAG -> f.getValue().getFlag();
+                    case V_NOT_SET -> throw new IllegalArgumentException("attribute '" + f.getName() + "' has no value");
+                };
+                out.add(new com.wiggle.server.store.Rows.AttrFilter(f.getName(),
+                        com.wiggle.core.criteria.Op.valueOf(f.getOp()), value));
+            }
+            if (out.size() > com.wiggle.server.store.Rows.SearchQuery.MAX_ATTRIBUTE_FILTERS) {
+                throw new IllegalArgumentException("a search filters on at most "
+                        + com.wiggle.server.store.Rows.SearchQuery.MAX_ATTRIBUTE_FILTERS + " attributes");
+            }
+        } catch (IllegalArgumentException e) {
+            throw EngineException.badRequest(e.getMessage());
+        }
+        return out;
     }
 
     @Override

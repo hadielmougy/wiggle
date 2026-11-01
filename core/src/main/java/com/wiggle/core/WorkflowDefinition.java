@@ -1,6 +1,7 @@
 package com.wiggle.core;
 
 import com.wiggle.core.criteria.DispatchAttribute;
+import com.wiggle.core.criteria.SearchAttribute;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -11,11 +12,13 @@ import java.util.*;
  * positive; a published version is immutable, which the engine enforces by comparing
  * {@link #fingerprint()} on re-registration. Running instances always keep executing the exact
  * graph they started on. {@code attributes} are the values queue criteria can test, read from the
- * context of each step as it becomes ready.
+ * context of each step as it becomes ready. {@code searchAttributes} are the values search can
+ * filter on, read from the instance's context each time it is indexed.
  */
 public record WorkflowDefinition(String name, int version, String startNode,
                                  Map<String, Node> nodes, Set<String> queues, ExecutionMode executionMode,
-                                 Set<String> checkpoints, List<DispatchAttribute> attributes) {
+                                 Set<String> checkpoints, List<DispatchAttribute> attributes,
+                                 List<SearchAttribute> searchAttributes) {
 
     public WorkflowDefinition {
         if (version <= 0) {
@@ -24,6 +27,14 @@ public record WorkflowDefinition(String name, int version, String startNode,
         executionMode = executionMode == null ? ExecutionMode.DEFAULT : executionMode;
         attributes = attributes == null ? List.of() : List.copyOf(attributes);
         DispatchAttribute.validate(attributes);
+        searchAttributes = searchAttributes == null ? List.of() : List.copyOf(searchAttributes);
+        SearchAttribute.validate(searchAttributes);
+    }
+
+    public WorkflowDefinition(String name, int version, String startNode,
+                              Map<String, Node> nodes, Set<String> queues, ExecutionMode executionMode,
+                              Set<String> checkpoints, List<DispatchAttribute> attributes) {
+        this(name, version, startNode, nodes, queues, executionMode, checkpoints, attributes, List.of());
     }
 
     public WorkflowDefinition(String name, int version, String startNode,
@@ -75,6 +86,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
         m.put("executionMode", executionMode.name());
         if (!checkpoints.isEmpty()) m.put("checkpoints", new ArrayList<>(new TreeSet<>(checkpoints)));
         if (!attributes.isEmpty()) m.put("attributes", attributesJson(attributes));
+        if (!searchAttributes.isEmpty()) m.put("searchAttributes", searchAttributesJson(searchAttributes));
         return m;
     }
 
@@ -102,8 +114,10 @@ public record WorkflowDefinition(String name, int version, String startNode,
         for (Object c : Json.asArray(m.get("checkpoints"))) checkpoints.add(String.valueOf(c));
         List<DispatchAttribute> attributes = new ArrayList<>();
         for (Object a : Json.asArray(m.get("attributes"))) attributes.add(DispatchAttribute.fromJson(a));
+        List<SearchAttribute> searchAttributes = new ArrayList<>();
+        for (Object a : Json.asArray(m.get("searchAttributes"))) searchAttributes.add(SearchAttribute.fromJson(a));
         return new WorkflowDefinition(Json.reqStr(m, "name"), (int) Json.num(m, "version", 0),
-                Json.reqStr(m, "startNode"), nodes, queues, mode, checkpoints, attributes);
+                Json.reqStr(m, "startNode"), nodes, queues, mode, checkpoints, attributes, searchAttributes);
     }
 
     /** The current fingerprint algorithm, stored beside a fingerprint so a later change to the
@@ -112,7 +126,7 @@ public record WorkflowDefinition(String name, int version, String startNode,
 
     /** This definition's {@link #fingerprint(String, String, Collection, ExecutionMode, Set) fingerprint}. */
     public String fingerprint() {
-        return fingerprint(name, startNode, nodes.values(), executionMode, checkpoints, attributes);
+        return fingerprint(name, startNode, nodes.values(), executionMode, checkpoints, attributes, searchAttributes);
     }
 
     public int numberOfNodes() {
@@ -136,6 +150,13 @@ public record WorkflowDefinition(String name, int version, String startNode,
     public static String fingerprint(String name, String startNode, Collection<Node> nodes,
                                      ExecutionMode executionMode, Set<String> checkpoints,
                                      List<DispatchAttribute> attributes) {
+        return fingerprint(name, startNode, nodes, executionMode, checkpoints, attributes, List.of());
+    }
+
+    /** The same, with declared search attributes; a graph without any digests exactly as it did before them. */
+    public static String fingerprint(String name, String startNode, Collection<Node> nodes,
+                                     ExecutionMode executionMode, Set<String> checkpoints,
+                                     List<DispatchAttribute> attributes, List<SearchAttribute> searchAttributes) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
         m.put("startNode", startNode);
@@ -145,6 +166,9 @@ public record WorkflowDefinition(String name, int version, String startNode,
         m.put("executionMode", (executionMode == null ? ExecutionMode.DEFAULT : executionMode).name());
         m.put("checkpoints", new ArrayList<>(new TreeSet<>(checkpoints == null ? Set.of() : checkpoints)));
         if (attributes != null && !attributes.isEmpty()) m.put("attributes", attributesJson(attributes));
+        if (searchAttributes != null && !searchAttributes.isEmpty()) {
+            m.put("searchAttributes", searchAttributesJson(searchAttributes));
+        }
         byte[] digest;
         try {
             digest = MessageDigest.getInstance("SHA-256")
@@ -155,6 +179,12 @@ public record WorkflowDefinition(String name, int version, String startNode,
         StringBuilder hex = new StringBuilder(64);
         for (byte b : digest) hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
         return hex.toString();
+    }
+
+    private static List<Object> searchAttributesJson(List<SearchAttribute> attributes) {
+        List<Object> out = new ArrayList<>();
+        attributes.stream().sorted(Comparator.comparing(SearchAttribute::name)).forEach(a -> out.add(a.toJson()));
+        return out;
     }
 
     private static List<Object> attributesJson(List<DispatchAttribute> attributes) {

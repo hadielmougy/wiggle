@@ -128,8 +128,21 @@ public final class WiggleClient implements AutoCloseable {
      */
     public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
                                int limit, boolean partialOk) {
+        return search(text, workflow, status, updatedFrom, updatedTo, limit, partialOk, List.of());
+    }
+
+    /**
+     * {@link #search(String, String, String, Long, Long, int, boolean)}, keeping the instances whose
+     * search attributes satisfy every filter. A flow declares them with
+     * {@code GraphBuilder.searchAttribute}, so the filters need a {@code workflow}; the server answers
+     * 400 without one. An instance that does not hold an attribute, or holds it as another type, does
+     * not match. Empty {@code text} matches on the filters alone.
+     */
+    public SearchResult search(String text, String workflow, String status, Long updatedFrom, Long updatedTo,
+                               int limit, boolean partialOk, List<AttributeFilter> attributes) {
         com.wiggle.proto.SearchRequest.Builder req = com.wiggle.proto.SearchRequest.newBuilder()
                 .setText(text == null ? "" : text).setLimit(limit).setPartialOk(partialOk);
+        for (AttributeFilter f : attributes) req.addAttributes(f.toProto());
         if (workflow != null) req.setWorkflow(workflow);
         if (status != null) req.setStatus(status);
         if (updatedFrom != null) req.setUpdatedFrom(updatedFrom);
@@ -142,6 +155,32 @@ public final class WiggleClient implements AutoCloseable {
                     h.getScore(), h.getPurged()));
         }
         return new SearchResult(hits, r.getPartial());
+    }
+
+    /**
+     * A condition on a search attribute: {@code value} is a String, Long (or Integer), BigDecimal (or
+     * Double) or Boolean. Text and boolean attributes are compared for equality only.
+     */
+    public record AttributeFilter(String name, com.wiggle.core.criteria.Op op, Object value) {
+        public static AttributeFilter eq(String name, Object value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.EQUAL, value); }
+        public static AttributeFilter lt(String name, Number value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.LESS_THAN, value); }
+        public static AttributeFilter le(String name, Number value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.LESS_THAN_OR_EQUAL, value); }
+        public static AttributeFilter gt(String name, Number value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.GREATER_THAN, value); }
+        public static AttributeFilter ge(String name, Number value) { return new AttributeFilter(name, com.wiggle.core.criteria.Op.GREATER_THAN_OR_EQUAL, value); }
+
+        com.wiggle.proto.SearchAttributeFilter toProto() {
+            com.wiggle.proto.CriteriaLiteral.Builder v = com.wiggle.proto.CriteriaLiteral.newBuilder();
+            switch (value) {
+                case String s -> v.setText(s);
+                case Boolean b -> v.setFlag(b);
+                case Long l -> v.setInteger(l);
+                case Integer i -> v.setInteger(i);
+                case Number n -> v.setDecimal(new java.math.BigDecimal(n.toString()).toPlainString());
+                case null, default -> throw new IllegalArgumentException("attribute '" + name
+                        + "' compares with a String, Number or Boolean, got " + value);
+            }
+            return com.wiggle.proto.SearchAttributeFilter.newBuilder().setName(name).setOp(op.name()).setValue(v).build();
+        }
     }
 
     /** One search hit; {@code purged} when the instance is gone and only its document remains. */

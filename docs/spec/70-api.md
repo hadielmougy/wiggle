@@ -354,5 +354,22 @@ nothing rather than failing.
 **WGL-API-124** *Withdrawn with vector search.* `SearchRequest.semantic` and `SearchResult.model` (field
 numbers 8 and 3) are reserved.
 
+**WGL-API-125** (MUST) `SearchRequest.attributes` MUST keep only the instances whose search attributes
+([WGL-AUTH-094](10-authoring.md)) satisfy every filter, together with the other conditions. A filter
+names an attribute and compares it with `EQUAL`; a numeric one may also use `LESS_THAN`,
+`LESS_THAN_OR_EQUAL`, `GREATER_THAN` or `GREATER_THAN_OR_EQUAL`. A value is text, an integer, a decimal
+or a flag, and matches an attribute of that kind only; numbers compare by value, so `5` equals `5.0`.
+An instance that lacks the attribute does not match. An empty `text` is allowed, to filter on the
+attributes alone.
+
+**WGL-API-126** (MUST) A search with attribute filters MUST name a `workflow`, since attributes are
+declared per flow, and MUST carry at most 8 filters; otherwise it fails `INVALID_ARGUMENT` (400), as it
+does for an unknown operator, a value of the wrong kind for the operator, or a missing value. The
+filters are applied inside each shard's query, on a value index, after the scoping of WGL-API-122.
+
+**WGL-API-127** (MUST) An instance's attributes MUST be those its flow's version declared, read from
+its context as last indexed, so they follow the context and are replaced, not merged, each time.
+Instances indexed before a version declared an attribute do not carry it.
+
 *Verified by:* `server/search/SearchEndToEndTest`, `server/search/SearchIndexTest`,
 `server/store/StorageContract` (search chapter, on every backend), `postgres/PostgresTopologyTest`.

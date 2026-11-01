@@ -5,6 +5,7 @@ import com.wiggle.core.InstanceStatus;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
+import com.wiggle.core.criteria.Op;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.core.WorkflowVersion;
@@ -1896,6 +1897,75 @@ abstract class StorageContract {
         assertEquals(List.of(prefix + "1", prefix + "2"), page.stream().map(Rows.SearchDoc::instanceId).toList());
         assertEquals(prefix + "3", storage.inTx(tx -> tx.searchDocsAfter(prefix + "2", 1)).getFirst().instanceId());
         storage.inTx(tx -> { mine.forEach(tx::deleteSearchDoc); return null; });
+    }
+
+    private Rows.SearchDoc attrDoc(String id, String workflow, long updatedAt, Map<String, Object> attributes) {
+        return new Rows.SearchDoc(id, workflow, 1, "RUNNING", null, "x", updatedAt, updatedAt, attributes);
+    }
+
+    private List<String> attrSearch(String workflow, Rows.AttrFilter... filters) {
+        return storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(null, Scope.of(workflow), null, null, null, 100,
+                        List.of(filters))))
+                .stream().map(h -> h.doc().instanceId()).sorted().toList();
+    }
+
+    @Test
+    @DisplayName("search documents are found by the attributes their flow declares: equality, ranges, all of several")
+    void searchByAttributes() {
+        String wf = "attrs-" + run;
+        String eu = id("wfi"), us = id("wfi"), bare = id("wfi"), typed = id("wfi"), other = id("wfi");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 1, Map.of("region", "EU", "total", 120L, "vip", true,
+                    "rate", new java.math.BigDecimal("0.25"))));
+            tx.upsertSearchDoc(attrDoc(us, wf, ANCIENT + 2, Map.of("region", "US", "total", 80L, "vip", false,
+                    "rate", new java.math.BigDecimal("1.5"))));
+            tx.upsertSearchDoc(attrDoc(bare, wf, ANCIENT + 3, Map.of()));
+            tx.upsertSearchDoc(attrDoc(typed, wf, ANCIENT + 4, Map.of("region", 7L)));
+            tx.upsertSearchDoc(attrDoc(other, wf + "-2", ANCIENT + 5, Map.of("region", "EU")));
+            return null;
+        });
+        Rows.AttrFilter region = new Rows.AttrFilter("region", Op.EQUAL, "EU");
+        assertEquals(List.of(eu), attrSearch(wf, region), "text equality, in this flow only");
+        assertEquals(List.of(other), attrSearch(wf + "-2", region), "each flow's documents are found under its own name");
+        assertEquals(List.of(eu), attrSearch(wf, new Rows.AttrFilter("vip", Op.EQUAL, true)));
+        assertEquals(List.of(us), attrSearch(wf, new Rows.AttrFilter("vip", Op.EQUAL, false)));
+        assertEquals(List.of(eu), attrSearch(wf, new Rows.AttrFilter("total", Op.GREATER_THAN, 100L)));
+        assertEquals(List.of(eu, us).stream().sorted().toList(),
+                attrSearch(wf, new Rows.AttrFilter("total", Op.GREATER_THAN_OR_EQUAL, 80L)));
+        assertEquals(List.of(us), attrSearch(wf, new Rows.AttrFilter("total", Op.LESS_THAN, 100L)));
+        assertEquals(List.of(us), attrSearch(wf, new Rows.AttrFilter("total", Op.LESS_THAN_OR_EQUAL, 80L)));
+        assertEquals(List.of(us), attrSearch(wf, new Rows.AttrFilter("rate", Op.GREATER_THAN, new java.math.BigDecimal("1"))));
+        assertEquals(List.of(eu), attrSearch(wf, new Rows.AttrFilter("rate", Op.EQUAL, new java.math.BigDecimal("0.25"))));
+        assertEquals(List.of(eu), attrSearch(wf, region, new Rows.AttrFilter("total", Op.GREATER_THAN, 100L)));
+        assertEquals(List.of(), attrSearch(wf, region, new Rows.AttrFilter("total", Op.LESS_THAN, 100L)), "every filter must hold");
+        assertEquals(List.of(), attrSearch(wf, new Rows.AttrFilter("region", Op.EQUAL, "APAC")));
+        assertEquals(List.of(), attrSearch(wf, new Rows.AttrFilter("undeclared", Op.EQUAL, "x")));
+        assertEquals(List.of(typed), attrSearch(wf, new Rows.AttrFilter("region", Op.EQUAL, 7L)),
+                "an attribute held as another type does not match a text filter, and the reverse");
+
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 10, Map.of("region", "US")));
+            return null;
+        });
+        assertEquals(List.of(eu, us).stream().sorted().toList(), attrSearch(wf, new Rows.AttrFilter("region", Op.EQUAL, "US")),
+                "a newer document replaces its attributes");
+        assertEquals(List.of(), attrSearch(wf, new Rows.AttrFilter("total", Op.GREATER_THAN, 100L)), "including the ones it no longer has");
+        storage.inTx(tx -> {
+            tx.upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 5, Map.of("region", "EU")));
+            return null;
+        });
+        assertEquals(List.of(), attrSearch(wf, region), "an older document does not bring its attributes back");
+
+        Map<String, Object> held = storage.inTx(tx -> tx.searchDocsAfter(us.substring(0, us.length() - 1), 100)).stream()
+                .filter(d -> d.instanceId().equals(us)).findFirst().orElseThrow().attributes();
+        assertEquals("US", held.get("region"));
+        assertEquals(80L, ((Number) held.get("total")).longValue());
+        assertEquals(false, held.get("vip"));
+        assertEquals(0, new java.math.BigDecimal("1.5").compareTo(new java.math.BigDecimal(held.get("rate").toString())));
+
+        storage.inTx(tx -> { tx.deleteSearchDoc(us); return null; });
+        assertEquals(List.of(), attrSearch(wf, new Rows.AttrFilter("total", Op.LESS_THAN, 100L)), "a document takes its attributes with it");
+        storage.inTx(tx -> { List.of(eu, bare, typed, other).forEach(tx::deleteSearchDoc); return null; });
     }
 
     // -- WGL-STOR-005: the store's own identity --

@@ -64,6 +64,7 @@ SOURCES = {
     "queues": FIXTURES / "docs/QueuesSnippet.java",
     "local-execution": FIXTURES / "docs/LocalExecutionSnippet.java",
     "event-log": FIXTURES / "docs/EventLogSnippet.java",
+    "search-attributes": FIXTURES / "docs/SearchAttributesSnippet.java",
     "agents": FIXTURES / "agents/ResearchTeam.java",
     "agents-model": FIXTURES / "agents/Model.java",
     "agents-demo": FIXTURES / "agents/AgentsDemo.java",
