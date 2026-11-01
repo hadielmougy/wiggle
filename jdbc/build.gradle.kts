@@ -11,4 +11,8 @@ dependencies {
     // `implementation`: no JDBI type appears on the Storage/Tx API, so it stays off a consumer's
     // compile classpath.
     implementation("org.jdbi:jdbi3-core:${property("jdbiVersion")}")
+
+    // Transactions run through Spring's DataSourceTransactionManager. No Spring type appears on the
+    // Storage/Tx API either.
+    implementation("org.springframework:spring-jdbc:${property("springFrameworkVersion")}")
 }

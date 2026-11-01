@@ -8,6 +8,13 @@ import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jdbi.v3.core.statement.Query;
 import org.jdbi.v3.core.statement.SqlStatement;
 import org.jdbi.v3.core.statement.Update;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DelegatingDataSource;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
+import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.wiggle.core.*;
 import com.wiggle.core.Doc;
 import com.wiggle.server.store.ClaimFilter;
@@ -23,6 +30,7 @@ import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
 import com.wiggle.server.store.Tx;
 
+import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.*;
@@ -39,14 +47,21 @@ import java.util.stream.Collectors;
  *
  * <p>The store body is dialect-neutral: it writes canonical, PostgreSQL-flavoured SQL and
  * defers every non-portable fragment to a {@link Dialect}. That single body backs PostgreSQL
- * and H2 (both via {@code wiggle-postgres}). Connection pooling is provided by HikariCP.
+ * and H2 (both via {@code wiggle-postgres}). Connection pooling is provided by HikariCP, unless the
+ * caller supplies its own {@link DataSource}. Every transaction runs through Spring's
+ * {@link DataSourceTransactionManager}, in a connection of its own.
  */
 public final class JdbcStorage implements Storage {
 
     private static final System.Logger LOG = System.getLogger(JdbcStorage.class.getName());
 
     private final Dialect dialect;
-    private final HikariDataSource ds;
+    /** The pool, closed with this store only when the store created it. */
+    private final DataSource pool;
+    private final boolean ownsPool;
+    /** {@link #pool}, with each connection reporting to the {@link #observe} listeners while any are attached. */
+    private final DataSource observed;
+    private final TransactionTemplate transactions;
     private final Jdbi jdbi;
     private final String fingerprint;
     private final boolean readOnly;
@@ -74,16 +89,56 @@ public final class JdbcStorage implements Storage {
     }
 
     private JdbcStorage(String url, String user, String password, int poolSize, Dialect dialect, boolean readOnly) {
+        this(pool(url, user, password, poolSize, dialect, readOnly), true, url, dialect, readOnly);
+    }
+
+    /**
+     * A store over {@code dataSource}, which the caller owns and closes. Its connections must start in
+     * manual-commit, read-committed mode, as the pool this store builds for a URL does. {@code url}
+     * identifies the database: every node pointed at the same one must pass the same value.
+     */
+    public JdbcStorage(DataSource dataSource, String url, Dialect dialect) {
+        this(dataSource, false, url, dialect, false);
+    }
+
+    /** As {@link #readReplica(String, String, String, int, Dialect)}, over a caller-owned {@code dataSource}. */
+    public static JdbcStorage readReplica(DataSource dataSource, String url, Dialect dialect) {
+        return new JdbcStorage(dataSource, false, url, dialect, true);
+    }
+
+    private JdbcStorage(DataSource pool, boolean ownsPool, String url, Dialect dialect, boolean readOnly) {
         this.dialect = Objects.requireNonNull(dialect, "dialect");
         this.readOnly = readOnly;
         this.fingerprint = fingerprintOf(dialect.id() + ':' + url);
+        this.pool = Objects.requireNonNull(pool, "dataSource");
+        this.ownsPool = ownsPool;
+        this.observed = new DelegatingDataSource(pool) {
+            @Override public Connection getConnection() throws SQLException {
+                Connection c = super.getConnection();
+                return listeners.isEmpty() ? c : ObservedConnections.wrap(c, listeners);
+            }
+        };
+        this.transactions = new TransactionTemplate(new DataSourceTransactionManager(observed));
+        this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.jdbi = Jdbi.create(new TransactionAwareDataSourceProxy(observed))
+                .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
+                .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs))
+                .registerRowMapper(Rows.Event.class, (rs, ctx) -> readEvent(rs))
+                .registerRowMapper(Rows.EventCursor.class, (rs, ctx) -> readCursor(rs))
+                .registerRowMapper(Rows.Schedule.class, (rs, ctx) -> readSchedule(rs))
+                .registerRowMapper(ServerNode.class, (rs, ctx) -> readNode(rs));
+    }
+
+    /** The HikariCP pool a URL-configured store runs on. */
+    private static HikariDataSource pool(String url, String user, String password, int poolSize, Dialect dialect,
+                                         boolean readOnly) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(url);
         if (user != null) cfg.setUsername(user);
         if (password != null) cfg.setPassword(password);
         cfg.setMaximumPoolSize(Math.max(1, poolSize));
-        // The engine drives its own transaction boundaries via inTx(); every borrowed connection
-        // stays in manual-commit, read-committed mode.
+        // Every transaction is bounded by inTx(); a borrowed connection stays in manual-commit,
+        // read-committed mode.
         cfg.setAutoCommit(false);
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
         if (dialect.connectionInitSql() != null) cfg.setConnectionInitSql(dialect.connectionInitSql());
@@ -92,14 +147,7 @@ public final class JdbcStorage implements Storage {
             cfg.setReadOnly(true);
             cfg.setInitializationFailTimeout(-1);
         }
-        this.ds = new HikariDataSource(cfg);
-        this.jdbi = Jdbi.create(this::connection)
-                .registerRowMapper(Instance.class, (rs, ctx) -> readInstance(rs))
-                .registerRowMapper(Token.class, (rs, ctx) -> readToken(rs))
-                .registerRowMapper(Rows.Event.class, (rs, ctx) -> readEvent(rs))
-                .registerRowMapper(Rows.EventCursor.class, (rs, ctx) -> readCursor(rs))
-                .registerRowMapper(Rows.Schedule.class, (rs, ctx) -> readSchedule(rs))
-                .registerRowMapper(ServerNode.class, (rs, ctx) -> readNode(rs));
+        return new HikariDataSource(cfg);
     }
 
     private Connection borrow() {
@@ -112,8 +160,7 @@ public final class JdbcStorage implements Storage {
 
     /** A pooled connection; one that reports to the {@link #observe} listeners while any are attached. */
     private Connection connection() throws SQLException {
-        Connection c = ds.getConnection();
-        return listeners.isEmpty() ? c : ObservedConnections.wrap(c, listeners);
+        return observed.getConnection();
     }
 
     /**
@@ -943,26 +990,26 @@ public final class JdbcStorage implements Storage {
     }
 
     /**
-     * One attempt. JDBI borrows the connection and hands it back to the pool when the handle closes;
-     * the transaction stays this store's own, as it always was. Nothing calls {@code handle.begin()},
-     * so there is one owner of the commit boundary and not two.
+     * One attempt, in a transaction of its own on a connection of its own. Spring owns the commit
+     * boundary; JDBI works on the connection Spring bound to the thread, and nothing calls
+     * {@code handle.begin()}.
      */
     private <R> R attemptTx(Function<Tx, R> work) {
-        try (Handle h = open()) {
-            Connection c = h.getConnection();
-            try {
-                R r = work.apply(new JdbcTx(h, dialect, this));
-                c.commit();
-                return r;
-            } catch (SQLException e) {
-                // Only the commit above throws a checked SQLException here, and its outcome is
-                // unknown: the rollback may be a no-op over work that is already durable.
-                rollback(c);
-                throw new StorageException("commit failed", e, Classification.AMBIGUOUS);
-            } catch (RuntimeException e) {
-                rollback(c);
-                throw labelled(e);
-            }
+        try {
+            return transactions.execute(status -> {
+                try (Handle h = open()) {
+                    return work.apply(new JdbcTx(h, dialect, this));
+                }
+            });
+        } catch (CannotCreateTransactionException e) {
+            throw connectionFailure(e);
+        } catch (TransactionSystemException e) {
+            // The rollback after a failed body failed too: the body's failure is the one to report.
+            if (e.getApplicationException() instanceof RuntimeException body) throw labelled(body);
+            // The commit failed, and its outcome is unknown: the work may already be durable.
+            throw new StorageException("commit failed", e, Classification.AMBIGUOUS);
+        } catch (RuntimeException e) {
+            throw labelled(e);
         }
     }
 
@@ -1002,7 +1049,7 @@ public final class JdbcStorage implements Storage {
     }
 
     @Override public void close() {
-        ds.close();
+        if (ownsPool && pool instanceof HikariDataSource hikari) hikari.close();
     }
 
 
