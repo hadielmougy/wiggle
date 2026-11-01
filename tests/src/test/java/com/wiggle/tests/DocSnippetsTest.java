@@ -66,6 +66,7 @@ class DocSnippetsTest {
         EXPECTED.put("onboarding/OnboardingSnippet.java",
                 List.of("contract", "register-line", "topology", "client-lifecycle",
                         "start-by-name", "search", "version-pinning", "worker-options"));
+        EXPECTED.put("../../../demo/Hello.java", List.of("quickstart"));
         EXPECTED.put("onboarding/OrderHandlers.java", List.of("handlers"));
         EXPECTED.put("decode/OrderHandlers.java", List.of("decode"));
         // the tutorial -- also run end to end by TutorialTest
@@ -282,6 +283,7 @@ class DocSnippetsTest {
             Map.entry("saga-doc-activity", "docs/CapturePayment.java"),
             Map.entry("saga-doc-handlers", "docs/SagaDocHandlers.java"),
             Map.entry("onboarding", "docs/onboarding/OnboardingSnippet.java"),
+            Map.entry("onboarding-quickstart", "../example/src/main/java/demo/Hello.java"),
             Map.entry("onboarding-handlers", "docs/onboarding/OrderHandlers.java"),
             Map.entry("decode", "docs/decode/OrderHandlers.java"),
             Map.entry("tutorial", "tutorial/Orders.java"),
