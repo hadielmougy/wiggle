@@ -65,7 +65,13 @@ public interface DashboardData {
     boolean searchEnabled();
 
     Optional<SearchView> search(String text, String workflow, String status, int limit, boolean partialOk,
-                                com.wiggle.server.auth.Scope readable);
+                                com.wiggle.server.auth.Scope readable, List<AttributeFilter> attributes);
+
+    /**
+     * A condition on a search attribute the workflow declares. {@code op} is {@code eq}, {@code lt},
+     * {@code le}, {@code gt} or {@code ge}; {@code value} is read as the attribute's declared type.
+     */
+    record AttributeFilter(String name, String op, String value) {}
 
     record SearchView(List<SearchHitView> hits, boolean partial) {}
 
