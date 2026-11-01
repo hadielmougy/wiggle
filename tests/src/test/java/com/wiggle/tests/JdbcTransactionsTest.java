@@ -5,6 +5,7 @@ import com.wiggle.postgres.H2Dialect;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
+import com.wiggle.server.store.Tx;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.DisplayName;
@@ -29,7 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The store's transaction boundary, run through Spring's transaction manager: over a pool the caller
- * owns, with a commit whose outcome is unknown, nested, and with no connection to be had.
+ * owns, with a commit whose outcome is unknown, nested, outside a transaction, and with no connection
+ * to be had.
  */
 class JdbcTransactionsTest {
 
@@ -90,6 +92,15 @@ class JdbcTransactionsTest {
             assertEquals(outerFailure, thrown);
             assertTrue(storage.inTx(tx -> tx.definition("inner", 1)).isPresent(), "the nested transaction committed");
             assertFalse(storage.inTx(tx -> tx.definition("outer", 1)).isPresent(), "the outer one rolled back");
+        }
+    }
+
+    @Test @DisplayName("store operations run only inside a transaction: a Tx kept past its transaction refuses to run")
+    void operationsNeedATransaction() {
+        try (HikariDataSource ds = pool("escaped"); JdbcStorage storage = store(ds)) {
+            Tx escaped = storage.inTx(tx -> tx);
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> escaped.definition("x", 1));
+            assertTrue(e.getMessage().contains("no transaction"), e.getMessage());
         }
     }
 
